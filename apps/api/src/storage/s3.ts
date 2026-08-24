@@ -7,7 +7,7 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { Env } from '../env.js';
-import type { ObjectStream, PresignedUpload, StorageDriver } from './types.js';
+import type { ByteRange, ObjectStream, PresignedUpload, StorageDriver } from './types.js';
 
 /** Works with Cloudflare R2, AWS S3, MinIO, Backblaze B2 – anything S3 compatible. */
 export class S3Storage implements StorageDriver {
@@ -72,13 +72,23 @@ export class S3Storage implements StorageDriver {
     );
   }
 
-  async createReadStream(key: string): Promise<ObjectStream | null> {
+  async createReadStream(key: string, range?: ByteRange): Promise<ObjectStream | null> {
     try {
-      const result = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+      const result = await this.client.send(
+        new GetObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+          Range: range ? `bytes=${range.start}-${range.end ?? ''}` : undefined,
+        }),
+      );
       if (!result.Body) return null;
+      const total = result.ContentRange
+        ? Number.parseInt(result.ContentRange.split('/')[1] ?? '', 10)
+        : (result.ContentLength ?? null);
       return {
         stream: result.Body as Readable,
         size: result.ContentLength ?? null,
+        totalSize: Number.isNaN(total as number) ? null : total,
         mime: result.ContentType ?? null,
       };
     } catch {

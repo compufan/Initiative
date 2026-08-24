@@ -61,7 +61,11 @@ export function bestOption(options: PollOptionDto[], tally: PollTally): PollOpti
   return best;
 }
 
-export function isPollClosed(poll: { closedAt: string | null; closesAt: string | null }, now = new Date()): boolean {
+/** Accepts both the API DTO (ISO strings) and a raw database row (Date objects). */
+export function isPollClosed(
+  poll: { closedAt: Date | string | null; closesAt: Date | string | null },
+  now = new Date(),
+): boolean {
   if (poll.closedAt) return true;
   if (poll.closesAt && new Date(poll.closesAt).getTime() <= now.getTime()) return true;
   return false;

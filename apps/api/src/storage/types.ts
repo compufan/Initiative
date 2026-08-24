@@ -7,9 +7,18 @@ export interface PresignedUpload {
   expiresAt: Date;
 }
 
+export interface ByteRange {
+  start: number;
+  /** Inclusive end offset; omit to read until the end of the object. */
+  end?: number;
+}
+
 export interface ObjectStream {
   stream: Readable;
+  /** Number of bytes in this response (the range length when a range was asked for). */
   size: number | null;
+  /** Total object size, needed for the Content-Range header. */
+  totalSize: number | null;
   mime: string | null;
 }
 
@@ -30,7 +39,8 @@ export interface StorageDriver {
     options?: { fileName?: string | null; mime?: string | null; download?: boolean },
   ): Promise<string | null>;
   put(key: string, body: Buffer | Readable, mime: string): Promise<void>;
-  createReadStream(key: string): Promise<ObjectStream | null>;
+  /** Byte ranges keep <video>/<audio> seeking working on iOS Safari. */
+  createReadStream(key: string, range?: ByteRange): Promise<ObjectStream | null>;
   delete(key: string): Promise<void>;
 }
 

@@ -4,7 +4,7 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import type { Env } from '../env.js';
-import type { ObjectStream, PresignedUpload, StorageDriver } from './types.js';
+import type { ByteRange, ObjectStream, PresignedUpload, StorageDriver } from './types.js';
 
 /** Disk backed storage for development and single-container self-hosting. */
 export class LocalStorage implements StorageDriver {
@@ -44,11 +44,26 @@ export class LocalStorage implements StorageDriver {
     }
   }
 
-  async createReadStream(key: string): Promise<ObjectStream | null> {
+  async createReadStream(key: string, range?: ByteRange): Promise<ObjectStream | null> {
     const target = this.pathFor(key);
     try {
       const stats = await stat(target);
-      return { stream: createReadStream(target), size: stats.size, mime: null };
+      if (!range) {
+        return {
+          stream: createReadStream(target),
+          size: stats.size,
+          totalSize: stats.size,
+          mime: null,
+        };
+      }
+      const start = Math.min(Math.max(0, range.start), Math.max(0, stats.size - 1));
+      const end = Math.min(range.end ?? stats.size - 1, stats.size - 1);
+      return {
+        stream: createReadStream(target, { start, end }),
+        size: end - start + 1,
+        totalSize: stats.size,
+        mime: null,
+      };
     } catch {
       return null;
     }
