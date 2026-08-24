@@ -235,7 +235,7 @@ pub const MODULE_KEYS: &[&str] = &[
 
 ```bash
 cd /home/user/Initiative
-cargo run --manifest-path apps/api/Cargo.toml
+cargo run --manifest-path apps/api/Cargo.toml --bin initiative-api
 
 curl -X POST http://localhost:8080/api/v1/conversations/$CHAT/tasks \
   -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
