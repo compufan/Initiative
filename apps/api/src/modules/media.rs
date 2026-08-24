@@ -344,9 +344,9 @@ async fn serve(state: AppState, id: Uuid, headers: HeaderMap, as_download: bool)
         },
     };
 
-    Ok(response
+    response
         .body(Body::from_stream(object.stream))
-        .map_err(|error| AppError::internal(error.to_string()))?)
+        .map_err(|error| AppError::internal(error.to_string()))
 }
 
 async fn deliver(

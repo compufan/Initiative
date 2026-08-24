@@ -62,7 +62,7 @@ impl Default for Validator {
 pub fn normalise_username(value: &str) -> AppResult<String> {
     let trimmed = value.trim().to_lowercase();
     let length = trimmed.chars().count();
-    if length < USERNAME_MIN || length > USERNAME_MAX {
+    if !(USERNAME_MIN..=USERNAME_MAX).contains(&length) {
         return Err(AppError::validation(vec![(
             "username",
             format!("zwischen {USERNAME_MIN} und {USERNAME_MAX} Zeichen"),
@@ -82,7 +82,7 @@ pub fn normalise_username(value: &str) -> AppResult<String> {
 
 pub fn check_password(value: &str) -> AppResult<()> {
     let length = value.chars().count();
-    if length < PASSWORD_MIN || length > PASSWORD_MAX {
+    if !(PASSWORD_MIN..=PASSWORD_MAX).contains(&length) {
         return Err(AppError::validation(vec![(
             "password",
             format!("zwischen {PASSWORD_MIN} und {PASSWORD_MAX} Zeichen"),
