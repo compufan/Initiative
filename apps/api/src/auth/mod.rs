@@ -83,3 +83,41 @@ where
         )
     }
 }
+
+/// Extractor for routes only admins may reach.
+///
+/// Bewusst serverseitig: Der Admin-Status hängt an `users.is_admin` in der
+/// Datenbank, nicht an einem Schalter im Browser. Ein manipuliertes Frontend
+/// kann sich damit keine Rechte verschaffen.
+#[derive(Debug, Clone, Copy)]
+pub struct AdminUser(pub Uuid);
+
+impl AdminUser {
+    pub fn id(&self) -> Uuid {
+        self.0
+    }
+}
+
+impl<S> FromRequestParts<S> for AdminUser
+where
+    AppState: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = AppError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let app_state = AppState::from_ref(state);
+        let AuthUser(id) =
+            <AuthUser as FromRequestParts<S>>::from_request_parts(parts, state).await?;
+
+        let is_admin: Option<bool> = sqlx::query_scalar("select is_admin from users where id = $1")
+            .bind(id)
+            .fetch_optional(&app_state.pool)
+            .await?;
+
+        match is_admin {
+            Some(true) => Ok(AdminUser(id)),
+            _ => Err(AppError::forbidden("Adminrechte erforderlich")),
+        }
+    }
+}

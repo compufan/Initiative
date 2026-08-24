@@ -361,6 +361,43 @@ export const api = {
       request<void>('DELETE', '/push/subscriptions', { body: { endpoint } }),
     test: () => post<{ delivered: number }>('/push/test'),
   },
+  admin: {
+    status: () => get<AdminStatus>('/admin/status'),
+    unlock: (password: string) => post<AdminStatus>('/admin/unlock', { password }),
+    lock: () => post<AdminStatus>('/admin/lock'),
+    invites: () => get<InviteDto[]>('/admin/invites'),
+    createInvite: (body: { note?: string; maxUses?: number; expiresAt?: string }) =>
+      post<InviteDto>('/admin/invites', body),
+    revokeInvite: (code: string) =>
+      del<{ revoked: boolean }>(`/admin/invites/${encodeURIComponent(code)}`),
+    members: () => get<AdminMemberDto[]>('/admin/members'),
+    removeMember: (id: string) => del<{ removed: boolean }>(`/admin/members/${id}`),
+  },
 };
+
+export interface AdminStatus {
+  /** Ob auf dem Server überhaupt ein Admin-Passwort hinterlegt ist. */
+  available: boolean;
+  isAdmin: boolean;
+}
+
+export interface InviteDto {
+  code: string;
+  note: string | null;
+  maxUses: number | null;
+  uses: number;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+export interface AdminMemberDto {
+  id: string;
+  username: string;
+  displayName: string;
+  isAdmin: boolean;
+  lastSeenAt: string | null;
+  createdAt: string;
+}
 
 export type Api = typeof api;

@@ -52,7 +52,8 @@ Gelesen in `apps/api/src/config.rs`. Was hier nicht steht, wird nicht gelesen.
 | `ACCESS_TOKEN_TTL`       | `900`              | Laufzeit des Access-Tokens in Sekunden (15 Minuten).                                                                         |
 | `REFRESH_TOKEN_TTL_DAYS` | `60`               | Laufzeit des Refresh-Tokens in Tagen. Er rotiert bei jedem Refresh.                                                          |
 | `REGISTRATION_MODE`      | `open`             | `open` \| `invite` \| `closed`.                                                                                              |
-| `INVITE_CODES`           | leer               | Kommaliste gültiger Codes, wirkt bei `REGISTRATION_MODE=invite`.                                                             |
+| `INVITE_CODES`           | leer               | Kommaliste fest verdrahteter Codes, wirkt bei `REGISTRATION_MODE=invite`. Zusätzlich zu den Codes, die Admins in der App anlegen – gedacht als Notnagel. |
+| `ADMIN_PASSWORD`         | leer               | Schaltet den Admin-Modus frei (mind. 8 Zeichen). Ohne gesetztes Passwort ist die Verwaltung komplett aus. Gehört als Secret gesetzt, **nie** ins Repository. |
 
 ### URLs und CORS
 
@@ -659,6 +660,19 @@ Nachdem alle drin sind – sonst legt sich jeder ein Konto an, der die URL kennt
 ```bash
 fly secrets set --app initiative-api REGISTRATION_MODE=invite INVITE_CODES="wandergruppe-2026,familie-xy"
 ```
+
+Ab dann laufen Einladungen am bequemsten über den **Admin-Modus** in der App:
+
+```bash
+fly secrets set --app initiative-api ADMIN_PASSWORD="dein-admin-passwort"
+```
+
+Danach in der App unter **Profil → Einstellungen → Verwaltung** mit diesem
+Passwort freischalten. Dort lassen sich Einladungscodes erzeugen (mit Limit und
+Ablaufdatum), wieder zurückziehen und Mitglieder entfernen. Der Admin-Status
+hängt an der Datenbank, nicht am Browser – ein manipuliertes Frontend bekommt
+dadurch keine Rechte. `INVITE_CODES` bleibt als Notnagel bestehen, falls
+niemand mehr hineinkommt.
 
 - `open` – jeder kann sich registrieren.
 - `invite` – nur mit einem Code aus `INVITE_CODES` (Kommaliste, Groß-/Kleinschreibung zählt).

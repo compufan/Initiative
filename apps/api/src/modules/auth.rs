@@ -97,12 +97,14 @@ async fn register(
         }
         RegistrationMode::Invite => {
             let provided = input.invite_code.clone().unwrap_or_default();
-            if !state
+            let from_env = state
                 .config
                 .invite_codes
                 .iter()
-                .any(|code| code == &provided)
-            {
+                .any(|code| code == &provided);
+            // Von Admins angelegte Codes stehen in der Datenbank; INVITE_CODES
+            // bleibt als Notnagel bestehen, falls niemand mehr hineinkommt.
+            if !from_env && !invite_code_is_valid(&state, &provided).await? {
                 return Err(AppError::forbidden("Ungültiger Einladungscode"));
             }
         }
@@ -142,10 +144,61 @@ async fn register(
     .fetch_one(&state.pool)
     .await?;
 
+    if state.config.registration_mode == RegistrationMode::Invite {
+        redeem_invite_code(&state, &input.invite_code.unwrap_or_default(), user.id).await?;
+    }
+
     Ok((
         StatusCode::CREATED,
         Json(issue_session(&state, &user).await?),
     ))
+}
+
+/// Prüft, ob ein von einem Admin angelegter Code noch eingelöst werden darf.
+async fn invite_code_is_valid(state: &AppState, code: &str) -> AppResult<bool> {
+    if code.is_empty() {
+        return Ok(false);
+    }
+    let usable: Option<bool> = sqlx::query_scalar(
+        "select true from invite_codes
+          where code = $1
+            and revoked_at is null
+            and (expires_at is null or expires_at > now())
+            and (max_uses is null or uses < max_uses)",
+    )
+    .bind(code)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(usable.unwrap_or(false))
+}
+
+/// Zählt die Einlösung. Das `where` wiederholt die Bedingungen, damit zwei
+/// gleichzeitige Registrierungen ein Limit nicht gemeinsam überschreiten.
+async fn redeem_invite_code(state: &AppState, code: &str, user_id: Uuid) -> AppResult<()> {
+    if code.is_empty() {
+        return Ok(());
+    }
+    let consumed = sqlx::query(
+        "update invite_codes
+            set uses = uses + 1
+          where code = $1
+            and revoked_at is null
+            and (expires_at is null or expires_at > now())
+            and (max_uses is null or uses < max_uses)",
+    )
+    .bind(code)
+    .execute(&state.pool)
+    .await?;
+
+    // Kein Treffer heißt: der Code kam aus INVITE_CODES, nicht aus der Tabelle.
+    if consumed.rows_affected() > 0 {
+        sqlx::query("insert into invite_redemptions (code, user_id) values ($1, $2)")
+            .bind(code)
+            .bind(user_id)
+            .execute(&state.pool)
+            .await?;
+    }
+    Ok(())
 }
 
 async fn login(

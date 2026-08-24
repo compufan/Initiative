@@ -66,6 +66,11 @@ pub struct Config {
 
     pub registration_mode: RegistrationMode,
     pub invite_codes: Vec<String>,
+    /// Passwort, mit dem ein angemeldetes Konto den Admin-Modus einschaltet.
+    /// Bewusst nur serverseitig: Es steht weder im Repository noch im
+    /// Frontend-Bundle. Ohne gesetztes Passwort ist der Admin-Modus komplett
+    /// abgeschaltet – niemand kann ihn dann aktivieren.
+    pub admin_password: Option<String>,
 
     pub storage_driver: StorageDriver,
     pub local_storage_dir: String,
@@ -222,6 +227,7 @@ impl Config {
                 _ => RegistrationMode::Open,
             },
             invite_codes: list("INVITE_CODES"),
+            admin_password: var("ADMIN_PASSWORD").filter(|value| value.len() >= 8),
 
             storage_driver,
             local_storage_dir: var_or("LOCAL_STORAGE_DIR", "./.data/uploads"),

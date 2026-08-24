@@ -5,6 +5,7 @@
 //! mini-games are siblings. Adding an area of the app means one file here plus
 //! one line in [`router`].
 
+pub mod admin;
 pub mod auth;
 pub mod calendar;
 pub mod conversations;
@@ -24,6 +25,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(auth::router())
+        .merge(admin::router())
         .merge(users::router())
         .merge(conversations::router())
         .merge(messages::router())
@@ -37,6 +39,7 @@ pub fn router() -> Router<AppState> {
 
 pub const MODULE_KEYS: &[&str] = &[
     "auth",
+    "admin",
     "users",
     "conversations",
     "messages",

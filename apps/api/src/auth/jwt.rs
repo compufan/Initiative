@@ -68,7 +68,9 @@ pub fn decode(token: &str, secret: &str) -> Option<Claims> {
     Some(claims)
 }
 
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+/// Vergleicht ohne frühen Abbruch, damit sich ein Geheimnis nicht über die
+/// Antwortzeit zeichenweise erraten lässt.
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }

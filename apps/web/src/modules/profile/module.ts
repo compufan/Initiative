@@ -2,6 +2,7 @@ import { createElement } from 'react';
 import { defineWebModule } from '../types.js';
 import { ProfileScreen } from './ProfileScreen.js';
 import { SettingsScreen } from './SettingsScreen.js';
+import { AdminScreen } from './AdminScreen.js';
 import { adoptAccountTheme } from './helpers.js';
 import './styles.css';
 
@@ -20,6 +21,7 @@ export default defineWebModule({
   routes: [
     { path: '/profil', element: createElement(ProfileScreen) },
     { path: '/profil/einstellungen', element: createElement(SettingsScreen) },
+    { path: '/verwaltung', element: createElement(AdminScreen) },
   ],
   init: adoptAccountTheme,
 });
