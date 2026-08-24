@@ -688,6 +688,7 @@ Bestehende Sitzungen bleiben davon unberührt.
 | `push: false` im Healthcheck                        | VAPID unvollständig               | beide Schlüssel setzen und neu starten                                          |
 | API startet nicht, Log nennt `Konfigurationsfehler` | Pflichtvariable fehlt             | Meldung lesen – sie nennt die Variable im Klartext                              |
 | `status: degraded`                                  | Datenbank nicht erreichbar        | `DATABASE_URL`, TLS und IP-Freigabe prüfen                                      |
+| URL lädt ewig, Log zeigt nur `Main child exited normally with code: 0` | Die Binary im Image ist die leere Platzhalter-Version aus der Cache-Stufe des Dockerfiles | Im `apps/api/Dockerfile` muss vor dem zweiten `cargo build` ein `find src migrations -type f -exec touch {} +` stehen – sonst hält Cargo den echten Code für unverändert (siehe Kommentar dort) |
 
 ---
 

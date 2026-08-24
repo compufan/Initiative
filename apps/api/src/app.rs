@@ -81,8 +81,8 @@ async fn index() -> Json<serde_json::Value> {
 }
 
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
-    // Fly prüft darüber, ob die Maschine noch lebt — ein hängender Pool darf
-    // diese Antwort deshalb nie unbegrenzt blockieren.
+    // Fly prüft über diesen Endpunkt, ob die Maschine noch lebt. Er darf
+    // deshalb nie unbegrenzt blockieren, egal wie träge die Datenbank ist.
     let ping = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         sqlx::query_scalar::<_, i32>("select 1").fetch_one(&state.pool),

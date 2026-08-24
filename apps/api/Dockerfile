@@ -12,12 +12,21 @@ RUN mkdir -p src/bin \
  && echo '' > src/lib.rs \
  && echo 'fn main() {}' > src/bin/seed.rs \
  && cargo build --release --locked \
- && rm -rf src
+ && rm -rf src \
+      target/release/.fingerprint/initiative-api-* \
+      target/release/.fingerprint/initiative_api-* \
+      target/release/.fingerprint/seed-*
 
 COPY src ./src
 COPY migrations ./migrations
+# `touch` ist zwingend: COPY übernimmt die Zeitstempel aus dem Build-Context,
+# die älter sind als die Platzhalter-Binary von oben. Cargo vergleicht genau
+# diese Zeitstempel, hielte den echten Code sonst für unverändert und würde
+# stillschweigend die leere `fn main() {}`-Binary ausliefern – die startet
+# ohne jede Ausgabe und endet sofort mit Code 0.
 # Migrationen werden über sqlx::migrate! in die Binary eingebettet.
-RUN cargo build --release --locked --bin initiative-api --bin seed
+RUN find src migrations -type f -exec touch {} + \
+ && cargo build --release --locked --bin initiative-api --bin seed
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \

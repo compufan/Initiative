@@ -29,12 +29,6 @@ impl AppState {
         let pool = PgPoolOptions::new()
             .max_connections(config.database_pool_max)
             .acquire_timeout(std::time::Duration::from_secs(15))
-            // Verhindert, dass Verbindungen zurückgegeben werden, die der
-            // Pooler des Anbieters (z. B. Neon) im Hintergrund bereits
-            // stillschweigend gekappt hat — sonst hängt die erste Anfrage
-            // nach einer Ruhephase ohne jedes Timeout in der Query fest.
-            .idle_timeout(std::time::Duration::from_secs(55))
-            .test_before_acquire(true)
             .connect(&config.database_url)
             .await?;
 
