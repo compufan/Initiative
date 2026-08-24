@@ -7,16 +7,21 @@ Aufgabenliste, Kasse, …) hinzugefügt wird, ohne den Kern anzufassen.
 ```
 Initiative/
 ├── apps/
-│   ├── api/          Fastify-Backend (Fly.io, Koyeb, Docker, eigener Server)
-│   └── web/          React-PWA (Vercel, Cloudflare Pages, eigener Server)
+│   ├── api/          Rust-Backend (Axum + sqlx) – Fly.io, Koyeb, Docker, eigener Server
+│   └── web/          React-PWA (Vite) – Vercel, Cloudflare Pages, eigener Server
 └── packages/
-    └── shared/       Contracts: Typen, Zod-Schemas, Realtime-Protokoll, Spiellogik
+    └── shared/       TypeScript-Contracts für die PWA (Typen, Zod-Schemas, Protokoll)
 ```
+
+Das Backend ist die **einzige Quelle der Wahrheit** für den API-Vertrag.
+`packages/shared` spiegelt diesen Vertrag für die PWA: dieselben Feldnamen
+(camelCase), dieselben Grenzwerte, dasselbe Realtime-Protokoll. Wer einen
+Endpunkt ändert, ändert beides.
 
 ## Datenfluss
 
 ```
-PWA  ──REST /api/v1──▶  Fastify  ──SQL──▶  Postgres (Neon / Supabase / eigener)
+PWA  ──REST /api/v1──▶  Axum (Rust)  ──SQL──▶  Postgres (Neon / Supabase / eigener)
  ▲                          │
  └──── WebSocket /ws ───────┘   Broadcast über Postgres LISTEN/NOTIFY
                                 Medien: presigned PUT/GET direkt auf R2/S3
@@ -32,28 +37,34 @@ PWA  ──REST /api/v1──▶  Fastify  ──SQL──▶  Postgres (Neon / 
 
 | Punkt | Datei | Wofür |
 | --- | --- | --- |
-| Backend-Modul | `apps/api/src/modules/<name>/index.ts` + `registry.ts` | eigene REST-Routen |
-| Message-Expander | `registerMessageExpander()` | eigene Entitäten in Nachrichten einbetten |
+| Backend-Modul | `apps/api/src/modules/<name>.rs` + `modules/mod.rs` | eigene REST-Routen |
+| Message-Expander | `impl MessageExpander` + Eintrag in `services/expanders.rs` | eigene Entitäten in Nachrichten einbetten |
 | Frontend-Modul | `apps/web/src/modules/<name>/module.ts` + `registry.ts` | Routen, Tab, Chat-Bubbles, Composer-Aktionen |
-| Mini-Spiel | `packages/shared/src/games/<name>.ts` + `registerGame()` | Regeln (Server validiert, Client rendert) |
+| Mini-Spiel | `apps/api/src/games/<name>.rs` + `games/mod.rs` | Regeln (Server validiert autoritativ) |
+| Spielbrett | `apps/web/src/modules/games/boards/` | Darstellung eines Spiels |
 
 ### Backend-Modul
 
-```ts
-export default defineModule({
-  key: 'tasks',
-  description: 'Aufgabenlisten',
-  register(app, ctx) {
-    app.get('/tasks', { preHandler: app.authenticate }, async (request) => {
-      const userId = requireUserId(request);
-      return ctx.sql`select * from tasks where user_id = ${userId}`;
-    });
-  },
-});
+```rust
+// apps/api/src/modules/tasks.rs
+pub fn router() -> Router<AppState> {
+    Router::new().route("/tasks", get(list))
+}
+
+async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<Vec<TaskRow>>> {
+    Ok(Json(
+        sqlx::query_as::<_, TaskRow>("select * from tasks where user_id = $1")
+            .bind(user.id())
+            .fetch_all(&state.pool)
+            .await?,
+    ))
+}
 ```
 
-`ctx` enthält `sql`, `storage`, `hub` (Realtime), `push` und `env`. Neue Tabellen
-kommen als nummerierte Datei nach `apps/api/migrations/`.
+Danach eine Zeile in `modules/mod.rs`: `.merge(tasks::router())`.
+`AppState` enthält `pool`, `storage`, `hub` (Realtime), `push` und `config`.
+Neue Tabellen kommen als nummerierte Datei nach `apps/api/migrations/` und
+werden beim Start automatisch angewendet (sie sind in die Binary eingebettet).
 
 ### Frontend-Modul
 
@@ -104,10 +115,41 @@ Sprachnachrichten) in eine Outbox, die beim Reconnect abgearbeitet wird.
 Der Service Worker cached die App-Shell und alle Medien (`cache-first`, Medien
 sind unveränderlich).
 
+## Warum Rust
+
+* Eine statisch gelinkte Binary (~15 MB) ohne Laufzeit, OpenSSL oder libcurl –
+  das Container-Image bleibt klein und startet in Millisekunden.
+* Der Compiler erzwingt, dass jeder Fehlerfall behandelt wird; `AppError` ist der
+  einzige Weg, wie eine Anfrage scheitern kann.
+* Spielregeln, Umfragen-Auswertung, Serientermine und die Web-Push-Verschlüsselung
+  sind reine Funktionen mit Unit-Tests – kein Mocking nötig.
+* Speicherverbrauch bleibt auch bei vielen offenen WebSockets flach, weil jede
+  Verbindung nur eine Task und einen Kanal kostet.
+
 ## Sicherheit
 
-* Passwörter: `scrypt` (Node-Crypto, keine nativen Module).
-* Access-Token: HS256-JWT, 15 Minuten; Refresh-Token: 48 zufällige Bytes,
-  nur als SHA-256-Hash gespeichert, wird bei jedem Refresh rotiert.
+* Passwörter: **Argon2id** (RustCrypto, keine nativen Abhängigkeiten).
+* Access-Token: HS256-JWT (selbst implementiert, Algorithmus fest verdrahtet –
+  `alg: none` und Verfahrenswechsel sind damit ausgeschlossen), 15 Minuten.
+  Refresh-Token: 48 zufällige Bytes, nur als SHA-256-Hash gespeichert, wird bei
+  jedem Refresh rotiert und dabei entwertet.
 * Jede Route prüft die Chat-Mitgliedschaft (`assertMembership`).
-* Medien-URLs sind kurzlebige signierte R2/S3-Links.
+* Medien-URLs sind kurzlebige signierte R2/S3-Links. Ohne S3 liefert die API
+  selbst aus – die Anhang-ID ist eine UUID v7 mit 74 Zufallsbits und wirkt als
+  Capability-URL, damit `<img>` und der Service-Worker-Cache ohne Header
+  funktionieren.
+* Web Push ist nach RFC 8291 (aes128gcm) direkt implementiert; die
+  Verschlüsselung ist mit einem Round-Trip-Test abgesichert.
+
+## Tests
+
+```bash
+cargo test --manifest-path apps/api/Cargo.toml            # Unit-Tests
+TEST_DATABASE_URL=postgres://… cargo test --test e2e      # kompletter API-Durchlauf
+```
+
+Der End-to-End-Test fährt den gesamten Router gegen eine echte Postgres-Datenbank
+(ohne Netzwerk-Port): Registrierung, Token-Rotation, Chats, Idempotenz,
+Ungelesen-Zähler, Reaktionen, Berechtigungen, Medien-Upload inklusive
+Range-Requests, Sticker, Umfragen, Terminfindung → Termin, ICS-Feed und eine
+komplette Partie Tic Tac Toe.

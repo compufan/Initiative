@@ -65,7 +65,10 @@ export function MessageBubble({
   }
 
   return (
-    <div className={`msg-row ${isMine ? 'msg-row-mine' : 'msg-row-theirs'}`} data-message-id={message.id}>
+    <div
+      className={`msg-row ${isMine ? 'msg-row-mine' : 'msg-row-theirs'}${showAvatar ? ' msg-row-start' : ''}`}
+      data-message-id={message.id}
+    >
       {!isMine && (
         <span className="msg-avatar-slot">
           {showAvatar && isGroup && (

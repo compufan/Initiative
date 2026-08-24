@@ -1,3 +1,12 @@
+/**
+ * Spielregeln für die Darstellung im Client.
+ *
+ * Autoritativ sind die Regeln in `apps/api/src/games/` – der Server prüft jeden
+ * Zug und schickt den neuen Spielstand zurück. Diese Kopie erlaubt dem Client
+ * nur, Züge sofort optimistisch anzuzeigen und ungültige Eingaben vorab
+ * abzufangen. Ein neues Spiel braucht beide Seiten plus ein Brett unter
+ * `apps/web/src/modules/games/boards/`.
+ */
 import type { GameDefinition } from './types.js';
 import { ticTacToe } from './tic-tac-toe.js';
 import { connectFour } from './connect-four.js';

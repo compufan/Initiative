@@ -1,3 +1,11 @@
+/**
+ * Gemeinsame Contracts der PWA.
+ *
+ * Die Rust-API (`apps/api`) ist die Quelle der Wahrheit für den HTTP- und
+ * Realtime-Vertrag; dieses Paket spiegelt ihn für das Frontend: dieselben
+ * Feldnamen (camelCase), dieselben Grenzwerte, dasselbe Envelope-Format.
+ * Wer einen Endpunkt oder ein Limit ändert, ändert beide Seiten.
+ */
 export * from './constants.js';
 export * from './ids.js';
 
