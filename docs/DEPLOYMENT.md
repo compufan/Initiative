@@ -291,12 +291,17 @@ primary_region = "fra"
     timeout = "5s"
 ```
 
-> `dockerfile = "Dockerfile"` ist **relativ zu `apps/api/`** gemeint, nicht zur
-> Repo-Wurzel: flyctl setzt den Build-Context auf das Verzeichnis, in dem die
-> `fly.toml` liegt (also `apps/api`). Ein zusätzliches `--dockerfile
-> apps/api/Dockerfile` beim Deploy würde diesen Pfad **doppelt** anhängen und
-> mit `dockerfile 'apps/api/apps/api/Dockerfile' not found` fehlschlagen –
-> deshalb bei `fly deploy` unten kein `--dockerfile` angeben.
+> `dockerfile = "Dockerfile"` ist **relativ zum Ordner dieser `fly.toml`**
+> gemeint (also `apps/api`) – das entscheidet flyctl anhand des Pfads der
+> Config-Datei, unabhängig davon, aus welchem Verzeichnis `fly deploy`
+> aufgerufen wird. Der **Build-Context** (das Verzeichnis, aus dem `COPY` in
+> der Dockerfile liest) folgt dagegen einer eigenen, unabhängigen Regel:
+> Standardmäßig das Verzeichnis, in dem der Befehl läuft – **außer**, `fly
+> deploy` bekommt ein Verzeichnis als erstes Argument übergeben, wie im
+> nächsten Schritt. Deshalb unten unbedingt `fly deploy apps/api …` verwenden
+> (nicht `fly deploy --config apps/api/fly.toml …` ohne das Verzeichnis) –
+> sonst sucht `COPY` die Dateien im falschen Ordner und der Build bricht mit
+> `"/migrations": not found` (oder `Cargo.toml`/`src`) ab.
 
 Zuerst ein zufälliges `JWT_SECRET` erzeugen – der Befehl unterscheidet sich
 nach Betriebssystem, das Ergebnis einfach für den nächsten Schritt kopieren.
@@ -324,11 +329,13 @@ einfügen), egal in welchem Terminal:
 fly secrets set --app initiative-api DATABASE_URL="postgres://…-pooler…/initiative?sslmode=require" JWT_SECRET="‹Wert von eben›" PUBLIC_APP_URL="https://initiative.example.com" PUBLIC_API_URL="https://initiative-api.fly.dev" CORS_ORIGINS="https://initiative.example.com" S3_ENDPOINT="https://<account-id>.r2.cloudflarestorage.com" S3_BUCKET="initiative-media" S3_ACCESS_KEY_ID="…" S3_SECRET_ACCESS_KEY="…" VAPID_PUBLIC_KEY="…" VAPID_PRIVATE_KEY="…" VAPID_SUBJECT="mailto:du@example.com"
 ```
 
-Deploy immer mit `--config`, damit flyctl die mitgelieferte `apps/api/fly.toml`
-findet (egal aus welchem Verzeichnis der Befehl läuft):
+Deploy **mit `apps/api` als erstem Argument**, von der Repo-Wurzel aus. Das
+Argument setzt gleichzeitig den Build-Context **und** findet die dortige
+`fly.toml` automatisch – kein `--config` nötig, und genau das vermeidet den
+Ordner-Mismatch von oben:
 
 ```bash
-fly deploy --config apps/api/fly.toml --app initiative-api
+fly deploy apps/api --app initiative-api
 ```
 
 ```bash
