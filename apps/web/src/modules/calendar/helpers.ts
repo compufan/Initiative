@@ -402,6 +402,31 @@ export function repeatFromRrule(rrule: string | null, reference = new Date()): R
   };
 }
 
+/** Sunday-first weekday codes/labels, matching the RFC 5545 BYDAY values. */
+export const WEEKDAY_OPTIONS: { code: string; label: string }[] = [
+  { code: 'MO', label: 'Mo' },
+  { code: 'DI', label: 'Di' },
+  { code: 'MI', label: 'Mi' },
+  { code: 'DO', label: 'Do' },
+  { code: 'FR', label: 'Fr' },
+  { code: 'SA', label: 'Sa' },
+  { code: 'SO', label: 'So' },
+].map((option) => ({
+  ...option,
+  // ICS uses English two-letter codes; only the label stays German.
+  code: { MO: 'MO', DI: 'TU', MI: 'WE', DO: 'TH', FR: 'FR', SA: 'SA', SO: 'SU' }[option.code]!,
+}));
+
+export function toggleWeekday(byDay: string | null, code: string): string | null {
+  const current = new Set((byDay ?? '').split(',').filter(Boolean));
+  if (current.has(code)) current.delete(code);
+  else current.add(code);
+  if (current.size === 0) return null;
+  // Keep a stable, calendar order so the chips never jump around.
+  const order = WEEKDAY_OPTIONS.map((option) => option.code);
+  return order.filter((day) => current.has(day)).join(',');
+}
+
 export function buildRrule(state: RepeatState): string | null {
   if (state.freq === 'none') return null;
   const parts = [`FREQ=${state.freq}`];

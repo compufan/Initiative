@@ -10,6 +10,7 @@ import {
   EVENT_COLORS,
   REMINDER_OPTIONS,
   REPEAT_OPTIONS,
+  WEEKDAY_OPTIONS,
   type RepeatEnd,
   type RepeatFreq,
   type RepeatState,
@@ -23,6 +24,7 @@ import {
   repeatFromRrule,
   toDateInput,
   toTimeInput,
+  toggleWeekday,
 } from './helpers.js';
 
 interface FormState {
@@ -440,6 +442,35 @@ export function EventEditor(props: EventEditorProps) {
             />
             <span className="cal-inline-label">{repeatOption?.unit}</span>
           </div>
+
+          {form.repeat.freq === 'WEEKLY' && (
+            <div className="field">
+              <span className="cal-field-label">An welchen Tagen</span>
+              <div className="cal-chip-row" role="group" aria-label="Wochentage">
+                {WEEKDAY_OPTIONS.map((option) => {
+                  const active = (form.repeat.byDay ?? '').split(',').includes(option.code);
+                  return (
+                    <button
+                      key={option.code}
+                      type="button"
+                      className={`cal-chip ${active ? 'is-active' : ''}`}
+                      aria-pressed={active}
+                      onClick={() =>
+                        patchRepeat({ byDay: toggleWeekday(form.repeat.byDay, option.code) })
+                      }
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="cal-hint">
+                {form.repeat.byDay
+                  ? 'Der Termin wiederholt sich an den ausgewählten Tagen.'
+                  : 'Ohne Auswahl wiederholt sich der Termin am Starttag.'}
+              </p>
+            </div>
+          )}
 
           <div className="cal-segment" role="group" aria-label="Serienende">
             {(
