@@ -480,8 +480,12 @@ docker compose exec -T postgres pg_dump -U initiative initiative | gzip > backup
    | **Build Command**  | `pnpm build`   |
    | Output Directory   | `dist`         |
 
-   „Include source files outside of the Root Directory" muss aktiv sein – die
-   PWA importiert `packages/shared`.
+   Die PWA importiert `packages/shared` als `workspace:*`. Einen Schalter
+   dafür gibt es nicht mehr: Vercel erkennt den pnpm-Workspace selbst an der
+   `pnpm-lock.yaml` in der Repo-Wurzel und installiert von dort, auch wenn das
+   Root Directory auf `apps/web` steht. Die frühere Option „Include source
+   files outside of the Root Directory" existiert nicht mehr und wird auch
+   nicht gebraucht.
 
 3. **Environment Variables** (für Production _und_ Preview):
 
