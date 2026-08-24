@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5"
+    />
+    <title>Initiative</title>
+    <meta name="description" content="Messenger, Kalender, Umfragen und Mini-Spiele – als PWA auf jedem Gerät." />
+    <meta name="theme-color" content="#0b1020" />
+    <meta name="color-scheme" content="dark light" />
+
+    <!-- iOS: standalone launch, status bar and home-screen icon -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Initiative" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/icons/icon-192.png" sizes="192x192" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <style>
+      /* Painted before the bundle boots so the launch screen never flashes white. */
+      html {
+        background: #0b1020;
+      }
+      @media (prefers-color-scheme: light) {
+        html:not([data-theme='dark']) {
+          background: #f5f6fb;
+        }
+      }
+      #root {
+        min-height: 100dvh;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>Initiative benötigt JavaScript.</noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

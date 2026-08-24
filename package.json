@@ -1,0 +1,24 @@
+{
+  "name": "initiative",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Initiative – modulare PWA-Plattform, erstes Modul: Messenger",
+  "packageManager": "pnpm@10.33.0",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "pnpm --parallel --filter \"./apps/*\" dev",
+    "dev:api": "pnpm --filter @initiative/api dev",
+    "dev:web": "pnpm --filter @initiative/web dev",
+    "build": "pnpm --filter @initiative/shared build && pnpm --filter @initiative/api build && pnpm --filter @initiative/web build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "db:migrate": "pnpm --filter @initiative/api db:migrate",
+    "db:seed": "pnpm --filter @initiative/api db:seed",
+    "format": "prettier --write \"**/*.{ts,tsx,css,json,md}\""
+  },
+  "devDependencies": {
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2"
+  }
+}
