@@ -54,7 +54,7 @@ impl AppState {
     /// Starts the LISTEN/NOTIFY task that fans events out across instances.
     pub fn spawn_realtime_listener(&self) {
         let bus = self.bus.clone();
-        let url = self.config.database_url.clone();
+        let url = self.config.realtime_database_url.clone();
         tokio::spawn(async move { bus.listen(url).await });
     }
 }

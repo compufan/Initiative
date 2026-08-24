@@ -35,10 +35,11 @@ Gelesen in `apps/api/src/config.rs`. Was hier nicht steht, wird nicht gelesen.
 
 ### Datenbank
 
-| Variable            | Standard        | Bedeutung                                                                 |
-| ------------------- | --------------- | ------------------------------------------------------------------------- |
-| `DATABASE_URL`      | – (**Pflicht**) | Postgres-Verbindung. TLS wird über die URL gesteuert: `?sslmode=require`. |
-| `DATABASE_POOL_MAX` | `10`            | Maximale Verbindungen im Pool. Bei kleinen Hostern eher senken (5).       |
+| Variable                 | Standard                      | Bedeutung                                                                                                                                     |
+| ------------------------ | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`           | – (**Pflicht**)               | Postgres-Verbindung. TLS wird über die URL gesteuert: `?sslmode=require`.                                                                       |
+| `REALTIME_DATABASE_URL`  | aus `DATABASE_URL` abgeleitet | Verbindung für LISTEN/NOTIFY. Muss **direkt** sein, nicht über einen Pooler – siehe Warnung unten. Bei Neon wird `-pooler` automatisch entfernt. |
+| `DATABASE_POOL_MAX`      | `10`                          | Maximale Verbindungen im Pool. Bei kleinen Hostern eher senken (5).                                                                            |
 
 > Rust-API aber **nicht** ausgewertet – TLS kommt ausschließlich aus dem
 > Connection String. Neon und Supabase liefern ihn bereits mit `sslmode=require`.
@@ -116,6 +117,17 @@ neu gebaut werden – ein Neustart reicht nicht.
 
 > `-pooler` im Hostnamen ist wichtig. Ohne Pooler geht Neon bei mehreren
 > Verbindungen schnell in die Knie; mit Pooler `DATABASE_POOL_MAX=5` setzen.
+
+> **Wichtig für Realtime:** Der Pooler (PgBouncer im Transaction-Mode)
+> unterstützt **kein LISTEN/NOTIFY** – genau das benutzt aber
+> `REALTIME_BUS=postgres`, damit neue Nachrichten sofort ankommen. Über die
+> gepoolte Verbindung allein bliebe der Chat stumm: Nachrichten tauchen erst
+> beim erneuten Öffnen auf, weil sie dann per REST nachgeladen werden.
+> Die API leitet deshalb aus `DATABASE_URL` automatisch die direkte Verbindung
+> ab (sie entfernt `-pooler` aus dem Hostnamen) und benutzt sie nur für den
+> Listener. Bei anderen Anbietern – etwa Supabase mit Port `6543` – muss
+> `REALTIME_DATABASE_URL` von Hand auf die **direkte** Verbindung gesetzt
+> werden. Ob es klappt, zeigt `/healthz` im Feld `busConnected`.
 
 ### Supabase
 
@@ -205,6 +217,15 @@ einsetzen und `AllowedOrigins` auf die URL **deiner PWA** ändern:
 Mehrere Umgebungen (Produktion und Vorschau) einfach als weitere Einträge in
 `AllowedOrigins` ergänzen. Ein `*` funktioniert, verschenkt aber Sicherheit ohne
 Not.
+
+> **Reihenfolge-Falle:** Diese Regel lässt sich erst richtig setzen, wenn die
+> echte PWA-Domain feststeht – die kennt man aber erst nach dem ersten
+> Vercel-Deploy. Steht hier noch ein Platzhalter, schlägt **jeder** Upload fehl
+> (Foto, Sprachnachricht, Video, Sticker), und zwar mit einer nichtssagenden
+> Meldung wie „Fetch fehlgeschlagen“: Der Browser lädt per `PUT` direkt in den
+> Bucket, und ohne passende CORS-Regel bricht er ab, bevor überhaupt ein
+> Statuscode zurückkommt. Also nach dem Frontend-Deploy hierher zurückkommen
+> und `AllowedOrigins` auf die echte Domain setzen.
 
 ### 5. Prüfen
 
@@ -685,6 +706,7 @@ Bestehende Sitzungen bleiben davon unberührt.
 | PWA lädt, aber jede Anfrage schlägt fehl            | `VITE_API_URL` falsch oder fehlt  | Wert prüfen und **neu bauen** – er steckt im Bundle                             |
 | `blocked by CORS policy` in der Konsole             | Origin nicht erlaubt              | PWA-URL in `CORS_ORIGINS` **ohne** Schrägstrich am Ende                         |
 | Chats aktualisieren sich nicht von selbst           | WebSocket kommt nicht durch       | Proxy muss Upgrades durchlassen; bei Fly `min_machines_running = 1` setzen      |
+| Neue Nachrichten erst nach erneutem Öffnen des Chats | `busConnected: false` in `/healthz` – der LISTEN-Kanal steht nicht, weil er über einen Pooler läuft | `REALTIME_DATABASE_URL` auf die **direkte** (nicht gepoolte) Verbindung setzen; bei Neon geschieht das automatisch |
 | Nachrichten kommen nur auf einer Instanz an         | `REALTIME_BUS=memory`             | auf `postgres` stellen                                                          |
 | Upload bricht mit CORS-Fehler ab                    | R2-CORS-Regel                     | `AllowedOrigins`, `AllowedMethods` `PUT`/`GET`, `AllowedHeaders` `content-type` |
 | Bilder bleiben grau                                 | `PUBLIC_API_URL` falsch           | auf die echte API-URL setzen, Medien-URLs entstehen daraus                      |

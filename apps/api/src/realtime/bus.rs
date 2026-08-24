@@ -3,6 +3,7 @@
 //! `postgres` uses LISTEN/NOTIFY so the API scales horizontally on Fly.io or
 //! Koyeb without an extra Redis; `memory` is for single-instance setups and tests.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -37,6 +38,9 @@ pub struct RealtimeBus {
     kind: BusKind,
     pool: PgPool,
     hub: OnceCell<Arc<Hub>>,
+    /// Ob der LISTEN-Kanal gerade wirklich steht. Ohne das meldet `/healthz`
+    /// „bus: postgres“ auch dann, wenn überhaupt nichts zugestellt wird.
+    listening: AtomicBool,
 }
 
 impl RealtimeBus {
@@ -45,6 +49,16 @@ impl RealtimeBus {
             kind,
             pool,
             hub: OnceCell::new(),
+            listening: AtomicBool::new(false),
+        }
+    }
+
+    /// `true`, sobald der LISTEN-Kanal steht. Bei `memory` immer `true`, weil
+    /// dort lokal zugestellt wird und es nichts zu verbinden gibt.
+    pub fn listening(&self) -> bool {
+        match self.kind {
+            BusKind::Memory => true,
+            BusKind::Postgres => self.listening.load(Ordering::Relaxed),
         }
     }
 
@@ -123,6 +137,14 @@ impl RealtimeBus {
         if self.kind != BusKind::Postgres {
             return;
         }
+        if is_pooled_url(&database_url) {
+            tracing::error!(
+                "REALTIME_BUS=postgres zeigt auf einen Verbindungs-Pooler. PgBouncer im \
+                 Transaction-Mode unterstuetzt LISTEN/NOTIFY nicht, Nachrichten kaemen nie \
+                 in Echtzeit an. Setze REALTIME_DATABASE_URL auf die direkte \
+                 (nicht gepoolte) Verbindung."
+            );
+        }
         loop {
             match PgListener::connect(&database_url).await {
                 Ok(mut listener) => {
@@ -131,6 +153,7 @@ impl RealtimeBus {
                         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                         continue;
                     }
+                    self.listening.store(true, Ordering::Relaxed);
                     tracing::info!("realtime bus listening on {CHANNEL}");
                     loop {
                         match listener.recv().await {
@@ -156,6 +179,7 @@ impl RealtimeBus {
                             }
                         }
                     }
+                    self.listening.store(false, Ordering::Relaxed);
                 }
                 Err(error) => {
                     tracing::warn!(%error, "realtime listener connect failed, retrying");
@@ -163,5 +187,63 @@ impl RealtimeBus {
             }
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         }
+    }
+}
+
+/// Erkennt die Pooler-Endpunkte der verbreiteten Anbieter.
+///
+/// Neon haengt `-pooler` an den Host, Supabase nutzt `pgbouncer=true` bzw. den
+/// Port 6543. Alle drei sprechen PgBouncer im Transaction-Mode, der
+/// LISTEN/NOTIFY nicht unterstuetzt.
+fn is_pooled_url(url: &str) -> bool {
+    url.contains("-pooler.")
+        || url.contains("pgbouncer=true")
+        || url.contains(":6543/")
+        || url.ends_with(":6543")
+}
+
+/// Leitet aus einer gepoolten Verbindung die direkte ab, damit LISTEN/NOTIFY
+/// funktioniert. Greift nur bei Neon (`-pooler` im Hostnamen); alles andere
+/// bleibt unveraendert und muss ueber `REALTIME_DATABASE_URL` gesetzt werden.
+pub fn direct_url(database_url: &str) -> String {
+    if database_url.contains("-pooler.") {
+        database_url.replace("-pooler.", ".")
+    } else {
+        database_url.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{direct_url, is_pooled_url};
+
+    #[test]
+    fn recognises_pooled_endpoints() {
+        assert!(is_pooled_url(
+            "postgres://u:p@ep-x-123-pooler.eu-central-1.aws.neon.tech/db?sslmode=require"
+        ));
+        assert!(is_pooled_url("postgres://u:p@db.supabase.co:6543/postgres"));
+        assert!(is_pooled_url(
+            "postgres://u:p@db.example.com/postgres?pgbouncer=true"
+        ));
+        assert!(!is_pooled_url(
+            "postgres://u:p@ep-x-123.eu-central-1.aws.neon.tech/db?sslmode=require"
+        ));
+        assert!(!is_pooled_url("postgres://u:p@127.0.0.1:5432/initiative"));
+    }
+
+    #[test]
+    fn derives_the_direct_neon_endpoint() {
+        assert_eq!(
+            direct_url(
+                "postgres://u:p@ep-x-123-pooler.eu-central-1.aws.neon.tech/db?sslmode=require"
+            ),
+            "postgres://u:p@ep-x-123.eu-central-1.aws.neon.tech/db?sslmode=require"
+        );
+        // Ohne Pooler bleibt alles, wie es ist.
+        assert_eq!(
+            direct_url("postgres://u:p@127.0.0.1:5432/initiative"),
+            "postgres://u:p@127.0.0.1:5432/initiative"
+        );
     }
 }

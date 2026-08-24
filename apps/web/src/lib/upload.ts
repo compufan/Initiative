@@ -17,11 +17,23 @@ export async function uploadBlob(attachment: OutboxAttachment): Promise<Attachme
   });
 
   if (target.strategy === 'presigned') {
-    const response = await fetch(target.uploadUrl, {
-      method: 'PUT',
-      headers: target.headers,
-      body: attachment.blob,
-    });
+    let response: Response;
+    try {
+      response = await fetch(target.uploadUrl, {
+        method: 'PUT',
+        headers: target.headers,
+        body: attachment.blob,
+      });
+    } catch (error) {
+      // Der Browser lädt hier direkt in den Bucket. Fehlt dort die CORS-Regel
+      // für diese Domain, bricht er ohne Statuscode ab – die blanke
+      // fetch-Meldung ("Failed to fetch") sagt niemandem, was zu tun ist.
+      throw new Error(
+        'Upload zum Speicher blockiert. Meist fehlt im Bucket die CORS-Regel für ' +
+          `${window.location.origin} (AllowedMethods PUT und GET, AllowedHeaders content-type). ` +
+          `Ursprüngliche Meldung: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
     if (!response.ok) throw new Error(`Upload fehlgeschlagen (${response.status})`);
     return api.media.completeUpload(target.attachmentId, {
       width: attachment.width,

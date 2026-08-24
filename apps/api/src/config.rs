@@ -50,6 +50,10 @@ pub struct Config {
     pub log_level: String,
 
     pub database_url: String,
+    /// Verbindung für den LISTEN/NOTIFY-Kanal. Muss **direkt** sein: Pooler wie
+    /// Neons `-pooler`-Endpunkt oder PgBouncer im Transaction-Mode unterstützen
+    /// LISTEN/NOTIFY nicht, Realtime bliebe sonst stumm.
+    pub realtime_database_url: String,
     pub database_pool_max: u32,
 
     pub jwt_secret: String,
@@ -197,6 +201,8 @@ impl Config {
             port: number("PORT", 8080u16),
             log_level: var_or("LOG_LEVEL", "info"),
 
+            realtime_database_url: var("REALTIME_DATABASE_URL")
+                .unwrap_or_else(|| crate::realtime::bus::direct_url(&database_url)),
             database_url,
             database_pool_max: number("DATABASE_POOL_MAX", 10u32),
 
