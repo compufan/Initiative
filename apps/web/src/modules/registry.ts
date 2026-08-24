@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react';
 import type { RouteObject } from 'react-router-dom';
 import messenger from './messenger/module.js';
+import media from './media/module.js';
 import stickers from './stickers/module.js';
 import calendar from './calendar/module.js';
 import polls from './polls/module.js';
@@ -16,6 +17,7 @@ import type { AppModuleDefinition, ComposerAction, MessageRendererProps, NavItem
  */
 export const appModules: AppModuleDefinition[] = [
   messenger,
+  media,
   calendar,
   games,
   stickers,
