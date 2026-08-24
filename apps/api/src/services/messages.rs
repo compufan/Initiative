@@ -15,7 +15,10 @@ use crate::state::AppState;
 pub fn to_reaction_dtos(rows: &[ReactionRow]) -> Vec<ReactionDto> {
     let mut grouped: HashMap<String, Vec<Uuid>> = HashMap::new();
     for row in rows {
-        grouped.entry(row.emoji.clone()).or_default().push(row.user_id);
+        grouped
+            .entry(row.emoji.clone())
+            .or_default()
+            .push(row.user_id);
     }
     let mut reactions: Vec<ReactionDto> = grouped
         .into_iter()
@@ -41,7 +44,11 @@ fn base_dto(row: &MessageRow) -> MessageDto {
         attachments: Vec::new(),
         reply_to_id: row.reply_to_id,
         reply_to: None,
-        metadata: if deleted { json!({}) } else { row.metadata.clone() },
+        metadata: if deleted {
+            json!({})
+        } else {
+            row.metadata.clone()
+        },
         reactions: Vec::new(),
         client_id: row.client_id.clone(),
         created_at: row.created_at,
@@ -78,7 +85,10 @@ pub async fn hydrate_messages(
             .await?;
     let mut reactions_by_message: HashMap<Uuid, Vec<ReactionRow>> = HashMap::new();
     for row in reaction_rows {
-        reactions_by_message.entry(row.message_id).or_default().push(row);
+        reactions_by_message
+            .entry(row.message_id)
+            .or_default()
+            .push(row);
     }
 
     let mut replies: HashMap<Uuid, MessageSnippet> = HashMap::new();
@@ -108,7 +118,11 @@ pub async fn hydrate_messages(
                     id: row.id,
                     sender_id: row.sender_id,
                     r#type: row.r#type.clone(),
-                    body: if row.deleted_at.is_some() { None } else { row.body.clone() },
+                    body: if row.deleted_at.is_some() {
+                        None
+                    } else {
+                        row.body.clone()
+                    },
                     attachment_kind: kind_by_message.get(&row.id).cloned(),
                     deleted_at: row.deleted_at,
                 },
@@ -151,7 +165,10 @@ pub async fn load_message(
         .bind(message_id)
         .fetch_all(&state.pool)
         .await?;
-    Ok(hydrate_messages(state, rows, viewer_id).await?.into_iter().next())
+    Ok(hydrate_messages(state, rows, viewer_id)
+        .await?
+        .into_iter()
+        .next())
 }
 
 pub async fn require_message(pool: &PgPool, message_id: Uuid) -> AppResult<MessageRow> {
@@ -207,7 +224,13 @@ impl NewMessage {
         }
     }
 
-    pub fn entity(conversation_id: Uuid, sender_id: Uuid, r#type: &str, key: &str, id: Uuid) -> Self {
+    pub fn entity(
+        conversation_id: Uuid,
+        sender_id: Uuid,
+        r#type: &str,
+        key: &str,
+        id: Uuid,
+    ) -> Self {
         Self {
             conversation_id,
             sender_id: Some(sender_id),
@@ -310,7 +333,10 @@ pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<Me
         .ok_or_else(|| AppError::internal("Nachricht konnte nicht geladen werden"))?;
 
     let members = super::conversations::member_ids(&state.pool, input.conversation_id).await?;
-    state.hub.publish(members.clone(), Event::message_new(&message)).await;
+    state
+        .hub
+        .publish(members.clone(), Event::message_new(&message))
+        .await;
 
     if !input.silent {
         super::notify::notify_new_message(state, &message, &members).await;
@@ -320,7 +346,10 @@ pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<Me
 
 pub async fn publish_message_update(state: &AppState, message: &MessageDto) -> AppResult<()> {
     let members = super::conversations::member_ids(&state.pool, message.conversation_id).await?;
-    state.hub.publish(members, Event::message_updated(message)).await;
+    state
+        .hub
+        .publish(members, Event::message_updated(message))
+        .await;
     Ok(())
 }
 

@@ -76,7 +76,11 @@ function fold(line: string): string {
 }
 
 export function buildIcsEvent(event: IcsEventInput, domain = 'initiative.app'): string[] {
-  const lines: string[] = ['BEGIN:VEVENT', `UID:${event.id}@${domain}`, `DTSTAMP:${toUtcStamp(event.updatedAt ?? event.createdAt ?? new Date())}`];
+  const lines: string[] = [
+    'BEGIN:VEVENT',
+    `UID:${event.id}@${domain}`,
+    `DTSTAMP:${toUtcStamp(event.updatedAt ?? event.createdAt ?? new Date())}`,
+  ];
 
   if (event.allDay) {
     lines.push(`DTSTART;VALUE=DATE:${toDateStamp(event.startsAt)}`);
@@ -97,7 +101,13 @@ export function buildIcsEvent(event: IcsEventInput, domain = 'initiative.app'): 
   if (event.organizerEmail) lines.push(`ORGANIZER:mailto:${event.organizerEmail}`);
 
   for (const minutes of event.reminderMinutes ?? []) {
-    lines.push('BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${escapeText(event.title)}`, `TRIGGER:-PT${minutes}M`, 'END:VALARM');
+    lines.push(
+      'BEGIN:VALARM',
+      'ACTION:DISPLAY',
+      `DESCRIPTION:${escapeText(event.title)}`,
+      `TRIGGER:-PT${minutes}M`,
+      'END:VALARM',
+    );
   }
 
   lines.push('END:VEVENT');

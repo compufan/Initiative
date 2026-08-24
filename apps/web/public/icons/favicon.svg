@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Initiative">
+  <defs>
+    <linearGradient id="initiative-bolt" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5766f5" />
+      <stop offset="1" stop-color="#22d3ee" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14.08" fill="url(#initiative-bolt)" />
+  <path d="M38.04 8.65L19.14 34.36L29.64 34.36L25.96 55.35L44.86 29.64L34.36 29.64Z" fill="#ffffff" />
+</svg>

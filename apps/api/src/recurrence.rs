@@ -52,9 +52,13 @@ fn parse_ics_date(value: &str) -> Option<DateTime<Utc>> {
         } else {
             (0, 0, 0)
         };
-        return Utc.with_ymd_and_hms(year, month, day, hour, minute, second).single();
+        return Utc
+            .with_ymd_and_hms(year, month, day, hour, minute, second)
+            .single();
     }
-    DateTime::parse_from_rfc3339(value).ok().map(|value| value.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
 }
 
 pub fn parse_rrule(rrule: Option<&str>) -> Option<ParsedRule> {
@@ -101,7 +105,13 @@ pub fn parse_rrule(rrule: Option<&str>) -> Option<ParsedRule> {
         }
     }
 
-    Some(ParsedRule { frequency: frequency?, interval, count, until, by_day })
+    Some(ParsedRule {
+        frequency: frequency?,
+        interval,
+        count,
+        until,
+        by_day,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,7 +144,11 @@ pub fn expand_occurrences(
     let duration = (ends_at - starts_at).max(Duration::zero());
     let Some(rule) = parse_rrule(rrule) else {
         return if starts_at <= window_end && ends_at >= window_start {
-            vec![Occurrence { index: 0, starts_at, ends_at }]
+            vec![Occurrence {
+                index: 0,
+                starts_at,
+                ends_at,
+            }]
         } else {
             Vec::new()
         };
@@ -324,8 +338,14 @@ mod tests {
 
     #[test]
     fn describes_rules_in_german() {
-        assert_eq!(describe_rrule(Some("FREQ=WEEKLY;COUNT=4")).unwrap(), "jede Woche, 4×");
-        assert_eq!(describe_rrule(Some("FREQ=DAILY;INTERVAL=3")).unwrap(), "alle 3 Tage");
+        assert_eq!(
+            describe_rrule(Some("FREQ=WEEKLY;COUNT=4")).unwrap(),
+            "jede Woche, 4×"
+        );
+        assert_eq!(
+            describe_rrule(Some("FREQ=DAILY;INTERVAL=3")).unwrap(),
+            "alle 3 Tage"
+        );
         assert!(describe_rrule(None).is_none());
     }
 }

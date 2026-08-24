@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import { CONVERSATION_TYPES, LIMITS, MEMBER_ROLES, type ConversationType, type MemberRole } from '../constants.js';
+import {
+  CONVERSATION_TYPES,
+  LIMITS,
+  MEMBER_ROLES,
+  type ConversationType,
+  type MemberRole,
+} from '../constants.js';
 import type { UserDto } from './user.js';
 import type { MessageDto } from './message.js';
 

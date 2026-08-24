@@ -21,7 +21,10 @@ impl AuthUser {
 fn token_from(parts: &Parts) -> Option<String> {
     if let Some(header) = parts.headers.get(axum::http::header::AUTHORIZATION) {
         let value = header.to_str().ok()?;
-        if let Some(token) = value.strip_prefix("Bearer ").or_else(|| value.strip_prefix("bearer ")) {
+        if let Some(token) = value
+            .strip_prefix("Bearer ")
+            .or_else(|| value.strip_prefix("bearer "))
+        {
             return Some(token.trim().to_string());
         }
     }
@@ -31,7 +34,9 @@ fn token_from(parts: &Parts) -> Option<String> {
         query.split('&').find_map(|pair| {
             let (key, value) = pair.split_once('=')?;
             if key == "access_token" || key == "token" {
-                urlencoding::decode(value).ok().map(|decoded| decoded.into_owned())
+                urlencoding::decode(value)
+                    .ok()
+                    .map(|decoded| decoded.into_owned())
             } else {
                 None
             }
@@ -54,8 +59,8 @@ where
         if claims.typ != "access" {
             return Err(AppError::unauthorized("Ungültiges Token"));
         }
-        let id = Uuid::parse_str(&claims.sub)
-            .map_err(|_| AppError::unauthorized("Ungültiges Token"))?;
+        let id =
+            Uuid::parse_str(&claims.sub).map_err(|_| AppError::unauthorized("Ungültiges Token"))?;
         Ok(AuthUser(id))
     }
 }

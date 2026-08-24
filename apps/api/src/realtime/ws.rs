@@ -127,7 +127,10 @@ async fn handle(socket: WebSocket, state: AppState, user_id: Uuid) {
 async fn broadcast_presence(state: &AppState, user_id: Uuid, online: bool) {
     match contacts_of(&state.pool, user_id).await {
         Ok(contacts) if !contacts.is_empty() => {
-            state.hub.publish(contacts, Event::presence(user_id, online)).await;
+            state
+                .hub
+                .publish(contacts, Event::presence(user_id, online))
+                .await;
         }
         Ok(_) => {}
         Err(error) => tracing::warn!(%error, "presence broadcast failed"),
@@ -162,10 +165,16 @@ async fn handle_client_event(
             let Some(conversation_id) = uuid_field(&payload, "conversationId") else {
                 return Ok(());
             };
-            if get_membership(&state.pool, conversation_id, user_id).await?.is_none() {
+            if get_membership(&state.pool, conversation_id, user_id)
+                .await?
+                .is_none()
+            {
                 return Ok(());
             }
-            let typing = payload.get("typing").and_then(Value::as_bool).unwrap_or(true);
+            let typing = payload
+                .get("typing")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
             let until = chrono::Utc::now()
                 + chrono::Duration::milliseconds(if typing { TYPING_TTL_MS } else { 0 });
             let audience: Vec<Uuid> = member_ids(&state.pool, conversation_id)
@@ -188,7 +197,10 @@ async fn handle_client_event(
             ) else {
                 return Ok(());
             };
-            if get_membership(&state.pool, conversation_id, user_id).await?.is_none() {
+            if get_membership(&state.pool, conversation_id, user_id)
+                .await?
+                .is_none()
+            {
                 return Ok(());
             }
             sqlx::query(

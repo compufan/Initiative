@@ -47,7 +47,9 @@ fn cors_layer(state: &AppState) -> CorsLayer {
         .max_age(std::time::Duration::from_secs(3600));
 
     if allow_any {
-        return layer.allow_origin(AllowOrigin::any()).allow_credentials(false);
+        return layer
+            .allow_origin(AllowOrigin::any())
+            .allow_credentials(false);
     }
 
     layer.allow_origin(AllowOrigin::predicate(move |origin: &HeaderValue, _| {

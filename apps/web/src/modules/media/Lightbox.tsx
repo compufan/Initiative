@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type TouchEvent,
-  type TouchList,
-} from 'react';
+import { useCallback, useEffect, useRef, useState, type TouchEvent, type TouchList } from 'react';
 import { createPortal } from 'react-dom';
 import type { AttachmentDto } from '@initiative/shared';
 import { mediaSrc } from './helpers.js';
@@ -220,15 +213,27 @@ export function Lightbox({ items, index, onClose }: LightboxProps) {
 
       {items.length > 1 && (
         <div className="media-lightbox-nav">
-          <button type="button" className="media-round-btn" onClick={() => go(-1)} aria-label="Vorheriges Foto">
+          <button
+            type="button"
+            className="media-round-btn"
+            onClick={() => go(-1)}
+            aria-label="Vorheriges Foto"
+          >
             ‹
           </button>
-          <button type="button" className="media-round-btn" onClick={() => go(1)} aria-label="Nächstes Foto">
+          <button
+            type="button"
+            className="media-round-btn"
+            onClick={() => go(1)}
+            aria-label="Nächstes Foto"
+          >
             ›
           </button>
         </div>
       )}
-      <p className="media-lightbox-hint">Nach unten wischen zum Schließen · Doppeltippen zum Zoomen</p>
+      <p className="media-lightbox-hint">
+        Nach unten wischen zum Schließen · Doppeltippen zum Zoomen
+      </p>
     </div>,
     document.body,
   );

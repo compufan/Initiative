@@ -12,7 +12,9 @@ use crate::db::UserRow;
 use crate::dto::{ListResult, SelfUserDto, UserDto};
 use crate::error::{AppError, AppResult};
 use crate::realtime::Event;
-use crate::services::users::{contacts_of, load_user, merge_settings, to_self_user_dto, to_user_dto};
+use crate::services::users::{
+    contacts_of, load_user, merge_settings, to_self_user_dto, to_user_dto,
+};
 use crate::state::AppState;
 use crate::validate::{clean, Validator};
 
@@ -53,7 +55,9 @@ async fn search(
     .await?;
 
     Ok(Json(ListResult::new(
-        rows.iter().map(|row| to_user_dto(row, &state.config)).collect(),
+        rows.iter()
+            .map(|row| to_user_dto(row, &state.config))
+            .collect(),
     )))
 }
 

@@ -157,14 +157,18 @@ pub async fn load_poll_dtos(
     .bind(poll_ids)
     .fetch_all(&state.pool)
     .await?;
-    let votes = sqlx::query_as::<_, PollVoteRow>("select * from poll_votes where poll_id = any($1)")
-        .bind(poll_ids)
-        .fetch_all(&state.pool)
-        .await?;
+    let votes =
+        sqlx::query_as::<_, PollVoteRow>("select * from poll_votes where poll_id = any($1)")
+            .bind(poll_ids)
+            .fetch_all(&state.pool)
+            .await?;
 
     let mut options_by_poll: HashMap<Uuid, Vec<PollOptionRow>> = HashMap::new();
     for option in options {
-        options_by_poll.entry(option.poll_id).or_default().push(option);
+        options_by_poll
+            .entry(option.poll_id)
+            .or_default()
+            .push(option);
     }
     let mut votes_by_poll: HashMap<Uuid, Vec<PollVoteRow>> = HashMap::new();
     for vote in votes {
@@ -176,8 +180,14 @@ pub async fn load_poll_dtos(
         .map(|poll| {
             let dto = to_poll_dto(
                 &poll,
-                options_by_poll.get(&poll.id).map(Vec::as_slice).unwrap_or(&[]),
-                votes_by_poll.get(&poll.id).map(Vec::as_slice).unwrap_or(&[]),
+                options_by_poll
+                    .get(&poll.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]),
+                votes_by_poll
+                    .get(&poll.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]),
                 viewer_id,
             );
             (poll.id, dto)
@@ -279,15 +289,14 @@ pub async fn set_votes(
     user_id: Uuid,
     votes: Vec<(Uuid, String)>,
 ) -> AppResult<()> {
-    let valid: HashSet<Uuid> = sqlx::query_as::<_, (Uuid,)>(
-        "select id from poll_options where poll_id = $1",
-    )
-    .bind(poll.id)
-    .fetch_all(&state.pool)
-    .await?
-    .into_iter()
-    .map(|(id,)| id)
-    .collect();
+    let valid: HashSet<Uuid> =
+        sqlx::query_as::<_, (Uuid,)>("select id from poll_options where poll_id = $1")
+            .bind(poll.id)
+            .fetch_all(&state.pool)
+            .await?
+            .into_iter()
+            .map(|(id,)| id)
+            .collect();
 
     let mut accepted: Vec<(Uuid, String)> = votes
         .into_iter()
@@ -323,7 +332,10 @@ pub async fn broadcast_poll(state: &AppState, poll: &PollDto) -> AppResult<()> {
     let members = super::conversations::member_ids(&state.pool, poll.conversation_id).await?;
     for user_id in &members {
         if let Ok(view) = load_poll_dto(state, poll.id, *user_id).await {
-            state.hub.publish(vec![*user_id], Event::poll_updated(&view)).await;
+            state
+                .hub
+                .publish(vec![*user_id], Event::poll_updated(&view))
+                .await;
         }
     }
     super::messages::republish_message(
@@ -360,7 +372,10 @@ impl MessageExpander for PollExpander {
                 if let Some(poll) = polls.get(&poll_id) {
                     result.insert(
                         message.id,
-                        Expansion { poll: Some(poll.clone()), ..Default::default() },
+                        Expansion {
+                            poll: Some(poll.clone()),
+                            ..Default::default()
+                        },
                     );
                 }
             }
@@ -377,7 +392,8 @@ mod tests {
         PollOptionDto {
             id,
             label: format!("Option {position}"),
-            starts_at: starts_at.map(|offset| chrono::DateTime::UNIX_EPOCH + chrono::Duration::seconds(offset)),
+            starts_at: starts_at
+                .map(|offset| chrono::DateTime::UNIX_EPOCH + chrono::Duration::seconds(offset)),
             ends_at: None,
             position,
             created_by: None,
@@ -419,11 +435,7 @@ mod tests {
         let a = Uuid::now_v7();
         let b = Uuid::now_v7();
         let options = vec![option(a, 0, None), option(b, 1, None)];
-        let votes = vec![
-            vote(a, 1, "yes"),
-            vote(a, 2, "no"),
-            vote(b, 3, "yes"),
-        ];
+        let votes = vec![vote(a, 1, "yes"), vote(a, 2, "no"), vote(b, 3, "yes")];
         let result = tally(&options, &votes);
         assert_eq!(best_option(&options, &result).unwrap().id, b);
     }

@@ -28,7 +28,13 @@ const NO_TYPING: { userId: string; until: number }[] = [];
 type RenderItem =
   | { kind: 'day'; key: string; label: string }
   | { kind: 'unread'; key: string }
-  | { kind: 'message'; key: string; message: ChatMessage; showSender: boolean; showAvatar: boolean };
+  | {
+      kind: 'message';
+      key: string;
+      message: ChatMessage;
+      showSender: boolean;
+      showAvatar: boolean;
+    };
 
 /** Keeps the composer above the on-screen keyboard on iOS (100dvh stays put). */
 function useKeyboardInset(): number {
@@ -73,7 +79,11 @@ export function ChatScreen() {
   const atBottom = useRef(true);
   const restore = useRef<{ height: number; top: number } | null>(null);
   const didInitialScroll = useRef(false);
-  const unreadAnchor = useRef<{ conversationId: string; enabled: boolean; lastReadId: string | null }>({
+  const unreadAnchor = useRef<{
+    conversationId: string;
+    enabled: boolean;
+    lastReadId: string | null;
+  }>({
     conversationId: '',
     enabled: false,
     lastReadId: null,
@@ -273,7 +283,9 @@ export function ChatScreen() {
             <span className="msg-header-title truncate">
               {conversation ? conversationTitle(conversation, myId) : 'Chat'}
             </span>
-            <span className={`msg-header-status truncate ${typingNames.length > 0 ? 'is-typing' : ''}`}>
+            <span
+              className={`msg-header-status truncate ${typingNames.length > 0 ? 'is-typing' : ''}`}
+            >
               {status}
             </span>
           </span>
@@ -292,7 +304,9 @@ export function ChatScreen() {
         <div className="msg-scroll" ref={scrollRef} onScroll={onScroll}>
           <div className="msg-content" ref={contentRef}>
             {hasMore && (
-              <div className="msg-loader">{loading ? <Spinner label="Ältere Nachrichten" /> : '…'}</div>
+              <div className="msg-loader">
+                {loading ? <Spinner label="Ältere Nachrichten" /> : '…'}
+              </div>
             )}
 
             {messages.length === 0 && loading && (

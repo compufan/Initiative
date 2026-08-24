@@ -1,0 +1,924 @@
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
+import { createPortal } from 'react-dom';
+import { LIMITS, formatBytes, type StickerPackDto } from '@initiative/shared';
+import { toast, useHideNav } from '../../state/ui.js';
+import { clamp, errorMessage, firstEmoji, loadImageFromBlob, supportsWebp } from './helpers.js';
+import { SavePackSheet } from './SavePackSheet.js';
+import {
+  STICKER_SIZE,
+  cloneDoc,
+  createDoc,
+  exportSticker,
+  isEmptyDoc,
+  renderSticker,
+  type EditorSource,
+  type ShapeKind,
+  type StickerDoc,
+  type TextSlot,
+} from './render.js';
+
+type Tool = 'move' | 'erase';
+type Tab = 'source' | 'move' | 'shape' | 'cutout' | 'outline' | 'text';
+
+const TABS: { key: Tab; icon: string; label: string }[] = [
+  { key: 'source', icon: '🖼️', label: 'Quelle' },
+  { key: 'move', icon: '✋', label: 'Bewegen' },
+  { key: 'shape', icon: '⬜', label: 'Form' },
+  { key: 'cutout', icon: '🪄', label: 'Freistellen' },
+  { key: 'outline', icon: '✨', label: 'Kontur' },
+  { key: 'text', icon: '🅣', label: 'Text' },
+];
+
+const SHAPES: { key: ShapeKind; label: string; icon: string }[] = [
+  { key: 'square', label: 'Quadrat', icon: '⬜' },
+  { key: 'circle', label: 'Kreis', icon: '⚪' },
+  { key: 'free', label: 'Frei', icon: '🧽' },
+];
+
+const START_EMOJI = ['😀', '😂', '😍', '🥳', '😎', '🤔', '🙈', '🔥', '✨', '💜', '🎉', '🚀'];
+const TEXT_COLORS = ['#ffffff', '#111111', '#ff3b30', '#ffcc00', '#34c759', '#0a84ff', '#af52de'];
+
+const MIN_SCALE = 0.3;
+const MAX_SCALE = 5;
+const HISTORY_MAX = 30;
+
+interface StickerStudioProps {
+  onClose: () => void;
+  onSaved?: (pack: StickerPackDto) => void;
+}
+
+interface GestureState {
+  mode: 'none' | 'pan' | 'pinch' | 'erase';
+  startX: number;
+  startY: number;
+  startOffsetX: number;
+  startOffsetY: number;
+  startDistance: number;
+  startScale: number;
+}
+
+/**
+ * Full screen sticker editor: photo, text or emoji as source, pan/pinch, shape
+ * masks, an eraser, the simple background removal, the white sticker outline
+ * and two text layers. Everything is rendered into a 512×512 canvas.
+ */
+export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
+  useHideNav(true);
+
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [source, setSource] = useState<EditorSource | null>(null);
+  const [doc, setDoc] = useState<StickerDoc>(createDoc);
+  const [tab, setTab] = useState<Tab>('source');
+  const [tool, setTool] = useState<Tool>('move');
+  const [slot, setSlot] = useState<TextSlot>('top');
+  const [brush, setBrush] = useState(56);
+  const [emojiInput, setEmojiInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [canUndo, setCanUndo] = useState(false);
+  const [result, setResult] = useState<{ blob: Blob; mime: string } | null>(null);
+
+  const docRef = useRef(doc);
+  const sourceRef = useRef(source);
+  const toolRef = useRef(tool);
+  const brushRef = useRef(brush);
+  const history = useRef<StickerDoc[]>([]);
+  const lastCommit = useRef<{ label: string; at: number }>({ label: '', at: 0 });
+  const pending = useRef<{ doc: StickerDoc; used: boolean } | null>(null);
+  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  const gesture = useRef<GestureState>({
+    mode: 'none',
+    startX: 0,
+    startY: 0,
+    startOffsetX: 0,
+    startOffsetY: 0,
+    startDistance: 0,
+    startScale: 1,
+  });
+  const busyGesture = useRef(false);
+  const frame = useRef<number | null>(null);
+
+  const render = useCallback((fast: boolean) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    renderSticker(canvas, sourceRef.current, docRef.current, { fast });
+  }, []);
+
+  const schedule = useCallback(() => {
+    if (frame.current != null) cancelAnimationFrame(frame.current);
+    frame.current = window.requestAnimationFrame(() => {
+      frame.current = null;
+      render(busyGesture.current);
+    });
+  }, [render]);
+
+  useEffect(() => {
+    docRef.current = doc;
+    sourceRef.current = source;
+    schedule();
+  }, [doc, source, schedule]);
+
+  useEffect(() => {
+    toolRef.current = tool;
+  }, [tool]);
+
+  useEffect(() => {
+    brushRef.current = brush;
+  }, [brush]);
+
+  useEffect(
+    () => () => {
+      if (frame.current != null) cancelAnimationFrame(frame.current);
+    },
+    [],
+  );
+
+  // The editor owns the viewport – the page behind it must not scroll away.
+  useEffect(() => {
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, []);
+
+  /* ---------- history ---------- */
+
+  const push = useCallback((snapshot: StickerDoc) => {
+    history.current = [...history.current, snapshot].slice(-HISTORY_MAX);
+    setCanUndo(true);
+  }, []);
+
+  /**
+   * Saves the current document for undo. A label coalesces rapid changes of the
+   * same kind (typing, dragging a slider) into a single step.
+   */
+  const commit = useCallback(
+    (label?: string) => {
+      const now = Date.now();
+      if (label && lastCommit.current.label === label && now - lastCommit.current.at < 1500) {
+        lastCommit.current = { label, at: now };
+        return;
+      }
+      push(cloneDoc(docRef.current));
+      lastCommit.current = { label: label ?? '', at: now };
+    },
+    [push],
+  );
+
+  /** Gestures only cost an undo step once they actually moved something. */
+  const armGesture = useCallback(() => {
+    pending.current = { doc: cloneDoc(docRef.current), used: false };
+  }, []);
+
+  const commitArmedGesture = useCallback(() => {
+    const armed = pending.current;
+    if (!armed || armed.used) return;
+    armed.used = true;
+    lastCommit.current = { label: '', at: 0 };
+    push(armed.doc);
+  }, [push]);
+
+  const undo = useCallback(() => {
+    const previous = history.current[history.current.length - 1];
+    if (!previous) return;
+    history.current = history.current.slice(0, -1);
+    lastCommit.current = { label: '', at: 0 };
+    setCanUndo(history.current.length > 0);
+    setDoc(previous);
+  }, []);
+
+  const reset = useCallback(() => {
+    commit();
+    setDoc(createDoc());
+    setTool('move');
+  }, [commit]);
+
+  /* ---------- source ---------- */
+
+  function applySource(next: EditorSource | null) {
+    history.current = [];
+    lastCommit.current = { label: '', at: 0 };
+    setCanUndo(false);
+    setSource(next);
+    setDoc(createDoc());
+    setTool('move');
+  }
+
+  async function pickImage(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setBusy(true);
+    try {
+      const image = await loadImageFromBlob(file);
+      applySource({
+        kind: 'image',
+        image,
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+      });
+      setTab('move');
+    } catch (error) {
+      toast(errorMessage(error, 'Das Bild konnte nicht geladen werden'), 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function chooseEmoji(value: string) {
+    const emoji = firstEmoji(value);
+    if (!emoji) return;
+    applySource({ kind: 'emoji', emoji });
+    setTab('text');
+  }
+
+  /* ---------- canvas gestures ---------- */
+
+  function canvasPoint(clientX: number, clientY: number): { x: number; y: number } {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    const factor = STICKER_SIZE / (rect.width || 1);
+    return { x: (clientX - rect.left) * factor, y: (clientY - rect.top) * factor };
+  }
+
+  function midpoint(): { x: number; y: number; distance: number } {
+    const list = [...pointers.current.values()];
+    const a = list[0];
+    const b = list[1];
+    if (!a || !b) return { x: 0, y: 0, distance: 0 };
+    return {
+      x: (a.x + b.x) / 2,
+      y: (a.y + b.y) / 2,
+      distance: Math.hypot(a.x - b.x, a.y - b.y),
+    };
+  }
+
+  function beginPinch() {
+    const mid = midpoint();
+    const current = docRef.current;
+    gesture.current = {
+      mode: 'pinch',
+      startX: mid.x,
+      startY: mid.y,
+      startOffsetX: current.offsetX,
+      startOffsetY: current.offsetY,
+      startDistance: mid.distance || 1,
+      startScale: current.scale,
+    };
+  }
+
+  function onPointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (!source) return;
+    const point = canvasPoint(event.clientX, event.clientY);
+    pointers.current.set(event.pointerId, point);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      /* pointer capture is a nice-to-have */
+    }
+
+    busyGesture.current = true;
+    if (pointers.current.size >= 2) {
+      armGesture();
+      beginPinch();
+      return;
+    }
+
+    const current = docRef.current;
+    if (toolRef.current === 'erase') {
+      armGesture();
+      commitArmedGesture();
+      gesture.current = { ...gesture.current, mode: 'erase' };
+      setDoc((value) => ({
+        ...value,
+        strokes: [...value.strokes, { size: brushRef.current, points: [point.x, point.y] }],
+      }));
+      return;
+    }
+
+    armGesture();
+    gesture.current = {
+      mode: 'pan',
+      startX: point.x,
+      startY: point.y,
+      startOffsetX: current.offsetX,
+      startOffsetY: current.offsetY,
+      startDistance: 0,
+      startScale: current.scale,
+    };
+  }
+
+  function onPointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (!pointers.current.has(event.pointerId)) return;
+    const point = canvasPoint(event.clientX, event.clientY);
+    pointers.current.set(event.pointerId, point);
+    const state = gesture.current;
+
+    if (state.mode === 'pinch' && pointers.current.size >= 2) {
+      commitArmedGesture();
+      const mid = midpoint();
+      const ratio = clamp(
+        (mid.distance || 1) / state.startDistance,
+        MIN_SCALE / state.startScale,
+        MAX_SCALE / state.startScale,
+      );
+      const centre = STICKER_SIZE / 2;
+      setDoc((value) => ({
+        ...value,
+        scale: state.startScale * ratio,
+        offsetX: mid.x - centre - (state.startX - centre - state.startOffsetX) * ratio,
+        offsetY: mid.y - centre - (state.startY - centre - state.startOffsetY) * ratio,
+      }));
+      return;
+    }
+
+    if (state.mode === 'pan') {
+      commitArmedGesture();
+      setDoc((value) => ({
+        ...value,
+        offsetX: state.startOffsetX + (point.x - state.startX),
+        offsetY: state.startOffsetY + (point.y - state.startY),
+      }));
+      return;
+    }
+
+    if (state.mode === 'erase') {
+      setDoc((value) => {
+        const strokes = value.strokes.slice();
+        const last = strokes[strokes.length - 1];
+        if (!last) return value;
+        strokes[strokes.length - 1] = {
+          size: last.size,
+          points: [...last.points, point.x, point.y],
+        };
+        return { ...value, strokes };
+      });
+    }
+  }
+
+  function endPointer(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (!pointers.current.delete(event.pointerId)) return;
+    if (pointers.current.size >= 2) {
+      beginPinch();
+      return;
+    }
+    if (pointers.current.size === 1 && gesture.current.mode === 'pinch') {
+      const remaining = [...pointers.current.values()][0];
+      const current = docRef.current;
+      gesture.current = {
+        mode: toolRef.current === 'erase' ? 'none' : 'pan',
+        startX: remaining.x,
+        startY: remaining.y,
+        startOffsetX: current.offsetX,
+        startOffsetY: current.offsetY,
+        startDistance: 0,
+        startScale: current.scale,
+      };
+      return;
+    }
+    if (pointers.current.size === 0) {
+      gesture.current = { ...gesture.current, mode: 'none' };
+      pending.current = null;
+      busyGesture.current = false;
+      lastCommit.current = { label: '', at: 0 };
+      schedule();
+    }
+  }
+
+  // Wheel zoom needs a non-passive listener, otherwise Chrome scrolls the page.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+    const onWheel = (event: WheelEvent) => {
+      if (!sourceRef.current) return;
+      event.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const factor = STICKER_SIZE / (rect.width || 1);
+      const anchorX = (event.clientX - rect.left) * factor;
+      const anchorY = (event.clientY - rect.top) * factor;
+      const current = docRef.current;
+      const next = clamp(
+        current.scale * (event.deltaY < 0 ? 1.08 : 1 / 1.08),
+        MIN_SCALE,
+        MAX_SCALE,
+      );
+      const ratio = next / current.scale;
+      const centre = STICKER_SIZE / 2;
+      commit('wheel');
+      setDoc((value) => ({
+        ...value,
+        scale: next,
+        offsetX: anchorX - centre - (anchorX - centre - value.offsetX) * ratio,
+        offsetY: anchorY - centre - (anchorY - centre - value.offsetY) * ratio,
+      }));
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, [commit]);
+
+  /** Slider zoom keeps the canvas centre fixed, so the offset scales with it. */
+  function setZoom(next: number) {
+    commit('zoom');
+    setDoc((value) => {
+      const ratio = next / value.scale;
+      return {
+        ...value,
+        scale: next,
+        offsetX: value.offsetX * ratio,
+        offsetY: value.offsetY * ratio,
+      };
+    });
+  }
+
+  function chooseShape(shape: ShapeKind) {
+    commit();
+    setDoc((value) => ({ ...value, shape }));
+    setTool(shape === 'free' ? 'erase' : 'move');
+  }
+
+  function updateText(patch: Partial<StickerDoc['top']>) {
+    commit(`text-${slot}`);
+    setDoc((value) => ({ ...value, [slot]: { ...value[slot], ...patch } }));
+  }
+
+  /* ---------- export ---------- */
+
+  async function openSave() {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    if (isEmptyDoc(source, doc)) {
+      toast('Wähle zuerst ein Foto, ein Emoji oder schreibe einen Text', 'info');
+      setTab('source');
+      return;
+    }
+    setBusy(true);
+    try {
+      // A queued preview frame must not overwrite the export-quality render.
+      if (frame.current != null) {
+        cancelAnimationFrame(frame.current);
+        frame.current = null;
+      }
+      renderSticker(canvas, sourceRef.current, docRef.current, { fast: false });
+      const exported = await exportSticker(canvas, supportsWebp());
+      if (exported.blob.size > LIMITS.maxUploadBytes.sticker) {
+        toast(
+          `Der Sticker ist zu groß (${formatBytes(exported.blob.size)}, erlaubt sind ${formatBytes(
+            LIMITS.maxUploadBytes.sticker,
+          )})`,
+          'error',
+        );
+        return;
+      }
+      setResult(exported);
+    } catch (error) {
+      toast(errorMessage(error, 'Sticker konnte nicht erstellt werden'), 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const layer = doc[slot];
+  const hasImage = source?.kind === 'image';
+
+  return createPortal(
+    <div className="stk-studio">
+      <div className="stk-studio-bar">
+        <button
+          type="button"
+          className="stk-round-btn"
+          onClick={onClose}
+          aria-label="Editor schließen"
+        >
+          ✕
+        </button>
+        <button
+          type="button"
+          className="stk-round-btn"
+          onClick={undo}
+          disabled={!canUndo}
+          aria-label="Rückgängig"
+        >
+          ↶
+        </button>
+        <button type="button" className="stk-round-btn" onClick={reset} aria-label="Zurücksetzen">
+          ⟲
+        </button>
+        <span className="stk-studio-title truncate">Sticker erstellen</span>
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
+          onClick={() => void openSave()}
+          disabled={busy}
+        >
+          {busy ? '…' : 'Weiter'}
+        </button>
+      </div>
+
+      <div className="stk-stage">
+        <div className="stk-canvas-wrap">
+          <canvas
+            ref={canvasRef}
+            className="stk-canvas"
+            width={STICKER_SIZE}
+            height={STICKER_SIZE}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={endPointer}
+            onPointerCancel={endPointer}
+            onContextMenu={(event) => event.preventDefault()}
+          />
+          {!source && (
+            <div className="stk-canvas-empty">
+              <span className="stk-canvas-emoji" aria-hidden="true">
+                🌟
+              </span>
+              <strong>Womit fängst du an?</strong>
+              <div className="stk-btn-row">
+                <label className="btn btn-sm">
+                  📷 Kamera
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="stk-file"
+                    onChange={(event) => void pickImage(event)}
+                  />
+                </label>
+                <label className="btn btn-sm">
+                  🖼️ Galerie
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="stk-file"
+                    onChange={(event) => void pickImage(event)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => {
+                    applySource({ kind: 'text' });
+                    setTab('text');
+                  }}
+                >
+                  🅣 Text
+                </button>
+              </div>
+            </div>
+          )}
+          {source && (
+            <span className="stk-mode-badge">
+              {tool === 'erase' ? '🧽 Radieren' : '✋ Verschieben'}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="stk-panel">
+        {tab === 'source' && (
+          <>
+            <div className="stk-btn-row">
+              <label className="btn btn-sm">
+                📷 Kamera
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  className="stk-file"
+                  onChange={(event) => void pickImage(event)}
+                />
+              </label>
+              <label className="btn btn-sm">
+                🖼️ Galerie
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="stk-file"
+                  onChange={(event) => void pickImage(event)}
+                />
+              </label>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  applySource({ kind: 'text' });
+                  setTab('text');
+                }}
+              >
+                🅣 Text
+              </button>
+            </div>
+            <div className="stk-emoji-row">
+              {START_EMOJI.map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className="stk-emoji-btn"
+                  onClick={() => chooseEmoji(value)}
+                  aria-label={`Emoji-Sticker ${value}`}
+                >
+                  {value}
+                </button>
+              ))}
+            </div>
+            <div className="stk-row">
+              <input
+                className="input"
+                value={emojiInput}
+                maxLength={8}
+                placeholder="Eigenes Emoji einfügen"
+                aria-label="Eigenes Emoji"
+                onChange={(event) => setEmojiInput(event.target.value)}
+              />
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => chooseEmoji(emojiInput)}
+                disabled={firstEmoji(emojiInput).length === 0}
+              >
+                Nehmen
+              </button>
+            </div>
+          </>
+        )}
+
+        {tab === 'move' && (
+          <>
+            <label className="stk-slider">
+              <span>Zoom</span>
+              <input
+                type="range"
+                min={MIN_SCALE * 100}
+                max={MAX_SCALE * 100}
+                value={Math.round(doc.scale * 100)}
+                onChange={(event) => setZoom(Number(event.target.value) / 100)}
+              />
+              <span className="stk-slider-value">{Math.round(doc.scale * 100)} %</span>
+            </label>
+            <div className="stk-btn-row">
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  commit();
+                  setDoc((value) => ({ ...value, offsetX: 0, offsetY: 0, scale: 1 }));
+                }}
+              >
+                Zentrieren
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${tool === 'move' ? 'stk-chip-active' : ''}`}
+                onClick={() => setTool('move')}
+              >
+                ✋ Verschieben
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${tool === 'erase' ? 'stk-chip-active' : ''}`}
+                onClick={() => setTool('erase')}
+              >
+                🧽 Radieren
+              </button>
+            </div>
+            <p className="stk-hint">
+              Ein Finger verschiebt, zwei Finger zoomen. Mit der Maus: ziehen und scrollen.
+            </p>
+          </>
+        )}
+
+        {tab === 'shape' && (
+          <>
+            <div className="stk-btn-row">
+              {SHAPES.map((shape) => (
+                <button
+                  key={shape.key}
+                  type="button"
+                  className={`btn btn-sm ${doc.shape === shape.key ? 'stk-chip-active' : ''}`}
+                  onClick={() => chooseShape(shape.key)}
+                >
+                  <span aria-hidden="true">{shape.icon}</span> {shape.label}
+                </button>
+              ))}
+            </div>
+            <label className="stk-slider">
+              <span>Pinsel</span>
+              <input
+                type="range"
+                min={12}
+                max={160}
+                value={brush}
+                onChange={(event) => setBrush(Number(event.target.value))}
+              />
+              <span className="stk-slider-value">{brush}</span>
+            </label>
+            <div className="stk-btn-row">
+              <button
+                type="button"
+                className={`btn btn-sm ${tool === 'erase' ? 'stk-chip-active' : ''}`}
+                onClick={() => setTool(tool === 'erase' ? 'move' : 'erase')}
+              >
+                🧽 Radiergummi {tool === 'erase' ? 'an' : 'aus'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  commit();
+                  setDoc((value) => ({ ...value, strokes: [] }));
+                }}
+                disabled={doc.strokes.length === 0}
+              >
+                Radierer zurücknehmen
+              </button>
+            </div>
+          </>
+        )}
+
+        {tab === 'cutout' && (
+          <>
+            <div className="stk-btn-row">
+              <button
+                type="button"
+                className={`btn btn-sm ${doc.removeBg ? 'stk-chip-active' : ''}`}
+                onClick={() => {
+                  commit();
+                  setDoc((value) => ({ ...value, removeBg: !value.removeBg }));
+                }}
+                disabled={!hasImage}
+              >
+                🪄 Hintergrund entfernen {doc.removeBg ? 'an' : 'aus'}
+              </button>
+            </div>
+            <label className="stk-slider">
+              <span>Toleranz</span>
+              <input
+                type="range"
+                min={5}
+                max={120}
+                value={doc.tolerance}
+                disabled={!hasImage || !doc.removeBg}
+                onChange={(event) => {
+                  commit('tolerance');
+                  const tolerance = Number(event.target.value);
+                  setDoc((value) => ({ ...value, tolerance }));
+                }}
+              />
+              <span className="stk-slider-value">{doc.tolerance}</span>
+            </label>
+            <p className="stk-hint">
+              {hasImage
+                ? 'Startet in den vier Ecken und entfernt alles, was der Eckfarbe ähnelt. Am besten füllt das Foto die ganze Fläche.'
+                : 'Freistellen gibt es nur für Fotos.'}
+            </p>
+          </>
+        )}
+
+        {tab === 'outline' && (
+          <>
+            <div className="stk-btn-row">
+              <button
+                type="button"
+                className={`btn btn-sm ${doc.outline ? 'stk-chip-active' : ''}`}
+                onClick={() => {
+                  commit();
+                  setDoc((value) => ({ ...value, outline: !value.outline }));
+                }}
+              >
+                ✨ Weiße Kontur {doc.outline ? 'an' : 'aus'}
+              </button>
+            </div>
+            <label className="stk-slider">
+              <span>Stärke</span>
+              <input
+                type="range"
+                min={2}
+                max={26}
+                value={doc.outlineWidth}
+                disabled={!doc.outline}
+                onChange={(event) => {
+                  commit('outline-width');
+                  const outlineWidth = Number(event.target.value);
+                  setDoc((value) => ({ ...value, outlineWidth }));
+                }}
+              />
+              <span className="stk-slider-value">{doc.outlineWidth}</span>
+            </label>
+          </>
+        )}
+
+        {tab === 'text' && (
+          <>
+            <div className="stk-btn-row">
+              <button
+                type="button"
+                className={`btn btn-sm ${slot === 'top' ? 'stk-chip-active' : ''}`}
+                onClick={() => setSlot('top')}
+              >
+                Oben
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${slot === 'bottom' ? 'stk-chip-active' : ''}`}
+                onClick={() => setSlot('bottom')}
+              >
+                Unten
+              </button>
+            </div>
+            <input
+              className="input"
+              value={layer.value}
+              maxLength={60}
+              placeholder={slot === 'top' ? 'Text oben' : 'Text unten'}
+              aria-label={slot === 'top' ? 'Text oben' : 'Text unten'}
+              onChange={(event) => updateText({ value: event.target.value })}
+            />
+            <label className="stk-slider">
+              <span>Größe</span>
+              <input
+                type="range"
+                min={24}
+                max={140}
+                value={layer.size}
+                onChange={(event) => updateText({ size: Number(event.target.value) })}
+              />
+              <span className="stk-slider-value">{layer.size}</span>
+            </label>
+            <div className="stk-btn-row">
+              {TEXT_COLORS.map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  className={`stk-swatch ${layer.color === color ? 'is-active' : ''}`}
+                  style={{ background: color }}
+                  onClick={() => updateText({ color })}
+                  aria-label={`Textfarbe ${color}`}
+                />
+              ))}
+              <input
+                type="color"
+                className="stk-swatch stk-swatch-picker"
+                value={layer.color}
+                aria-label="Eigene Textfarbe"
+                onChange={(event) => updateText({ color: event.target.value })}
+              />
+              <button
+                type="button"
+                className={`btn btn-sm ${layer.outline ? 'stk-chip-active' : ''}`}
+                onClick={() => updateText({ outline: !layer.outline })}
+              >
+                Kontur {layer.outline ? 'an' : 'aus'}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="stk-tabs" role="tablist" aria-label="Werkzeuge">
+        {TABS.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            role="tab"
+            aria-selected={tab === item.key}
+            className={`stk-tab ${tab === item.key ? 'is-active' : ''}`}
+            onClick={() => setTab(item.key)}
+          >
+            <span className="stk-tab-icon" aria-hidden="true">
+              {item.icon}
+            </span>
+            <span>{item.label}</span>
+          </button>
+        ))}
+      </div>
+
+      {busy && (
+        <div className="stk-busy" role="status" aria-live="polite">
+          <span className="spinner" aria-hidden="true" />
+        </div>
+      )}
+
+      {result && (
+        <SavePackSheet
+          blob={result.blob}
+          mime={result.mime}
+          onClose={() => setResult(null)}
+          onSaved={(pack) => {
+            setResult(null);
+            onSaved?.(pack);
+            onClose();
+          }}
+        />
+      )}
+    </div>,
+    document.body,
+  );
+}

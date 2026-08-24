@@ -184,7 +184,8 @@ export async function videoPreview(
 /** Normalised peaks (0..1) for the voice-message waveform. */
 export async function waveformFromBlob(blob: Blob, buckets = 64): Promise<number[]> {
   const AudioCtor: typeof AudioContext | undefined =
-    window.AudioContext ?? (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    window.AudioContext ??
+    (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AudioCtor) return [];
   const context = new AudioCtor();
   try {

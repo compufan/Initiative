@@ -58,3 +58,49 @@ jobs:
       - run: pnpm -r typecheck
       - run: pnpm -r test
       - run: pnpm --filter @initiative/web build
+
+  e2e:
+    name: Browser (Playwright)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: initiative
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/initiative
+      JWT_SECRET: ci-secret-value-at-least-16-characters
+      PUBLIC_API_URL: http://localhost:8080
+      PUBLIC_APP_URL: http://localhost:5173
+      STORAGE_DRIVER: local
+      REALTIME_BUS: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/api
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Die API einmal vorbauen, damit der Playwright-Start nicht in den Timeout läuft.
+      - run: cargo build --manifest-path apps/api/Cargo.toml --bin initiative-api
+      - run: pnpm --filter @initiative/web exec playwright install --with-deps chromium
+      - run: pnpm --filter @initiative/web exec playwright test --project=chromium
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report/
+          retention-days: 7

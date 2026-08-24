@@ -122,12 +122,24 @@ export function fileIconFor(mime: string, fileName?: string | null): string {
   if (base.startsWith('video/')) return '🎬';
   if (base.startsWith('audio/')) return '🎧';
   if (base === 'application/pdf' || ext === 'pdf') return '📕';
-  if (base.includes('zip') || base.includes('compressed') || ['zip', 'rar', '7z', 'tar', 'gz'].includes(ext))
+  if (
+    base.includes('zip') ||
+    base.includes('compressed') ||
+    ['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)
+  )
     return '🗜️';
   if (base.includes('word') || ['doc', 'docx', 'odt', 'rtf'].includes(ext)) return '📘';
-  if (base.includes('sheet') || base.includes('excel') || ['xls', 'xlsx', 'ods', 'csv'].includes(ext))
+  if (
+    base.includes('sheet') ||
+    base.includes('excel') ||
+    ['xls', 'xlsx', 'ods', 'csv'].includes(ext)
+  )
     return '📗';
-  if (base.includes('presentation') || base.includes('powerpoint') || ['ppt', 'pptx', 'odp'].includes(ext))
+  if (
+    base.includes('presentation') ||
+    base.includes('powerpoint') ||
+    ['ppt', 'pptx', 'odp'].includes(ext)
+  )
     return '📙';
   if (base.includes('calendar') || ext === 'ics') return '📅';
   if (base.startsWith('text/') || ['txt', 'md', 'json', 'xml', 'log'].includes(ext)) return '📄';
@@ -165,7 +177,11 @@ export function deviceErrorMessage(error: unknown, device: 'Kamera' | 'Mikrofon'
 }
 
 /** Checks the shared upload ceiling and explains the rejection. */
-export function withinUploadLimit(kind: AttachmentKind, size: number, name?: string | null): boolean {
+export function withinUploadLimit(
+  kind: AttachmentKind,
+  size: number,
+  name?: string | null,
+): boolean {
   const max = LIMITS.maxUploadBytes[kind];
   if (size <= max) return true;
   const subject = name ? `„${name}“` : 'Die Datei';
@@ -189,7 +205,12 @@ export const VIDEO_MIME_CANDIDATES = [
 ];
 
 /** iOS Safari only ever records `audio/mp4`. */
-export const AUDIO_MIME_CANDIDATES = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac'];
+export const AUDIO_MIME_CANDIDATES = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+  'audio/mp4',
+  'audio/aac',
+];
 
 export function pickRecorderMime(candidates: string[]): string | null {
   if (!supportsRecorder() || typeof MediaRecorder.isTypeSupported !== 'function') return null;
@@ -206,7 +227,8 @@ export function buildAttachment(input: OutboxAttachment): OutboxAttachment {
   };
   if (input.width && input.width > 0) attachment.width = Math.round(input.width);
   if (input.height && input.height > 0) attachment.height = Math.round(input.height);
-  if (input.durationMs && input.durationMs > 0) attachment.durationMs = Math.round(input.durationMs);
+  if (input.durationMs && input.durationMs > 0)
+    attachment.durationMs = Math.round(input.durationMs);
   if (input.waveform && input.waveform.length > 0) attachment.waveform = input.waveform;
   if (input.previewDataUrl && input.previewDataUrl.length <= LIMITS.previewDataUrlMax) {
     attachment.previewDataUrl = input.previewDataUrl;

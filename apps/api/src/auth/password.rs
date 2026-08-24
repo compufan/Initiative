@@ -15,7 +15,9 @@ pub fn hash_password(password: &str) -> AppResult<String> {
     Argon2::default()
         .hash_password(password.as_bytes(), &salt)
         .map(|hash| hash.to_string())
-        .map_err(|error| AppError::internal(format!("Passwort konnte nicht gehasht werden: {error}")))
+        .map_err(|error| {
+            AppError::internal(format!("Passwort konnte nicht gehasht werden: {error}"))
+        })
 }
 
 pub fn verify_password(password: &str, stored: &str) -> bool {

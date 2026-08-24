@@ -1,7 +1,25 @@
+import { createElement } from 'react';
 import { defineWebModule } from '../types.js';
+import { ProfileScreen } from './ProfileScreen.js';
+import { SettingsScreen } from './SettingsScreen.js';
+import { adoptAccountTheme } from './helpers.js';
+import './styles.css';
 
-// TODO(module): implemented in apps/web/src/modules/profile
+/**
+ * Profile & settings – the personal corner of the app.
+ *
+ * It owns the own account (picture, name, bio), the switches for look and
+ * notifications, the home-screen installation, the calendar subscription and
+ * the way out: password change, logout and the offline cache.
+ */
 export default defineWebModule({
   key: 'profile',
-  title: 'profile',
+  title: 'Profil',
+  description: 'Profilbild, Anzeigename, Benachrichtigungen, Darstellung und Konto.',
+  nav: [{ path: '/profil', label: 'Profil', icon: '👤', order: 90 }],
+  routes: [
+    { path: '/profil', element: createElement(ProfileScreen) },
+    { path: '/profil/einstellungen', element: createElement(SettingsScreen) },
+  ],
+  init: adoptAccountTheme,
 });

@@ -86,13 +86,18 @@ fn var_or(key: &str, fallback: &str) -> String {
 
 fn flag(key: &str, fallback: bool) -> bool {
     match var(key) {
-        Some(value) => matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+        Some(value) => matches!(
+            value.to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
         None => fallback,
     }
 }
 
 fn number<T: std::str::FromStr>(key: &str, fallback: T) -> T {
-    var(key).and_then(|value| value.parse().ok()).unwrap_or(fallback)
+    var(key)
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(fallback)
 }
 
 fn list(key: &str) -> Vec<String> {
@@ -117,8 +122,8 @@ impl Config {
         let environment = var_or("NODE_ENV", "development");
         let is_production = environment == "production";
 
-        let database_url = var("DATABASE_URL")
-            .ok_or_else(|| AppError::config("DATABASE_URL ist erforderlich"))?;
+        let database_url =
+            var("DATABASE_URL").ok_or_else(|| AppError::config("DATABASE_URL ist erforderlich"))?;
 
         let jwt_secret = match var("JWT_SECRET") {
             Some(secret) if secret.len() >= 16 => secret,
@@ -136,11 +141,18 @@ impl Config {
             None => crate::auth::password::random_token(32),
         };
 
-        let storage_driver = match var_or("STORAGE_DRIVER", "local").to_ascii_lowercase().as_str() {
+        let storage_driver = match var_or("STORAGE_DRIVER", "local")
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "r2" => StorageDriver::R2,
             "s3" => StorageDriver::S3,
             "local" => StorageDriver::Local,
-            other => return Err(AppError::config(format!("Unbekannter STORAGE_DRIVER: {other}"))),
+            other => {
+                return Err(AppError::config(format!(
+                    "Unbekannter STORAGE_DRIVER: {other}"
+                )))
+            }
         };
 
         let s3 = if storage_driver == StorageDriver::Local {
@@ -150,8 +162,9 @@ impl Config {
                 .ok_or_else(|| AppError::config("S3_BUCKET ist für R2/S3 erforderlich"))?;
             let access_key_id = var("S3_ACCESS_KEY_ID")
                 .ok_or_else(|| AppError::config("S3_ACCESS_KEY_ID ist für R2/S3 erforderlich"))?;
-            let secret_access_key = var("S3_SECRET_ACCESS_KEY")
-                .ok_or_else(|| AppError::config("S3_SECRET_ACCESS_KEY ist für R2/S3 erforderlich"))?;
+            let secret_access_key = var("S3_SECRET_ACCESS_KEY").ok_or_else(|| {
+                AppError::config("S3_SECRET_ACCESS_KEY ist für R2/S3 erforderlich")
+            })?;
             let endpoint = var("S3_ENDPOINT");
             if storage_driver == StorageDriver::R2 && endpoint.is_none() {
                 return Err(AppError::config(

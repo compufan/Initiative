@@ -34,12 +34,13 @@ struct ErrorBody<'a> {
 }
 
 impl AppError {
-    fn api(
-        status: StatusCode,
-        code: &'static str,
-        message: impl Into<String>,
-    ) -> Self {
-        Self::Api { status, code, message: message.into(), details: None }
+    fn api(status: StatusCode, code: &'static str, message: impl Into<String>) -> Self {
+        Self::Api {
+            status,
+            code,
+            message: message.into(),
+            details: None,
+        }
     }
 
     pub fn bad_request(message: impl Into<String>) -> Self {
@@ -100,9 +101,12 @@ impl AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, code, message, details) = match &self {
-            AppError::Api { status, code, message, details } => {
-                (*status, *code, message.clone(), details.clone())
-            }
+            AppError::Api {
+                status,
+                code,
+                message,
+                details,
+            } => (*status, *code, message.clone(), details.clone()),
             AppError::Database(sqlx::Error::RowNotFound) => (
                 StatusCode::NOT_FOUND,
                 "not_found",

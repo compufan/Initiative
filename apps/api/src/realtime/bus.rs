@@ -41,7 +41,11 @@ pub struct RealtimeBus {
 
 impl RealtimeBus {
     pub fn new(kind: BusKind, pool: PgPool) -> Self {
-        Self { kind, pool, hub: OnceCell::new() }
+        Self {
+            kind,
+            pool,
+            hub: OnceCell::new(),
+        }
     }
 
     pub fn kind(&self) -> &'static str {

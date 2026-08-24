@@ -103,7 +103,8 @@ if (typeof window !== 'undefined') {
 /** Screens that own the full viewport (chat view, camera) hide the tab bar. */
 export const useNavVisibility = create<{ hidden: number }>(() => ({ hidden: 0 }));
 
-const useIsomorphicEffect = (effect: EffectCallback, deps: DependencyList) => useEffect(effect, deps);
+const useIsomorphicEffect = (effect: EffectCallback, deps: DependencyList) =>
+  useEffect(effect, deps);
 
 export function useHideNav(active = true): void {
   useIsomorphicEffect(() => {

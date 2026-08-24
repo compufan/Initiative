@@ -53,7 +53,9 @@ export function ImageBubble({ message, isMine }: MessageRendererProps) {
   const images = message.attachments.filter((attachment) => attachment.kind === 'image');
 
   if (images.length === 0) {
-    return <PendingMedia emoji="📷" label="Foto wird gesendet …" message={message} isMine={isMine} />;
+    return (
+      <PendingMedia emoji="📷" label="Foto wird gesendet …" message={message} isMine={isMine} />
+    );
   }
 
   return (
@@ -61,7 +63,9 @@ export function ImageBubble({ message, isMine }: MessageRendererProps) {
       {images.length === 1 ? (
         <ImageTile attachment={images[0]} square={false} onOpen={() => setOpenIndex(0)} />
       ) : (
-        <div className={images.length === 2 ? 'media-grid media-grid-2' : 'media-grid media-grid-3'}>
+        <div
+          className={images.length === 2 ? 'media-grid media-grid-2' : 'media-grid media-grid-3'}
+        >
           {images.map((attachment, index) => (
             <ImageTile
               key={attachment.id}

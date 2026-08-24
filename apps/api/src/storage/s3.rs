@@ -36,9 +36,18 @@ impl S3Storage {
         let endpoint = Url::parse(&endpoint)
             .map_err(|error| AppError::config(format!("Ungültiger S3_ENDPOINT: {error}")))?;
 
-        let style = if settings.path_style { UrlStyle::Path } else { UrlStyle::VirtualHost };
-        let bucket = Bucket::new(endpoint, style, settings.bucket.clone(), settings.region.clone())
-            .map_err(|error| AppError::config(format!("S3-Bucket ungültig: {error}")))?;
+        let style = if settings.path_style {
+            UrlStyle::Path
+        } else {
+            UrlStyle::VirtualHost
+        };
+        let bucket = Bucket::new(
+            endpoint,
+            style,
+            settings.bucket.clone(),
+            settings.region.clone(),
+        )
+        .map_err(|error| AppError::config(format!("S3-Bucket ungültig: {error}")))?;
 
         Ok(Self {
             bucket,
@@ -46,7 +55,11 @@ impl S3Storage {
                 settings.access_key_id.clone(),
                 settings.secret_access_key.clone(),
             ),
-            kind: if config.storage_driver == StorageDriver::R2 { "r2" } else { "s3" },
+            kind: if config.storage_driver == StorageDriver::R2 {
+                "r2"
+            } else {
+                "s3"
+            },
             signed_url_ttl: config.signed_url_ttl,
             public_base_url: settings.public_base_url.clone(),
             http: reqwest::Client::builder()
@@ -85,13 +98,17 @@ impl Storage for S3Storage {
         }
         let mut action = self.bucket.get_object(Some(&self.credentials), key);
         if let Some(mime) = &options.mime {
-            action.query_mut().insert("response-content-type", mime.clone());
-        }
-        if options.download {
-            let name = super::sanitise_file_name(options.file_name.as_deref().unwrap_or("download"));
             action
                 .query_mut()
-                .insert("response-content-disposition", format!("attachment; filename=\"{name}\""));
+                .insert("response-content-type", mime.clone());
+        }
+        if options.download {
+            let name =
+                super::sanitise_file_name(options.file_name.as_deref().unwrap_or("download"));
+            action.query_mut().insert(
+                "response-content-disposition",
+                format!("attachment; filename=\"{name}\""),
+            );
         }
         Ok(Some(action.sign(self.signed_url_ttl).to_string()))
     }

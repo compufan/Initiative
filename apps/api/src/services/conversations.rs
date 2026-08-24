@@ -185,7 +185,9 @@ pub async fn load_conversation_dtos(
     Ok(rows
         .into_iter()
         .map(|row| ConversationDto {
-            avatar_url: row.avatar_attachment_id.map(|id| state.config.media_url(&id)),
+            avatar_url: row
+                .avatar_attachment_id
+                .map(|id| state.config.media_url(&id)),
             members: members_by_conversation.remove(&row.id).unwrap_or_default(),
             last_message: last_by_conversation.remove(&row.id),
             unread_count: unread_by_conversation.get(&row.id).copied().unwrap_or(0),
@@ -222,7 +224,10 @@ pub async fn load_conversation_dto(
     load_conversation_dtos(
         state,
         viewer_id,
-        ListOptions { ids: Some(vec![conversation_id]), include_archived: true },
+        ListOptions {
+            ids: Some(vec![conversation_id]),
+            include_archived: true,
+        },
     )
     .await?
     .into_iter()

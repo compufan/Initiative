@@ -75,7 +75,10 @@ pub async fn load_event_dtos(
 
     let mut by_event: HashMap<Uuid, Vec<EventAttendeeRow>> = HashMap::new();
     for attendee in attendees {
-        by_event.entry(attendee.event_id).or_default().push(attendee);
+        by_event
+            .entry(attendee.event_id)
+            .or_default()
+            .push(attendee);
     }
     Ok(rows
         .into_iter()
@@ -147,7 +150,10 @@ pub async fn load_events_for_user(
     .await?;
     let mut by_event: HashMap<Uuid, Vec<EventAttendeeRow>> = HashMap::new();
     for attendee in attendees {
-        by_event.entry(attendee.event_id).or_default().push(attendee);
+        by_event
+            .entry(attendee.event_id)
+            .or_default()
+            .push(attendee);
     }
 
     Ok(in_window
@@ -222,7 +228,11 @@ pub async fn create_event(state: &AppState, input: NewEvent) -> AppResult<Calend
                 .cloned()
                 .unwrap_or_else(|| "pending".to_string())
         };
-        let responded_at = if status == "pending" { None } else { Some(Utc::now()) };
+        let responded_at = if status == "pending" {
+            None
+        } else {
+            Some(Utc::now())
+        };
         sqlx::query(
             "insert into event_attendees (event_id, user_id, status, responded_at)
              values ($1, $2, $3, $4)
@@ -268,7 +278,10 @@ pub async fn broadcast_event(state: &AppState, event: &CalendarEventDto) -> AppR
     if let Some(conversation_id) = event.conversation_id {
         audience.extend(super::conversations::member_ids(&state.pool, conversation_id).await?);
     }
-    state.hub.publish(audience, Event::event_updated(event)).await;
+    state
+        .hub
+        .publish(audience, Event::event_updated(event))
+        .await;
     Ok(())
 }
 
@@ -298,7 +311,10 @@ impl MessageExpander for EventExpander {
                 if let Some(event) = events.get(&event_id) {
                     result.insert(
                         message.id,
-                        Expansion { event: Some(event.clone()), ..Default::default() },
+                        Expansion {
+                            event: Some(event.clone()),
+                            ..Default::default()
+                        },
                     );
                 }
             }

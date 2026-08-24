@@ -78,16 +78,16 @@ pub async fn notify_new_message(state: &AppState, message: &MessageDto, member_i
     }
 
     let sender_name = match message.sender_id {
-        Some(sender_id) => sqlx::query_as::<_, (String,)>(
-            "select display_name from users where id = $1",
-        )
-        .bind(sender_id)
-        .fetch_optional(&state.pool)
-        .await
-        .ok()
-        .flatten()
-        .map(|(name,)| name)
-        .unwrap_or_else(|| "Initiative".to_string()),
+        Some(sender_id) => {
+            sqlx::query_as::<_, (String,)>("select display_name from users where id = $1")
+                .bind(sender_id)
+                .fetch_optional(&state.pool)
+                .await
+                .ok()
+                .flatten()
+                .map(|(name,)| name)
+                .unwrap_or_else(|| "Initiative".to_string())
+        }
         None => "Initiative".to_string(),
     };
 
@@ -101,7 +101,9 @@ pub async fn notify_new_message(state: &AppState, message: &MessageDto, member_i
     .flatten();
 
     let title = match conversation {
-        Some((Some(chat_title), kind)) if kind == "group" => format!("{sender_name} · {chat_title}"),
+        Some((Some(chat_title), kind)) if kind == "group" => {
+            format!("{sender_name} · {chat_title}")
+        }
         _ => sender_name,
     };
 
@@ -124,7 +126,10 @@ pub async fn notify_new_message(state: &AppState, message: &MessageDto, member_i
             message_id: Some(message.id),
             kind: "message".to_string(),
         };
-        state.push.send_to_users(&state.pool, &with_preview, &payload).await;
+        state
+            .push
+            .send_to_users(&state.pool, &with_preview, &payload)
+            .await;
     }
 
     if !without_preview.is_empty() {
@@ -137,7 +142,10 @@ pub async fn notify_new_message(state: &AppState, message: &MessageDto, member_i
             message_id: None,
             kind: "message".to_string(),
         };
-        state.push.send_to_users(&state.pool, &without_preview, &payload).await;
+        state
+            .push
+            .send_to_users(&state.pool, &without_preview, &payload)
+            .await;
     }
 }
 
@@ -146,5 +154,8 @@ pub async fn notify_users(state: &AppState, user_ids: &[Uuid], payload: &PushPay
     if !state.push.enabled() || user_ids.is_empty() {
         return;
     }
-    state.push.send_to_users(&state.pool, user_ids, payload).await;
+    state
+        .push
+        .send_to_users(&state.pool, user_ids, payload)
+        .await;
 }

@@ -453,8 +453,9 @@ async fn full_api_scenario() {
         .await;
     assert_eq!(status, StatusCode::PARTIAL_CONTENT);
     assert_eq!(bytes.len(), 10);
-    assert!(headers.iter().any(|(name, value)| name == "content-range"
-        && value == &format!("bytes 0-9/{}", png.len())));
+    assert!(headers.iter().any(
+        |(name, value)| name == "content-range" && value == &format!("bytes 0-9/{}", png.len())
+    ));
 
     // ---- stickers ---------------------------------------------------------
     let (status, pack) = app
@@ -768,7 +769,10 @@ async fn full_api_scenario() {
     assert_eq!(after_first["turnUserId"], bob_id.as_str());
 
     // Occupied cell and nonsense input are both refused.
-    for payload in [json!({ "move": { "cell": 0 } }), json!({ "move": { "cell": 99 } })] {
+    for payload in [
+        json!({ "move": { "cell": 0 } }),
+        json!({ "move": { "cell": 99 } }),
+    ] {
         let (status, _) = app
             .call(
                 "POST",
@@ -781,7 +785,12 @@ async fn full_api_scenario() {
     }
 
     let mut last = after_first;
-    for (token, cell) in [(&bob_token, 3), (&alice_token, 1), (&bob_token, 4), (&alice_token, 2)] {
+    for (token, cell) in [
+        (&bob_token, 3),
+        (&alice_token, 1),
+        (&bob_token, 4),
+        (&alice_token, 2),
+    ] {
         let (status, response) = app
             .call(
                 "POST",
@@ -798,7 +807,12 @@ async fn full_api_scenario() {
 
     // ---- full text search -------------------------------------------------
     let (status, results) = app
-        .call("GET", "/api/v1/search/messages?q=Hallo", Some(&bob_token), None)
+        .call(
+            "GET",
+            "/api/v1/search/messages?q=Hallo",
+            Some(&bob_token),
+            None,
+        )
         .await;
     assert_eq!(status, StatusCode::OK);
     assert!(!results["items"].as_array().unwrap().is_empty());

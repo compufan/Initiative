@@ -107,11 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             anonymous: false,
             allow_add_options: true,
             closes_at: None,
-            options: vec![
-                slot(saturday, 0),
-                slot(saturday, 1),
-                slot(saturday, 7),
-            ],
+            options: vec![slot(saturday, 0), slot(saturday, 1), slot(saturday, 7)],
         },
     )
     .await?;
@@ -152,7 +148,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn option(label: &str) -> NewPollOption {
-    NewPollOption { label: Some(label.to_string()), starts_at: None, ends_at: None }
+    NewPollOption {
+        label: Some(label.to_string()),
+        starts_at: None,
+        ends_at: None,
+    }
 }
 
 fn slot(base: chrono::DateTime<Utc>, offset_days: i64) -> NewPollOption {

@@ -82,7 +82,10 @@ pub fn encrypt(p256dh: &str, auth: &str, plaintext: &[u8]) -> AppResult<Vec<u8>>
     let ciphertext = cipher
         .encrypt(
             Nonce::from_slice(&nonce),
-            Payload { msg: &record, aad: b"" },
+            Payload {
+                msg: &record,
+                aad: b"",
+            },
         )
         .map_err(|_| AppError::internal("Verschlüsselung der Push-Nachricht fehlgeschlagen"))?;
 
@@ -138,13 +141,21 @@ mod tests {
 
         let hkdf = Hkdf::<Sha256>::new(Some(salt), &ikm);
         let mut cek = [0u8; 16];
-        hkdf.expand(b"Content-Encoding: aes128gcm\0", &mut cek).unwrap();
+        hkdf.expand(b"Content-Encoding: aes128gcm\0", &mut cek)
+            .unwrap();
         let mut nonce = [0u8; 12];
-        hkdf.expand(b"Content-Encoding: nonce\0", &mut nonce).unwrap();
+        hkdf.expand(b"Content-Encoding: nonce\0", &mut nonce)
+            .unwrap();
 
         let cipher = Aes128Gcm::new_from_slice(&cek).unwrap();
         let mut decrypted = cipher
-            .decrypt(Nonce::from_slice(&nonce), Payload { msg: ciphertext, aad: b"" })
+            .decrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: ciphertext,
+                    aad: b"",
+                },
+            )
             .expect("decrypts");
 
         assert_eq!(decrypted.pop(), Some(0x02), "padding delimiter");

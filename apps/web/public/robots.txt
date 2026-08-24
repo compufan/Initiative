@@ -1,0 +1,4 @@
+# Nichts ist gesperrt – ausgeliefert wird ohnehin nur die App-Shell,
+# alle Inhalte stecken hinter der Anmeldung.
+User-agent: *
+Allow: /

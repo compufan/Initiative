@@ -41,7 +41,10 @@ async fn load_many(
     viewer: Uuid,
 ) -> AppResult<Json<ListResult<StickerPackDto>>> {
     let packs = load_pack_dtos(state, &ids, viewer).await?;
-    let items = ids.into_iter().filter_map(|id| packs.get(&id).cloned()).collect();
+    let items = ids
+        .into_iter()
+        .filter_map(|id| packs.get(&id).cloned())
+        .collect();
     Ok(Json(ListResult::new(items)))
 }
 
@@ -143,13 +146,15 @@ async fn create_pack(
         .finish()?;
 
     let pack_id = Uuid::now_v7();
-    sqlx::query("insert into sticker_packs (id, owner_id, name, is_public) values ($1, $2, $3, $4)")
-        .bind(pack_id)
-        .bind(user.id())
-        .bind(&name)
-        .bind(input.is_public)
-        .execute(&state.pool)
-        .await?;
+    sqlx::query(
+        "insert into sticker_packs (id, owner_id, name, is_public) values ($1, $2, $3, $4)",
+    )
+    .bind(pack_id)
+    .bind(user.id())
+    .bind(&name)
+    .bind(input.is_public)
+    .execute(&state.pool)
+    .await?;
     // The owner always has their own packs on the keyboard.
     sqlx::query(
         "insert into sticker_pack_installs (pack_id, user_id) values ($1, $2)
@@ -197,7 +202,9 @@ async fn update_pack(
                 .fetch_optional(&state.pool)
                 .await?;
         if owned.is_none() {
-            return Err(AppError::bad_request("Sticker gehört nicht zu diesem Paket"));
+            return Err(AppError::bad_request(
+                "Sticker gehört nicht zu diesem Paket",
+            ));
         }
     }
 
@@ -248,10 +255,11 @@ async fn add_sticker(
 ) -> AppResult<(StatusCode, Json<StickerPackDto>)> {
     own_pack(&state, id, user.id()).await?;
 
-    let (count,): (i64,) = sqlx::query_as("select count(*)::bigint from stickers where pack_id = $1")
-        .bind(id)
-        .fetch_one(&state.pool)
-        .await?;
+    let (count,): (i64,) =
+        sqlx::query_as("select count(*)::bigint from stickers where pack_id = $1")
+            .bind(id)
+            .fetch_one(&state.pool)
+            .await?;
     if count >= STICKERS_PER_PACK_MAX {
         return Err(AppError::bad_request(format!(
             "Ein Paket fasst maximal {STICKERS_PER_PACK_MAX} Sticker"
@@ -276,7 +284,13 @@ async fn add_sticker(
     .bind(Uuid::now_v7())
     .bind(id)
     .bind(attachment.id)
-    .bind(input.emoji.as_deref().map(str::trim).filter(|value| !value.is_empty()))
+    .bind(
+        input
+            .emoji
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty()),
+    )
     .bind(attachment.width.unwrap_or(512))
     .bind(attachment.height.unwrap_or(512))
     .bind(count as i32)

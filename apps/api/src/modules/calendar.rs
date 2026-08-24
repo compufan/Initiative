@@ -54,8 +54,14 @@ async fn list(
     if let Some(conversation_id) = query.conversation_id {
         assert_membership(&state.pool, conversation_id, user.id()).await?;
     }
-    let items =
-        load_events_for_user(&state, user.id(), query.from, query.to, query.conversation_id).await?;
+    let items = load_events_for_user(
+        &state,
+        user.id(),
+        query.from,
+        query.to,
+        query.conversation_id,
+    )
+    .await?;
     Ok(Json(ListResult::new(items)))
 }
 
@@ -79,7 +85,12 @@ struct CreateEventInput {
     announce: Option<bool>,
 }
 
-fn validate_event(title: &str, description: Option<&str>, starts: DateTime<Utc>, ends: DateTime<Utc>) -> AppResult<()> {
+fn validate_event(
+    title: &str,
+    description: Option<&str>,
+    starts: DateTime<Utc>,
+    ends: DateTime<Utc>,
+) -> AppResult<()> {
     let mut validator = Validator::new();
     validator.length("title", title, 1, EVENT_TITLE_MAX);
     if let Some(description) = description {
@@ -95,7 +106,12 @@ async fn create(
     Json(input): Json<CreateEventInput>,
 ) -> AppResult<(StatusCode, Json<CalendarEventDto>)> {
     let title = input.title.trim().to_string();
-    validate_event(&title, input.description.as_deref(), input.starts_at, input.ends_at)?;
+    validate_event(
+        &title,
+        input.description.as_deref(),
+        input.starts_at,
+        input.ends_at,
+    )?;
     if let Some(conversation_id) = input.conversation_id {
         assert_membership(&state.pool, conversation_id, user.id()).await?;
     }
@@ -125,7 +141,11 @@ async fn create(
     Ok((StatusCode::CREATED, Json(event)))
 }
 
-async fn assert_visible(state: &AppState, event: &CalendarEventRow, user_id: Uuid) -> AppResult<()> {
+async fn assert_visible(
+    state: &AppState,
+    event: &CalendarEventRow,
+    user_id: Uuid,
+) -> AppResult<()> {
     if event.created_by == Some(user_id) {
         return Ok(());
     }
@@ -144,7 +164,11 @@ async fn assert_visible(state: &AppState, event: &CalendarEventRow, user_id: Uui
         .ok_or_else(|| AppError::forbidden("Kein Zugriff auf diesen Termin"))
 }
 
-async fn assert_editable(state: &AppState, event: &CalendarEventRow, user_id: Uuid) -> AppResult<()> {
+async fn assert_editable(
+    state: &AppState,
+    event: &CalendarEventRow,
+    user_id: Uuid,
+) -> AppResult<()> {
     if event.created_by == Some(user_id) {
         return Ok(());
     }
@@ -154,7 +178,9 @@ async fn assert_editable(state: &AppState, event: &CalendarEventRow, user_id: Uu
             return Ok(());
         }
     }
-    Err(AppError::forbidden("Nur der Ersteller darf den Termin ändern"))
+    Err(AppError::forbidden(
+        "Nur der Ersteller darf den Termin ändern",
+    ))
 }
 
 async fn by_id(
@@ -266,15 +292,14 @@ async fn remove(
         .execute(&state.pool)
         .await?;
 
-    let mut audience: Vec<Uuid> = sqlx::query_as::<_, (Uuid,)>(
-        "select user_id from event_attendees where event_id = $1",
-    )
-    .bind(id)
-    .fetch_all(&state.pool)
-    .await?
-    .into_iter()
-    .map(|(user_id,)| user_id)
-    .collect();
+    let mut audience: Vec<Uuid> =
+        sqlx::query_as::<_, (Uuid,)>("select user_id from event_attendees where event_id = $1")
+            .bind(id)
+            .fetch_all(&state.pool)
+            .await?
+            .into_iter()
+            .map(|(user_id,)| user_id)
+            .collect();
     if let Some(conversation_id) = row.conversation_id {
         audience.extend(member_ids(&state.pool, conversation_id).await?);
     }
@@ -376,7 +401,10 @@ fn ics_response(body: String, filename: &str, inline: bool) -> Response {
     };
     (
         [
-            (header::CONTENT_TYPE, "text/calendar; charset=utf-8".to_string()),
+            (
+                header::CONTENT_TYPE,
+                "text/calendar; charset=utf-8".to_string(),
+            ),
             (header::CONTENT_DISPOSITION, disposition),
             (header::CACHE_CONTROL, "private, max-age=300".to_string()),
         ],

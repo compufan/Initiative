@@ -45,7 +45,10 @@ async fn list(
     let items = load_conversation_dtos(
         &state,
         user.id(),
-        ListOptions { ids: None, include_archived: archived },
+        ListOptions {
+            ids: None,
+            include_archived: archived,
+        },
     )
     .await?;
     let items = if archived {
@@ -77,7 +80,11 @@ async fn create(
 ) -> AppResult<(StatusCode, Json<ConversationDto>)> {
     Validator::new()
         .one_of("type", &input.r#type, crate::constants::CONVERSATION_TYPES)
-        .require("memberIds", !input.member_ids.is_empty(), "mindestens ein Mitglied")
+        .require(
+            "memberIds",
+            !input.member_ids.is_empty(),
+            "mindestens ein Mitglied",
+        )
         .require(
             "memberIds",
             input.r#type != "direct" || input.member_ids.len() == 1,
@@ -101,9 +108,12 @@ async fn create(
     if input.r#type == "direct" {
         let counterpart = input.member_ids[0];
         if counterpart == user.id() {
-            return Err(AppError::bad_request("Chat mit sich selbst ist nicht möglich"));
+            return Err(AppError::bad_request(
+                "Chat mit sich selbst ist nicht möglich",
+            ));
         }
-        if let Some(existing) = find_direct_conversation(&state.pool, user.id(), counterpart).await?
+        if let Some(existing) =
+            find_direct_conversation(&state.pool, user.id(), counterpart).await?
         {
             let dto = load_conversation_dto(&state, user.id(), existing).await?;
             return Ok((StatusCode::OK, Json(dto)));
@@ -142,7 +152,11 @@ async fn create(
         )
         .bind(conversation_id)
         .bind(member_id)
-        .bind(if *member_id == user.id() { "owner" } else { "member" })
+        .bind(if *member_id == user.id() {
+            "owner"
+        } else {
+            "member"
+        })
         .execute(&mut *tx)
         .await?;
     }
@@ -151,7 +165,12 @@ async fn create(
     if input.r#type == "group" {
         create_message(
             &state,
-            NewMessage::system(conversation_id, user.id(), "conversation.created", Vec::new()),
+            NewMessage::system(
+                conversation_id,
+                user.id(),
+                "conversation.created",
+                Vec::new(),
+            ),
         )
         .await?;
     }
@@ -340,14 +359,25 @@ async fn remove_member(
         .execute(&state.pool)
         .await?;
 
-    let kind = if target_id == user.id() { "member.left" } else { "member.removed" };
-    create_message(&state, NewMessage::system(id, user.id(), kind, vec![target_id])).await?;
+    let kind = if target_id == user.id() {
+        "member.left"
+    } else {
+        "member.removed"
+    };
+    create_message(
+        &state,
+        NewMessage::system(id, user.id(), kind, vec![target_id]),
+    )
+    .await?;
 
     state
         .hub
         .publish(vec![target_id], Event::conversation_removed(id))
         .await;
-    let remaining: Vec<Uuid> = before.into_iter().filter(|member| *member != target_id).collect();
+    let remaining: Vec<Uuid> = before
+        .into_iter()
+        .filter(|member| *member != target_id)
+        .collect();
     broadcast_conversation(&state, id, Some(remaining)).await?;
 
     Ok(StatusCode::NO_CONTENT)
@@ -380,7 +410,10 @@ async fn mark_read(
     let members = member_ids(&state.pool, id).await?;
     state
         .hub
-        .publish(members, Event::read_updated(id, user.id(), input.message_id))
+        .publish(
+            members,
+            Event::read_updated(id, user.id(), input.message_id),
+        )
         .await;
     Ok(Json(serde_json::json!({ "ok": true })))
 }

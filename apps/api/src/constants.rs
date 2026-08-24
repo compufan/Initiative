@@ -54,11 +54,26 @@ pub fn max_upload_bytes(kind: &str) -> i64 {
 pub fn allowed_mime(kind: &str) -> &'static [&'static str] {
     match kind {
         "image" => &[
-            "image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/heic",
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "image/gif",
+            "image/avif",
+            "image/heic",
         ],
-        "video" => &["video/mp4", "video/webm", "video/quicktime", "video/x-matroska"],
+        "video" => &[
+            "video/mp4",
+            "video/webm",
+            "video/quicktime",
+            "video/x-matroska",
+        ],
         "audio" => &[
-            "audio/webm", "audio/ogg", "audio/mpeg", "audio/mp4", "audio/aac", "audio/wav",
+            "audio/webm",
+            "audio/ogg",
+            "audio/mpeg",
+            "audio/mp4",
+            "audio/aac",
+            "audio/wav",
         ],
         "sticker" => &["image/webp", "image/png"],
         _ => &[],

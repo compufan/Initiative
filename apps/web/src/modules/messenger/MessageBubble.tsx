@@ -86,7 +86,9 @@ export function MessageBubble({
       )}
 
       <div className="msg-col" {...longPress}>
-        {showName && <span className="msg-sender">{senderName(conversation, message.senderId)}</span>}
+        {showName && (
+          <span className="msg-sender">{senderName(conversation, message.senderId)}</span>
+        )}
 
         {message.replyTo && (
           <button
@@ -94,7 +96,9 @@ export function MessageBubble({
             className="msg-quote"
             onClick={() => message.replyTo && onJumpTo(message.replyTo.id)}
           >
-            <span className="msg-quote-name">{senderName(conversation, message.replyTo.senderId)}</span>
+            <span className="msg-quote-name">
+              {senderName(conversation, message.replyTo.senderId)}
+            </span>
             <span className="msg-quote-text truncate">{messagePreview(message.replyTo)}</span>
           </button>
         )}

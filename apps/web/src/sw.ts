@@ -2,7 +2,9 @@
 import { cleanupOutdatedCaches, precacheAndRoute } from 'workbox-precaching';
 import type { PushPayload } from '@initiative/shared';
 
-declare const self: ServiceWorkerGlobalScope & { __WB_MANIFEST: { url: string; revision: string | null }[] };
+declare const self: ServiceWorkerGlobalScope & {
+  __WB_MANIFEST: { url: string; revision: string | null }[];
+};
 
 const MEDIA_CACHE = 'initiative-media-v1';
 const SHELL_FALLBACK = '/index.html';
@@ -19,7 +21,9 @@ self.addEventListener('activate', (event) => {
     (async () => {
       const keys = await caches.keys();
       await Promise.all(
-        keys.filter((key) => key.startsWith('initiative-media-') && key !== MEDIA_CACHE).map((key) => caches.delete(key)),
+        keys
+          .filter((key) => key.startsWith('initiative-media-') && key !== MEDIA_CACHE)
+          .map((key) => caches.delete(key)),
       );
       await self.clients.claim();
     })(),
@@ -33,7 +37,9 @@ self.addEventListener('message', (event) => {
 });
 
 function isMediaRequest(url: URL): boolean {
-  return /\/api\/v1\/media\/[0-9a-f-]{36}$/.test(url.pathname) || url.pathname.startsWith('/media/');
+  return (
+    /\/api\/v1\/media\/[0-9a-f-]{36}$/.test(url.pathname) || url.pathname.startsWith('/media/')
+  );
 }
 
 self.addEventListener('fetch', (event) => {
@@ -132,7 +138,9 @@ self.addEventListener('push', (event) => {
     (async () => {
       // Stay quiet when the matching chat is already open and focused.
       const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      const focused = clients.find((client) => client.focused && client.visibilityState === 'visible');
+      const focused = clients.find(
+        (client) => client.focused && client.visibilityState === 'visible',
+      );
       if (focused && payload.conversationId && focused.url.includes(payload.conversationId)) {
         focused.postMessage({ type: 'push', payload });
         return;

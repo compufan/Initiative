@@ -1,0 +1,402 @@
+/* Profile module: own account, settings cards, switches and dialogs.
+   Mobile first – every row and every switch is at least 44px tall, the cards
+   inherit the padding of `.page-body` and stay readable in both themes. */
+
+/* ---------- profile header ---------- */
+
+.prf-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  text-align: center;
+}
+
+.prf-avatar-btn {
+  position: relative;
+  border-radius: var(--radius-full);
+  padding: 0;
+  line-height: 0;
+  transition: transform var(--transition);
+}
+
+.prf-avatar-btn:active {
+  transform: scale(0.97);
+}
+
+.prf-avatar-btn[disabled] {
+  opacity: 0.6;
+}
+
+.prf-avatar-badge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  border: 2px solid var(--bg);
+  display: grid;
+  place-items: center;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.prf-file-input {
+  display: none;
+}
+
+.prf-name-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius);
+  color: inherit;
+}
+
+.prf-name-btn:hover,
+.prf-name-btn:focus-visible {
+  background: var(--surface-2);
+}
+
+.prf-name {
+  font-size: 1.3rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.prf-pencil {
+  font-size: 0.85rem;
+  opacity: 0.65;
+}
+
+.prf-handle {
+  color: var(--text-muted);
+  font-size: 0.92rem;
+}
+
+.prf-meta {
+  color: var(--text-faint);
+  font-size: 0.8rem;
+}
+
+.prf-edit {
+  width: 100%;
+  text-align: left;
+}
+
+.prf-field-label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.prf-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.prf-counter {
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+
+/* ---------- bio ---------- */
+
+.prf-bio-btn {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 44px;
+  padding: var(--space-2);
+  margin: calc(var(--space-2) * -1);
+  border-radius: var(--radius);
+  text-align: left;
+  color: inherit;
+}
+
+.prf-bio-btn:hover,
+.prf-bio-btn:focus-visible {
+  background: var(--surface-2);
+}
+
+.prf-bio {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.94rem;
+}
+
+.prf-bio-empty {
+  color: var(--text-faint);
+}
+
+/* ---------- connection ---------- */
+
+.prf-connection {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.prf-connection-text {
+  gap: 2px;
+  min-width: 0;
+}
+
+.prf-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  flex: none;
+  margin-top: 6px;
+  background: var(--text-faint);
+}
+
+.prf-dot.is-online {
+  background: var(--success);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--success) 22%, transparent);
+}
+
+.prf-dot.is-pending {
+  background: var(--warning);
+  animation: prf-pulse 1.4s ease-in-out infinite;
+}
+
+.prf-dot.is-offline {
+  background: var(--danger);
+}
+
+@keyframes prf-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* ---------- menu ---------- */
+
+.prf-menu {
+  padding: 0;
+  overflow: hidden;
+}
+
+.prf-menu-row {
+  min-height: 60px;
+  gap: var(--space-3);
+}
+
+.prf-menu-icon {
+  font-size: 1.25rem;
+  width: 28px;
+  text-align: center;
+  flex: none;
+}
+
+.prf-menu-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.prf-menu-danger strong {
+  color: var(--danger);
+}
+
+.prf-chevron {
+  color: var(--text-faint);
+  font-size: 1.4rem;
+  line-height: 1;
+  flex: none;
+}
+
+/* ---------- settings blocks ---------- */
+
+.prf-block-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 650;
+}
+
+.prf-hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.prf-error {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.prf-note {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 0.88rem;
+}
+
+.prf-note.is-warn {
+  background: var(--danger-soft);
+}
+
+.prf-note.is-ok {
+  background: color-mix(in srgb, var(--success) 14%, transparent);
+}
+
+.prf-steps {
+  margin: 0;
+  padding-left: 1.2em;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+
+.prf-url {
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+  -webkit-user-select: all;
+  user-select: all;
+}
+
+/* ---------- segmented control ---------- */
+
+.prf-segment {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+}
+
+.prf-segment-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-full);
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+  transition:
+    background var(--transition),
+    color var(--transition);
+}
+
+.prf-segment-btn.is-active {
+  background: var(--bg-elevated);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+.prf-segment-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* ---------- switches ---------- */
+
+.prf-toggles {
+  display: flex;
+  flex-direction: column;
+}
+
+.prf-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 56px;
+  padding: var(--space-2) 0;
+  text-align: left;
+  color: inherit;
+}
+
+.prf-toggle + .prf-toggle {
+  border-top: 1px solid var(--border);
+}
+
+.prf-toggle[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.prf-toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.prf-toggle-label {
+  font-weight: 600;
+  font-size: 0.94rem;
+}
+
+.prf-toggle-desc {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.prf-switch {
+  position: relative;
+  width: 52px;
+  height: 32px;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
+  transition: background var(--transition);
+}
+
+.prf-switch.is-on {
+  background: var(--accent);
+}
+
+.prf-switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-full);
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+  transition: transform var(--transition);
+}
+
+.prf-switch.is-on .prf-switch-knob {
+  transform: translateX(20px);
+}
+
+/* ---------- dialog ---------- */
+
+.prf-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}

@@ -18,7 +18,9 @@ pub struct LocalStorage {
 
 impl LocalStorage {
     pub fn new(root: &str) -> Self {
-        Self { root: PathBuf::from(root) }
+        Self {
+            root: PathBuf::from(root),
+        }
     }
 
     /// Resolves a key inside the storage root, refusing traversal attempts.
@@ -82,11 +84,17 @@ impl Storage for LocalStorage {
         let (size, stream): (u64, super::ByteStream) = match range {
             Some(range) => {
                 let start = range.start.min(total.saturating_sub(1));
-                let end = range.end.unwrap_or(total.saturating_sub(1)).min(total.saturating_sub(1));
+                let end = range
+                    .end
+                    .unwrap_or(total.saturating_sub(1))
+                    .min(total.saturating_sub(1));
                 let length = end.saturating_sub(start) + 1;
                 file.seek(std::io::SeekFrom::Start(start)).await?;
                 let limited = file.take(length);
-                (length, Box::pin(ReaderStream::new(limited).map_ok(Bytes::from)))
+                (
+                    length,
+                    Box::pin(ReaderStream::new(limited).map_ok(Bytes::from)),
+                )
             }
             None => (total, Box::pin(ReaderStream::new(file).map_ok(Bytes::from))),
         };
@@ -107,5 +115,7 @@ impl Storage for LocalStorage {
 }
 
 fn guess_mime(path: &Path) -> Option<String> {
-    mime_guess::from_path(path).first().map(|mime| mime.to_string())
+    mime_guess::from_path(path)
+        .first()
+        .map(|mime| mime.to_string())
 }

@@ -6,7 +6,9 @@ export function counterpartOf(
   myId: string,
 ): ConversationMemberDto | null {
   if (conversation.type !== 'direct') return null;
-  return conversation.members.find((member) => member.userId !== myId) ?? conversation.members[0] ?? null;
+  return (
+    conversation.members.find((member) => member.userId !== myId) ?? conversation.members[0] ?? null
+  );
 }
 
 export function memberName(member: ConversationMemberDto): string {

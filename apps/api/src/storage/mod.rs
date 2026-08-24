@@ -69,7 +69,9 @@ pub trait Storage: Send + Sync {
 
 pub fn create_storage(config: &Config) -> AppResult<Arc<dyn Storage>> {
     match config.storage_driver {
-        StorageDriver::Local => Ok(Arc::new(local::LocalStorage::new(&config.local_storage_dir))),
+        StorageDriver::Local => Ok(Arc::new(local::LocalStorage::new(
+            &config.local_storage_dir,
+        ))),
         StorageDriver::R2 | StorageDriver::S3 => {
             Ok(Arc::new(s3::S3Storage::new(config)?) as Arc<dyn Storage>)
         }

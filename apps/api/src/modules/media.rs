@@ -17,7 +17,9 @@ use crate::dto::AttachmentDto;
 use crate::error::{AppError, AppResult};
 use crate::services::attachments::{load_attachment, to_attachment_dto};
 use crate::state::AppState;
-use crate::storage::{extension_for, sanitise_file_name, storage_key_for, ByteRange, DownloadOptions};
+use crate::storage::{
+    extension_for, sanitise_file_name, storage_key_for, ByteRange, DownloadOptions,
+};
 use crate::validate::Validator;
 
 pub fn router() -> Router<AppState> {
@@ -49,7 +51,13 @@ async fn create_upload(
         .finish()?;
 
     let allowed = allowed_mime(&input.kind);
-    let normalised = input.mime.split(';').next().unwrap_or("").trim().to_lowercase();
+    let normalised = input
+        .mime
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
     if !allowed.is_empty() && !allowed.contains(&normalised.as_str()) {
         return Err(AppError::unsupported_media(format!(
             "{} ist für {} nicht erlaubt",
@@ -221,7 +229,9 @@ async fn complete_upload(
             return Err(AppError::bad_request("Vorschaubild ist zu groß"));
         }
         if !preview.starts_with("data:") {
-            return Err(AppError::bad_request("Vorschaubild muss eine data-URL sein"));
+            return Err(AppError::bad_request(
+                "Vorschaubild muss eine data-URL sein",
+            ));
         }
     }
 
@@ -268,7 +278,12 @@ fn parse_range(header: Option<&str>, total: Option<u64>) -> Option<ByteRange> {
 /// Delivery. The attachment id is a UUID v7 with 74 random bits and acts as a
 /// capability URL, so `<img>`, `<video>` and the service-worker cache work
 /// without an Authorization header.
-async fn serve(state: AppState, id: Uuid, headers: HeaderMap, as_download: bool) -> AppResult<Response> {
+async fn serve(
+    state: AppState,
+    id: Uuid,
+    headers: HeaderMap,
+    as_download: bool,
+) -> AppResult<Response> {
     let attachment = load_attachment(&state.pool, id).await?;
     let options = DownloadOptions {
         file_name: attachment.file_name.clone(),
@@ -276,7 +291,10 @@ async fn serve(state: AppState, id: Uuid, headers: HeaderMap, as_download: bool)
         download: as_download,
     };
 
-    if let Some(url) = state.storage.download_url(&attachment.storage_key, &options)? {
+    if let Some(url) = state
+        .storage
+        .download_url(&attachment.storage_key, &options)?
+    {
         // R2/S3 serve the bytes directly – the API never proxies media.
         return Ok((
             [(header::CACHE_CONTROL, "private, max-age=60")],
@@ -310,9 +328,15 @@ async fn serve(state: AppState, id: Uuid, headers: HeaderMap, as_download: bool)
     let mut response = Response::builder()
         .header(
             header::CONTENT_TYPE,
-            object.mime.clone().unwrap_or_else(|| attachment.mime.clone()),
+            object
+                .mime
+                .clone()
+                .unwrap_or_else(|| attachment.mime.clone()),
         )
-        .header(header::CACHE_CONTROL, "private, max-age=31536000, immutable")
+        .header(
+            header::CACHE_CONTROL,
+            "private, max-age=31536000, immutable",
+        )
         .header(header::ACCEPT_RANGES, "bytes")
         .header("x-content-type-options", "nosniff");
 
@@ -326,7 +350,10 @@ async fn serve(state: AppState, id: Uuid, headers: HeaderMap, as_download: bool)
 
     let response = match (range, object.total_size) {
         (Some(range), Some(total)) => {
-            let end = range.end.unwrap_or(total.saturating_sub(1)).min(total.saturating_sub(1));
+            let end = range
+                .end
+                .unwrap_or(total.saturating_sub(1))
+                .min(total.saturating_sub(1));
             response
                 .status(StatusCode::PARTIAL_CONTENT)
                 .header(

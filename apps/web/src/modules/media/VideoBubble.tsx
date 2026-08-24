@@ -10,7 +10,9 @@ export function VideoBubble({ message, isMine }: MessageRendererProps) {
   const attachment = message.attachments.find((item) => item.kind === 'video');
 
   if (!attachment) {
-    return <PendingMedia emoji="🎬" label="Video wird gesendet …" message={message} isMine={isMine} />;
+    return (
+      <PendingMedia emoji="🎬" label="Video wird gesendet …" message={message} isMine={isMine} />
+    );
   }
 
   const ratio =

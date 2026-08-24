@@ -107,7 +107,10 @@ export const useChat = create<ChatState>((set, get) => ({
       set((state) => {
         const messages = { ...state.messages };
         for (const [conversationId, pending] of Object.entries(grouped)) {
-          messages[conversationId] = sortMessages([...(messages[conversationId] ?? []), ...pending]);
+          messages[conversationId] = sortMessages([
+            ...(messages[conversationId] ?? []),
+            ...pending,
+          ]);
         }
         return { messages };
       });
@@ -159,7 +162,10 @@ export const useChat = create<ChatState>((set, get) => ({
     try {
       const { items, nextCursor } = await api.messages.list(conversationId);
       set((state) => ({
-        messages: { ...state.messages, [conversationId]: mergeList(state.messages[conversationId], items) },
+        messages: {
+          ...state.messages,
+          [conversationId]: mergeList(state.messages[conversationId], items),
+        },
         hasMore: { ...state.hasMore, [conversationId]: Boolean(nextCursor) },
       }));
       void cacheMessages(items);
@@ -179,7 +185,10 @@ export const useChat = create<ChatState>((set, get) => ({
     try {
       const { items, nextCursor } = await api.messages.list(conversationId, { before: oldest.id });
       set((state) => ({
-        messages: { ...state.messages, [conversationId]: mergeList(state.messages[conversationId], items) },
+        messages: {
+          ...state.messages,
+          [conversationId]: mergeList(state.messages[conversationId], items),
+        },
         hasMore: { ...state.hasMore, [conversationId]: Boolean(nextCursor) && items.length > 0 },
       }));
       void cacheMessages(items);
@@ -336,7 +345,10 @@ export const useChat = create<ChatState>((set, get) => ({
     set((state) => ({
       messages: {
         ...state.messages,
-        [message.conversationId]: mergeMessage(state.messages[message.conversationId] ?? [], message),
+        [message.conversationId]: mergeMessage(
+          state.messages[message.conversationId] ?? [],
+          message,
+        ),
       },
       conversations: state.conversations.map((conversation) =>
         conversation.id === message.conversationId
@@ -384,12 +396,17 @@ function outboxToMessage(entry: OutboxEntry): ChatMessage {
   };
 }
 
-function markFailed(set: (updater: (state: ChatState) => Partial<ChatState>) => void, entry: OutboxEntry): void {
+function markFailed(
+  set: (updater: (state: ChatState) => Partial<ChatState>) => void,
+  entry: OutboxEntry,
+): void {
   set((state) => ({
     messages: {
       ...state.messages,
       [entry.conversationId]: (state.messages[entry.conversationId] ?? []).map((message) =>
-        message.clientId === entry.clientId ? { ...message, failed: true, pending: false } : message,
+        message.clientId === entry.clientId
+          ? { ...message, failed: true, pending: false }
+          : message,
       ),
     },
   }));
@@ -437,7 +454,10 @@ async function refreshMessages(
     const { items } = await api.messages.list(conversationId, newest ? { after: newest.id } : {});
     if (items.length === 0) return;
     set((state) => ({
-      messages: { ...state.messages, [conversationId]: mergeList(state.messages[conversationId], items) },
+      messages: {
+        ...state.messages,
+        [conversationId]: mergeList(state.messages[conversationId], items),
+      },
     }));
     void cacheMessages(items);
   } catch {
@@ -458,7 +478,9 @@ export function connectChatRealtime(): void {
     useChat.setState((state) => ({
       messages: {
         ...state.messages,
-        [conversationId]: (state.messages[conversationId] ?? []).filter((item) => item.id !== messageId),
+        [conversationId]: (state.messages[conversationId] ?? []).filter(
+          (item) => item.id !== messageId,
+        ),
       },
     }));
   });
@@ -482,7 +504,9 @@ export function connectChatRealtime(): void {
     });
   });
   realtime.on('presence', ({ userId, online, lastSeenAt }) => {
-    useChat.setState((state) => ({ presence: { ...state.presence, [userId]: { online, lastSeenAt } } }));
+    useChat.setState((state) => ({
+      presence: { ...state.presence, [userId]: { online, lastSeenAt } },
+    }));
   });
   realtime.on('read.updated', ({ conversationId, userId, lastReadMessageId }) => {
     useChat.setState((state) => ({

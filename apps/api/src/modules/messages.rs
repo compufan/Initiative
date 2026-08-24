@@ -50,7 +50,10 @@ async fn list_messages(
     Query(query): Query<ListQuery>,
 ) -> AppResult<Json<ListResult<MessageDto>>> {
     assert_membership(&state.pool, id, user.id()).await?;
-    let limit = query.limit.unwrap_or(MESSAGE_PAGE_SIZE).clamp(1, MESSAGE_PAGE_SIZE_MAX);
+    let limit = query
+        .limit
+        .unwrap_or(MESSAGE_PAGE_SIZE)
+        .clamp(1, MESSAGE_PAGE_SIZE_MAX);
 
     // `after` walks forward (catching up), everything else walks backwards.
     let rows = if let Some(after) = query.after {
@@ -125,7 +128,11 @@ async fn send_message(
 
     Validator::new()
         .one_of("type", &input.r#type, MESSAGE_TYPES)
-        .require("type", input.r#type != "system", "Systemnachrichten können nicht gesendet werden")
+        .require(
+            "type",
+            input.r#type != "system",
+            "Systemnachrichten können nicht gesendet werden",
+        )
         .require(
             "body",
             body.is_some() || !input.attachment_ids.is_empty() || has_entity,
@@ -133,7 +140,10 @@ async fn send_message(
         )
         .require(
             "body",
-            body.as_ref().map(|value| value.chars().count()).unwrap_or(0) <= MESSAGE_BODY_MAX,
+            body.as_ref()
+                .map(|value| value.chars().count())
+                .unwrap_or(0)
+                <= MESSAGE_BODY_MAX,
             "Nachricht ist zu lang",
         )
         .require(
@@ -188,13 +198,19 @@ async fn edit(
 ) -> AppResult<Json<MessageDto>> {
     let row = require_message(&state.pool, id).await?;
     if row.sender_id != Some(user.id()) {
-        return Err(AppError::forbidden("Nur eigene Nachrichten können bearbeitet werden"));
+        return Err(AppError::forbidden(
+            "Nur eigene Nachrichten können bearbeitet werden",
+        ));
     }
     if row.deleted_at.is_some() {
-        return Err(AppError::bad_request("Gelöschte Nachrichten können nicht bearbeitet werden"));
+        return Err(AppError::bad_request(
+            "Gelöschte Nachrichten können nicht bearbeitet werden",
+        ));
     }
     if row.r#type != "text" {
-        return Err(AppError::bad_request("Nur Textnachrichten können bearbeitet werden"));
+        return Err(AppError::bad_request(
+            "Nur Textnachrichten können bearbeitet werden",
+        ));
     }
     let body = input.body.trim().to_string();
     Validator::new()
@@ -226,7 +242,9 @@ async fn remove(
     let row = require_message(&state.pool, id).await?;
     let membership = assert_membership(&state.pool, row.conversation_id, user.id()).await?;
     if row.sender_id != Some(user.id()) && membership.role == "member" {
-        return Err(AppError::forbidden("Nur eigene Nachrichten können gelöscht werden"));
+        return Err(AppError::forbidden(
+            "Nur eigene Nachrichten können gelöscht werden",
+        ));
     }
 
     sqlx::query(

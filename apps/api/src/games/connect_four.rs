@@ -64,14 +64,24 @@ fn has_four(columns: &[Vec<i32>], col: usize, row: usize, seat: i32) -> bool {
 pub struct ConnectFour;
 
 impl GameDefinition for ConnectFour {
-    fn key(&self) -> &'static str { "connect-four" }
-    fn name(&self) -> &'static str { "Vier gewinnt" }
+    fn key(&self) -> &'static str {
+        "connect-four"
+    }
+    fn name(&self) -> &'static str {
+        "Vier gewinnt"
+    }
     fn description(&self) -> &'static str {
         "Vier Steine in einer Reihe – waagerecht, senkrecht oder diagonal."
     }
-    fn emoji(&self) -> &'static str { "🔴" }
-    fn min_players(&self) -> usize { 2 }
-    fn max_players(&self) -> usize { 2 }
+    fn emoji(&self) -> &'static str {
+        "🔴"
+    }
+    fn min_players(&self) -> usize {
+        2
+    }
+    fn max_players(&self) -> usize {
+        2
+    }
 
     fn initial_state(&self, _players: &[GameSeat]) -> Value {
         serde_json::to_value(State {
@@ -84,9 +94,14 @@ impl GameDefinition for ConnectFour {
         .expect("state serialises")
     }
 
-    fn apply_move(&self, state: &Value, mv: &Value, ctx: &MoveContext<'_>) -> Result<Value, String> {
-        let state: State =
-            serde_json::from_value(state.clone()).map_err(|_| "Ungültiger Spielstand".to_string())?;
+    fn apply_move(
+        &self,
+        state: &Value,
+        mv: &Value,
+        ctx: &MoveContext<'_>,
+    ) -> Result<Value, String> {
+        let state: State = serde_json::from_value(state.clone())
+            .map_err(|_| "Ungültiger Spielstand".to_string())?;
         let mv: Move =
             serde_json::from_value(mv.clone()).map_err(|_| "Ungültiger Zug".to_string())?;
 
@@ -129,7 +144,11 @@ impl GameDefinition for ConnectFour {
 
     fn current_seat(&self, state: &Value) -> Option<i32> {
         let state: State = serde_json::from_value(state.clone()).ok()?;
-        if state.winner.is_none() && !state.draw { Some(state.turn) } else { None }
+        if state.winner.is_none() && !state.draw {
+            Some(state.turn)
+        } else {
+            None
+        }
     }
 
     fn outcome(&self, state: &Value) -> Outcome {
@@ -164,15 +183,25 @@ mod tests {
     fn detects_a_vertical_win() {
         let game = ConnectFour;
         let players = vec![
-            GameSeat { seat: 0, user_id: Uuid::now_v7() },
-            GameSeat { seat: 1, user_id: Uuid::now_v7() },
+            GameSeat {
+                seat: 0,
+                user_id: Uuid::now_v7(),
+            },
+            GameSeat {
+                seat: 1,
+                user_id: Uuid::now_v7(),
+            },
         ];
         let mut state = game.initial_state(&players);
 
         // Seat 0 stacks column 0, seat 1 answers in column 1.
         for (index, col) in [0usize, 1, 0, 1, 0, 1, 0].iter().enumerate() {
             let seat = (index % 2) as i32;
-            let ctx = MoveContext { seat, user_id: players[seat as usize].user_id, players: &players };
+            let ctx = MoveContext {
+                seat,
+                user_id: players[seat as usize].user_id,
+                players: &players,
+            };
             state = game
                 .apply_move(&state, &serde_json::json!({ "col": col }), &ctx)
                 .expect("legal move");
@@ -187,20 +216,36 @@ mod tests {
     fn rejects_a_full_column() {
         let game = ConnectFour;
         let players = vec![
-            GameSeat { seat: 0, user_id: Uuid::now_v7() },
-            GameSeat { seat: 1, user_id: Uuid::now_v7() },
+            GameSeat {
+                seat: 0,
+                user_id: Uuid::now_v7(),
+            },
+            GameSeat {
+                seat: 1,
+                user_id: Uuid::now_v7(),
+            },
         ];
         let mut state = game.initial_state(&players);
         // Fill column 3 alternately; the 7th drop must be refused.
         for index in 0..ROWS {
             let seat = (index % 2) as i32;
-            let ctx = MoveContext { seat, user_id: players[seat as usize].user_id, players: &players };
+            let ctx = MoveContext {
+                seat,
+                user_id: players[seat as usize].user_id,
+                players: &players,
+            };
             state = game
                 .apply_move(&state, &serde_json::json!({ "col": 3 }), &ctx)
                 .expect("legal move");
         }
         let seat = (ROWS % 2) as i32;
-        let ctx = MoveContext { seat, user_id: players[seat as usize].user_id, players: &players };
-        assert!(game.apply_move(&state, &serde_json::json!({ "col": 3 }), &ctx).is_err());
+        let ctx = MoveContext {
+            seat,
+            user_id: players[seat as usize].user_id,
+            players: &players,
+        };
+        assert!(game
+            .apply_move(&state, &serde_json::json!({ "col": 3 }), &ctx)
+            .is_err());
     }
 }

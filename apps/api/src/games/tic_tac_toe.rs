@@ -22,20 +22,37 @@ struct Move {
 }
 
 const LINES: [[usize; 3]; 8] = [
-    [0, 1, 2], [3, 4, 5], [6, 7, 8],
-    [0, 3, 6], [1, 4, 7], [2, 5, 8],
-    [0, 4, 8], [2, 4, 6],
+    [0, 1, 2],
+    [3, 4, 5],
+    [6, 7, 8],
+    [0, 3, 6],
+    [1, 4, 7],
+    [2, 5, 8],
+    [0, 4, 8],
+    [2, 4, 6],
 ];
 
 pub struct TicTacToe;
 
 impl GameDefinition for TicTacToe {
-    fn key(&self) -> &'static str { "tic-tac-toe" }
-    fn name(&self) -> &'static str { "Tic Tac Toe" }
-    fn description(&self) -> &'static str { "Drei in einer Reihe – der Klassiker für zwischendurch." }
-    fn emoji(&self) -> &'static str { "⭕" }
-    fn min_players(&self) -> usize { 2 }
-    fn max_players(&self) -> usize { 2 }
+    fn key(&self) -> &'static str {
+        "tic-tac-toe"
+    }
+    fn name(&self) -> &'static str {
+        "Tic Tac Toe"
+    }
+    fn description(&self) -> &'static str {
+        "Drei in einer Reihe – der Klassiker für zwischendurch."
+    }
+    fn emoji(&self) -> &'static str {
+        "⭕"
+    }
+    fn min_players(&self) -> usize {
+        2
+    }
+    fn max_players(&self) -> usize {
+        2
+    }
 
     fn initial_state(&self, _players: &[GameSeat]) -> Value {
         serde_json::to_value(State {
@@ -48,11 +65,16 @@ impl GameDefinition for TicTacToe {
         .expect("state serialises")
     }
 
-    fn apply_move(&self, state: &Value, mv: &Value, ctx: &MoveContext<'_>) -> Result<Value, String> {
-        let state: State =
-            serde_json::from_value(state.clone()).map_err(|_| "Ungültiger Spielstand".to_string())?;
-        let mv: Move = serde_json::from_value(mv.clone())
-            .map_err(|_| "Ungültiger Zug".to_string())?;
+    fn apply_move(
+        &self,
+        state: &Value,
+        mv: &Value,
+        ctx: &MoveContext<'_>,
+    ) -> Result<Value, String> {
+        let state: State = serde_json::from_value(state.clone())
+            .map_err(|_| "Ungültiger Spielstand".to_string())?;
+        let mv: Move =
+            serde_json::from_value(mv.clone()).map_err(|_| "Ungültiger Zug".to_string())?;
 
         if state.winner.is_some() || state.draw {
             return Err("Das Spiel ist beendet.".into());
@@ -82,18 +104,32 @@ impl GameDefinition for TicTacToe {
         }
         let draw = winner.is_none() && board.iter().all(Option::is_some);
         let turn = if winner.is_none() && !draw {
-            if state.turn == 0 { 1 } else { 0 }
+            if state.turn == 0 {
+                1
+            } else {
+                0
+            }
         } else {
             state.turn
         };
 
-        serde_json::to_value(State { board, turn, winner, draw, line })
-            .map_err(|_| "Spielstand konnte nicht gespeichert werden".to_string())
+        serde_json::to_value(State {
+            board,
+            turn,
+            winner,
+            draw,
+            line,
+        })
+        .map_err(|_| "Spielstand konnte nicht gespeichert werden".to_string())
     }
 
     fn current_seat(&self, state: &Value) -> Option<i32> {
         let state: State = serde_json::from_value(state.clone()).ok()?;
-        if state.winner.is_none() && !state.draw { Some(state.turn) } else { None }
+        if state.winner.is_none() && !state.draw {
+            Some(state.turn)
+        } else {
+            None
+        }
     }
 
     fn outcome(&self, state: &Value) -> Outcome {
@@ -126,8 +162,14 @@ mod tests {
 
     fn seats() -> Vec<GameSeat> {
         vec![
-            GameSeat { seat: 0, user_id: Uuid::now_v7() },
-            GameSeat { seat: 1, user_id: Uuid::now_v7() },
+            GameSeat {
+                seat: 0,
+                user_id: Uuid::now_v7(),
+            },
+            GameSeat {
+                seat: 1,
+                user_id: Uuid::now_v7(),
+            },
         ]
     }
 
@@ -139,7 +181,11 @@ mod tests {
 
         for (index, cell) in [0usize, 3, 1, 4, 2].iter().enumerate() {
             let seat = (index % 2) as i32;
-            let ctx = MoveContext { seat, user_id: players[seat as usize].user_id, players: &players };
+            let ctx = MoveContext {
+                seat,
+                user_id: players[seat as usize].user_id,
+                players: &players,
+            };
             state = game
                 .apply_move(&state, &serde_json::json!({ "cell": cell }), &ctx)
                 .expect("legal move");
@@ -157,17 +203,37 @@ mod tests {
         let players = seats();
         let state = game.initial_state(&players);
 
-        let wrong = MoveContext { seat: 1, user_id: players[1].user_id, players: &players };
-        assert!(game.apply_move(&state, &serde_json::json!({ "cell": 0 }), &wrong).is_err());
+        let wrong = MoveContext {
+            seat: 1,
+            user_id: players[1].user_id,
+            players: &players,
+        };
+        assert!(game
+            .apply_move(&state, &serde_json::json!({ "cell": 0 }), &wrong)
+            .is_err());
 
-        let right = MoveContext { seat: 0, user_id: players[0].user_id, players: &players };
+        let right = MoveContext {
+            seat: 0,
+            user_id: players[0].user_id,
+            players: &players,
+        };
         let state = game
             .apply_move(&state, &serde_json::json!({ "cell": 0 }), &right)
             .unwrap();
 
-        let second = MoveContext { seat: 1, user_id: players[1].user_id, players: &players };
-        assert!(game.apply_move(&state, &serde_json::json!({ "cell": 0 }), &second).is_err());
-        assert!(game.apply_move(&state, &serde_json::json!({ "cell": 99 }), &second).is_err());
-        assert!(game.apply_move(&state, &serde_json::json!({ "nope": 1 }), &second).is_err());
+        let second = MoveContext {
+            seat: 1,
+            user_id: players[1].user_id,
+            players: &players,
+        };
+        assert!(game
+            .apply_move(&state, &serde_json::json!({ "cell": 0 }), &second)
+            .is_err());
+        assert!(game
+            .apply_move(&state, &serde_json::json!({ "cell": 99 }), &second)
+            .is_err());
+        assert!(game
+            .apply_move(&state, &serde_json::json!({ "nope": 1 }), &second)
+            .is_err());
     }
 }

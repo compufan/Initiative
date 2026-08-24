@@ -33,7 +33,13 @@ export function Screen({ title, subtitle, back, actions, children, bare }: Scree
         </div>
         {actions}
       </header>
-      {bare ? children : <div className="page"><div className="page-body">{children}</div></div>}
+      {bare ? (
+        children
+      ) : (
+        <div className="page">
+          <div className="page-body">{children}</div>
+        </div>
+      )}
     </div>
   );
 }

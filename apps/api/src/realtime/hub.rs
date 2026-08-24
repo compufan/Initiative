@@ -34,14 +34,21 @@ pub enum PresenceChange {
 
 impl Hub {
     pub fn new(bus: Arc<RealtimeBus>) -> Self {
-        Self { connections: DashMap::new(), bus }
+        Self {
+            connections: DashMap::new(),
+            bus,
+        }
     }
 
     pub fn register(&self, user_id: Uuid) -> (Uuid, UnboundedReceiver<String>, PresenceChange) {
         let (sender, receiver) = unbounded_channel();
         let id = Uuid::now_v7();
         let mut entry = self.connections.entry(user_id).or_default();
-        let change = if entry.is_empty() { PresenceChange::CameOnline } else { PresenceChange::Unchanged };
+        let change = if entry.is_empty() {
+            PresenceChange::CameOnline
+        } else {
+            PresenceChange::Unchanged
+        };
         entry.push(Connection { id, sender });
         (id, receiver, change)
     }
@@ -61,11 +68,16 @@ impl Hub {
     }
 
     pub fn is_online(&self, user_id: &Uuid) -> bool {
-        self.connections.get(user_id).is_some_and(|entry| !entry.is_empty())
+        self.connections
+            .get(user_id)
+            .is_some_and(|entry| !entry.is_empty())
     }
 
     pub fn connection_count(&self) -> usize {
-        self.connections.iter().map(|entry| entry.value().len()).sum()
+        self.connections
+            .iter()
+            .map(|entry| entry.value().len())
+            .sum()
     }
 
     /// Send to the given users on every instance.
@@ -76,7 +88,12 @@ impl Hub {
         if unique.is_empty() {
             return;
         }
-        self.bus.publish(BusMessage { user_ids: unique, event }).await;
+        self.bus
+            .publish(BusMessage {
+                user_ids: unique,
+                event,
+            })
+            .await;
     }
 
     /// Send only to sockets attached to this instance.

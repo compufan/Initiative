@@ -27,10 +27,16 @@ export type ServerEvent =
   | { type: 'message.new'; payload: { message: MessageDto } }
   | { type: 'message.updated'; payload: { message: MessageDto } }
   | { type: 'message.deleted'; payload: { conversationId: string; messageId: string } }
-  | { type: 'message.reactions'; payload: { conversationId: string; messageId: string; reactions: ReactionDto[] } }
+  | {
+      type: 'message.reactions';
+      payload: { conversationId: string; messageId: string; reactions: ReactionDto[] };
+    }
   | { type: 'conversation.updated'; payload: { conversation: ConversationDto } }
   | { type: 'conversation.removed'; payload: { conversationId: string } }
-  | { type: 'read.updated'; payload: { conversationId: string; userId: string; lastReadMessageId: string } }
+  | {
+      type: 'read.updated';
+      payload: { conversationId: string; userId: string; lastReadMessageId: string };
+    }
   | { type: 'typing'; payload: { conversationId: string; userId: string; until: string } }
   | { type: 'presence'; payload: { userId: string; online: boolean; lastSeenAt: string | null } }
   | { type: 'poll.updated'; payload: { poll: PollDto } }

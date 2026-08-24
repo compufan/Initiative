@@ -11,7 +11,9 @@ use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::constants::{POLL_KINDS, POLL_OPTIONS_MAX, POLL_OPTION_MAX, POLL_QUESTION_MAX, VOTE_VALUES};
+use crate::constants::{
+    POLL_KINDS, POLL_OPTIONS_MAX, POLL_OPTION_MAX, POLL_QUESTION_MAX, VOTE_VALUES,
+};
 use crate::db::{PollOptionRow, PollRow, PollVoteRow};
 use crate::dto::{CalendarEventDto, PollDto};
 use crate::error::{AppError, AppResult};
@@ -78,7 +80,11 @@ async fn create(
     validator
         .one_of("kind", &input.kind, POLL_KINDS)
         .length("question", &question, 1, POLL_QUESTION_MAX)
-        .require("options", input.options.len() >= 2, "mindestens zwei Optionen")
+        .require(
+            "options",
+            input.options.len() >= 2,
+            "mindestens zwei Optionen",
+        )
         .require(
             "options",
             input.options.len() <= POLL_OPTIONS_MAX,
@@ -152,7 +158,9 @@ async fn owned_poll(state: &AppState, id: Uuid, viewer: Uuid) -> AppResult<PollR
         .await?
         .ok_or_else(|| AppError::forbidden("Du bist kein Mitglied dieses Chats"))?;
     if poll.created_by != Some(viewer) && membership.role == "member" {
-        return Err(AppError::forbidden("Nur der Ersteller darf die Umfrage verwalten"));
+        return Err(AppError::forbidden(
+            "Nur der Ersteller darf die Umfrage verwalten",
+        ));
     }
     Ok(poll)
 }
@@ -227,10 +235,14 @@ async fn add_option(
         return Err(AppError::bad_request("Die Umfrage ist beendet"));
     }
     if !poll.allow_add_options && poll.created_by != Some(user.id()) {
-        return Err(AppError::forbidden("Hier dürfen keine Optionen ergänzt werden"));
+        return Err(AppError::forbidden(
+            "Hier dürfen keine Optionen ergänzt werden",
+        ));
     }
     if poll.kind == "date" && input.starts_at.is_none() {
-        return Err(AppError::bad_request("Ein Terminvorschlag braucht ein Datum"));
+        return Err(AppError::bad_request(
+            "Ein Terminvorschlag braucht ein Datum",
+        ));
     }
 
     let (count,): (i64,) =
@@ -402,5 +414,7 @@ async fn best(
 ) -> AppResult<Json<serde_json::Value>> {
     readable_poll(&state, id, user.id()).await?;
     let dto = load_poll_dto(&state, id, user.id()).await?;
-    Ok(Json(json!({ "option": best_option(&dto.options, &dto.tally) })))
+    Ok(Json(
+        json!({ "option": best_option(&dto.options, &dto.tally) }),
+    ))
 }

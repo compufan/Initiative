@@ -62,8 +62,16 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
 };
 
 const ACCENTS = [
-  '#f97316', '#ef4444', '#ec4899', '#a855f7', '#6366f1',
-  '#0ea5e9', '#14b8a6', '#22c55e', '#eab308', '#78716c',
+  '#f97316',
+  '#ef4444',
+  '#ec4899',
+  '#a855f7',
+  '#6366f1',
+  '#0ea5e9',
+  '#14b8a6',
+  '#22c55e',
+  '#eab308',
+  '#78716c',
 ];
 
 /** Stable colour for avatar placeholders – same input always yields same colour. */

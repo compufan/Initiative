@@ -19,3 +19,8 @@ npm-debug.log*
 # Rust
 target/
 apps/api/target/
+
+# Playwright
+apps/web/test-results/
+apps/web/playwright-report/
+apps/web/blob-report/

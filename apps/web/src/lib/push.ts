@@ -68,7 +68,10 @@ export async function enablePush(): Promise<boolean> {
       applicationServerKey: urlBase64ToBuffer(publicKey),
     }));
 
-  const json = subscription.toJSON() as { endpoint?: string; keys?: { p256dh: string; auth: string } };
+  const json = subscription.toJSON() as {
+    endpoint?: string;
+    keys?: { p256dh: string; auth: string };
+  };
   if (!json.endpoint || !json.keys) return false;
 
   await api.push.subscribe({ endpoint: json.endpoint, keys: json.keys });

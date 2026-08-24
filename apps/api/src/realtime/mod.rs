@@ -72,11 +72,17 @@ impl Event {
     }
 
     pub fn conversation_updated(conversation: &crate::dto::ConversationDto) -> Self {
-        Self::new("conversation.updated", json!({ "conversation": conversation }))
+        Self::new(
+            "conversation.updated",
+            json!({ "conversation": conversation }),
+        )
     }
 
     pub fn conversation_removed(conversation_id: uuid::Uuid) -> Self {
-        Self::new("conversation.removed", json!({ "conversationId": conversation_id }))
+        Self::new(
+            "conversation.removed",
+            json!({ "conversationId": conversation_id }),
+        )
     }
 
     pub fn read_updated(

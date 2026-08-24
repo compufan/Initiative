@@ -16,11 +16,17 @@ pub struct ListResult<T> {
 
 impl<T> ListResult<T> {
     pub fn new(items: Vec<T>) -> Self {
-        Self { items, next_cursor: None }
+        Self {
+            items,
+            next_cursor: None,
+        }
     }
 
     pub fn paged(items: Vec<T>, next_cursor: Option<String>) -> Self {
-        Self { items, next_cursor: Some(next_cursor) }
+        Self {
+            items,
+            next_cursor: Some(next_cursor),
+        }
     }
 }
 

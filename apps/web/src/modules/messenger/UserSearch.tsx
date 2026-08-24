@@ -82,7 +82,11 @@ export function UserSearch({
       )}
 
       {!loading && touched && query.trim().length > 0 && visible.length === 0 && (
-        <EmptyState emoji="🔍" title="Niemanden gefunden" description="Versuch es mit einem anderen Namen." />
+        <EmptyState
+          emoji="🔍"
+          title="Niemanden gefunden"
+          description="Versuch es mit einem anderen Namen."
+        />
       )}
 
       {visible.length > 0 && (
@@ -102,7 +106,10 @@ export function UserSearch({
                   <span className="truncate" style={{ display: 'block', fontWeight: 600 }}>
                     {user.displayName}
                   </span>
-                  <span className="muted truncate" style={{ display: 'block', fontSize: '0.82rem' }}>
+                  <span
+                    className="muted truncate"
+                    style={{ display: 'block', fontSize: '0.82rem' }}
+                  >
                     @{user.username}
                   </span>
                 </span>

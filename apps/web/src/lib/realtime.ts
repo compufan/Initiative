@@ -51,7 +51,10 @@ export class RealtimeClient {
 
   connect(): void {
     this.closedByUser = false;
-    if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
+    if (
+      this.socket &&
+      (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)
+    ) {
       return;
     }
     const url = this.url();

@@ -134,7 +134,8 @@ async fn join(
     let row = require_session(&state, id).await?;
     assert_membership(&state.pool, row.conversation_id, user.id()).await?;
 
-    let definition = get_game(&row.game_key).ok_or_else(|| AppError::bad_request("Unbekanntes Spiel"))?;
+    let definition =
+        get_game(&row.game_key).ok_or_else(|| AppError::bad_request("Unbekanntes Spiel"))?;
     if row.status == "finished" || row.status == "aborted" {
         return Err(AppError::bad_request("Das Spiel ist beendet"));
     }
@@ -153,7 +154,10 @@ async fn join(
     });
     let seats: Vec<crate::games::GameSeat> = players
         .iter()
-        .map(|player| crate::games::GameSeat { seat: player.seat, user_id: player.user_id })
+        .map(|player| crate::games::GameSeat {
+            seat: player.seat,
+            user_id: player.user_id,
+        })
         .collect();
     let active = players.len() >= definition.min_players();
 
@@ -168,7 +172,11 @@ async fn join(
                     None
                 },
                 state: row.state.clone(),
-                status: if active { "active".into() } else { "open".into() },
+                status: if active {
+                    "active".into()
+                } else {
+                    "open".into()
+                },
                 winner_user_ids: Vec::new(),
                 players: Some(players),
             },
@@ -203,15 +211,21 @@ async fn make_move(
         return Err(AppError::bad_request("Das Spiel läuft gerade nicht"));
     }
 
-    let definition = get_game(&row.game_key).ok_or_else(|| AppError::bad_request("Unbekanntes Spiel"))?;
+    let definition =
+        get_game(&row.game_key).ok_or_else(|| AppError::bad_request("Unbekanntes Spiel"))?;
     let seats = seats_of(&row);
-    let seat = seat_of(&seats, user.id()).ok_or_else(|| AppError::forbidden("Du spielst nicht mit"))?;
+    let seat =
+        seat_of(&seats, user.id()).ok_or_else(|| AppError::forbidden("Du spielst nicht mit"))?;
 
     let next_state = definition
         .apply_move(
             &row.state,
             &input.r#move,
-            &MoveContext { seat, user_id: user.id(), players: &seats },
+            &MoveContext {
+                seat,
+                user_id: user.id(),
+                players: &seats,
+            },
         )
         .map_err(AppError::bad_request)?;
 
@@ -221,8 +235,16 @@ async fn make_move(
         &state,
         &row,
         SessionUpdate {
-            status: if outcome.finished { "finished".into() } else { "active".into() },
-            turn_user_id: if outcome.finished { None } else { user_of_seat(&seats, next_seat) },
+            status: if outcome.finished {
+                "finished".into()
+            } else {
+                "active".into()
+            },
+            turn_user_id: if outcome.finished {
+                None
+            } else {
+                user_of_seat(&seats, next_seat)
+            },
             winner_user_ids: outcome
                 .winner_seats
                 .iter()
@@ -267,7 +289,9 @@ async fn abort(
 
     let seats = seats_of(&row);
     if seat_of(&seats, user.id()).is_none() && row.created_by != Some(user.id()) {
-        return Err(AppError::forbidden("Nur Mitspieler können das Spiel beenden"));
+        return Err(AppError::forbidden(
+            "Nur Mitspieler können das Spiel beenden",
+        ));
     }
     if row.status == "finished" || row.status == "aborted" {
         return Ok(Json(to_session_dto(&row)));

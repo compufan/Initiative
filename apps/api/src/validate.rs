@@ -28,9 +28,11 @@ impl Validator {
     ) -> &mut Self {
         let length = value.chars().count();
         if length < min {
-            self.issues.push((field, format!("mindestens {min} Zeichen")));
+            self.issues
+                .push((field, format!("mindestens {min} Zeichen")));
         } else if length > max {
-            self.issues.push((field, format!("höchstens {max} Zeichen")));
+            self.issues
+                .push((field, format!("höchstens {max} Zeichen")));
         }
         self
     }

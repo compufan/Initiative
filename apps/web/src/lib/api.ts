@@ -229,8 +229,12 @@ interface ListResult<T> {
  */
 export const api = {
   auth: {
-    register: (body: { username: string; password: string; displayName: string; inviteCode?: string }) =>
-      post<AuthSession>('/auth/register', body, { anonymous: true }),
+    register: (body: {
+      username: string;
+      password: string;
+      displayName: string;
+      inviteCode?: string;
+    }) => post<AuthSession>('/auth/register', body, { anonymous: true }),
     login: (body: { username: string; password: string }) =>
       post<AuthSession>('/auth/login', body, { anonymous: true }),
     logout: (refreshToken: string) => post<void>('/auth/logout', { refreshToken }),
@@ -256,21 +260,27 @@ export const api = {
       post<ConversationDto>(`/conversations/${id}/members`, { memberIds }),
     updateMember: (id: string, userId: string, body: Record<string, unknown>) =>
       patch<ConversationDto>(`/conversations/${id}/members/${userId}`, body),
-    removeMember: (id: string, userId: string) => del<void>(`/conversations/${id}/members/${userId}`),
+    removeMember: (id: string, userId: string) =>
+      del<void>(`/conversations/${id}/members/${userId}`),
     markRead: (id: string, messageId: string) =>
       post<{ ok: boolean }>(`/conversations/${id}/read`, { messageId }),
   },
   messages: {
-    list: (conversationId: string, query: { before?: string; after?: string; limit?: number } = {}) =>
-      get<ListResult<MessageDto>>(`/conversations/${conversationId}/messages`, { query }),
+    list: (
+      conversationId: string,
+      query: { before?: string; after?: string; limit?: number } = {},
+    ) => get<ListResult<MessageDto>>(`/conversations/${conversationId}/messages`, { query }),
     send: (conversationId: string, body: Record<string, unknown>) =>
       post<MessageDto>(`/conversations/${conversationId}/messages`, body),
     byId: (id: string) => get<MessageDto>(`/messages/${id}`),
     edit: (id: string, body: string) => patch<MessageDto>(`/messages/${id}`, { body }),
     remove: (id: string) => del<void>(`/messages/${id}`),
-    react: (id: string, emoji: string) => put<{ reactions: MessageDto['reactions'] }>(`/messages/${id}/reactions`, { emoji }),
+    react: (id: string, emoji: string) =>
+      put<{ reactions: MessageDto['reactions'] }>(`/messages/${id}/reactions`, { emoji }),
     unreact: (id: string, emoji: string) =>
-      del<{ reactions: MessageDto['reactions'] }>(`/messages/${id}/reactions`, { query: { emoji } }),
+      del<{ reactions: MessageDto['reactions'] }>(`/messages/${id}/reactions`, {
+        query: { emoji },
+      }),
     search: (q: string, conversationId?: string) =>
       get<ListResult<MessageDto>>('/search/messages', { query: { q, conversationId } }),
   },
@@ -299,7 +309,8 @@ export const api = {
       del<void>(`/stickers/packs/${packId}/stickers/${stickerId}`),
     install: (packId: string) => post<StickerPackDto>(`/stickers/packs/${packId}/install`),
     uninstall: (packId: string) => del<void>(`/stickers/packs/${packId}/install`),
-    discover: (q?: string) => get<ListResult<StickerPackDto>>('/stickers/discover', { query: { q } }),
+    discover: (q?: string) =>
+      get<ListResult<StickerPackDto>>('/stickers/discover', { query: { q } }),
   },
   calendar: {
     events: (query: { from?: string; to?: string; conversationId?: string } = {}) =>
@@ -311,7 +322,8 @@ export const api = {
     rsvp: (id: string, status: 'yes' | 'no' | 'maybe' | 'pending') =>
       post<CalendarEventDto>(`/calendar/events/${id}/rsvp`, { status }),
     byId: (id: string) => get<CalendarEventDto>(`/calendar/events/${id}`),
-    icsUrl: (calendarToken: string) => `${API_BASE}${API_PREFIX}/calendar/${calendarToken}/feed.ics`,
+    icsUrl: (calendarToken: string) =>
+      `${API_BASE}${API_PREFIX}/calendar/${calendarToken}/feed.ics`,
     eventIcsUrl: (id: string) => `${API_BASE}${API_PREFIX}/calendar/events/${id}/event.ics`,
   },
   polls: {
@@ -328,6 +340,9 @@ export const api = {
   },
   games: {
     catalog: () => get<ListResult<GameInfoDto>>('/games'),
+    /** Laufende (oder gefilterte) Partien des angemeldeten Nutzers. */
+    sessions: (query: { conversationId?: string; status?: string } = {}) =>
+      get<ListResult<GameSessionDto>>('/games/sessions', { query }),
     create: (body: { conversationId: string; gameKey: string; opponentIds?: string[] }) =>
       post<GameSessionDto>('/games/sessions', body),
     byId: (id: string) => get<GameSessionDto>(`/games/sessions/${id}`),
@@ -335,12 +350,15 @@ export const api = {
     move: (id: string, move: unknown, version?: number) =>
       post<GameSessionDto>(`/games/sessions/${id}/moves`, { move, version }),
     abort: (id: string) => post<GameSessionDto>(`/games/sessions/${id}/abort`),
+    rematch: (id: string) => post<GameSessionDto>(`/games/sessions/${id}/rematch`),
   },
   push: {
-    publicKey: () => get<{ publicKey: string | null; enabled: boolean }>('/push/public-key', { anonymous: true }),
+    publicKey: () =>
+      get<{ publicKey: string | null; enabled: boolean }>('/push/public-key', { anonymous: true }),
     subscribe: (body: { endpoint: string; keys: { p256dh: string; auth: string } }) =>
       post<{ ok: boolean }>('/push/subscriptions', body),
-    unsubscribe: (endpoint: string) => request<void>('DELETE', '/push/subscriptions', { body: { endpoint } }),
+    unsubscribe: (endpoint: string) =>
+      request<void>('DELETE', '/push/subscriptions', { body: { endpoint } }),
     test: () => post<{ delivered: number }>('/push/test'),
   },
 };

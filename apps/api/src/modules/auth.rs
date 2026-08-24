@@ -97,7 +97,12 @@ async fn register(
         }
         RegistrationMode::Invite => {
             let provided = input.invite_code.clone().unwrap_or_default();
-            if !state.config.invite_codes.iter().any(|code| code == &provided) {
+            if !state
+                .config
+                .invite_codes
+                .iter()
+                .any(|code| code == &provided)
+            {
                 return Err(AppError::forbidden("Ungültiger Einladungscode"));
             }
         }
@@ -108,7 +113,12 @@ async fn register(
     check_password(&input.password)?;
     let display_name = input.display_name.trim().to_string();
     Validator::new()
-        .length("displayName", &display_name, 1, crate::constants::DISPLAY_NAME_MAX)
+        .length(
+            "displayName",
+            &display_name,
+            1,
+            crate::constants::DISPLAY_NAME_MAX,
+        )
         .finish()?;
 
     let existing: Option<(Uuid,)> = sqlx::query_as("select id from users where username = $1")
@@ -132,7 +142,10 @@ async fn register(
     .fetch_one(&state.pool)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(issue_session(&state, &user).await?)))
+    Ok((
+        StatusCode::CREATED,
+        Json(issue_session(&state, &user).await?),
+    ))
 }
 
 async fn login(
@@ -156,7 +169,9 @@ async fn login(
     };
 
     let Some(user) = user.filter(|_| valid) else {
-        return Err(AppError::unauthorized("Benutzername oder Passwort ist falsch"));
+        return Err(AppError::unauthorized(
+            "Benutzername oder Passwort ist falsch",
+        ));
     };
 
     let _ = sqlx::query("update users set last_seen_at = now() where id = $1")
@@ -188,10 +203,14 @@ async fn refresh(
     .await?;
 
     let Some(row) = row else {
-        return Err(AppError::unauthorized("Sitzung abgelaufen, bitte neu anmelden"));
+        return Err(AppError::unauthorized(
+            "Sitzung abgelaufen, bitte neu anmelden",
+        ));
     };
     if row.revoked_at.is_some() || row.expires_at <= chrono::Utc::now() {
-        return Err(AppError::unauthorized("Sitzung abgelaufen, bitte neu anmelden"));
+        return Err(AppError::unauthorized(
+            "Sitzung abgelaufen, bitte neu anmelden",
+        ));
     }
 
     // Rotation: the presented token is burned before a new pair is issued.
@@ -242,10 +261,12 @@ async fn change_password(
         .execute(&state.pool)
         .await?;
     // Every other device has to sign in again.
-    sqlx::query("update refresh_tokens set revoked_at = now() where user_id = $1 and revoked_at is null")
-        .bind(row.id)
-        .execute(&state.pool)
-        .await?;
+    sqlx::query(
+        "update refresh_tokens set revoked_at = now() where user_id = $1 and revoked_at is null",
+    )
+    .bind(row.id)
+    .execute(&state.pool)
+    .await?;
 
     Ok(StatusCode::NO_CONTENT)
 }

@@ -14,9 +14,14 @@ export interface TicTacToeMove {
 }
 
 const LINES = [
-  [0, 1, 2], [3, 4, 5], [6, 7, 8],
-  [0, 3, 6], [1, 4, 7], [2, 5, 8],
-  [0, 4, 8], [2, 4, 6],
+  [0, 1, 2],
+  [3, 4, 5],
+  [6, 7, 8],
+  [0, 3, 6],
+  [1, 4, 7],
+  [2, 5, 8],
+  [0, 4, 8],
+  [2, 4, 6],
 ];
 
 export const ticTacToe: GameDefinition<TicTacToeState, TicTacToeMove> = {
@@ -60,7 +65,13 @@ export const ticTacToe: GameDefinition<TicTacToeState, TicTacToeMove> = {
 
     return {
       ok: true,
-      state: { board, turn: winner == null && !draw ? (state.turn === 0 ? 1 : 0) : state.turn, winner, draw, line },
+      state: {
+        board,
+        turn: winner == null && !draw ? (state.turn === 0 ? 1 : 0) : state.turn,
+        winner,
+        draw,
+        line,
+      },
     };
   },
 

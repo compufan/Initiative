@@ -17,7 +17,13 @@ function BottomNav() {
   return (
     <nav className="app-nav">
       {items.map((item) => (
-        <NavItemLink key={item.path} path={item.path} label={item.label} icon={item.icon} useBadge={item.useBadge} />
+        <NavItemLink
+          key={item.path}
+          path={item.path}
+          label={item.label}
+          icon={item.icon}
+          useBadge={item.useBadge}
+        />
       ))}
     </nav>
   );
@@ -48,11 +54,7 @@ function NavItemLink({
 
 function ModuleOverlays() {
   return (
-    <>
-      {appModules.map((module) =>
-        module.overlay ? <module.overlay key={module.key} /> : null,
-      )}
-    </>
+    <>{appModules.map((module) => (module.overlay ? <module.overlay key={module.key} /> : null))}</>
   );
 }
 

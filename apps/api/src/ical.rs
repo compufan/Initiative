@@ -82,7 +82,10 @@ fn event_lines(event: &IcsEvent, domain: &str, out: &mut Vec<String>) {
     out.push(format!("DTSTAMP:{}", utc_stamp(event.updated_at)));
 
     if event.all_day {
-        out.push(format!("DTSTART;VALUE=DATE:{}", date_stamp(event.starts_at)));
+        out.push(format!(
+            "DTSTART;VALUE=DATE:{}",
+            date_stamp(event.starts_at)
+        ));
         // DTEND is exclusive for all-day events.
         out.push(format!(
             "DTEND;VALUE=DATE:{}",

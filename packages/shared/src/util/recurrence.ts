@@ -57,7 +57,14 @@ function parseIcsDate(value: string): Date | null {
   }
   const [, y, m, d, hh, mm, ss] = match;
   return new Date(
-    Date.UTC(Number(y), Number(m) - 1, Number(d), Number(hh ?? 0), Number(mm ?? 0), Number(ss ?? 0)),
+    Date.UTC(
+      Number(y),
+      Number(m) - 1,
+      Number(d),
+      Number(hh ?? 0),
+      Number(mm ?? 0),
+      Number(ss ?? 0),
+    ),
   );
 }
 
@@ -145,7 +152,10 @@ export function expandOccurrences(
       if (rule.until && candidate.getTime() > rule.until.getTime()) return result;
       emitted += 1;
       const occurrenceEnd = new Date(candidate.getTime() + durationMs);
-      if (candidate.getTime() <= windowEnd.getTime() && occurrenceEnd.getTime() >= windowStart.getTime()) {
+      if (
+        candidate.getTime() <= windowEnd.getTime() &&
+        occurrenceEnd.getTime() >= windowStart.getTime()
+      ) {
         result.push({ index: emitted - 1, startsAt: candidate, endsAt: occurrenceEnd });
       }
     }
@@ -162,8 +172,14 @@ export function describeRrule(rrule: string | null | undefined): string | null {
   if (!rule) return null;
   const every = rule.interval > 1 ? `alle ${rule.interval} ` : 'jede';
   const unit = { DAILY: 'Tage', WEEKLY: 'Wochen', MONTHLY: 'Monate', YEARLY: 'Jahre' }[rule.freq];
-  const singular = { DAILY: 'n Tag', WEEKLY: ' Woche', MONTHLY: 'n Monat', YEARLY: 's Jahr' }[rule.freq];
+  const singular = { DAILY: 'n Tag', WEEKLY: ' Woche', MONTHLY: 'n Monat', YEARLY: 's Jahr' }[
+    rule.freq
+  ];
   const base = rule.interval > 1 ? `${every}${unit}` : `${every}${singular}`;
-  const suffix = rule.count ? `, ${rule.count}×` : rule.until ? ` bis ${rule.until.toLocaleDateString('de-DE')}` : '';
+  const suffix = rule.count
+    ? `, ${rule.count}×`
+    : rule.until
+      ? ` bis ${rule.until.toLocaleDateString('de-DE')}`
+      : '';
   return base + suffix;
 }

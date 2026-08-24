@@ -22,7 +22,10 @@ pub fn players_of(row: &GameSessionRow) -> Vec<GamePlayerDto> {
 pub fn seats_of(row: &GameSessionRow) -> Vec<GameSeat> {
     players_of(row)
         .into_iter()
-        .map(|player| GameSeat { seat: player.seat, user_id: player.user_id })
+        .map(|player| GameSeat {
+            seat: player.seat,
+            user_id: player.user_id,
+        })
         .collect()
 }
 
@@ -59,7 +62,8 @@ pub async fn create_session(
     created_by: Uuid,
     opponent_ids: &[Uuid],
 ) -> AppResult<GameSessionDto> {
-    let definition = get_game(game_key).ok_or_else(|| AppError::bad_request("Unbekanntes Spiel"))?;
+    let definition =
+        get_game(game_key).ok_or_else(|| AppError::bad_request("Unbekanntes Spiel"))?;
 
     let mut user_ids = vec![created_by];
     for id in opponent_ids {
@@ -75,11 +79,18 @@ pub async fn create_session(
     let players: Vec<GamePlayerDto> = user_ids
         .iter()
         .enumerate()
-        .map(|(seat, user_id)| GamePlayerDto { user_id: *user_id, seat: seat as i32, joined_at: now })
+        .map(|(seat, user_id)| GamePlayerDto {
+            user_id: *user_id,
+            seat: seat as i32,
+            joined_at: now,
+        })
         .collect();
     let seats: Vec<GameSeat> = players
         .iter()
-        .map(|player| GameSeat { seat: player.seat, user_id: player.user_id })
+        .map(|player| GameSeat {
+            seat: player.seat,
+            user_id: player.user_id,
+        })
         .collect();
 
     let initial_state = definition.initial_state(&seats);
@@ -174,7 +185,10 @@ pub async fn persist_session(
 
 pub async fn broadcast_session(state: &AppState, session: &GameSessionDto) -> AppResult<()> {
     let members = super::conversations::member_ids(&state.pool, session.conversation_id).await?;
-    state.hub.publish(members, Event::game_updated(session)).await;
+    state
+        .hub
+        .publish(members, Event::game_updated(session))
+        .await;
     super::messages::republish_message(
         state,
         session.message_id,
@@ -218,7 +232,10 @@ impl MessageExpander for GameExpander {
                 if let Some(session) = sessions.get(&session_id) {
                     result.insert(
                         message.id,
-                        Expansion { game: Some(session.clone()), ..Default::default() },
+                        Expansion {
+                            game: Some(session.clone()),
+                            ..Default::default()
+                        },
                     );
                 }
             }

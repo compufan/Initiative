@@ -50,7 +50,16 @@ export const createEventSchema = z
     allDay: z.boolean().default(false),
     rrule: z.string().max(300).nullable().optional(),
     color: z.string().max(16).nullable().optional(),
-    reminderMinutes: z.array(z.number().int().min(0).max(60 * 24 * 14)).max(5).optional(),
+    reminderMinutes: z
+      .array(
+        z
+          .number()
+          .int()
+          .min(0)
+          .max(60 * 24 * 14),
+      )
+      .max(5)
+      .optional(),
     /** Invite these users; conversation members are invited automatically. */
     attendeeIds: z.array(z.string().uuid()).max(200).optional(),
     /** Post an event card into the conversation (default true for group events). */
@@ -62,7 +71,10 @@ export const createEventSchema = z
   });
 export type CreateEventInput = z.infer<typeof createEventSchema>;
 
-export const updateEventSchema = createEventSchema.innerType().partial().omit({ conversationId: true });
+export const updateEventSchema = createEventSchema
+  .innerType()
+  .partial()
+  .omit({ conversationId: true });
 export type UpdateEventInput = z.infer<typeof updateEventSchema>;
 
 export const listEventsSchema = z.object({

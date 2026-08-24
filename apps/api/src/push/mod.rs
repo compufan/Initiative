@@ -36,12 +36,20 @@ impl PushService {
     }
 
     pub fn public_key(&self) -> Option<&str> {
-        self.config.vapid.as_ref().map(|vapid| vapid.public_key.as_str())
+        self.config
+            .vapid
+            .as_ref()
+            .map(|vapid| vapid.public_key.as_str())
     }
 
     /// Sends to every device of the given users. Dead subscriptions (404/410)
     /// are removed so the table does not grow stale.
-    pub async fn send_to_users(&self, pool: &PgPool, user_ids: &[Uuid], payload: &PushPayload) -> usize {
+    pub async fn send_to_users(
+        &self,
+        pool: &PgPool,
+        user_ids: &[Uuid],
+        payload: &PushPayload,
+    ) -> usize {
         let Some(vapid) = self.config.vapid.as_ref() else {
             return 0;
         };

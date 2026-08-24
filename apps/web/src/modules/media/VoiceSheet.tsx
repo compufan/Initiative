@@ -231,7 +231,9 @@ export function VoiceSheet({ conversationId, onClose }: ComposerActionProps) {
             <span className="media-voice-time">{formatClock(result.durationMs)}</span>
             <span className="muted">{formatBytes(result.blob.size)}</span>
           </div>
-          {previewUrl && <audio className="media-voice-player" src={previewUrl} controls preload="metadata" />}
+          {previewUrl && (
+            <audio className="media-voice-player" src={previewUrl} controls preload="metadata" />
+          )}
           <div className="row row-between">
             <button type="button" className="btn btn-danger" onClick={discard} disabled={sending}>
               Verwerfen

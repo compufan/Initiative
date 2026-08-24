@@ -28,20 +28,20 @@ PWA  ──REST /api/v1──▶  Axum (Rust)  ──SQL──▶  Postgres (Neo
                                 Push: Web Push (VAPID) an Android & iOS 16.4+
 ```
 
-* **Schreiben** geht immer über REST (idempotent per `clientId`).
-* **Lesen im Betrieb** kommt über den WebSocket; REST wird nur beim Kaltstart
+- **Schreiben** geht immer über REST (idempotent per `clientId`).
+- **Lesen im Betrieb** kommt über den WebSocket; REST wird nur beim Kaltstart
   und beim Nachladen älterer Nachrichten benutzt.
-* **Medien** laufen nie durch den API-Container, wenn R2/S3 konfiguriert ist.
+- **Medien** laufen nie durch den API-Container, wenn R2/S3 konfiguriert ist.
 
 ## Erweiterungspunkte
 
-| Punkt | Datei | Wofür |
-| --- | --- | --- |
-| Backend-Modul | `apps/api/src/modules/<name>.rs` + `modules/mod.rs` | eigene REST-Routen |
-| Message-Expander | `impl MessageExpander` + Eintrag in `services/expanders.rs` | eigene Entitäten in Nachrichten einbetten |
-| Frontend-Modul | `apps/web/src/modules/<name>/module.ts` + `registry.ts` | Routen, Tab, Chat-Bubbles, Composer-Aktionen |
-| Mini-Spiel | `apps/api/src/games/<name>.rs` + `games/mod.rs` | Regeln (Server validiert autoritativ) |
-| Spielbrett | `apps/web/src/modules/games/boards/` | Darstellung eines Spiels |
+| Punkt            | Datei                                                       | Wofür                                        |
+| ---------------- | ----------------------------------------------------------- | -------------------------------------------- |
+| Backend-Modul    | `apps/api/src/modules/<name>.rs` + `modules/mod.rs`         | eigene REST-Routen                           |
+| Message-Expander | `impl MessageExpander` + Eintrag in `services/expanders.rs` | eigene Entitäten in Nachrichten einbetten    |
+| Frontend-Modul   | `apps/web/src/modules/<name>/module.ts` + `registry.ts`     | Routen, Tab, Chat-Bubbles, Composer-Aktionen |
+| Mini-Spiel       | `apps/api/src/games/<name>.rs` + `games/mod.rs`             | Regeln (Server validiert autoritativ)        |
+| Spielbrett       | `apps/web/src/modules/games/boards/`                        | Darstellung eines Spiels                     |
 
 ### Backend-Modul
 
@@ -95,7 +95,7 @@ Ungelesen-Zähler ohne zusätzlichen Index.
 Ein Envelope für beide Richtungen:
 
 ```json
-{ "v": 1, "type": "message.new", "ts": "2026-08-24T10:00:00.000Z", "payload": { } }
+{ "v": 1, "type": "message.new", "ts": "2026-08-24T10:00:00.000Z", "payload": {} }
 ```
 
 Server → Client: `hello`, `message.new|updated|deleted|reactions`,
@@ -117,28 +117,28 @@ sind unveränderlich).
 
 ## Warum Rust
 
-* Eine statisch gelinkte Binary (~15 MB) ohne Laufzeit, OpenSSL oder libcurl –
+- Eine statisch gelinkte Binary (~15 MB) ohne Laufzeit, OpenSSL oder libcurl –
   das Container-Image bleibt klein und startet in Millisekunden.
-* Der Compiler erzwingt, dass jeder Fehlerfall behandelt wird; `AppError` ist der
+- Der Compiler erzwingt, dass jeder Fehlerfall behandelt wird; `AppError` ist der
   einzige Weg, wie eine Anfrage scheitern kann.
-* Spielregeln, Umfragen-Auswertung, Serientermine und die Web-Push-Verschlüsselung
+- Spielregeln, Umfragen-Auswertung, Serientermine und die Web-Push-Verschlüsselung
   sind reine Funktionen mit Unit-Tests – kein Mocking nötig.
-* Speicherverbrauch bleibt auch bei vielen offenen WebSockets flach, weil jede
+- Speicherverbrauch bleibt auch bei vielen offenen WebSockets flach, weil jede
   Verbindung nur eine Task und einen Kanal kostet.
 
 ## Sicherheit
 
-* Passwörter: **Argon2id** (RustCrypto, keine nativen Abhängigkeiten).
-* Access-Token: HS256-JWT (selbst implementiert, Algorithmus fest verdrahtet –
+- Passwörter: **Argon2id** (RustCrypto, keine nativen Abhängigkeiten).
+- Access-Token: HS256-JWT (selbst implementiert, Algorithmus fest verdrahtet –
   `alg: none` und Verfahrenswechsel sind damit ausgeschlossen), 15 Minuten.
   Refresh-Token: 48 zufällige Bytes, nur als SHA-256-Hash gespeichert, wird bei
   jedem Refresh rotiert und dabei entwertet.
-* Jede Route prüft die Chat-Mitgliedschaft (`assertMembership`).
-* Medien-URLs sind kurzlebige signierte R2/S3-Links. Ohne S3 liefert die API
+- Jede Route prüft die Chat-Mitgliedschaft (`assertMembership`).
+- Medien-URLs sind kurzlebige signierte R2/S3-Links. Ohne S3 liefert die API
   selbst aus – die Anhang-ID ist eine UUID v7 mit 74 Zufallsbits und wirkt als
   Capability-URL, damit `<img>` und der Service-Worker-Cache ohne Header
   funktionieren.
-* Web Push ist nach RFC 8291 (aes128gcm) direkt implementiert; die
+- Web Push ist nach RFC 8291 (aes128gcm) direkt implementiert; die
   Verschlüsselung ist mit einem Round-Trip-Test abgesichert.
 
 ## Tests

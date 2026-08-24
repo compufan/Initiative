@@ -3,7 +3,13 @@ import { LIMITS, formatBytes } from '@initiative/shared';
 import { Sheet } from '../../components/Sheet.js';
 import { EmptyState } from '../../components/Feedback.js';
 import type { ComposerActionProps } from '../types.js';
-import { buildAttachment, fileIconFor, mimeForFile, sendMedia, withinUploadLimit } from './helpers.js';
+import {
+  buildAttachment,
+  fileIconFor,
+  mimeForFile,
+  sendMedia,
+  withinUploadLimit,
+} from './helpers.js';
 
 /** Any file, checked against the shared upload ceiling before it is queued. */
 export function FileSheet({ conversationId, onClose }: ComposerActionProps) {

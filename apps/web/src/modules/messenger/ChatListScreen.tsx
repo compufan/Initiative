@@ -145,16 +145,28 @@ export function ChatListScreen() {
             title="Noch keine Chats"
             description="Starte ein Gespräch – such dir jemanden oder gründe direkt eine Gruppe."
             action={
-              <button type="button" className="btn btn-primary" onClick={() => setNewChatOpen(true)}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setNewChatOpen(true)}
+              >
                 Neuen Chat starten
               </button>
             }
           />
         )}
 
-        {conversations.length > 0 && visible.length === 0 && term.length > 0 && hits.length === 0 && !searching && (
-          <EmptyState emoji="🔍" title="Nichts gefunden" description={`Keine Treffer für „${term}“.`} />
-        )}
+        {conversations.length > 0 &&
+          visible.length === 0 &&
+          term.length > 0 &&
+          hits.length === 0 &&
+          !searching && (
+            <EmptyState
+              emoji="🔍"
+              title="Nichts gefunden"
+              description={`Keine Treffer für „${term}“.`}
+            />
+          )}
 
         {visible.length > 0 && (
           <div className="list">
@@ -191,7 +203,8 @@ export function ChatListScreen() {
             )}
             <div className="list">
               {hits.map((hit) => {
-                const conversation = conversations.find((item) => item.id === hit.conversationId) ?? null;
+                const conversation =
+                  conversations.find((item) => item.id === hit.conversationId) ?? null;
                 return (
                   <button
                     key={hit.id}
@@ -209,7 +222,10 @@ export function ChatListScreen() {
                       <span className="truncate" style={{ display: 'block', fontWeight: 600 }}>
                         {conversation ? conversationTitle(conversation, myId) : 'Chat'}
                       </span>
-                      <span className="muted truncate" style={{ display: 'block', fontSize: '0.84rem' }}>
+                      <span
+                        className="muted truncate"
+                        style={{ display: 'block', fontSize: '0.84rem' }}
+                      >
                         {senderName(conversation, hit.senderId)}: {messagePreview(hit)}
                       </span>
                     </span>
@@ -275,7 +291,9 @@ function ChatRow({
           </span>
         </span>
         <span className="chat-row-line">
-          <span className={`chat-row-preview truncate ${typing ? 'chat-row-typing' : ''}`}>{preview}</span>
+          <span className={`chat-row-preview truncate ${typing ? 'chat-row-typing' : ''}`}>
+            {preview}
+          </span>
           {conversation.unreadCount > 0 && (
             <span className="chat-badge">
               {conversation.unreadCount > 99 ? '99+' : conversation.unreadCount}

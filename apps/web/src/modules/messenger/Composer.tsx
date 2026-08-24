@@ -119,7 +119,12 @@ export function Composer({
             <div className="msg-quote-name">{senderName(conversation, replyTo.senderId)}</div>
             <div className="msg-quote-text truncate">{messagePreview(replyTo)}</div>
           </div>
-          <button type="button" className="icon-btn" aria-label="Antwort verwerfen" onClick={onCancelReply}>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Antwort verwerfen"
+            onClick={onCancelReply}
+          >
             ✕
           </button>
         </div>

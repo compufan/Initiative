@@ -7,7 +7,12 @@ import calendar from './calendar/module.js';
 import polls from './polls/module.js';
 import games from './games/module.js';
 import profile from './profile/module.js';
-import type { AppModuleDefinition, ComposerAction, MessageRendererProps, NavItem } from './types.js';
+import type {
+  AppModuleDefinition,
+  ComposerAction,
+  MessageRendererProps,
+  NavItem,
+} from './types.js';
 
 /**
  * Registered feature modules.

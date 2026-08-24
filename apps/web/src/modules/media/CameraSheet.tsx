@@ -391,7 +391,9 @@ export function CameraSheet({ conversationId, onClose }: ComposerActionProps) {
       <div className="media-camera-stage">
         {draft ? (
           draft.kind === 'image' ? (
-            photoUrl && <img className="media-camera-preview" src={photoUrl} alt="Aufgenommenes Foto" />
+            photoUrl && (
+              <img className="media-camera-preview" src={photoUrl} alt="Aufgenommenes Foto" />
+            )
           ) : (
             videoUrl && (
               <video

@@ -60,7 +60,12 @@ async fn subscribe(
     .bind(&input.endpoint)
     .bind(&input.keys.p256dh)
     .bind(&input.keys.auth)
-    .bind(input.user_agent.as_deref().map(|value| &value[..value.len().min(300)]))
+    .bind(
+        input
+            .user_agent
+            .as_deref()
+            .map(|value| &value[..value.len().min(300)]),
+    )
     .execute(&state.pool)
     .await?;
 

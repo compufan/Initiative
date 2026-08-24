@@ -42,7 +42,8 @@ pub trait GameDefinition: Send + Sync {
 
     fn initial_state(&self, players: &[GameSeat]) -> Value;
     /// Validates and applies one move. `Err` carries a message for the player.
-    fn apply_move(&self, state: &Value, mv: &Value, ctx: &MoveContext<'_>) -> Result<Value, String>;
+    fn apply_move(&self, state: &Value, mv: &Value, ctx: &MoveContext<'_>)
+        -> Result<Value, String>;
     /// Seat that has to move next, or `None` when nobody has to.
     fn current_seat(&self, state: &Value) -> Option<i32>;
     fn outcome(&self, state: &Value) -> Outcome;

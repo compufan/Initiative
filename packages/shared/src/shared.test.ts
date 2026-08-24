@@ -45,14 +45,20 @@ describe('IDs', () => {
 describe('Umfragen-Auswertung', () => {
   it('zählt yes, maybe und no', () => {
     const a = uuidv7();
-    const tally = tallyVotes([option(a, 0)], [vote(a, '1', 'yes'), vote(a, '2', 'maybe'), vote(a, '3', 'no')]);
+    const tally = tallyVotes(
+      [option(a, 0)],
+      [vote(a, '1', 'yes'), vote(a, '2', 'maybe'), vote(a, '3', 'no')],
+    );
     expect(tally[a]).toEqual({ yes: 1, maybe: 1, no: 1, score: 1.5 });
   });
 
   it('nimmt bei Gleichstand den früheren Termin', () => {
     const early = uuidv7();
     const late = uuidv7();
-    const options = [option(late, 0, '2026-09-02T10:00:00.000Z'), option(early, 1, '2026-09-01T10:00:00.000Z')];
+    const options = [
+      option(late, 0, '2026-09-02T10:00:00.000Z'),
+      option(early, 1, '2026-09-01T10:00:00.000Z'),
+    ];
     const tally = tallyVotes(options, [vote(early, '1', 'yes'), vote(late, '2', 'yes')]);
     expect(bestOption(options, tally)?.id).toBe(early);
   });
@@ -61,7 +67,11 @@ describe('Umfragen-Auswertung', () => {
     const a = uuidv7();
     const b = uuidv7();
     const options = [option(a, 0), option(b, 1)];
-    const tally = tallyVotes(options, [vote(a, '1', 'yes'), vote(a, '2', 'no'), vote(b, '3', 'yes')]);
+    const tally = tallyVotes(options, [
+      vote(a, '1', 'yes'),
+      vote(a, '2', 'no'),
+      vote(b, '3', 'yes'),
+    ]);
     expect(bestOption(options, tally)?.id).toBe(b);
   });
 });
@@ -98,7 +108,11 @@ describe('Serientermine', () => {
   it('faltet BYDAY wöchentlich auf', () => {
     const [from, to] = window('2026-08-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z');
     const occurrences = expandOccurrences(
-      { startsAt: '2026-08-24T09:00:00.000Z', endsAt: '2026-08-24T10:00:00.000Z', rrule: 'FREQ=WEEKLY;BYDAY=MO,WE;COUNT=4' },
+      {
+        startsAt: '2026-08-24T09:00:00.000Z',
+        endsAt: '2026-08-24T10:00:00.000Z',
+        rrule: 'FREQ=WEEKLY;BYDAY=MO,WE;COUNT=4',
+      },
       from,
       to,
     );
@@ -109,7 +123,11 @@ describe('Serientermine', () => {
 
   it('beschränkt auf das angefragte Fenster', () => {
     const occurrences = expandOccurrences(
-      { startsAt: '2026-01-01T08:00:00.000Z', endsAt: '2026-01-01T09:00:00.000Z', rrule: 'FREQ=MONTHLY;COUNT=12' },
+      {
+        startsAt: '2026-01-01T08:00:00.000Z',
+        endsAt: '2026-01-01T09:00:00.000Z',
+        rrule: 'FREQ=MONTHLY;COUNT=12',
+      },
       new Date('2026-06-01T00:00:00.000Z'),
       new Date('2026-08-01T00:00:00.000Z'),
     );
@@ -163,7 +181,11 @@ describe('Mini-Spiele (Client-Spiegel der Server-Regeln)', () => {
     const moves = [0, 3, 1, 4, 2];
     moves.forEach((cell, index) => {
       const seat = index % 2;
-      const result = ticTacToe.applyMove(state, { cell }, { seat, userId: players[seat]!.userId, players });
+      const result = ticTacToe.applyMove(
+        state,
+        { cell },
+        { seat, userId: players[seat]!.userId, players },
+      );
       expect(result.ok).toBe(true);
       if (result.ok) state = result.state;
     });
@@ -173,11 +195,15 @@ describe('Mini-Spiele (Client-Spiegel der Server-Regeln)', () => {
 
   it('Tic Tac Toe: weist belegte Felder und falsche Züge ab', () => {
     const state = ticTacToe.createInitialState(players);
-    expect(ticTacToe.applyMove(state, { cell: 0 }, { seat: 1, userId: 'b', players }).ok).toBe(false);
+    expect(ticTacToe.applyMove(state, { cell: 0 }, { seat: 1, userId: 'b', players }).ok).toBe(
+      false,
+    );
     const first = ticTacToe.applyMove(state, { cell: 0 }, { seat: 0, userId: 'a', players });
     expect(first.ok).toBe(true);
     if (!first.ok) return;
-    expect(ticTacToe.applyMove(first.state, { cell: 0 }, { seat: 1, userId: 'b', players }).ok).toBe(false);
+    expect(
+      ticTacToe.applyMove(first.state, { cell: 0 }, { seat: 1, userId: 'b', players }).ok,
+    ).toBe(false);
     expect(ticTacToe.parseMove({ cell: 99 })).toBeNull();
     expect(ticTacToe.parseMove({ nope: 1 })).toBeNull();
   });
@@ -186,7 +212,11 @@ describe('Mini-Spiele (Client-Spiegel der Server-Regeln)', () => {
     let state = connectFour.createInitialState(players);
     [0, 1, 0, 1, 0, 1, 0].forEach((col, index) => {
       const seat = index % 2;
-      const result = connectFour.applyMove(state, { col }, { seat, userId: players[seat]!.userId, players });
+      const result = connectFour.applyMove(
+        state,
+        { col },
+        { seat, userId: players[seat]!.userId, players },
+      );
       expect(result.ok).toBe(true);
       if (result.ok) state = result.state;
     });
@@ -197,11 +227,17 @@ describe('Mini-Spiele (Client-Spiegel der Server-Regeln)', () => {
     let state = connectFour.createInitialState(players);
     for (let index = 0; index < 6; index += 1) {
       const seat = index % 2;
-      const result = connectFour.applyMove(state, { col: 3 }, { seat, userId: players[seat]!.userId, players });
+      const result = connectFour.applyMove(
+        state,
+        { col: 3 },
+        { seat, userId: players[seat]!.userId, players },
+      );
       expect(result.ok).toBe(true);
       if (result.ok) state = result.state;
     }
-    expect(connectFour.applyMove(state, { col: 3 }, { seat: 0, userId: 'a', players }).ok).toBe(false);
+    expect(connectFour.applyMove(state, { col: 3 }, { seat: 0, userId: 'a', players }).ok).toBe(
+      false,
+    );
   });
 });
 

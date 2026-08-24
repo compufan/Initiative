@@ -63,10 +63,11 @@ pub async fn load_pack_dtos(
     if pack_ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let packs = sqlx::query_as::<_, StickerPackRow>("select * from sticker_packs where id = any($1)")
-        .bind(pack_ids)
-        .fetch_all(&state.pool)
-        .await?;
+    let packs =
+        sqlx::query_as::<_, StickerPackRow>("select * from sticker_packs where id = any($1)")
+            .bind(pack_ids)
+            .fetch_all(&state.pool)
+            .await?;
     let stickers = sqlx::query_as::<_, StickerRow>(
         "select * from stickers where pack_id = any($1) order by position asc",
     )
@@ -94,7 +95,10 @@ pub async fn load_pack_dtos(
         .map(|pack| {
             let stickers = by_pack.remove(&pack.id).unwrap_or_default();
             let installed = installs.contains(&pack.id);
-            (pack.id, to_pack_dto(&pack, &stickers, installed, &state.config))
+            (
+                pack.id,
+                to_pack_dto(&pack, &stickers, installed, &state.config),
+            )
         })
         .collect())
 }
@@ -162,21 +166,23 @@ impl MessageExpander for StickerExpander {
 
         let stickers: HashMap<Uuid, StickerDto> = rows
             .into_iter()
-            .map(|(id, pack_id, attachment_id, emoji, width, height, created_at, pack_name)| {
-                (
-                    id,
-                    StickerDto {
+            .map(
+                |(id, pack_id, attachment_id, emoji, width, height, created_at, pack_name)| {
+                    (
                         id,
-                        pack_id,
-                        pack_name,
-                        url: state.config.media_url(&attachment_id),
-                        emoji,
-                        width,
-                        height,
-                        created_at,
-                    },
-                )
-            })
+                        StickerDto {
+                            id,
+                            pack_id,
+                            pack_name,
+                            url: state.config.media_url(&attachment_id),
+                            emoji,
+                            width,
+                            height,
+                            created_at,
+                        },
+                    )
+                },
+            )
             .collect();
 
         let mut result = HashMap::new();
@@ -185,7 +191,10 @@ impl MessageExpander for StickerExpander {
                 if let Some(sticker) = stickers.get(&sticker_id) {
                     result.insert(
                         message.id,
-                        Expansion { sticker: Some(sticker.clone()), ..Default::default() },
+                        Expansion {
+                            sticker: Some(sticker.clone()),
+                            ..Default::default()
+                        },
                     );
                 }
             }

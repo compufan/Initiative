@@ -66,10 +66,10 @@ export const createPollSchema = z
     allowAddOptions: z.boolean().default(false),
     closesAt: isoDateSchema.nullable().optional(),
   })
-  .refine(
-    (v) => v.kind !== 'date' || v.options.every((o) => o.startsAt != null),
-    { message: 'date polls require startsAt on every option', path: ['options'] },
-  );
+  .refine((v) => v.kind !== 'date' || v.options.every((o) => o.startsAt != null), {
+    message: 'date polls require startsAt on every option',
+    path: ['options'],
+  });
 export type CreatePollInput = z.infer<typeof createPollSchema>;
 
 export const votePollSchema = z.object({
