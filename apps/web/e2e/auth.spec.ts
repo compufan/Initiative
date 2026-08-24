@@ -97,3 +97,26 @@ test.describe('PWA', () => {
     expect(registered).toBeTruthy();
   });
 });
+
+test.describe('Teilen-Ziel', () => {
+  test('zeigt eine Chatauswahl, wenn nichts mehr im Zwischenspeicher liegt', async ({ page }) => {
+    const user = credentials('share');
+    await register(page, user);
+
+    // Der Service Worker legt geteilte Inhalte kurz beiseite; ohne gültige id
+    // muss die Seite das sauber auffangen statt leer zu bleiben.
+    await page.goto('/teilen?share=unbekannt');
+    await expect(page.getByRole('heading', { name: 'Teilen' })).toBeVisible();
+    await expect(page.getByText('Nichts zum Teilen')).toBeVisible();
+  });
+
+  test('übernimmt Text und URL aus den Query-Parametern', async ({ page }) => {
+    const user = credentials('sharetext');
+    await register(page, user);
+
+    await page.goto('/teilen?title=Schau%20mal&text=Das%20hier&url=https%3A%2F%2Fexample.com');
+    await expect(page.getByRole('heading', { name: 'Teilen' })).toBeVisible();
+    await expect(page.getByText('Das wird gesendet')).toBeVisible();
+    await expect(page.getByText('https://example.com')).toBeVisible();
+  });
+});
