@@ -1,0 +1,50 @@
+# Fly.io – Initiative API
+#
+#   fly launch --no-deploy --name initiative-api
+#   fly secrets set \
+#     DATABASE_URL="postgres://…"   \
+#     JWT_SECRET="$(openssl rand -base64 48)" \
+#     PUBLIC_APP_URL="https://initiative.example.com" \
+#     PUBLIC_API_URL="https://initiative-api.fly.dev" \
+#     CORS_ORIGINS="https://initiative.example.com" \
+#     STORAGE_DRIVER=r2 S3_ENDPOINT="https://<account>.r2.cloudflarestorage.com" \
+#     S3_BUCKET=initiative-media S3_ACCESS_KEY_ID=… S3_SECRET_ACCESS_KEY=… \
+#     VAPID_PUBLIC_KEY=… VAPID_PRIVATE_KEY=… VAPID_SUBJECT="mailto:du@example.com"
+#   fly deploy
+
+app = "initiative-api"
+primary_region = "fra"
+
+[build]
+  dockerfile = "apps/api/Dockerfile"
+
+[env]
+  HOST = "0.0.0.0"
+  PORT = "8080"
+  NODE_ENV = "production"
+  REALTIME_BUS = "postgres"
+  RUN_MIGRATIONS = "true"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  # Mindestens eine Maschine bleibt wach, damit WebSockets nicht abreißen.
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 400
+    soft_limit = 300
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    timeout = "5s"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

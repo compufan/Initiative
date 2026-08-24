@@ -11,6 +11,11 @@ publish = false
 name = "initiative-api"
 path = "src/main.rs"
 
+[profile.release]
+# Kleine Binary ohne Debug-Symbole; die Migrationen stecken bereits darin.
+strip = true
+opt-level = 3
+
 [dependencies]
 aes-gcm = "0.10.3"
 argon2 = "0.5.3"

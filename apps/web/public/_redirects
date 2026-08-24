@@ -1,0 +1,7 @@
+# Cloudflare Pages: Single-Page-App – alles Übrige auf index.html.
+# Der Service Worker und statische Dateien werden vorher direkt ausgeliefert.
+/sw.js                 /sw.js                 200
+/manifest.webmanifest  /manifest.webmanifest  200
+/assets/*              /assets/:splat         200
+/icons/*               /icons/:splat          200
+/*                     /index.html            200

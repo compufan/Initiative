@@ -1,0 +1,74 @@
+# Koyeb – Initiative API
+#
+#   koyeb app init initiative --docker-build-context . \
+#     --docker-dockerfile apps/api/Dockerfile
+#
+# Secrets vorher anlegen:
+#   koyeb secret create initiative-database-url --value "postgres://…"
+#   koyeb secret create initiative-jwt-secret   --value "$(openssl rand -base64 48)"
+
+name: initiative
+services:
+  - name: api
+    instance_type: nano
+    regions:
+      - fra
+    ports:
+      - port: 8080
+        protocol: http
+    routes:
+      - path: /
+        port: 8080
+    health_checks:
+      - http:
+          path: /healthz
+          port: 8080
+        grace_period: 15
+        interval: 30
+        timeout: 5
+    git: null
+    docker:
+      dockerfile: apps/api/Dockerfile
+      context: .
+    scalings:
+      - min: 1
+        max: 2
+    env:
+      - key: HOST
+        value: "0.0.0.0"
+      - key: PORT
+        value: "8080"
+      - key: NODE_ENV
+        value: production
+      - key: REALTIME_BUS
+        value: postgres
+      - key: RUN_MIGRATIONS
+        value: "true"
+      - key: DATABASE_URL
+        secret: initiative-database-url
+      - key: JWT_SECRET
+        secret: initiative-jwt-secret
+      - key: PUBLIC_APP_URL
+        value: https://initiative.example.com
+      - key: PUBLIC_API_URL
+        value: https://initiative-api.koyeb.app
+      - key: CORS_ORIGINS
+        value: https://initiative.example.com
+      # Cloudflare R2
+      - key: STORAGE_DRIVER
+        value: r2
+      - key: S3_ENDPOINT
+        value: https://<account-id>.r2.cloudflarestorage.com
+      - key: S3_BUCKET
+        value: initiative-media
+      - key: S3_ACCESS_KEY_ID
+        secret: initiative-r2-key-id
+      - key: S3_SECRET_ACCESS_KEY
+        secret: initiative-r2-secret
+      # Web Push
+      - key: VAPID_PUBLIC_KEY
+        secret: initiative-vapid-public
+      - key: VAPID_PRIVATE_KEY
+        secret: initiative-vapid-private
+      - key: VAPID_SUBJECT
+        value: mailto:admin@example.com

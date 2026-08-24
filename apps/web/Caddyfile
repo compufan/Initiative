@@ -1,0 +1,31 @@
+# Eine Domain für PWA und API – kein CORS, keine Sonderfälle.
+:8080 {
+	encode zstd gzip
+
+	# API und WebSocket an den Rust-Dienst weiterreichen.
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+	handle /ws* {
+		reverse_proxy api:8080
+	}
+
+	handle {
+		root * /srv
+
+		# Der Service Worker darf nie aus dem Cache kommen.
+		@sw path /sw.js /manifest.webmanifest /index.html
+		header @sw Cache-Control "no-cache"
+
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+
+		header Service-Worker-Allowed "/"
+		header X-Content-Type-Options "nosniff"
+		header Referrer-Policy "strict-origin-when-cross-origin"
+		header Permissions-Policy "camera=(self), microphone=(self), geolocation=()"
+
+		try_files {path} /index.html
+		file_server
+	}
+}

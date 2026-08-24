@@ -1,0 +1,12 @@
+# Gilt für den gemeinsamen Build-Kontext von API- und Web-Image.
+.git/
+.github/
+**/node_modules/
+**/target/
+**/dist/
+**/.data/
+**/.env
+**/.env.*
+!**/.env.example
+docs/
+*.md
