@@ -229,11 +229,32 @@ S3_FORCE_PATH_STYLE=false    # AWS: false, MinIO: true
 
 ### Fly.io
 
-```bash
-# einmalig
-curl -L https://fly.io/install.sh | sh
-fly auth login
+Die `fly`-CLI installieren – der Befehl unterscheidet sich nach Betriebssystem:
 
+**macOS/Linux** (Terminal-App bzw. `Terminal.app`):
+
+```bash
+curl -L https://fly.io/install.sh | sh
+```
+
+**Windows** (PowerShell, nicht die Eingabeaufforderung/`cmd` öffnen):
+
+```powershell
+pwsh -Command "iwr https://fly.io/install.ps1 -useb | iex"
+```
+
+> `sh` gibt es unter Windows nicht – der Unix-Befehl oben schlägt dort immer
+> fehl. Nach der Installation das PowerShell-Fenster einmal schließen und neu
+> öffnen, damit `fly` im PATH steht.
+
+Danach auf allen Systemen gleich, im selben Fenster (PowerShell unter
+Windows, Terminal unter macOS/Linux):
+
+```bash
+fly auth login
+```
+
+```bash
 cd /pfad/zu/Initiative
 fly launch --no-deploy --name initiative-api --region fra
 ```
@@ -268,26 +289,48 @@ primary_region = "fra"
     timeout = "5s"
 ```
 
-Geheimnisse setzen (sie landen nicht in der `fly.toml`):
+Zuerst ein zufälliges `JWT_SECRET` erzeugen – der Befehl unterscheidet sich
+nach Betriebssystem, das Ergebnis einfach für den nächsten Schritt kopieren.
+
+**macOS/Linux** (Terminal):
 
 ```bash
-fly secrets set \
-  DATABASE_URL="postgres://…-pooler…/initiative?sslmode=require" \
-  JWT_SECRET="$(openssl rand -base64 48)" \
-  PUBLIC_APP_URL="https://initiative.example.com" \
-  PUBLIC_API_URL="https://initiative-api.fly.dev" \
-  CORS_ORIGINS="https://initiative.example.com" \
-  S3_ENDPOINT="https://<account-id>.r2.cloudflarestorage.com" \
-  S3_BUCKET="initiative-media" \
-  S3_ACCESS_KEY_ID="…" \
-  S3_SECRET_ACCESS_KEY="…" \
-  VAPID_PUBLIC_KEY="…" \
-  VAPID_PRIVATE_KEY="…" \
-  VAPID_SUBJECT="mailto:du@example.com"
+openssl rand -base64 48
+```
 
+**Windows** (PowerShell):
+
+```powershell
+-join ((48..57) + (65..90) + (97..122) | Get-Random -Count 48 | ForEach-Object { [char]$_ })
+```
+
+Geheimnisse setzen (sie landen nicht in der `fly.toml`). Der Befehl ist
+bewusst **eine einzige Zeile** ohne `\`-Zeilenumbrüche – die funktionieren in
+PowerShell und `cmd` nicht wie in Bash und reißen den Befehl sonst
+mittendrin ab. Platzhalter wie `‹…›` vorher durch die echten Werte ersetzen
+(am einfachsten in einem Texteditor vorbereiten und dann als Ganzes
+einfügen), egal in welchem Terminal:
+
+```bash
+fly secrets set --app initiative-api DATABASE_URL="postgres://…-pooler…/initiative?sslmode=require" JWT_SECRET="‹Wert von eben›" PUBLIC_APP_URL="https://initiative.example.com" PUBLIC_API_URL="https://initiative-api.fly.dev" CORS_ORIGINS="https://initiative.example.com" S3_ENDPOINT="https://<account-id>.r2.cloudflarestorage.com" S3_BUCKET="initiative-media" S3_ACCESS_KEY_ID="…" S3_SECRET_ACCESS_KEY="…" VAPID_PUBLIC_KEY="…" VAPID_PRIVATE_KEY="…" VAPID_SUBJECT="mailto:du@example.com"
+```
+
+```bash
 fly deploy
+```
+
+```bash
 fly logs
-curl https://initiative-api.fly.dev/healthz
+```
+
+Danach reicht es, `https://initiative-api.fly.dev/healthz` in einem
+Browser-Tab zu öffnen – kein Terminal nötig. Wer lieber im Terminal prüft:
+Unter Windows PowerShell den Befehl explizit als `curl.exe` schreiben (nicht
+nur `curl`), sonst greift PowerShells eigener `curl`-Alias
+(`Invoke-WebRequest`), der andere Optionen erwartet.
+
+```bash
+curl.exe https://initiative-api.fly.dev/healthz
 ```
 
 `min_machines_running = 1` ist kein Luxus: Ohne eine dauerhaft laufende Instanz
@@ -341,12 +384,17 @@ cd Initiative
 cp .env.example .env
 ```
 
-Zwei Zufallswerte erzeugen …
+Zwei Zufallswerte erzeugen – diese Schritte laufen direkt auf dem Server
+(typischerweise Linux), auf dem auch `docker compose` steht:
 
 ```bash
 openssl rand -base64 24    # → POSTGRES_PASSWORD
 openssl rand -base64 48    # → JWT_SECRET
 ```
+
+> Bereitest du die `.env` stattdessen von einem Windows-Rechner aus vor: in
+> PowerShell erzeugt `-join ((48..57) + (65..90) + (97..122) | Get-Random -Count 32 | ForEach-Object { [char]$_ })`
+> denselben Zweck ohne `openssl`.
 
 … und in die `.env` eintragen (eine `.env` kennt keine Befehlsersetzung, die
 Werte müssen ausgeschrieben dastehen):
@@ -475,11 +523,11 @@ Abonnements ungültig und jedes Gerät muss Benachrichtigungen neu erlauben.
 
 ### 2. Setzen
 
+Wieder als eine einzige Zeile, egal ob in PowerShell (Windows) oder Terminal
+(macOS/Linux):
+
 ```bash
-fly secrets set \
-  VAPID_PUBLIC_KEY="BEl…" \
-  VAPID_PRIVATE_KEY="k9…" \
-  VAPID_SUBJECT="mailto:du@example.com"
+fly secrets set --app initiative-api VAPID_PUBLIC_KEY="BEl…" VAPID_PRIVATE_KEY="k9…" VAPID_SUBJECT="mailto:du@example.com"
 ```
 
 Die PWA holt den öffentlichen Schlüssel zur Laufzeit über
@@ -490,10 +538,11 @@ Oberfläche blendet den Schalter aus, statt einen Fehler zu zeigen.
 ### 3. Testen
 
 In der App: **Profil → Einstellungen → Benachrichtigungen** einschalten, dann
+im Terminal (unter Windows-PowerShell explizit `curl.exe`, sonst greift der
+`curl`-Alias von PowerShell und die Optionen unten funktionieren nicht):
 
 ```bash
-curl -X POST https://initiative-api.fly.dev/api/v1/push/test \
-  -H "authorization: Bearer <access-token>"
+curl.exe -X POST https://initiative-api.fly.dev/api/v1/push/test -H "authorization: Bearer <access-token>"
 # → { "delivered": 1 }
 ```
 
@@ -520,8 +569,12 @@ Berechtigung.
 
 ### Healthcheck
 
+Einfach `https://initiative-api.fly.dev/healthz` in einem Browser-Tab öffnen
+– kein Terminal nötig. Alternativ im Terminal (unter Windows-PowerShell als
+`curl.exe`, siehe oben):
+
 ```bash
-curl https://initiative-api.fly.dev/healthz
+curl.exe https://initiative-api.fly.dev/healthz
 ```
 
 ```json
@@ -539,10 +592,11 @@ Instanzen `postgres`, `push` `true`, sobald VAPID gesetzt ist. Bei
 `"status": "degraded"` erreicht die API die Datenbank nicht – dann steht der
 Grund im Feld `error` und in `fly logs`.
 
-Ein Blick auf die Wurzel zeigt die geladenen Module:
+Ein Blick auf die Wurzel zeigt die geladenen Module – auch das reicht als
+Adresse im Browser, oder im Terminal (Windows: `curl.exe`):
 
 ```bash
-curl https://initiative-api.fly.dev/
+curl.exe https://initiative-api.fly.dev/
 # { "name": "Initiative API", "version": 1, "runtime": "rust", "modules": [ … ] }
 ```
 
@@ -555,7 +609,7 @@ Solange `REGISTRATION_MODE=open` gilt, einfach in der PWA registrieren.
 Nachdem alle drin sind – sonst legt sich jeder ein Konto an, der die URL kennt:
 
 ```bash
-fly secrets set REGISTRATION_MODE=invite INVITE_CODES="wandergruppe-2026,familie-xy"
+fly secrets set --app initiative-api REGISTRATION_MODE=invite INVITE_CODES="wandergruppe-2026,familie-xy"
 ```
 
 - `open` – jeder kann sich registrieren.
@@ -571,7 +625,8 @@ Bestehende Sitzungen bleiben davon unberührt.
 ## g) Produktions-Checkliste
 
 - [ ] **`JWT_SECRET`** ist zufällig und mindestens 32 Zeichen lang
-      (`openssl rand -base64 48`), liegt als Secret vor und nicht im Repository.
+      (macOS/Linux: `openssl rand -base64 48`; Windows-PowerShell: siehe
+      Abschnitt c) Backend), liegt als Secret vor und nicht im Repository.
 - [ ] **`NODE_ENV=production`** – erst dann ist `JWT_SECRET` erzwungen und die
       CORS-Ausnahme für lokale Netze abgeschaltet.
 - [ ] **`CORS_ORIGINS`** enthält genau die PWA-Domain, kein `*`.
