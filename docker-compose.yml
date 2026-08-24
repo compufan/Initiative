@@ -25,8 +25,8 @@ services:
 
   api:
     build:
-      context: .
-      dockerfile: apps/api/Dockerfile
+      context: ./apps/api
+      dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
       postgres:

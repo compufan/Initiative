@@ -1,22 +1,19 @@
 # Fly.io – Initiative API
 #
-#   fly launch --no-deploy --name initiative-api
-#   fly secrets set \
-#     DATABASE_URL="postgres://…"   \
-#     JWT_SECRET="$(openssl rand -base64 48)" \
-#     PUBLIC_APP_URL="https://initiative.example.com" \
-#     PUBLIC_API_URL="https://initiative-api.fly.dev" \
-#     CORS_ORIGINS="https://initiative.example.com" \
-#     STORAGE_DRIVER=r2 S3_ENDPOINT="https://<account>.r2.cloudflarestorage.com" \
-#     S3_BUCKET=initiative-media S3_ACCESS_KEY_ID=… S3_SECRET_ACCESS_KEY=… \
-#     VAPID_PUBLIC_KEY=… VAPID_PRIVATE_KEY=… VAPID_SUBJECT="mailto:du@example.com"
-#   fly deploy
+# Von der Repo-Wurzel ausführen (nicht aus apps/api heraus):
+#
+#   fly apps create initiative-api
+#   fly secrets set --app initiative-api DATABASE_URL="postgres://…" JWT_SECRET="…" PUBLIC_APP_URL="https://initiative.example.com" PUBLIC_API_URL="https://initiative-api.fly.dev" CORS_ORIGINS="https://initiative.example.com" STORAGE_DRIVER=r2 S3_ENDPOINT="https://<account>.r2.cloudflarestorage.com" S3_BUCKET=initiative-media S3_ACCESS_KEY_ID=… S3_SECRET_ACCESS_KEY=… VAPID_PUBLIC_KEY=… VAPID_PRIVATE_KEY=… VAPID_SUBJECT="mailto:du@example.com"
+#   fly deploy --config apps/api/fly.toml --app initiative-api
+#
+# flyctl setzt den Build-Context auf das Verzeichnis dieser Datei (apps/api).
+# `dockerfile` unten ist deshalb relativ zu apps/api gemeint, nicht zur Repo-Wurzel.
 
 app = "initiative-api"
 primary_region = "fra"
 
 [build]
-  dockerfile = "apps/api/Dockerfile"
+  dockerfile = "Dockerfile"
 
 [env]
   HOST = "0.0.0.0"

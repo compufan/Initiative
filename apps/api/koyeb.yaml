@@ -1,7 +1,6 @@
 # Koyeb – Initiative API
 #
-#   koyeb app init initiative --docker-build-context . \
-#     --docker-dockerfile apps/api/Dockerfile
+#   koyeb app init initiative --docker-build-context apps/api --docker-dockerfile Dockerfile
 #
 # Secrets vorher anlegen:
 #   koyeb secret create initiative-database-url --value "postgres://…"
@@ -28,8 +27,8 @@ services:
         timeout: 5
     git: null
     docker:
-      dockerfile: apps/api/Dockerfile
-      context: .
+      dockerfile: Dockerfile
+      context: apps/api
     scalings:
       - min: 1
         max: 2

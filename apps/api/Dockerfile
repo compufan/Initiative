@@ -5,7 +5,8 @@ FROM rust:1-slim-bookworm AS builder
 WORKDIR /build
 
 # Abhängigkeiten zuerst bauen, damit Docker sie zwischen Builds cachen kann.
-COPY apps/api/Cargo.toml apps/api/Cargo.lock ./
+# Build-Context ist dieses Verzeichnis (apps/api) selbst, nicht das Repo-Root.
+COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src/bin \
  && echo 'fn main() {}' > src/main.rs \
  && echo '' > src/lib.rs \
@@ -13,8 +14,8 @@ RUN mkdir -p src/bin \
  && cargo build --release --locked \
  && rm -rf src
 
-COPY apps/api/src ./src
-COPY apps/api/migrations ./migrations
+COPY src ./src
+COPY migrations ./migrations
 # Migrationen werden über sqlx::migrate! in die Binary eingebettet.
 RUN cargo build --release --locked --bin initiative-api --bin seed
 

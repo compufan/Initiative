@@ -256,18 +256,20 @@ fly auth login
 
 ```bash
 cd /pfad/zu/Initiative
-fly launch --no-deploy --name initiative-api --region fra
+fly apps create initiative-api
 ```
 
-`fly launch` legt eine `fly.toml` an. Sie muss auf das API-Dockerfile zeigen und
-den internen Port kennen:
+Eine passende `fly.toml` liegt bereits im Repository unter `apps/api/fly.toml`
+– `fly launch` ist hier **nicht** nötig, das würde nur eine zweite,
+überflüssige Konfiguration anlegen. Die mitgelieferte Datei zeigt auf das
+API-Dockerfile und kennt den internen Port:
 
 ```toml
 app = "initiative-api"
 primary_region = "fra"
 
 [build]
-  dockerfile = "apps/api/Dockerfile"
+  dockerfile = "Dockerfile"
 
 [env]
   NODE_ENV = "production"
@@ -288,6 +290,13 @@ primary_region = "fra"
     interval = "30s"
     timeout = "5s"
 ```
+
+> `dockerfile = "Dockerfile"` ist **relativ zu `apps/api/`** gemeint, nicht zur
+> Repo-Wurzel: flyctl setzt den Build-Context auf das Verzeichnis, in dem die
+> `fly.toml` liegt (also `apps/api`). Ein zusätzliches `--dockerfile
+> apps/api/Dockerfile` beim Deploy würde diesen Pfad **doppelt** anhängen und
+> mit `dockerfile 'apps/api/apps/api/Dockerfile' not found` fehlschlagen –
+> deshalb bei `fly deploy` unten kein `--dockerfile` angeben.
 
 Zuerst ein zufälliges `JWT_SECRET` erzeugen – der Befehl unterscheidet sich
 nach Betriebssystem, das Ergebnis einfach für den nächsten Schritt kopieren.
@@ -315,12 +324,15 @@ einfügen), egal in welchem Terminal:
 fly secrets set --app initiative-api DATABASE_URL="postgres://…-pooler…/initiative?sslmode=require" JWT_SECRET="‹Wert von eben›" PUBLIC_APP_URL="https://initiative.example.com" PUBLIC_API_URL="https://initiative-api.fly.dev" CORS_ORIGINS="https://initiative.example.com" S3_ENDPOINT="https://<account-id>.r2.cloudflarestorage.com" S3_BUCKET="initiative-media" S3_ACCESS_KEY_ID="…" S3_SECRET_ACCESS_KEY="…" VAPID_PUBLIC_KEY="…" VAPID_PRIVATE_KEY="…" VAPID_SUBJECT="mailto:du@example.com"
 ```
 
+Deploy immer mit `--config`, damit flyctl die mitgelieferte `apps/api/fly.toml`
+findet (egal aus welchem Verzeichnis der Befehl läuft):
+
 ```bash
-fly deploy
+fly deploy --config apps/api/fly.toml --app initiative-api
 ```
 
 ```bash
-fly logs
+fly logs --app initiative-api
 ```
 
 Danach reicht es, `https://initiative-api.fly.dev/healthz` in einem
@@ -339,7 +351,9 @@ trennt jede eingeschlafene Maschine alle WebSockets und verzögert Push-Zustellu
 ### Koyeb (Docker-Deploy)
 
 1. **Create Service → Docker** – oder **GitHub**, dann als Builder **Dockerfile**
-   mit dem Pfad `apps/api/Dockerfile` und Build-Context `.` wählen.
+   mit **Work directory** `apps/api` und Dockerfile-Pfad `Dockerfile` wählen
+   (der Build-Context ist damit `apps/api`, nicht die Repo-Wurzel – die
+   Dockerfile-`COPY`-Befehle erwarten genau das).
 2. **Instance**: Free/Nano genügt für eine kleine Gruppe.
 3. **Ports**: `8080`, Protokoll `HTTP`. Health-Check-Pfad `/healthz`.
 4. **Environment variables** – Geheimnisse als _Secret_ anlegen:
@@ -365,10 +379,12 @@ trennt jede eingeschlafene Maschine alle WebSockets und verzögert Push-Zustellu
 
 5. **Deploy**, dann `https://…koyeb.app/healthz` aufrufen.
 
-Alternativ das fertige Image bauen und schieben:
+Alternativ das fertige Image bauen und schieben – als Build-Context
+`apps/api` angeben (nicht die Repo-Wurzel), das `-f` kann dann entfallen, weil
+`Dockerfile` dort direkt gefunden wird:
 
 ```bash
-docker build -f apps/api/Dockerfile -t ghcr.io/<user>/initiative-api:latest .
+docker build -t ghcr.io/<user>/initiative-api:latest apps/api
 docker push ghcr.io/<user>/initiative-api:latest
 ```
 
