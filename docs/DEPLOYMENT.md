@@ -258,8 +258,9 @@ primary_region = "fra"
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = false     # WebSockets vertragen kein Einschlafen
-  min_machines_running = 1
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 1        # bleibt wach – WebSockets vertragen kein Einschlafen
 
   [[http_service.checks]]
     path = "/healthz"
@@ -289,8 +290,8 @@ fly logs
 curl https://initiative-api.fly.dev/healthz
 ```
 
-`auto_stop_machines = false` ist kein Luxus: Eine schlafende Maschine trennt alle
-WebSockets und verzögert Push-Zustellungen.
+`min_machines_running = 1` ist kein Luxus: Ohne eine dauerhaft laufende Instanz
+trennt jede eingeschlafene Maschine alle WebSockets und verzögert Push-Zustellungen.
 
 ### Koyeb (Docker-Deploy)
 
@@ -586,8 +587,8 @@ Bestehende Sitzungen bleiben davon unberührt.
       Benachrichtigungen neu erlauben.
 - [ ] **`REGISTRATION_MODE`** steht auf `invite` oder `closed`.
 - [ ] **`REALTIME_BUS=postgres`**, sobald mehr als eine Instanz läuft.
-- [ ] **Kein Autostop** bei der API (Fly: `auto_stop_machines = false`),
-      sonst brechen WebSockets weg.
+- [ ] **Mindestens eine wache Instanz** (Fly: `min_machines_running = 1`),
+      sonst brechen WebSockets weg, sobald die Maschine einschläft.
 - [ ] **`/healthz`** wird überwacht (Fly-Check, UptimeRobot, Healthchecks.io).
 - [ ] **Logs** sind erreichbar (`fly logs`, `docker compose logs -f api`).
 - [ ] **`LOCAL_STORAGE_DIR`** liegt auf einem persistenten Volume – falls du
@@ -601,7 +602,7 @@ Bestehende Sitzungen bleiben davon unberührt.
 | --------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------- |
 | PWA lädt, aber jede Anfrage schlägt fehl            | `VITE_API_URL` falsch oder fehlt  | Wert prüfen und **neu bauen** – er steckt im Bundle                             |
 | `blocked by CORS policy` in der Konsole             | Origin nicht erlaubt              | PWA-URL in `CORS_ORIGINS` **ohne** Schrägstrich am Ende                         |
-| Chats aktualisieren sich nicht von selbst           | WebSocket kommt nicht durch       | Proxy muss Upgrades durchlassen; bei Fly `auto_stop_machines = false`           |
+| Chats aktualisieren sich nicht von selbst           | WebSocket kommt nicht durch       | Proxy muss Upgrades durchlassen; bei Fly `min_machines_running = 1` setzen      |
 | Nachrichten kommen nur auf einer Instanz an         | `REALTIME_BUS=memory`             | auf `postgres` stellen                                                          |
 | Upload bricht mit CORS-Fehler ab                    | R2-CORS-Regel                     | `AllowedOrigins`, `AllowedMethods` `PUT`/`GET`, `AllowedHeaders` `content-type` |
 | Bilder bleiben grau                                 | `PUBLIC_API_URL` falsch           | auf die echte API-URL setzen, Medien-URLs entstehen daraus                      |
