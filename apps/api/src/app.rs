@@ -81,11 +81,16 @@ async fn index() -> Json<serde_json::Value> {
 }
 
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
-    match sqlx::query_scalar::<_, i32>("select 1")
-        .fetch_one(&state.pool)
-        .await
-    {
-        Ok(_) => (
+    // Fly prüft darüber, ob die Maschine noch lebt — ein hängender Pool darf
+    // diese Antwort deshalb nie unbegrenzt blockieren.
+    let ping = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        sqlx::query_scalar::<_, i32>("select 1").fetch_one(&state.pool),
+    )
+    .await;
+
+    match ping {
+        Ok(Ok(_)) => (
             StatusCode::OK,
             Json(json!({
                 "status": "ok",
@@ -95,9 +100,13 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
                 "connections": state.hub.connection_count(),
             })),
         ),
-        Err(error) => (
+        Ok(Err(error)) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "status": "degraded", "error": error.to_string() })),
+        ),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "status": "degraded", "error": "database timeout" })),
         ),
     }
 }
