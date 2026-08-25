@@ -30,12 +30,21 @@ export interface Stroke {
   points: number[];
 }
 
+/** Ein Antippen im Bild: alles, was farblich daran hängt, bleibt erhalten. */
+export interface KeepSeed {
+  /** Position auf der Sticker-Fläche, 0 … STICKER_SIZE. */
+  x: number;
+  y: number;
+}
+
 export interface StickerDoc {
   offsetX: number;
   offsetY: number;
   scale: number;
   shape: ShapeKind;
   removeBg: boolean;
+  /** Angetippte Stellen, die im Sticker bleiben sollen. */
+  keep: KeepSeed[];
   tolerance: number;
   outline: boolean;
   outlineWidth: number;
@@ -56,6 +65,7 @@ export function createDoc(): StickerDoc {
     scale: 1,
     shape: 'square',
     removeBg: false,
+    keep: [],
     tolerance: 40,
     outline: true,
     outlineWidth: 10,
@@ -68,6 +78,7 @@ export function createDoc(): StickerDoc {
 export function cloneDoc(doc: StickerDoc): StickerDoc {
   return {
     ...doc,
+    keep: doc.keep.map((seed) => ({ ...seed })),
     strokes: doc.strokes.map((stroke) => ({ size: stroke.size, points: stroke.points.slice() })),
     top: { ...doc.top },
     bottom: { ...doc.bottom },
@@ -84,6 +95,91 @@ export function isEmptyDoc(source: EditorSource | null, doc: StickerDoc): boolea
 
 function colourDistance(dr: number, dg: number, db: number): number {
   return Math.sqrt((dr * dr + dg * dg + db * db) / 3);
+}
+
+/**
+ * "Antippen zum Behalten": das Gegenstück zu `removeBackground`.
+ *
+ * Statt vom Rand her wegzuräumen, wächst hier von jeder angetippten Stelle ein
+ * Bereich über farblich verwandte Nachbarn – alles ausserhalb wird
+ * durchsichtig. Das trifft genau die Erwartung „ich tippe auf das, was ich im
+ * Sticker haben will“, und funktioniert auf jedem Gerät ohne Download.
+ *
+ * Mehrere Antipper addieren sich, damit sich auch mehrfarbige Motive
+ * zusammensetzen lassen (Gesicht, dann Haare, dann Pullover).
+ */
+export function keepAtSeeds(image: ImageData, seeds: KeepSeed[], tolerance: number): void {
+  const { width, height, data } = image;
+  const total = width * height;
+  if (seeds.length === 0) return;
+
+  const keep = new Uint8Array(total);
+  const visited = new Uint8Array(total);
+  const stack = new Int32Array(total);
+
+  for (const seed of seeds) {
+    const sx = Math.round(seed.x);
+    const sy = Math.round(seed.y);
+    if (sx < 0 || sy < 0 || sx >= width || sy >= height) continue;
+    const start = sy * width + sx;
+    const startAt = start * 4;
+    if (data[startAt + 3] === 0) continue;
+
+    // Jeder Antipper beginnt mit frischer Besuchsliste, sonst blockieren sich
+    // zwei Bereiche gegenseitig.
+    visited.fill(0);
+    const seedR = data[startAt];
+    const seedG = data[startAt + 1];
+    const seedB = data[startAt + 2];
+
+    let top = 0;
+    visited[start] = 1;
+    keep[start] = 1;
+    stack[top++] = start;
+
+    while (top > 0) {
+      const index = stack[--top];
+      const x = index % width;
+      const y = (index - x) / width;
+
+      const visit = (neighbour: number) => {
+        if (visited[neighbour]) return;
+        visited[neighbour] = 1;
+        const at = neighbour * 4;
+        if (data[at + 3] === 0) return;
+        const distance = colourDistance(
+          data[at] - seedR,
+          data[at + 1] - seedG,
+          data[at + 2] - seedB,
+        );
+        if (distance <= tolerance) {
+          keep[neighbour] = 1;
+          stack[top++] = neighbour;
+        }
+      };
+
+      if (x > 0) visit(index - 1);
+      if (x < width - 1) visit(index + 1);
+      if (y > 0) visit(index - width);
+      if (y < height - 1) visit(index + width);
+    }
+  }
+
+  // Kleine Löcher im Motiv schliessen (Lichtreflexe, Augen) und die Kante
+  // weich auslaufen lassen, damit kein Treppenmuster stehen bleibt.
+  const grown = dilateAlpha(
+    Uint8Array.from(keep, (value) => (value ? 255 : 0)),
+    width,
+    height,
+    2,
+  );
+  const soft = blurAlpha(grown, width, height, 1);
+
+  for (let i = 0; i < total; i += 1) {
+    const at = i * 4;
+    if (data[at + 3] === 0) continue;
+    data[at + 3] = Math.round((data[at + 3] * soft[i]) / 255);
+  }
 }
 
 /**
@@ -393,9 +489,12 @@ export function renderSticker(
 
   if (source) drawSource(ctx, source, doc);
 
-  if (!options.fast && doc.removeBg && source?.kind === 'image') {
+  // Angetippte Bereiche haben Vorrang: Wer sagt, was bleiben soll, braucht das
+  // Wegräumen von den Ecken her nicht mehr.
+  if (!options.fast && source?.kind === 'image' && (doc.keep.length > 0 || doc.removeBg)) {
     const image = ctx.getImageData(0, 0, STICKER_SIZE, STICKER_SIZE);
-    removeBackground(image, doc.tolerance);
+    if (doc.keep.length > 0) keepAtSeeds(image, doc.keep, doc.tolerance);
+    else removeBackground(image, doc.tolerance);
     ctx.putImageData(image, 0, 0);
   }
 

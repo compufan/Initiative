@@ -24,7 +24,7 @@ import {
   type TextSlot,
 } from './render.js';
 
-type Tool = 'move' | 'erase';
+type Tool = 'move' | 'erase' | 'keep';
 type Tab = 'source' | 'move' | 'shape' | 'cutout' | 'outline' | 'text';
 
 const TABS: { key: Tab; icon: string; label: string }[] = [
@@ -293,6 +293,14 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
     }
 
     const current = docRef.current;
+    if (toolRef.current === 'keep') {
+      armGesture();
+      commitArmedGesture();
+      // Kein Ziehen: Ein Antippen ist ein Punkt, aus dem der Bereich waechst.
+      gesture.current = { ...gesture.current, mode: 'none' };
+      setDoc((value) => ({ ...value, keep: [...value.keep, { x: point.x, y: point.y }] }));
+      return;
+    }
     if (toolRef.current === 'erase') {
       armGesture();
       commitArmedGesture();
@@ -576,7 +584,11 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
           )}
           {source && (
             <span className="stk-mode-badge">
-              {tool === 'erase' ? '🧽 Radieren' : '✋ Verschieben'}
+              {tool === 'erase'
+                ? '🧽 Radieren'
+                : tool === 'keep'
+                  ? '👆 Antippen zum Behalten'
+                  : '✋ Verschieben'}
             </span>
           )}
         </div>
@@ -748,14 +760,43 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
             <div className="stk-btn-row">
               <button
                 type="button"
+                className={`btn btn-sm ${tool === 'keep' ? 'stk-chip-active' : ''}`}
+                onClick={() => setTool(tool === 'keep' ? 'move' : 'keep')}
+                disabled={!hasImage}
+              >
+                👆 Antippen zum Behalten {tool === 'keep' ? 'an' : 'aus'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  commit();
+                  setDoc((value) => ({ ...value, keep: [] }));
+                }}
+                disabled={!hasImage || doc.keep.length === 0}
+              >
+                Auswahl zurücksetzen
+              </button>
+            </div>
+            {doc.keep.length > 0 && (
+              <p className="stk-hint">
+                {doc.keep.length === 1
+                  ? '1 Stelle ausgewählt.'
+                  : `${doc.keep.length} Stellen ausgewählt.`}{' '}
+                Tippe weitere Bereiche an, die dazugehören – etwa Haare oder Pullover.
+              </p>
+            )}
+            <div className="stk-btn-row">
+              <button
+                type="button"
                 className={`btn btn-sm ${doc.removeBg ? 'stk-chip-active' : ''}`}
                 onClick={() => {
                   commit();
                   setDoc((value) => ({ ...value, removeBg: !value.removeBg }));
                 }}
-                disabled={!hasImage}
+                disabled={!hasImage || doc.keep.length > 0}
               >
-                🪄 Hintergrund entfernen {doc.removeBg ? 'an' : 'aus'}
+                🪄 Ecken entfernen {doc.removeBg ? 'an' : 'aus'}
               </button>
             </div>
             <label className="stk-slider">
@@ -765,7 +806,7 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
                 min={5}
                 max={120}
                 value={doc.tolerance}
-                disabled={!hasImage || !doc.removeBg}
+                disabled={!hasImage || (!doc.removeBg && doc.keep.length === 0)}
                 onChange={(event) => {
                   commit('tolerance');
                   const tolerance = Number(event.target.value);
@@ -775,9 +816,11 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
               <span className="stk-slider-value">{doc.tolerance}</span>
             </label>
             <p className="stk-hint">
-              {hasImage
-                ? 'Startet in den vier Ecken und entfernt alles, was der Eckfarbe ähnelt. Am besten füllt das Foto die ganze Fläche.'
-                : 'Freistellen gibt es nur für Fotos.'}
+              {!hasImage
+                ? 'Freistellen gibt es nur für Fotos.'
+                : doc.keep.length > 0
+                  ? 'Die Toleranz bestimmt, wie weit ein Antippen ins Bild wächst. Bleibt zu wenig stehen: erhöhen. Greift es auf den Hintergrund über: senken.'
+                  : 'Tippe oben auf „Antippen zum Behalten“ und dann im Bild auf das, was im Sticker bleiben soll. „Ecken entfernen“ ist die einfachere Variante für einfarbige Hintergründe.'}
             </p>
           </>
         )}

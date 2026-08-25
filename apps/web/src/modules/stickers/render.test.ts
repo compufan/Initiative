@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cloneDoc, createDoc, isEmptyDoc, removeBackground } from './render.js';
+import { cloneDoc, createDoc, isEmptyDoc, keepAtSeeds, removeBackground } from './render.js';
 
 /** Minimal stand-in for `ImageData` – the pure pipeline never touches the DOM. */
 function makeImage(
@@ -76,5 +76,46 @@ describe('document helpers', () => {
     expect(isEmptyDoc({ kind: 'text' }, doc)).toBe(true);
     expect(isEmptyDoc({ kind: 'emoji', emoji: '🐱' }, doc)).toBe(false);
     expect(isEmptyDoc(null, { ...doc, top: { ...doc.top, value: 'Moin' } })).toBe(false);
+  });
+});
+
+describe('keepAtSeeds', () => {
+  /** Roter Kreis auf blauem Grund – wie ein Motiv vor einem Hintergrund. */
+  const motif = () =>
+    makeImage(40, (x, y) => {
+      const inside = (x - 20) ** 2 + (y - 20) ** 2 < 100;
+      return inside ? [220, 40, 40, 255] : [40, 60, 220, 255];
+    });
+
+  const alphaAt = (image: ImageData, x: number, y: number) =>
+    image.data[(y * image.width + x) * 4 + 3];
+
+  it('behaelt das angetippte Motiv und entfernt den Rest', () => {
+    const image = motif();
+    keepAtSeeds(image, [{ x: 20, y: 20 }], 40);
+
+    expect(alphaAt(image, 20, 20)).toBeGreaterThan(200); // Mitte des Motivs
+    expect(alphaAt(image, 1, 1)).toBe(0); // Ecke im Hintergrund
+    expect(alphaAt(image, 39, 39)).toBe(0);
+  });
+
+  it('setzt mehrere Antipper zusammen', () => {
+    // Zwei getrennte Farbfelder nebeneinander.
+    const image = makeImage(40, (x) => (x < 20 ? [10, 200, 10, 255] : [200, 200, 10, 255]));
+
+    keepAtSeeds(image, [{ x: 5, y: 20 }], 30);
+    expect(alphaAt(image, 5, 20)).toBeGreaterThan(200);
+    expect(alphaAt(image, 35, 20)).toBe(0); // zweites Feld noch nicht angetippt
+
+    const both = makeImage(40, (x) => (x < 20 ? [10, 200, 10, 255] : [200, 200, 10, 255]));
+    keepAtSeeds(both, [{ x: 5, y: 20 }, { x: 35, y: 20 }], 30);
+    expect(alphaAt(both, 5, 20)).toBeGreaterThan(200);
+    expect(alphaAt(both, 35, 20)).toBeGreaterThan(200);
+  });
+
+  it('laesst das Bild unveraendert, wenn nichts angetippt wurde', () => {
+    const image = motif();
+    keepAtSeeds(image, [], 40);
+    expect(alphaAt(image, 1, 1)).toBe(255);
   });
 });
