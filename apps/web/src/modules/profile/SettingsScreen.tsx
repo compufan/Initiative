@@ -4,6 +4,7 @@ import { Screen } from '../../components/Screen.js';
 import { AboutCard } from './AboutCard.js';
 import { AccountCard } from './AccountCard.js';
 import { AdminCard } from './AdminCard.js';
+import { CutoutCard } from './CutoutCard.js';
 import { PasskeyCard } from './PasskeyCard.js';
 import { AppearanceCard } from './AppearanceCard.js';
 import { CalendarCard } from './CalendarCard.js';
@@ -31,6 +32,7 @@ export function SettingsScreen() {
       <NotificationsCard />
       <InstallCard />
       <CalendarCard />
+      <CutoutCard />
       <PasskeyCard />
       <AdminCard />
       <AccountCard />
