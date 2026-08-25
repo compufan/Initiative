@@ -603,9 +603,14 @@ export function EventEditor(props: EventEditorProps) {
       */}
       <fieldset className="field">
         <legend>Eingeladen</legend>
+        {/* Ehrlich sein, was hier passiert: Bei einem Termin MIT Chat laedt der
+            Server ohnehin alle Chatmitglieder ein (services/calendar.rs,
+            create_event) – die Auswahl kann dort nur erweitern, nicht
+            einschraenken. Frueher stand hier „Wer hier steht, sieht den
+            Termin", was eine Einschraenkung versprach, die es nicht gibt. */}
         <p className="cal-hint">
-          {form.conversationId && form.attendeeIds.length === 0
-            ? 'Ohne Auswahl sind alle aus dem Chat eingeladen.'
+          {form.conversationId
+            ? 'Alle aus dem Chat sind eingeladen. Wer hier zusätzlich steht, kommt dazu – auch jemand von ausserhalb.'
             : 'Wer hier steht, sieht den Termin, die Notizen und die Unterlagen.'}
         </p>
         <PersonenWahl

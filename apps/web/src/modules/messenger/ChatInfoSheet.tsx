@@ -19,6 +19,9 @@ import {
   roleLabel,
 } from './helpers.js';
 
+/** Was addMembersSchema erlaubt (packages/shared/src/schemas/conversation.ts). */
+const HINZU_MAX = 100;
+
 const MUTE_PRESETS: { label: string; hours: number | null }[] = [
   { label: '1 Stunde', hours: 1 },
   { label: '8 Stunden', hours: 8 },
@@ -106,6 +109,13 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
       if (neue.length === 0) {
         setPicked([]);
         setAdding(false);
+        return;
+      }
+      if (neue.length > HINZU_MAX) {
+        // Sonst kommt die Absage erst vom Server, nachdem man ausgewaehlt hat
+        // und nicht mehr weiss, welche zu viel sind.
+        toast(`Höchstens ${HINZU_MAX} auf einmal`, 'error');
+        setBusy(false);
         return;
       }
       const updated = await api.conversations.addMembers(conversation.id, neue);

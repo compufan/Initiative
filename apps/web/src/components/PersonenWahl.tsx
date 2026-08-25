@@ -35,7 +35,16 @@ interface Props {
   vorschlaege: Person[];
   gewaehlt: string[];
   onChange: (ids: string[]) => void;
-  /** Kennungen, die nicht abwählbar sind (etwa man selbst). */
+  /**
+   * Kennungen, die auf jeden Fall dabei sind und sich nicht abwählen lassen –
+   * etwa man selbst als Verfasser.
+   *
+   * Sie werden **angehakt und gesperrt** dargestellt. Das war einmal anders:
+   * Haken und Sperre waren zwei unabhängige Dinge, und wer `fest` gesetzt hat,
+   * ohne die Kennung zusätzlich in `gewaehlt` zu führen, bekam ein
+   * ausgegrautes *leeres* Kästchen – zu lesen als „ausdrücklich nicht dabei“,
+   * also das Gegenteil des Gemeinten.
+   */
   fest?: string[];
   /**
    * Kennungen, die gar nicht erst zur Wahl stehen – auch nicht über die Suche.
@@ -124,6 +133,10 @@ export function PersonenWahl({
   const waehlbar = liste.filter((person) => !fest.includes(person.id));
   const alleGewaehlt =
     waehlbar.length > 0 && waehlbar.every((person) => gewaehlt.includes(person.id));
+  // Die Gesperrten zählen mit, weil sie sichtbar angehakt sind – sonst
+  // widerspricht die Zahl dem, was man sieht.
+  const anzahl = new Set([...gewaehlt, ...fest.filter((id) => liste.some((p) => p.id === id))])
+    .size;
 
   function umschalten(id: string) {
     if (fest.includes(id)) return;
@@ -148,7 +161,7 @@ export function PersonenWahl({
           {alleGewaehlt ? 'Auswahl leeren' : 'Alle auswählen'}
         </button>
         <span className="pw-zahl">
-          {gewaehlt.length} {gewaehlt.length === 1 ? 'Person' : 'Personen'}
+          {anzahl} {anzahl === 1 ? 'Person' : 'Personen'}
         </span>
       </div>
 
@@ -170,8 +183,11 @@ export function PersonenWahl({
 
       <div className="pw-liste">
         {liste.map((person) => {
-          const an = gewaehlt.includes(person.id);
           const gesperrt = fest.includes(person.id);
+          // Gesperrt heisst „auf jeden Fall dabei“ – also auch angehakt, ganz
+          // gleich, ob der Aufrufer die Kennung in `gewaehlt` führt oder der
+          // Server sie ohnehin hinzufügt.
+          const an = gesperrt || gewaehlt.includes(person.id);
           return (
             <label key={person.id} className={gesperrt ? 'pw-zeile is-fest' : 'pw-zeile'}>
               <input

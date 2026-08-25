@@ -96,16 +96,36 @@ export function ExpenseSheet({
     setNote('');
   }, [open, conversationId, conversations, myId]);
 
-  // Wer im gewählten Chat ist. Ohne die Namen wäre die Liste eine Reihe
+  /**
+   * Die Mitglieder als Zeichenkette, nicht als Objekt.
+   *
+   * Das ist der Kern der beiden Effekte darunter: `chat` bekommt bei **jeder
+   * eingehenden Nachricht** eine neue Kennung (state/chat.ts, `applyMessage`
+   * ersetzt das Unterhaltungsobjekt, um `lastMessage` zu setzen). Ein Effekt
+   * mit `chat` im Abhängigkeitsfeld läuft also im laufenden Betrieb dauernd –
+   * und setzte die Beteiligten jedes Mal auf alle Chatmitglieder zurück:
+   * Abgewählte kamen wieder, und wer über die Suche von ausserhalb
+   * dazugekommen war, fiel still heraus. Bei offenem Blatt, ohne jede
+   * Rückmeldung.
+   */
+  const mitgliedIds = chat ? chat.members.map((member) => member.userId).join(',') : '';
+
+  // Die Vorauswahl gilt beim Wechsel des Chats – und nur dann.
+  useEffect(() => {
+    setBeteiligte(chatId ? mitgliedIds.split(',').filter(Boolean) : []);
+    // Bewusst nur `chatId`: Kommt jemand in den Chat, ändert sich zwar die
+    // Mitgliederliste, aber eine laufende Eingabe darf das nicht umwerfen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId]);
+
+  // Die Namen dagegen dürfen mitwachsen. Ohne sie wäre die Liste eine Reihe
   // Kennungen, mit denen niemand etwas anfangen kann.
   useEffect(() => {
-    if (!chat) {
+    const ids = mitgliedIds.split(',').filter(Boolean);
+    if (ids.length === 0) {
       setLeute([]);
-      setBeteiligte([]);
-      return;
+      return undefined;
     }
-    const ids = chat.members.map((member) => member.userId);
-    setBeteiligte(ids);
     let abgebrochen = false;
     void Promise.all(ids.map((id) => api.users.byId(id).catch(() => null)))
       .then((ergebnis) => {
@@ -116,7 +136,7 @@ export function ExpenseSheet({
     return () => {
       abgebrochen = true;
     };
-  }, [chat]);
+  }, [mitgliedIds]);
 
   const cents = parseAmount(betrag);
   const vorschau = useMemo(() => {
