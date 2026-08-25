@@ -84,8 +84,18 @@ export function StickerPickerSheet({ conversationId, onClose }: ComposerActionPr
       });
       setRecent(rememberSticker(sticker.id));
       setSent(sticker.id);
+      // Kurz die Bestaetigung zeigen, dann zumachen.
+      //
+      // Das Blatt reicht bis zu 88 % der Schirmhoehe und verdeckt den
+      // Verlauf: Wer einen Sticker antippt, sieht sonst nirgends, dass er
+      // angekommen ist – die Blase entsteht hinter dem Blatt. Die 450 ms
+      // reichen fuer die Bestaetigungs-Animation und sind kurz genug, dass
+      // es sich nicht nach Warten anfuehlt.
       if (sentTimer.current != null) window.clearTimeout(sentTimer.current);
-      sentTimer.current = window.setTimeout(() => setSent(null), 600);
+      sentTimer.current = window.setTimeout(() => {
+        setSent(null);
+        onClose();
+      }, 450);
     } catch (error) {
       toast(errorMessage(error, 'Sticker konnte nicht gesendet werden'), 'error');
     }

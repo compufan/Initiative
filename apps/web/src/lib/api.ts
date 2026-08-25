@@ -523,6 +523,14 @@ export const api = {
     settle: (id: string, body: { userId?: string; settled?: boolean } = {}) =>
       post<ExpenseDto>(`/expenses/${id}/settle`, body),
 
+    /**
+     * Alles abhaken, was zwischen mir und einer Person offen ist – in beiden
+     * Richtungen. Wer die angezeigte Summe überweist, will einmal bestätigen,
+     * nicht an jeder Ausgabe einzeln.
+     */
+    settleUp: (userId: string, settled = true) =>
+      post<{ count: number; amountCents: number }>('/expenses/settle-up', { userId, settled }),
+
     /** Wer schuldet mir was – und was schulde ich. */
     balances: (conversationId?: string) =>
       get<ListResult<BalanceDto>>('/expenses/balances', { query: { conversationId } }),

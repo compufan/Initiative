@@ -366,6 +366,9 @@ pub struct ExpenseShareRow {
     pub user_id: Uuid,
     pub amount_cents: i64,
     pub settled_at: Option<DateTime<Utc>>,
+    /// Wer abgehakt hat. Der Schuldner selbst meldet, der Auslegende
+    /// bestaetigt - das ist nicht dasselbe und soll unterscheidbar bleiben.
+    pub settled_by: Option<Uuid>,
 }
 
 /// Wie jemandem Geld zurueckgegeben werden kann.

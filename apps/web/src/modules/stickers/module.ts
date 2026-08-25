@@ -17,6 +17,14 @@ export default defineWebModule({
   routes: [{ path: '/sticker', element: createElement(StickerLibraryScreen) }],
   messageRenderers: { sticker: StickerBubble },
   composerActions: [
-    { key: 'sticker', label: 'Sticker', icon: '🌟', order: 50, render: StickerPickerSheet },
+    {
+      key: 'sticker',
+      label: 'Sticker',
+      icon: '🌟',
+      order: 50,
+      // Eigener Knopf in der Eingabezeile – siehe `pinned` in ../types.ts.
+      pinned: true,
+      render: StickerPickerSheet,
+    },
   ],
 });

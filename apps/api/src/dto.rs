@@ -407,6 +407,9 @@ pub struct ExpenseShareDto {
     pub user_id: Uuid,
     pub amount_cents: i64,
     pub settled_at: Option<DateTime<Utc>>,
+    /// Wer den Haken gesetzt hat - der Schuldner (Meldung) oder der
+    /// Auslegende (Bestaetigung).
+    pub settled_by: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, Serialize)]

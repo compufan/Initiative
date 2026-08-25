@@ -452,6 +452,16 @@
   font-size: 1.35rem;
 }
 
+/* Aktionen mit eigenem Platz in der Zeile (heute: Sticker). Gleiche Groesse
+   wie der Plus-Knopf, damit die Zeile ruhig bleibt. 44px ist die kleinste
+   Flaeche, die sich auf einem Handy sicher treffen laesst. */
+.msg-composer-pinned {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  font-size: 1.25rem;
+}
+
 .msg-composer-input {
   flex: 1;
   min-width: 0;

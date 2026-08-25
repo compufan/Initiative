@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react';
+import { type ReactNode, useEffect, useId } from 'react';
 import { createPortal } from 'react-dom';
 
 interface SheetProps {
@@ -13,6 +13,11 @@ interface SheetProps {
 
 /** Bottom sheet / modal with backdrop, escape handling and scroll locking. */
 export function Sheet({ open, onClose, title, children, actions, variant = 'sheet' }: SheetProps) {
+  // Ein `role="dialog"` ohne Beschriftung meldet sich bei einem Screenreader
+  // als „Dialog“ und sonst nichts. Der Titel stand bisher in einem schmucklosen
+  // `span`, also nirgends, wo eine Vorlesehilfe ihn findet. Als Ueberschrift
+  // mit `aria-labelledby` ist er beides: sichtbar und angesagt.
+  const titleId = useId();
   useEffect(() => {
     if (!open) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -31,11 +36,13 @@ export function Sheet({ open, onClose, title, children, actions, variant = 'shee
 
   const content =
     variant === 'modal' ? (
-      <div className="modal" role="dialog" aria-modal="true">
+      <div className="modal" role="dialog" aria-modal="true" aria-labelledby={title ? titleId : undefined}>
         <div className="modal-card">
           {(title || actions) && (
             <div className="row row-between" style={{ marginBottom: 'var(--space-3)' }}>
-              <strong>{title}</strong>
+              <h2 id={titleId} className="sheet-title">
+                {title}
+              </h2>
               {actions}
             </div>
           )}
@@ -43,11 +50,13 @@ export function Sheet({ open, onClose, title, children, actions, variant = 'shee
         </div>
       </div>
     ) : (
-      <div className="sheet" role="dialog" aria-modal="true">
+      <div className="sheet" role="dialog" aria-modal="true" aria-labelledby={title ? titleId : undefined}>
         <div className="sheet-handle" />
         {(title || actions) && (
           <div className="sheet-header">
-            <span>{title}</span>
+            <h2 id={titleId} className="sheet-title">
+              {title}
+            </h2>
             {actions ?? (
               <button type="button" className="icon-btn" onClick={onClose} aria-label="Schließen">
                 ✕

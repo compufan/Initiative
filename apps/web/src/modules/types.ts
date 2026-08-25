@@ -19,6 +19,20 @@ export interface ComposerAction {
   /** Emoji or short glyph shown in the attachment sheet. */
   icon: string;
   order?: number;
+  /**
+   * Bekommt einen eigenen Knopf direkt in der Eingabezeile, statt nur im
+   * Menü dahinter zu stehen.
+   *
+   * Gedacht für das, wonach man beim Schreiben ständig greift. Sticker waren
+   * der Anlass: Sie funktionierten von Anfang an, lagen aber hinter einem
+   * Knopf mit der Aufschrift „Anhang hinzufügen“ – und danach sucht niemand,
+   * der einen Sticker schicken will. Ein Weg, den man nicht findet, ist kein
+   * Weg.
+   *
+   * Sparsam vergeben: Jeder eigene Knopf nimmt Platz weg, den auf einem
+   * Handyschirm das Textfeld besser gebrauchen kann.
+   */
+  pinned?: boolean;
   render: ComponentType<ComposerActionProps>;
 }
 

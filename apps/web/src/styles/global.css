@@ -458,6 +458,24 @@ canvas {
   font-weight: 650;
 }
 
+/* Der Blatt-Titel ist eine echte Ueberschrift, damit `aria-labelledby` etwas
+   zu benennen hat. Optisch soll sie sich davon nicht unterscheiden – die
+   Groesse kommt vom Kasten darum, nicht von der Ebene. */
+.sheet-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: inherit;
+  line-height: 1.3;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal-card .sheet-title {
+  font-weight: 650;
+}
+
 .sheet-body {
   overflow-y: auto;
   padding: var(--space-2) var(--space-4) var(--space-5);

@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::db::{ExpenseRow, ExpenseShareRow};
 use crate::dto::{BalanceDto, ExpenseDto, ExpenseShareDto};
 use crate::error::{AppError, AppResult};
+use crate::state::AppState;
 
 pub const VISIBILITIES: &[&str] = &["participants", "conversation", "listed"];
 
@@ -162,6 +163,7 @@ pub async fn to_expense_dto(
                 user_id: share.user_id,
                 amount_cents: share.amount_cents,
                 settled_at: share.settled_at,
+                settled_by: share.settled_by,
             })
             .collect(),
         settled_at: expense.settled_at,
@@ -259,6 +261,64 @@ pub fn paypal_me_url(name: &str, amount_cents: i64, currency: &str) -> Option<St
     }
     let betrag = format!("{}.{:02}", amount_cents / 100, (amount_cents % 100).abs());
     Some(format!("https://paypal.me/{sauber}/{betrag}{currency}"))
+}
+
+/// Sagt beiden Seiten Bescheid, dass abgerechnet wurde.
+///
+/// Ohne das erfährt der Empfänger nur dann von einer Zahlung, wenn er von sich
+/// aus die Ausgabenseite öffnet – und wartet derweil womöglich auf Geld, das
+/// längst da ist.
+///
+/// Bewusst leise im Fehlerfall: Eine misslungene Benachrichtigung darf das
+/// Abrechnen nicht rückgängig machen. Das Geld ist geflossen, der Haken sitzt;
+/// dass die Meldung nicht ankam, ist ärgerlich, aber kein Grund, den Vorgang
+/// scheitern zu lassen.
+pub async fn melde_abrechnung(state: &AppState, wer: Uuid, mit: Uuid, cents: i64, beglichen: bool) {
+    let payload = serde_json::json!({
+        "byUserId": wer,
+        "withUserId": mit,
+        "amountCents": cents,
+        "settled": beglichen,
+    });
+    state
+        .hub
+        .publish(
+            vec![wer, mit],
+            crate::realtime::Event::new("expense.settled", payload),
+        )
+        .await;
+
+    if !beglichen || !state.push.enabled() {
+        return;
+    }
+
+    let name = sqlx::query_scalar::<_, String>("select display_name from users where id = $1")
+        .bind(wer)
+        .fetch_optional(&state.pool)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "Jemand".to_string());
+
+    let payload = crate::dto::PushPayload {
+        title: "Ausgaben".to_string(),
+        body: format!("{name} hat {} als bezahlt markiert.", format_cents(cents)),
+        tag: Some("expense-settled".to_string()),
+        url: "/ausgaben".to_string(),
+        conversation_id: None,
+        message_id: None,
+        kind: "expense".to_string(),
+    };
+    let _ = state
+        .push
+        .send_to_users(&state.pool, &[mit], &payload)
+        .await;
+}
+
+/// Cent als Text – „12,50 €“. Nur für Meldungen; gerechnet wird in Cent.
+pub fn format_cents(cents: i64) -> String {
+    let betrag = cents.abs();
+    format!("{},{:02} €", betrag / 100, betrag % 100)
 }
 
 #[cfg(test)]

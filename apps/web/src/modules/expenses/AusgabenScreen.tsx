@@ -138,11 +138,12 @@ export function AusgabenScreen() {
                       ? `du schuldest ${formatCents(-eintrag.netCents, eintrag.currency)}`
                       : `schuldet dir ${formatCents(eintrag.netCents, eintrag.currency)}`}
                   </span>
-                  {eintrag.netCents < 0 && (
-                    <button type="button" className="btn btn-sm" onClick={() => setZahlen(eintrag)}>
-                      Zurückzahlen
-                    </button>
-                  )}
+                  {/* Beide Richtungen brauchen einen Knopf. Bisher gab es ihn
+                      nur beim Schuldner – wer Geld bekam, konnte den Eingang
+                      nirgends bestaetigen, obwohl der Server es erlaubt. */}
+                  <button type="button" className="btn btn-sm" onClick={() => setZahlen(eintrag)}>
+                    {eintrag.netCents < 0 ? 'Zurückzahlen' : 'Erhalten?'}
+                  </button>
                 </li>
               ))}
             </ul>
@@ -190,6 +191,7 @@ export function AusgabenScreen() {
           displayName={name(zahlen.userId)}
           amountCents={zahlen.netCents}
           currency={zahlen.currency}
+          onSettled={() => void laden()}
         />
       )}
     </Screen>
@@ -215,6 +217,19 @@ function ExpenseCard({
     setBusy(true);
     try {
       await api.expenses.settle(expense.id, { settled: meiner?.settledAt == null });
+      await onChanged();
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Nicht gespeichert');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Als Auslegender den Eingang eines fremden Anteils bestaetigen. */
+  async function bestaetigen(userId: string) {
+    setBusy(true);
+    try {
+      await api.expenses.settle(expense.id, { userId, settled: true });
       await onChanged();
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Nicht gespeichert');
@@ -255,7 +270,24 @@ function ExpenseCard({
           <li key={share.userId} className={share.settledAt ? 'exp-settled' : undefined}>
             <span className="truncate">{name(share.userId)}</span>
             <span>{formatCents(share.amountCents, expense.currency)}</span>
-            {share.settledAt && <span aria-label="beglichen">✓</span>}
+            {share.settledAt && (
+              // Der Unterschied zwischen „ich habe überwiesen“ und „ist
+              // angekommen“ ist genau der Punkt, an dem es sonst Streit gibt.
+              <span
+                aria-label={
+                  share.settledBy === expense.paidBy
+                    ? `${name(expense.paidBy)} hat den Eingang bestätigt`
+                    : `${name(share.settledBy)} hat als bezahlt gemeldet`
+                }
+                title={
+                  share.settledBy === expense.paidBy
+                    ? `Eingang bestätigt von ${name(expense.paidBy)}`
+                    : `Als bezahlt gemeldet von ${name(share.settledBy)}`
+                }
+              >
+                {share.settledBy === expense.paidBy ? '✓✓' : '✓'}
+              </span>
+            )}
           </li>
         ))}
       </ul>
@@ -266,6 +298,23 @@ function ExpenseCard({
             {meiner.settledAt ? 'Doch noch offen' : 'Bezahlt'}
           </button>
         )}
+        {/* Wer ausgelegt hat, bestaetigt den Eingang. Der Server liess das von
+            Anfang an zu (expenses.rs: „Fremde Anteile darf nur abhaken, wer
+            ausgelegt oder eingetragen hat“) – nur gab es dafuer keinen Knopf. */}
+        {expense.paidBy === myId &&
+          expense.shares
+            .filter((share) => share.userId !== myId && share.settledAt == null)
+            .map((share) => (
+              <button
+                key={share.userId}
+                type="button"
+                className="btn btn-sm"
+                disabled={busy}
+                onClick={() => void bestaetigen(share.userId)}
+              >
+                {name(share.userId)} hat gezahlt
+              </button>
+            ))}
         {expense.canEdit && (
           <button
             type="button"

@@ -34,6 +34,9 @@ export function Composer({
   const idleTimer = useRef<number | null>(null);
 
   const actions = useMemo(() => composerActions(), []);
+  // Aktionen mit eigenem Knopf stehen zusätzlich in der Eingabezeile – im
+  // Menü bleiben sie trotzdem, damit es genau einen vollständigen Ort gibt.
+  const pinned = useMemo(() => actions.filter((action) => action.pinned), [actions]);
   const canSend = text.trim().length > 0;
 
   const stopTyping = () => {
@@ -131,16 +134,31 @@ export function Composer({
       )}
 
       <div className="msg-composer-row">
+        {/* „Anhang hinzufügen“ stand hier und war schlicht falsch: Hinter dem
+            Knopf liegen auch Sticker, Termin, Umfrage und Spiel. */}
         {actions.length > 0 && (
           <button
             type="button"
             className="icon-btn msg-composer-plus"
-            aria-label="Anhang hinzufügen"
+            aria-label="Mehr hinzufügen"
             onClick={() => setActionsOpen(true)}
           >
             ＋
           </button>
         )}
+        {/* Aktionen, die sich einen eigenen Platz gewünscht haben. */}
+        {pinned.map((action) => (
+          <button
+            key={action.key}
+            type="button"
+            className="icon-btn msg-composer-pinned"
+            aria-label={action.label}
+            title={action.label}
+            onClick={() => setActiveAction(action)}
+          >
+            <span aria-hidden="true">{action.icon}</span>
+          </button>
+        ))}
         <textarea
           ref={textareaRef}
           className="msg-composer-input"

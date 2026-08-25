@@ -51,7 +51,7 @@ test('ein Foto im Chat wird wirklich angezeigt', async ({ browser }) => {
   await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
 
   // Anhang-Menü → „Foto/Video“ → Datei wählen → senden.
-  await alicePage.getByRole('button', { name: 'Anhang hinzufügen' }).click();
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
   await alicePage.getByText('Foto/Video').click();
   await alicePage.locator('input[type=file]').setInputFiles({
     name: 'testbild.png',
@@ -121,7 +121,7 @@ test('die Bildunterschrift bestimmt nicht die Bildgröße', async ({ browser }) 
   await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
 
   const senden = async (unterschrift: string) => {
-    await alicePage.getByRole('button', { name: 'Anhang hinzufügen' }).click();
+    await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
     await alicePage.getByText('Foto/Video').click();
     await alicePage.locator('input[type=file]').setInputFiles({
       name: 'testbild.png',

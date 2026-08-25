@@ -16,6 +16,15 @@ export interface ExpenseShareDto {
   userId: string;
   amountCents: number;
   settledAt: string | null;
+  /**
+   * Wer abgehakt hat.
+   *
+   * Ist das der Schuldner selbst, ist es eine **Meldung** („ich habe
+   * überwiesen“). Ist es der Auslegende, eine **Bestätigung** („ist
+   * angekommen“). Der Unterschied ist genau der Punkt, an dem sich Leute sonst
+   * uneinig werden, deshalb steht er dabei.
+   */
+  settledBy: string | null;
 }
 
 export interface ExpenseDto {

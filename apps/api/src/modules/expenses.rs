@@ -16,7 +16,7 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -40,6 +40,7 @@ pub fn router() -> Router<AppState> {
         .route("/expenses", get(list).post(create))
         .route("/expenses/{id}", get(by_id).patch(update).delete(remove))
         .route("/expenses/{id}/settle", post(settle))
+        .route("/expenses/settle-up", post(settle_up))
         .route("/expenses/balances", get(balance_list))
         .route(
             "/expenses/payment-profile",
@@ -403,12 +404,15 @@ async fn settle(
     }
 
     sqlx::query(
-        "update expense_shares set settled_at = case when $3 then now() else null end
+        "update expense_shares
+            set settled_at = case when $3 then now() else null end,
+                settled_by = case when $3 then $4::uuid else null end
           where expense_id = $1 and user_id = $2",
     )
     .bind(id)
     .bind(ziel)
     .bind(input.settled)
+    .bind(user.id())
     .execute(&state.pool)
     .await?;
 
@@ -431,6 +435,125 @@ async fn settle(
 
     let expense = require_expense(&state.pool, id).await?;
     Ok(Json(to_expense_dto(&state.pool, expense, user.id()).await?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SettleUpInput {
+    /// Mit wem abgerechnet wird.
+    user_id: Uuid,
+    /// `false` macht den Haken wieder weg – falls jemand zu früh geklickt hat.
+    #[serde(default = "wahr")]
+    settled: bool,
+}
+
+fn wahr() -> bool {
+    true
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SettleUpResult {
+    /// Wie viele Anteile angefasst wurden.
+    count: i64,
+    /// Was dabei zusammenkam – in Cent, aus Sicht des Aufrufers.
+    amount_cents: i64,
+}
+
+/// Alles begleichen, was zwischen mir und einer Person offen ist.
+///
+/// Bisher ging Abhaken nur je Ausgabe. Bei fünf gemeinsamen Abenden waren das
+/// fünf Klicks an fünf Karten – während die Übersicht nur eine einzige Summe
+/// zeigt. Wer diese Summe überweist, will einmal bestätigen, nicht fünfmal.
+///
+/// Es werden **beide Richtungen** abgehakt, und das ist Absicht: „Abrechnen“
+/// heißt, dass zwischen uns nichts mehr offen ist. Wenn ich 20 schulde und mir
+/// 5 zustehen, überweise ich 15 – danach ist beides erledigt, nicht nur eine
+/// Hälfte. Genau diese Zahl steht auch in der Übersicht.
+///
+/// Erlaubt ist das, weil jeder Anteil ohnehin von einem der beiden abgehakt
+/// werden dürfte: der eigene immer, der fremde auf einer Ausgabe, die man
+/// selbst ausgelegt hat.
+async fn settle_up(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(input): Json<SettleUpInput>,
+) -> AppResult<Json<SettleUpResult>> {
+    if input.user_id == user.id() {
+        return Err(AppError::bad_request(
+            "Mit sich selbst rechnet man nicht ab",
+        ));
+    }
+
+    // Nur Anteile, die ich auch einzeln abhaken dürfte – dieselbe Regel wie in
+    // `settle`, nur als Mengenoperation.
+    let rows = sqlx::query_as::<_, (Uuid, i64)>(
+        "update expense_shares s
+            set settled_at = case when $3 then now() else null end,
+                settled_by = case when $3 then $1::uuid else null end
+           from expenses e
+          where s.expense_id = e.id
+            and (
+              -- Ich schulde: mein Anteil auf einer Ausgabe, die der andere
+              -- ausgelegt hat.
+              (s.user_id = $1 and e.paid_by = $2)
+              -- Der andere schuldet mir: sein Anteil auf meiner Ausgabe.
+              or (s.user_id = $2 and e.paid_by = $1)
+            )
+            and s.user_id <> coalesce(e.paid_by, s.user_id)
+            and (s.settled_at is null) = $3
+          returning s.expense_id, s.amount_cents",
+    )
+    .bind(user.id())
+    .bind(input.user_id)
+    .bind(input.settled)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let betroffene: Vec<Uuid> = {
+        let mut ids: Vec<Uuid> = rows.iter().map(|(expense_id, _)| *expense_id).collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    };
+
+    // Ausgaben, an denen nichts mehr offen ist, gelten als erledigt.
+    for expense_id in &betroffene {
+        sqlx::query(
+            "update expenses set
+               settled_at = case
+                 when exists (
+                   select 1 from expense_shares
+                    where expense_id = $1 and settled_at is null
+                      and user_id <> coalesce(paid_by, user_id)
+                 ) then null
+                 else coalesce(settled_at, now())
+               end,
+               updated_at = now()
+             where id = $1",
+        )
+        .bind(expense_id)
+        .execute(&state.pool)
+        .await?;
+    }
+
+    let summe: i64 = rows.iter().map(|(_, cents)| *cents).sum();
+
+    if !betroffene.is_empty() {
+        crate::services::expenses::melde_abrechnung(
+            &state,
+            user.id(),
+            input.user_id,
+            summe,
+            input.settled,
+        )
+        .await;
+    }
+
+    Ok(Json(SettleUpResult {
+        count: rows.len() as i64,
+        amount_cents: summe,
+    }))
 }
 
 /* ---------- Wer schuldet wem ---------- */

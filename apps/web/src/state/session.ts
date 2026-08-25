@@ -119,3 +119,8 @@ realtime.onStateChange((connection) => useSession.setState({ connection }));
 export function useMyId(): string {
   return useSession((state) => state.user?.id ?? '');
 }
+
+/** Der eigene Anzeigename – etwa fuer einen Verwendungszweck. */
+export function useMyName(): string {
+  return useSession((state) => state.user?.displayName ?? '');
+}
