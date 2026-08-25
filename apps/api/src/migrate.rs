@@ -10,6 +10,15 @@
 //! die schon auf einer echten Datenbank lief, ist Geschichte und kein Entwurf
 //! mehr.
 //!
+//! Nachgetragen, weil die naheliegende Erklärung hier die falsche war: Die
+//! Dateien waren gar nicht bearbeitet worden. Die Datenbank hatte für
+//! Migration 1 und 2 Prüfsummen vermerkt (`d1e3e46b…`, `d63dd564…`), die zu
+//! **keiner** Fassung im Repository passen – weder zu einer committeten noch
+//! zu einer verwaisten. Für 3 bis 6 stimmten sie dagegen genau. Die Datenbank
+//! ist also älter als diese Repository-Geschichte: Ihre ersten beiden
+//! Migrationen hat ein früherer Stand des Projekts angewendet. Deshalb nennt
+//! die Meldung unten beide Ursachen und nicht nur die naheliegende.
+//!
 //! Nur war die Folge hier fatal. Der Fehler wanderte aus `main` heraus, der
 //! Prozess beendete sich mit Code 1, Fly startete ihn neu, wieder Code 1 – bis
 //! „machine has reached its max restart count of 10“. Von aussen sah man davon
@@ -99,12 +108,14 @@ async fn auf_verbindung(
         Err(MigrateError::VersionMismatch(version)) => {
             let name = dateiname(migrator, version);
             Err(format!(
-                "Migration {version} ({name}) wurde nach dem Ausführen verändert. \
-                 Die Datenbank hat sie längst angewendet, nur passt die Prüfsumme \
-                 nicht mehr zur Datei – deshalb läuft KEINE der neueren \
-                 Migrationen. Lösung: In GitHub → Actions → „API-Wartung“ die \
-                 Aufgabe „migration-reparieren“ starten. Sie gleicht die \
-                 Prüfsumme an und lässt die offenen Migrationen durchlaufen."
+                "Migration {version} ({name}): Die in der Datenbank vermerkte \
+                 Prüfsumme passt nicht zu der Datei, die dieses Abbild mitbringt. \
+                 Angewendet hat die Datenbank die Migration längst – nur aus \
+                 anderen Bytes. Deshalb läuft KEINE der neueren Migrationen. \
+                 Zwei übliche Ursachen: Die Datei wurde nach dem Ausführen noch \
+                 bearbeitet, oder die Datenbank wurde ursprünglich von einem \
+                 anderen Stand migriert. Lösung: In GitHub → Actions → \
+                 „API-Wartung“ die Aufgabe „migration-reparieren“ starten."
             ))
         }
         Err(MigrateError::Dirty(version)) => {

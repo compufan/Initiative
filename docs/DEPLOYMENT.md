@@ -687,8 +687,8 @@ curl.exe https://initiative-api.fly.dev/
 ### Wenn Migrationen blockieren
 
 sqlx merkt sich zu jeder ausgeführten Migration eine Prüfsumme über den
-Dateiinhalt. Wird eine Datei danach noch verändert – und sei es ein Leerzeichen
-–, verweigert sqlx **jede** Migration, auch die neuen:
+Dateiinhalt. Passt sie später nicht mehr, verweigert sqlx **jede** Migration,
+auch die neuen:
 
 ```
 Error: VersionMismatch(1)
@@ -697,6 +697,18 @@ Error: VersionMismatch(1)
 Das ist im Kern richtig: Eine Migration, die auf einer echten Datenbank lief,
 ist Geschichte und kein Entwurf mehr. Neue Änderungen gehören in eine neue
 Datei.
+
+Zwei Ursachen kommen in Frage, und die zweite wird leicht übersehen:
+
+1. Die Datei wurde nach dem Ausführen noch bearbeitet – und sei es ein
+   Leerzeichen.
+2. **Die Datenbank wurde ursprünglich von einem anderen Stand migriert.** Das
+   passiert, wenn dieselbe Datenbank schon vor der jetzigen
+   Repository-Geschichte in Benutzung war. Die Tabellen sind dann in Ordnung,
+   nur der Vermerk stammt aus anderen Bytes.
+
+Welcher Fall vorliegt, verrät ein Vergleich: Steht die vermerkte Prüfsumme in
+keiner einzigen Fassung der Datei aus der Repository-Geschichte, ist es Fall 2.
 
 Die API beendet sich deswegen **nicht**. Sie läuft weiter, bleibt erreichbar
 und meldet über `/healthz` (mit 200, damit Fly sie nicht aus dem Verkehr nimmt
