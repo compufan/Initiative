@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { AuthSession, SelfUserDto } from '@initiative/shared';
 import { ApiError, api, getTokens, setTokens } from '../lib/api.js';
 import { realtime, type ConnectionState } from '../lib/realtime.js';
-import { clearOfflineData } from '../lib/db.js';
+import { clearOfflineData, readMeta, writeMeta } from '../lib/db.js';
 
 export type SessionStatus = 'loading' | 'anonymous' | 'authenticated';
 
@@ -25,6 +25,9 @@ interface SessionState {
   refreshUser: () => Promise<void>;
 }
 
+/** Schluessel des lokal hinterlegten Profils. */
+const USER_CACHE_KEY = 'session.user';
+
 export const useSession = create<SessionState>((set, get) => ({
   status: 'loading',
   user: null,
@@ -36,17 +39,30 @@ export const useSession = create<SessionState>((set, get) => ({
       set({ status: 'anonymous', user: null });
       return;
     }
+    // Zuerst das zuletzt bekannte Profil einsetzen. Ohne das steht die App
+    // still, bis der Server antwortet – und ohne eigene Kennung wirkt keine
+    // Nachricht als eigene, weil `isMine` daran haengt.
+    const cached = await readMeta<SelfUserDto>(USER_CACHE_KEY);
+    if (cached) set({ status: 'authenticated', user: cached });
+
     try {
       const user = await api.auth.me();
       set({ status: 'authenticated', user, error: null });
+      void writeMeta(USER_CACHE_KEY, user);
       realtime.connect();
     } catch (error) {
       if (error instanceof ApiError && error.isOffline) {
-        // Keep the cached session so the app still opens without a network.
-        set({ status: 'authenticated', error: null });
+        // Server nicht erreichbar: mit dem zwischengespeicherten Profil
+        // weiterarbeiten, statt die Sitzung wegzuwerfen.
+        set({
+          status: 'authenticated',
+          error: cached ? null : 'Der Server ist gerade nicht erreichbar.',
+        });
+        realtime.connect();
         return;
       }
       setTokens(null);
+      void writeMeta(USER_CACHE_KEY, null);
       set({ status: 'anonymous', user: null });
     }
   },
@@ -66,6 +82,7 @@ export const useSession = create<SessionState>((set, get) => ({
   applySession(session) {
     setTokens(session);
     set({ status: 'authenticated', user: session.user, error: null });
+    void writeMeta(USER_CACHE_KEY, session.user);
     realtime.reconnect();
   },
 
@@ -80,6 +97,7 @@ export const useSession = create<SessionState>((set, get) => ({
 
   setUser(user) {
     set({ user });
+    void writeMeta(USER_CACHE_KEY, user);
   },
 
   async refreshUser() {

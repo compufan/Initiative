@@ -172,6 +172,25 @@ export async function forceRefresh(): Promise<StoredTokens | null> {
   return refreshTokens();
 }
 
+/**
+ * Nach dieser Zeit gilt eine Anfrage als gescheitert.
+ *
+ * Ohne Zeitlimit haengt ein `fetch` potenziell unbegrenzt. Antwortete die API
+ * nicht mehr, lud die App deshalb ewig, statt auf den Zwischenspeicher
+ * zurueckzufallen und "nicht erreichbar" zu melden.
+ */
+const REQUEST_TIMEOUT_MS = 20_000;
+
+/** Verbindet das eigene Zeitlimit mit einem ggf. uebergebenen Abbruchsignal. */
+function withTimeout(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  if (!signal) return timeout;
+  // `any` gibt es noch nicht ueberall; dann gilt das Zeitlimit allein.
+  return typeof AbortSignal.any === 'function'
+    ? AbortSignal.any([signal, timeout])
+    : timeout;
+}
+
 export interface RequestOptions {
   query?: Record<string, string | number | boolean | undefined | null>;
   body?: unknown;
@@ -208,7 +227,7 @@ export async function request<T>(
     return fetch(buildUrl(path, options.query, options.root), {
       method,
       headers,
-      signal: options.signal,
+      signal: withTimeout(options.signal),
       body:
         options.body === undefined
           ? undefined
@@ -229,7 +248,13 @@ export async function request<T>(
   try {
     response = await send(accessToken);
   } catch (error) {
-    throw new ApiError(0, 'offline', 'Keine Verbindung zum Server', error);
+    const timedOut = error instanceof DOMException && error.name === 'TimeoutError';
+    throw new ApiError(
+      0,
+      'offline',
+      timedOut ? 'Der Server antwortet nicht' : 'Keine Verbindung zum Server',
+      error,
+    );
   }
 
   if (response.status === 401 && !options.anonymous && tokens) {
