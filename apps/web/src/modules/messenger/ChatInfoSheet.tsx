@@ -141,6 +141,7 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
         <div className="stack">
           <PersonenWahl
             label="Wer dazukommen soll"
+            suchePlatzhalter="Jemanden suchen"
             vorschlaege={bekannte}
             gewaehlt={picked}
             onChange={setPicked}

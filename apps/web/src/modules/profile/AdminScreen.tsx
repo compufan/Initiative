@@ -3,22 +3,52 @@ import { useNavigate } from 'react-router-dom';
 import { Screen } from '../../components/Screen.js';
 import { EmptyState, Spinner } from '../../components/Feedback.js';
 import { api, type AdminMemberDto, type InviteDto, type StorageCheck } from '../../lib/api.js';
+import { useListenfilter } from '../../components/Listenfilter.js';
 import { useSession } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
 import { errorMessage } from './helpers.js';
 
-/** Ein Code ist nur brauchbar, solange er weder zurückgezogen noch aufgebraucht ist. */
-function inviteState(invite: InviteDto): { label: string; usable: boolean } {
-  if (invite.revokedAt) return { label: 'zurückgezogen', usable: false };
+/**
+ * Ein fester leerer Wert.
+ *
+ * `invites ?? []` erzeugte bei jedem Rendern ein neues Feld – und damit
+ * rechneten die Memos im Filterhaken jedes Mal neu, obwohl sich nichts
+ * geändert hat.
+ */
+const LEER: InviteDto[] = [];
+
+type InviteZustand = 'zurueckgezogen' | 'abgelaufen' | 'aufgebraucht' | 'offen';
+
+const ZUSTAND_TEXT: Record<InviteZustand, string> = {
+  offen: 'offen',
+  aufgebraucht: 'aufgebraucht',
+  abgelaufen: 'abgelaufen',
+  zurueckgezogen: 'zurückgezogen',
+};
+
+const ZUSTAND_REIHE: InviteZustand[] = ['offen', 'aufgebraucht', 'abgelaufen', 'zurueckgezogen'];
+
+/**
+ * Ein Code ist nur brauchbar, solange er weder zurückgezogen noch aufgebraucht
+ * ist.
+ *
+ * `id` und `label` sind bewusst zweierlei: Das Label trägt bei einem offenen
+ * Code die Restzahl („3 Einlösung(en) offen“). Als Filterwert benutzt, bekäme
+ * die Leiste für jede Zahl einen eigenen Knopf.
+ */
+function inviteState(invite: InviteDto): { id: InviteZustand; label: string; usable: boolean } {
+  if (invite.revokedAt) {
+    return { id: 'zurueckgezogen', label: ZUSTAND_TEXT.zurueckgezogen, usable: false };
+  }
   if (invite.expiresAt && new Date(invite.expiresAt) <= new Date()) {
-    return { label: 'abgelaufen', usable: false };
+    return { id: 'abgelaufen', label: ZUSTAND_TEXT.abgelaufen, usable: false };
   }
   if (invite.maxUses != null && invite.uses >= invite.maxUses) {
-    return { label: 'aufgebraucht', usable: false };
+    return { id: 'aufgebraucht', label: ZUSTAND_TEXT.aufgebraucht, usable: false };
   }
   const left = invite.maxUses == null ? '∞' : `${invite.maxUses - invite.uses}`;
-  return { label: `${left} Einlösung(en) offen`, usable: true };
+  return { id: 'offen', label: `${left} Einlösung(en) offen`, usable: true };
 }
 
 /** `/verwaltung` – Einladungscodes und Mitglieder. Nur für Admins erreichbar. */
@@ -27,6 +57,22 @@ export function AdminScreen() {
   const myId = useSession((state) => state.user?.id ?? '');
 
   const [invites, setInvites] = useState<InviteDto[] | null>(null);
+  // `invites` ist null, solange geladen wird – der Haken braucht ein Feld.
+  const codeFilter = useListenfilter(invites ?? LEER, {
+    suchePlatzhalter: 'Code oder Notiz suchen …',
+    suchtext: (invite) => `${invite.code} ${invite.note ?? ''}`,
+    facetten: [
+      {
+        key: 'zustand',
+        label: 'Zustand',
+        reihenfolge: ZUSTAND_REIHE,
+        werte: (invite) => {
+          const zustand = inviteState(invite);
+          return [{ id: zustand.id, label: ZUSTAND_TEXT[zustand.id] }];
+        },
+      },
+    ],
+  });
   const [members, setMembers] = useState<AdminMemberDto[] | null>(null);
   const [note, setNote] = useState('');
   const [maxUses, setMaxUses] = useState('1');
@@ -132,7 +178,12 @@ export function AdminScreen() {
           Testet vom Server aus, ob Fotos, Sprachnachrichten und Sticker im Objektspeicher landen
           können – Zugangsdaten, Bucket und die CORS-Regel, die der Browser zum Hochladen braucht.
         </p>
-        <button type="button" className="btn" disabled={checking} onClick={() => void runStorageCheck()}>
+        <button
+          type="button"
+          className="btn"
+          disabled={checking}
+          onClick={() => void runStorageCheck()}
+        >
           {checking ? 'Wird geprüft …' : 'Jetzt prüfen'}
         </button>
 
@@ -175,8 +226,8 @@ export function AdminScreen() {
           Einladungscode erstellen
         </h2>
         <p className="prf-hint">
-          Der Code wird hier erzeugt; weitergeben kannst du ihn, wie du magst. Bei der
-          Registrierung tippt die eingeladene Person ihn ins Feld „Einladungscode“.
+          Der Code wird hier erzeugt; weitergeben kannst du ihn, wie du magst. Bei der Registrierung
+          tippt die eingeladene Person ihn ins Feld „Einladungscode“.
         </p>
         <div className="field">
           <label htmlFor="adm-note">Notiz (nur für dich)</label>
@@ -200,7 +251,12 @@ export function AdminScreen() {
           />
           <p className="prf-hint">Leer oder 0 bedeutet: unbegrenzt.</p>
         </div>
-        <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void createInvite()}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={busy}
+          onClick={() => void createInvite()}
+        >
           Code erstellen
         </button>
       </section>
@@ -214,48 +270,63 @@ export function AdminScreen() {
         ) : invites.length === 0 ? (
           <EmptyState emoji="🎟️" title="Noch keine Codes" description="Erstelle oben den ersten." />
         ) : (
-          <ul className="stack" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
-            {invites.map((invite) => {
-              const state = inviteState(invite);
-              return (
-                <li key={invite.code} className="stack" style={{ gap: 6 }}>
-                  {/* Der Code darf nie umbrechen – er wird abgetippt. */}
-                  <code
-                    style={{
-                      fontSize: '1.05rem',
-                      letterSpacing: '0.04em',
-                      whiteSpace: 'nowrap',
-                      opacity: state.usable ? 1 : 0.55,
-                    }}
-                  >
-                    {invite.code}
-                  </code>
-                  <p className="prf-hint" style={{ margin: 0 }}>
-                    {invite.note ? `${invite.note} · ` : ''}
-                    {state.label}
-                  </p>
-                  <div className="row" style={{ gap: 8 }}>
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      onClick={() => void copy(invite.code)}
+          <>
+            {/* Codes haeufen sich und werden nie geloescht. Nach einem Jahr
+                sucht man „den fuer Chris“ in einer Wand aus Zufallszeichen –
+                dafuer gibt es die Notiz, und danach konnte man bisher nicht
+                suchen. */}
+            {invites.length > 3 && codeFilter.steuerung}
+            <ul className="stack" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+              {codeFilter.gefiltert.map((invite) => {
+                const state = inviteState(invite);
+                return (
+                  <li key={invite.code} className="stack" style={{ gap: 6 }}>
+                    {/* Der Code darf nie umbrechen – er wird abgetippt. */}
+                    <code
+                      style={{
+                        fontSize: '1.05rem',
+                        letterSpacing: '0.04em',
+                        whiteSpace: 'nowrap',
+                        opacity: state.usable ? 1 : 0.55,
+                      }}
                     >
-                      Kopieren
-                    </button>
-                    {state.usable && (
+                      {invite.code}
+                    </code>
+                    <p className="prf-hint" style={{ margin: 0 }}>
+                      {invite.note ? `${invite.note} · ` : ''}
+                      {state.label}
+                    </p>
+                    <div className="row" style={{ gap: 8 }}>
                       <button
                         type="button"
                         className="btn btn-ghost"
-                        onClick={() => void revoke(invite.code)}
+                        onClick={() => void copy(invite.code)}
                       >
-                        Zurückziehen
+                        Kopieren
                       </button>
-                    )}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+                      {state.usable && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          onClick={() => void revoke(invite.code)}
+                        >
+                          Zurückziehen
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+            {codeFilter.gefiltert.length === 0 && (
+              <p className="prf-hint">
+                Kein Code passt dazu.{' '}
+                <button type="button" className="btn btn-sm" onClick={codeFilter.zuruecksetzen}>
+                  Filter zurücksetzen
+                </button>
+              </p>
+            )}
+          </>
         )}
       </section>
 

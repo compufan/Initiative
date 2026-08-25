@@ -16,10 +16,19 @@ interface AgendaViewProps {
   onCreate: () => void;
   /** „Termin abstimmen“ – wenn der Zeitpunkt noch offen ist. */
   onPlan?: () => void;
+  /** Ob gerade gesucht oder gefiltert wird – für einen ehrlichen Leerzustand. */
+  gefiltert?: boolean;
+  onZuruecksetzen?: () => void;
 }
 
 /** Flat list of the next ~60 days, grouped by day and skipping empty ones. */
-export function AgendaView({ byDay, onCreate, onPlan }: AgendaViewProps) {
+export function AgendaView({
+  byDay,
+  onCreate,
+  onPlan,
+  gefiltert,
+  onZuruecksetzen,
+}: AgendaViewProps) {
   const days = useMemo(() => {
     const first = startOfDay(new Date());
     const result: { key: string; date: Date; occurrences: Occurrence[] }[] = [];
@@ -31,6 +40,26 @@ export function AgendaView({ byDay, onCreate, onPlan }: AgendaViewProps) {
     }
     return result;
   }, [byDay]);
+
+  // Zwei verschiedene Aussagen, die man nicht verwechseln darf: „da ist
+  // nichts“ und „dein Filter lässt nichts übrig“. Die zweite mit dem Angebot
+  // zurückzusetzen, sonst sucht man den Ausweg.
+  if (days.length === 0 && gefiltert) {
+    return (
+      <EmptyState
+        emoji="🔍"
+        title="Nichts gefunden"
+        description="In den nächsten 60 Tagen passt nichts zu deiner Suche."
+        action={
+          onZuruecksetzen && (
+            <button type="button" className="btn" onClick={onZuruecksetzen}>
+              Filter zurücksetzen
+            </button>
+          )
+        }
+      />
+    );
+  }
 
   if (days.length === 0) {
     return (

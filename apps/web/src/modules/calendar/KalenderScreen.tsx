@@ -1,6 +1,16 @@
 import { useMemo, useState } from 'react';
+import {
+  EVENT_STATUSES,
+  RSVP_STATUSES,
+  type ConversationDto,
+  type EventStatus,
+  type RsvpStatus,
+} from '@initiative/shared';
 import { Screen } from '../../components/Screen.js';
 import { Spinner } from '../../components/Feedback.js';
+import { useListenfilter, type Facette } from '../../components/Listenfilter.js';
+import { useChat } from '../../state/chat.js';
+import { useMyId } from '../../state/session.js';
 import { AgendaView } from './AgendaView.js';
 import { EventEditor } from './EventEditor.js';
 import { PlanningSheet } from './PlanningSheet.js';
@@ -15,12 +25,35 @@ import {
   monthGridDays,
   startOfDay,
   startOfMonth,
+  type Occurrence,
 } from './helpers.js';
 
 type View = 'month' | 'agenda';
 
+const STATUS_TEXT: Record<EventStatus, string> = {
+  planning: 'In Abstimmung',
+  confirmed: 'Steht fest',
+  cancelled: 'Abgesagt',
+};
+
+const RSVP_TEXT: Record<RsvpStatus, string> = {
+  yes: 'Zugesagt',
+  no: 'Abgesagt',
+  maybe: 'Vielleicht',
+  pending: 'Noch offen',
+};
+
+/** Wie ein Chat heisst – bei einem Direktchat der Name des Gegenübers. */
+function chatTitel(chat: ConversationDto, myId: string): string {
+  if (chat.title) return chat.title;
+  const gegenueber = chat.members.find((mitglied) => mitglied.userId !== myId);
+  return gegenueber?.user.displayName ?? 'Chat';
+}
+
 /** Calendar home: month grid, agenda, subscription card and the new-event FAB. */
 export function KalenderScreen() {
+  const myId = useMyId();
+  const conversations = useChat((state) => state.conversations);
   const [view, setView] = useState<View>('month');
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const [selectedDay, setSelectedDay] = useState(() => startOfDay(new Date()));
@@ -43,10 +76,65 @@ export function KalenderScreen() {
     range.to,
   );
 
-  const byDay = useMemo(
-    () => groupByDay(buildOccurrences(events, range.from, range.to)),
+  const occurrences = useMemo(
+    () => buildOccurrences(events, range.from, range.to),
     [events, range],
   );
+
+  // Der Name eines Chats steht nicht am Termin, sondern nur seine Kennung.
+  const chatNamen = useMemo(() => {
+    const namen = new Map(conversations.map((chat) => [chat.id, chatTitel(chat, myId)]));
+    return (id: string) => namen.get(id) ?? 'Chat';
+  }, [conversations, myId]);
+
+  const facetten: Facette<Occurrence>[] = useMemo(
+    () => [
+      {
+        key: 'status',
+        label: 'Zustand',
+        reihenfolge: [...EVENT_STATUSES],
+        werte: (vorkommen) => [
+          { id: vorkommen.event.status, label: STATUS_TEXT[vorkommen.event.status] },
+        ],
+      },
+      {
+        key: 'chat',
+        label: 'Chat',
+        werte: (vorkommen) =>
+          vorkommen.event.conversationId
+            ? [
+                {
+                  id: vorkommen.event.conversationId,
+                  label: chatNamen(vorkommen.event.conversationId),
+                },
+              ]
+            : [{ id: 'ohne', label: 'Nur für mich' }],
+      },
+      {
+        key: 'antwort',
+        label: 'Meine Antwort',
+        reihenfolge: [...RSVP_STATUSES, 'keine'],
+        werte: (vorkommen) => {
+          const eigene = vorkommen.event.attendees.find((gast) => gast.userId === myId);
+          return [
+            eigene
+              ? { id: eigene.status, label: RSVP_TEXT[eigene.status] }
+              : { id: 'keine', label: 'Nicht eingeladen' },
+          ];
+        },
+      },
+    ],
+    [chatNamen, myId],
+  );
+
+  const filter = useListenfilter(occurrences, {
+    suchePlatzhalter: 'Termin suchen …',
+    suchtext: (vorkommen) =>
+      `${vorkommen.event.title} ${vorkommen.event.location ?? ''} ${vorkommen.event.description ?? ''}`,
+    facetten,
+  });
+
+  const byDay = useMemo(() => groupByDay(filter.gefiltert), [filter.gefiltert]);
 
   function changeMonth(next: Date) {
     setMonth(next);
@@ -95,6 +183,10 @@ export function KalenderScreen() {
         </button>
       </div>
 
+      {/* Die Leiste gilt fuer beide Ansichten. Sonst zeigte das Monatsraster
+          nach dem Umschalten wieder alles, obwohl ein Filter gesetzt ist. */}
+      {events.length > 0 && filter.steuerung}
+
       {failed && (
         <div className="card cal-notice">
           <p>
@@ -121,6 +213,8 @@ export function KalenderScreen() {
       ) : (
         <AgendaView
           byDay={byDay}
+          gefiltert={filter.aktiv}
+          onZuruecksetzen={filter.zuruecksetzen}
           onCreate={() => setEditorOpen(true)}
           onPlan={() => setPlanOpen(true)}
         />

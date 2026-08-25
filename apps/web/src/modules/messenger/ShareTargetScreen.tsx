@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { formatBytes } from '@initiative/shared';
 import { Avatar } from '../../components/Avatar.js';
+import { useListenfilter } from '../../components/Listenfilter.js';
 import { EmptyState, Spinner } from '../../components/Feedback.js';
 import { Screen } from '../../components/Screen.js';
 import type { OutboxAttachment } from '../../lib/db.js';
@@ -109,6 +110,27 @@ export function ShareTargetScreen() {
   const presence = useChat((state) => state.presence);
   const myId = useSession((state) => state.user?.id ?? '');
 
+  // Suchen ist hier der ganze Zweck: Man kommt aus einer fremden App, will
+  // EINEN bestimmten Chat und nichts sonst – und bisher gab es dafuer nicht
+  // einmal ein Feld.
+  const filter = useListenfilter(conversations, {
+    suchePlatzhalter: 'Chat suchen …',
+    suchtext: (chat) =>
+      `${conversationTitle(chat, myId)} ${chat.members.map((m) => m.user.username).join(' ')}`,
+    facetten: [
+      {
+        key: 'art',
+        label: 'Art',
+        reihenfolge: ['direct', 'group'],
+        werte: (chat) => [
+          chat.type === 'group'
+            ? { id: 'group', label: 'Gruppe' }
+            : { id: 'direct', label: 'Direkt' },
+        ],
+      },
+    ],
+  });
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -194,6 +216,18 @@ export function ShareTargetScreen() {
             )}
           </div>
 
+          {/* Waehrend gesendet wird bleibt die Leiste stehen, aber gesperrt:
+              Verschwaende der gerade sendende Chat durch eine Filteraenderung,
+              waere der Spinner weg und der Vorgang saehe abgebrochen aus. */}
+          {conversations.length > 3 && (
+            <div
+              className={sending != null ? 'is-gesperrt' : undefined}
+              aria-busy={sending != null}
+            >
+              {filter.steuerung}
+            </div>
+          )}
+
           {conversations.length === 0 ? (
             <EmptyState
               emoji="💬"
@@ -202,7 +236,7 @@ export function ShareTargetScreen() {
             />
           ) : (
             <div className="card list" style={{ padding: 0, overflow: 'hidden' }}>
-              {conversations.map((conversation) => {
+              {filter.gefiltert.map((conversation) => {
                 const counterpart =
                   conversation.type === 'direct'
                     ? conversation.members.find((member) => member.userId !== myId)?.user
@@ -234,6 +268,11 @@ export function ShareTargetScreen() {
                   </button>
                 );
               })}
+              {filter.gefiltert.length === 0 && (
+                <p className="faint" style={{ padding: 'var(--space-3)' }}>
+                  Kein Chat passt dazu.
+                </p>
+              )}
             </div>
           )}
         </>

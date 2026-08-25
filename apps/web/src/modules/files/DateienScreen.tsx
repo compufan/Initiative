@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
+  ATTACHMENT_KINDS,
   allowsLevel,
   formatBytes,
   type AttachmentDto,
+  type AttachmentKind,
   type CollectionDto,
   type CollectionItemDto,
 } from '@initiative/shared';
@@ -11,12 +13,23 @@ import { EmptyState, Spinner } from '../../components/Feedback.js';
 import { Screen } from '../../components/Screen.js';
 import { api } from '../../lib/api.js';
 import { prepareImage, uploadBlob } from '../../lib/upload.js';
+import { useListenfilter, type Facette } from '../../components/Listenfilter.js';
+import { useNamen } from '../../state/leute.js';
+import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 import { CollectionSheet } from './CollectionSheet.js';
 import { UploadToCollectionSheet } from './UploadToCollectionSheet.js';
 import { FileViewer } from './FileViewer.js';
 import { ShareSheet } from './ShareSheet.js';
 import { pfadZu, useFiles } from './state.js';
+
+const ART_TEXT: Record<AttachmentKind, string> = {
+  image: 'Bilder',
+  video: 'Videos',
+  audio: 'Ton',
+  file: 'Dateien',
+  sticker: 'Sticker',
+};
 
 /**
  * „Dateien“ – die Ordneransicht.
@@ -28,6 +41,7 @@ import { pfadZu, useFiles } from './state.js';
 export function DateienScreen() {
   const { collectionId } = useParams<{ collectionId?: string }>();
   const navigate = useNavigate();
+  const myId = useMyId();
 
   const collections = useFiles((state) => state.collections);
   const status = useFiles((state) => state.status);
@@ -41,7 +55,16 @@ export function DateienScreen() {
   const [hochladen, setHochladen] = useState(false);
   const [bearbeiten, setBearbeiten] = useState(false);
   const [teilen, setTeilen] = useState(false);
-  const [betrachter, setBetrachter] = useState<number | null>(null);
+  /**
+   * Welche Datei im Betrachter offen ist – als Kennung, nicht als Platznummer.
+   *
+   * Eine Platznummer stimmte nur so lange, wie die Liste unveraendert bleibt.
+   * Sobald gefiltert wird oder eine Datei dazukommt, zeigte sie auf etwas
+   * anderes – und man tippt auf ein Foto und bekommt ein PDF. Mit der Kennung
+   * schliesst sich der Betrachter von selbst, wenn die Datei aus der Auswahl
+   * faellt.
+   */
+  const [betrachterId, setBetrachterId] = useState<string | null>(null);
 
   const aktuell = collectionId ? collections.find((entry) => entry.id === collectionId) : undefined;
   // Nicht als Selektor: `childrenOf` baut jedes Mal ein neues Feld, und zustand
@@ -69,7 +92,53 @@ export function DateienScreen() {
     [collections, collectionId],
   );
 
-  const anhaenge: AttachmentDto[] = items.map((item) => item.attachment);
+  // Wer eine Datei hinzugefuegt hat, steht nur als Kennung am Eintrag.
+  const namen = useNamen(
+    items.map((item) => item.addedBy),
+    myId,
+  );
+
+  const facetten: Facette<CollectionItemDto>[] = useMemo(
+    () => [
+      {
+        key: 'art',
+        label: 'Art',
+        reihenfolge: [...ATTACHMENT_KINDS],
+        werte: (item) => [{ id: item.attachment.kind, label: ART_TEXT[item.attachment.kind] }],
+      },
+      {
+        key: 'herkunft',
+        label: 'Herkunft',
+        reihenfolge: ['chat', 'direkt'],
+        werte: (item) => [
+          item.messageId
+            ? { id: 'chat', label: 'Aus dem Chat' }
+            : { id: 'direkt', label: 'Direkt abgelegt' },
+        ],
+      },
+      {
+        key: 'von',
+        label: 'Hinzugefügt von',
+        werte: (item) => (item.addedBy ? [{ id: item.addedBy, label: namen(item.addedBy) }] : []),
+      },
+    ],
+    [namen],
+  );
+
+  const filter = useListenfilter(items, {
+    suchePlatzhalter: 'Datei suchen …',
+    suchtext: (item) => `${item.title ?? ''} ${item.attachment.fileName ?? ''} ${item.note ?? ''}`,
+    facetten,
+  });
+
+  // Der Betrachter haengt an einem Index – und zwar in GENAU der Liste, die
+  // gerade gezeigt wird. Kaeme er aus `items` und die Kacheln aus der
+  // gefilterten Liste, oeffnete ein Tipp die falsche Datei.
+  const sichtbar = filter.gefiltert;
+  const anhaenge: AttachmentDto[] = sichtbar.map((item) => item.attachment);
+  const betrachterIndex = betrachterId
+    ? sichtbar.findIndex((item) => item.id === betrachterId)
+    : -1;
   const darfAendern = aktuell ? allowsLevel(aktuell.myLevel, 'edit') : true;
   const darfBesitzen = aktuell ? allowsLevel(aktuell.myLevel, 'own') : false;
 
@@ -226,17 +295,28 @@ export function DateienScreen() {
 
           {collectionId && !inhaltGeladen && <Spinner label="Inhalt wird geladen …" />}
 
-          {items.length > 0 && (
+          {items.length > 1 && filter.steuerung}
+
+          {sichtbar.length > 0 && (
             <ul className="fil-grid">
-              {items.map((item, index) => (
+              {sichtbar.map((item, index) => (
                 <DateiKachel
                   key={item.id}
                   item={item}
                   collectionId={collectionId!}
-                  onOpen={() => setBetrachter(index)}
+                  onOpen={() => setBetrachterId(item.id)}
                 />
               ))}
             </ul>
+          )}
+
+          {items.length > 0 && sichtbar.length === 0 && (
+            <p className="fil-hint">
+              Nichts gefunden.{' '}
+              <button type="button" className="btn btn-sm" onClick={filter.zuruecksetzen}>
+                Filter zurücksetzen
+              </button>
+            </p>
           )}
         </div>
       )}
@@ -267,11 +347,11 @@ export function DateienScreen() {
       {aktuell && teilen && (
         <ShareSheet open={teilen} onClose={() => setTeilen(false)} collection={aktuell} />
       )}
-      {betrachter != null && anhaenge.length > 0 && (
+      {betrachterIndex >= 0 && (
         <FileViewer
           items={anhaenge}
-          index={betrachter}
-          onClose={() => setBetrachter(null)}
+          index={betrachterIndex}
+          onClose={() => setBetrachterId(null)}
           zielName={darfAendern ? 'In die Sammlung' : undefined}
           ablegen={
             darfAendern && aktuell

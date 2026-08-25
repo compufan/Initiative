@@ -50,6 +50,8 @@ interface Props {
   label: string;
   /** Ob über die Vorschläge hinaus gesucht werden darf. */
   suchbar?: boolean;
+  /** Beschriftung des Suchfelds, wenn „Jemanden suchen“ zu unbestimmt ist. */
+  suchePlatzhalter?: string;
   /** Zusatz je Person, etwa der Anteil in Cent. */
   zusatz?: (id: string) => React.ReactNode;
 }
@@ -62,6 +64,7 @@ export function PersonenWahl({
   ausschluss = [],
   label,
   suchbar = true,
+  suchePlatzhalter = 'Jemanden suchen (auch ausserhalb des Chats) …',
   zusatz,
 }: Props) {
   const [suche, setSuche] = useState('');
@@ -154,8 +157,8 @@ export function PersonenWahl({
           type="search"
           className="input pw-suche"
           value={suche}
-          placeholder="Jemanden suchen (auch ausserhalb des Chats) …"
-          aria-label="Person suchen"
+          placeholder={suchePlatzhalter}
+          aria-label={suchePlatzhalter}
           onChange={(event) => setSuche(event.target.value)}
         />
       )}

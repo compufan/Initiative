@@ -146,6 +146,7 @@ export function NewChatSheet({ open, onClose }: NewChatSheetProps) {
       ) : (
         <PersonenWahl
           label="Wer in die Gruppe soll"
+          suchePlatzhalter="Mitglieder suchen"
           vorschlaege={bekannte}
           gewaehlt={picked}
           onChange={setPicked}
