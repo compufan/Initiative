@@ -179,10 +179,12 @@ export interface RequestOptions {
   /** Skip the Authorization header (login, register, public key …). */
   anonymous?: boolean;
   raw?: boolean;
+  /** Pfad liegt auf der Wurzel, nicht unter `/api/v1` (etwa `/healthz`). */
+  root?: boolean;
 }
 
-function buildUrl(path: string, query?: RequestOptions['query']): string {
-  const url = `${API_BASE}${path.startsWith('/api') ? '' : API_PREFIX}${path}`;
+function buildUrl(path: string, query?: RequestOptions['query'], root = false): string {
+  const url = `${API_BASE}${root || path.startsWith('/api') ? '' : API_PREFIX}${path}`;
   if (!query) return url;
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
@@ -203,7 +205,7 @@ export async function request<T>(
       headers['content-type'] = 'application/json';
     }
     if (accessToken) headers.authorization = `Bearer ${accessToken}`;
-    return fetch(buildUrl(path, options.query), {
+    return fetch(buildUrl(path, options.query, options.root), {
       method,
       headers,
       signal: options.signal,
@@ -280,6 +282,8 @@ interface ListResult<T> {
  * hand-rolling fetch calls, which keeps the contract in exactly one place.
  */
 export const api = {
+  /** Zustand der API samt Commit-Kennung des laufenden Stands. */
+  health: () => request<HealthDto>('GET', '/healthz', { anonymous: true, root: true }),
   auth: {
     register: (body: {
       username: string;
@@ -437,6 +441,16 @@ export const api = {
       post<AuthSession>('/passkeys/login/finish', body, { anonymous: true }),
   },
 };
+
+export interface HealthDto {
+  status: string;
+  storage?: string;
+  bus?: string;
+  busConnected?: boolean;
+  push?: boolean;
+  connections?: number;
+  version?: string;
+}
 
 export interface PasskeyDto {
   id: string;

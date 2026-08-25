@@ -52,6 +52,8 @@ jobs:
       # gemeinsam auf denselben Ordner.
       - name: Deploy
         if: steps.guard.outputs.ready == 'true'
-        run: flyctl deploy apps/api --app initiative-api --remote-only
+        run: |
+          flyctl deploy apps/api --app initiative-api --remote-only \
+            --build-arg GIT_SHA=${{ github.sha }}
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

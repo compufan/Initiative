@@ -14,6 +14,14 @@ import { useUi, type ThemePreference } from '../../state/ui.js';
 
 export const APP_NAME = 'Initiative';
 export const APP_VERSION: string = import.meta.env.VITE_APP_VERSION ?? '0.1.0';
+/**
+ * Kurzer Commit-Hash dieses Frontend-Builds – von Vite eingesetzt.
+ *
+ * Die Abfrage mit `typeof` ist noetig, weil die Konstante nur beim Bauen
+ * ersetzt wird; in Tests gibt es sie nicht.
+ */
+export const APP_COMMIT: string =
+  typeof __APP_COMMIT__ === 'string' ? __APP_COMMIT__ : 'dev';
 export const REPO_URL: string =
   import.meta.env.VITE_REPO_URL ?? 'https://github.com/compufan/Initiative';
 

@@ -99,6 +99,7 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
                 // Steht der LISTEN-Kanal wirklich? Ohne ihn kommen Nachrichten
                 // nur beim Neuladen an, obwohl sonst alles „ok“ meldet.
                 "busConnected": state.bus.listening(),
+                "version": state.config.git_sha,
                 "push": state.push.enabled(),
                 "connections": state.hub.connection_count(),
             })),

@@ -36,6 +36,10 @@ RUN find src migrations -type f -exec touch {} + \
  && cargo build --release --locked --bin initiative-api --bin seed
 
 FROM debian:bookworm-slim AS runtime
+# Welcher Stand laeuft hier? Wird beim Deploy durchgereicht und in der App
+# unter "Ueber" angezeigt, damit man einen Push zuordnen kann.
+ARG GIT_SHA=unbekannt
+ENV GIT_SHA=$GIT_SHA
 # `libssl3` gehört dazu, weil die Binary dynamisch gegen OpenSSL gelinkt ist
 # (siehe Kommentar in der Build-Stufe). Ohne das Paket startet sie nicht.
 RUN apt-get update \

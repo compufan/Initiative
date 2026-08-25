@@ -7,7 +7,18 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const apiTarget = env.VITE_DEV_API_PROXY ?? 'http://localhost:8080';
 
+  // Welcher Stand ist das hier? Vercel und GitHub legen den Commit als
+  // Umgebungsvariable bereit; lokal steht schlicht "dev".
+  const commit = (
+    env.VERCEL_GIT_COMMIT_SHA ||
+    env.GITHUB_SHA ||
+    'dev'
+  ).slice(0, 7);
+
   return {
+    define: {
+      __APP_COMMIT__: JSON.stringify(commit),
+    },
     resolve: {
       alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
     },

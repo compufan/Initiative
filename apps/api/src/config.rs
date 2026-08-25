@@ -80,6 +80,8 @@ pub struct Config {
     pub vapid: Option<VapidConfig>,
     pub realtime_bus: RealtimeBus,
     pub run_migrations: bool,
+    /// Commit, aus dem dieses Abbild gebaut wurde. Wird in der App angezeigt.
+    pub git_sha: String,
 }
 
 fn var(key: &str) -> Option<String> {
@@ -240,6 +242,9 @@ impl Config {
                 _ => RealtimeBus::Postgres,
             },
             run_migrations: var("RUN_MIGRATIONS").as_deref() != Some("false"),
+            git_sha: var("GIT_SHA")
+                .map(|value| value.chars().take(7).collect())
+                .unwrap_or_else(|| "unbekannt".to_string()),
         })
     }
 
