@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { createElement, useMemo, useState } from 'react';
 import { REACTION_EMOJIS, type ConversationDto } from '@initiative/shared';
 import { Sheet } from '../../components/Sheet.js';
+import { messageActions } from '../registry.js';
 import { api } from '../../lib/api.js';
 import { useChat, type ChatMessage } from '../../state/chat.js';
 import { useMyId } from '../../state/session.js';
@@ -36,6 +37,7 @@ export function MessageActionsSheet({
 
 function Actions({
   message,
+  conversation,
   onClose,
   onReply,
 }: {
@@ -59,6 +61,16 @@ function Actions({
   // haengender Bild-Upload dauerhaft im Chat stehen.
   const canDelete = isMine;
   const canCopy = Boolean(message.body?.trim());
+
+  // Was andere Bereiche der App an dieser Nachricht anbieten – etwa „Zur
+  // Sammlung hinzufügen“. Der Messenger muss davon nichts wissen.
+  const [offen, setOffen] = useState<string | null>(null);
+  const weitere = useMemo(
+    () =>
+      isLocal ? [] : messageActions().filter((action) => action.applies(message, conversation)),
+    [isLocal, message, conversation],
+  );
+  const offeneAktion = weitere.find((action) => action.key === offen);
 
   async function react(emoji: string) {
     const mine = message.reactions.some(
@@ -198,6 +210,17 @@ function Actions({
             <span>Bearbeiten</span>
           </button>
         )}
+        {weitere.map((action) => (
+          <button
+            key={action.key}
+            type="button"
+            className="list-row"
+            onClick={() => setOffen(action.key)}
+          >
+            <span aria-hidden="true">{action.icon}</span>
+            <span>{action.label}</span>
+          </button>
+        ))}
         {canDelete && (
           <button
             type="button"
@@ -212,6 +235,16 @@ function Actions({
           </button>
         )}
       </div>
+
+      {offeneAktion &&
+        createElement(offeneAktion.render, {
+          message,
+          conversation,
+          onClose: () => {
+            setOffen(null);
+            onClose();
+          },
+        })}
     </div>
   );
 }

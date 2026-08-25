@@ -55,6 +55,12 @@ export const LIMITS = {
   eventDescriptionMax: 4000,
   stickerPackNameMax: 60,
   stickersPerPackMax: 120,
+  collectionNameMax: 120,
+  collectionDescriptionMax: 2000,
+  collectionItemTitleMax: 200,
+  collectionItemNoteMax: 2000,
+  /** Wie tief Ordner ineinander liegen dürfen. */
+  collectionDepthMax: 8,
   attachmentsPerMessage: 10,
   messagePageSize: 50,
   messagePageSizeMax: 100,

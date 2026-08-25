@@ -3,6 +3,7 @@ import type { RouteObject } from 'react-router-dom';
 import messenger from './messenger/module.js';
 import media from './media/module.js';
 import stickers from './stickers/module.js';
+import files from './files/module.js';
 import calendar from './calendar/module.js';
 import polls from './polls/module.js';
 import games from './games/module.js';
@@ -10,6 +11,7 @@ import profile from './profile/module.js';
 import type {
   AppModuleDefinition,
   ComposerAction,
+  MessageAction,
   MessageRendererProps,
   NavItem,
 } from './types.js';
@@ -23,6 +25,7 @@ import type {
 export const appModules: AppModuleDefinition[] = [
   messenger,
   media,
+  files,
   calendar,
   games,
   stickers,
@@ -49,6 +52,12 @@ export function messageRenderers(): Record<string, ComponentType<MessageRenderer
 export function composerActions(): ComposerAction[] {
   return appModules
     .flatMap((module) => module.composerActions ?? [])
+    .sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
+}
+
+export function messageActions(): MessageAction[] {
+  return appModules
+    .flatMap((module) => module.messageActions ?? [])
     .sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
 }
 

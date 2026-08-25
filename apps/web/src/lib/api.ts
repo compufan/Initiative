@@ -3,15 +3,23 @@ import type {
   AttachmentDto,
   AuthSession,
   AuthTokens,
+  AddCollectionItemInput,
   CalendarEventDto,
+  CollectionDto,
+  CollectionGrantDto,
+  CollectionItemDto,
   ConversationDto,
+  CreateCollectionInput,
   CreateUploadResult,
   GameInfoDto,
   GameSessionDto,
+  GrantCollectionInput,
   MessageDto,
   PollDto,
   SelfUserDto,
   StickerPackDto,
+  UpdateCollectionInput,
+  UpdateCollectionItemInput,
   UserDto,
 } from '@initiative/shared';
 import { API_PREFIX } from '@initiative/shared';
@@ -392,6 +400,33 @@ export const api = {
     uninstall: (packId: string) => del<void>(`/stickers/packs/${packId}/install`),
     discover: (q?: string) =>
       get<ListResult<StickerPackDto>>('/stickers/discover', { query: { q } }),
+  },
+  collections: {
+    /**
+     * Alle Sammlungen, die ich mindestens ansehen darf – als flache Liste.
+     * Den Baum baut `buildCollectionTree` daraus; so kommt jede Sammlung
+     * genau einmal über die Leitung.
+     */
+    list: () => get<ListResult<CollectionDto>>('/collections'),
+    byId: (id: string) => get<CollectionDto>(`/collections/${id}`),
+    create: (body: CreateCollectionInput) => post<CollectionDto>('/collections', body),
+    update: (id: string, body: UpdateCollectionInput) =>
+      patch<CollectionDto>(`/collections/${id}`, body),
+    remove: (id: string) => del<void>(`/collections/${id}`),
+
+    items: (id: string) => get<ListResult<CollectionItemDto>>(`/collections/${id}/items`),
+    addItem: (id: string, body: AddCollectionItemInput) =>
+      post<CollectionItemDto>(`/collections/${id}/items`, body),
+    updateItem: (id: string, itemId: string, body: UpdateCollectionItemInput) =>
+      patch<void>(`/collections/${id}/items/${itemId}`, body),
+    removeItem: (id: string, itemId: string) => del<void>(`/collections/${id}/items/${itemId}`),
+
+    grants: (id: string) => get<ListResult<CollectionGrantDto>>(`/collections/${id}/grants`),
+    grant: (id: string, body: GrantCollectionInput) =>
+      post<CollectionGrantDto>(`/collections/${id}/grants`, body),
+    revoke: (id: string, grantId: string) => del<void>(`/collections/${id}/grants/${grantId}`),
+    grantItem: (itemId: string, body: GrantCollectionInput) =>
+      post<CollectionGrantDto>(`/collections/items/${itemId}/grants`, body),
   },
   calendar: {
     events: (query: { from?: string; to?: string; conversationId?: string } = {}) =>

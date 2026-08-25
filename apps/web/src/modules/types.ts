@@ -22,6 +22,29 @@ export interface ComposerAction {
   render: ComponentType<ComposerActionProps>;
 }
 
+/**
+ * Ein Eintrag im Menü, das beim langen Antippen einer Nachricht aufgeht.
+ *
+ * Damit kann ein Modul etwas an einer Nachricht anbieten, ohne dass der
+ * Messenger davon wissen muss – „Zur Sammlung hinzufügen“ ist der erste Fall.
+ */
+export interface MessageActionProps {
+  message: MessageDto;
+  conversation: ConversationDto | null;
+  onClose: () => void;
+}
+
+export interface MessageAction {
+  key: string;
+  label: string;
+  icon: string;
+  order?: number;
+  /** Ob der Eintrag für diese Nachricht überhaupt sinnvoll ist. */
+  applies: (message: MessageDto, conversation: ConversationDto | null) => boolean;
+  /** Was aufgeht, wenn man ihn antippt. */
+  render: ComponentType<MessageActionProps>;
+}
+
 export interface NavItem {
   path: string;
   label: string;
@@ -48,6 +71,8 @@ export interface AppModuleDefinition {
   /** Chat bubbles for the message types this module owns. */
   messageRenderers?: Record<string, ComponentType<MessageRendererProps>>;
   composerActions?: ComposerAction[];
+  /** Einträge im Menü einer einzelnen Nachricht. */
+  messageActions?: MessageAction[];
   /** Runs once when the app boots with an authenticated session. */
   init?: () => void | (() => void);
   /** Optional element rendered once inside the app shell (sheets, listeners). */
