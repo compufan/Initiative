@@ -33,8 +33,9 @@ import {
   type EngineKey,
 } from './engines/index.js';
 import { kanteWeichzeichnen, maskeTraegt, vorlageAus } from './engines/prepare.js';
+import { teilAn, teileFinden } from './engines/teile.js';
 
-type Tool = 'move' | 'erase' | 'keep';
+type Tool = 'move' | 'erase' | 'keep' | 'teile';
 type Tab = 'source' | 'move' | 'shape' | 'cutout' | 'outline' | 'text';
 
 const TABS: { key: Tab; icon: string; label: string }[] = [
@@ -120,7 +121,11 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
   const render = useCallback((fast: boolean) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    renderSticker(canvas, sourceRef.current, docRef.current, { fast });
+    renderSticker(canvas, sourceRef.current, docRef.current, {
+      fast,
+      // Waehrend der Arbeit bleibt Abgewaehltes sichtbar und gekennzeichnet.
+      auswahlZeigen: toolRef.current === 'teile',
+    });
   }, []);
 
   const schedule = useCallback(() => {
@@ -214,6 +219,37 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
   }, [commit]);
 
   /**
+   * Ein Teil der Modell-Maske an- oder abwählen.
+   *
+   * Der Finger tippt auf die Sticker-Fläche, die Maske liegt im Quellbild –
+   * dazwischen liegen Verschieben und Zoomen, also muss der Punkt
+   * zurückgerechnet werden. Ohne das wählt man beim Gruppenfoto das falsche
+   * Objekt, und zwar umso mehr, je weiter man hineingezoomt hat.
+   */
+  function teilUmschalten(punkt: { x: number; y: number }) {
+    const quelle = sourceRef.current;
+    const maske = docRef.current.autoMask;
+    if (!quelle || quelle.kind !== 'image' || !maske?.teile) return;
+
+    const imBild = toSourcePoint(punkt, quelle, docRef.current);
+    const faktor = maske.width / quelle.width;
+    const teil = teilAn(maske.teile, imBild.x * faktor, imBild.y * faktor);
+    if (teil === 0) return;
+
+    commit();
+    setDoc((value) => {
+      const dabei = value.maskParts.includes(teil);
+      // Leer heisst „alles“. Das erste Antippen wählt also NUR das Getippte
+      // aus, statt es aus einer gedachten Vollauswahl zu entfernen – sonst
+      // täte der erste Fingertipp das Gegenteil dessen, was man erwartet.
+      const naechste = dabei
+        ? value.maskParts.filter((nummer) => nummer !== teil)
+        : [...value.maskParts, teil];
+      return { ...value, maskParts: naechste };
+    });
+  }
+
+  /**
    * Ein Modell laufen lassen und seine Maske übernehmen.
    *
    * Alles rechnet im Gerät. Beim ersten Mal wird das Modell geladen – deshalb
@@ -247,16 +283,25 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
           );
         }
 
+        // Die Maske in antippbare Flaechen zerlegen. Erst damit wird aus
+        // "alles oder nichts" ein Auswaehlen: Flasche antippen, dann die
+        // Person dazu. Siehe engines/teile.ts.
+        const teile = teileFinden(alpha, image.width, image.height);
+
         commit();
         setDoc((value) => ({
           ...value,
-          autoMask: { engine: key, width: image.width, height: image.height, alpha },
+          autoMask: { engine: key, width: image.width, height: image.height, alpha, teile },
+          // Leere Auswahl heisst „alles“ – wer nichts antippt, bekommt wie
+          // bisher das ganze Ergebnis des Modells.
+          maskParts: [],
           // Antippen und "Ecken entfernen" wuerden dem Modell nur ins Handwerk
           // pfuschen – die faengt man neu an, wenn man sie braucht.
           keep: [],
           removeBg: false,
         }));
-        setTool('move');
+        // Gibt es mehr als eine Flaeche, ist Auswaehlen das Naheliegende.
+        setTool(teile.anzahl > 1 ? 'teile' : 'move');
       } catch (error) {
         setModellFehler(
           error instanceof EngineError
@@ -363,6 +408,13 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
     }
 
     const current = docRef.current;
+    if (toolRef.current === 'teile') {
+      armGesture();
+      commitArmedGesture();
+      gesture.current = { ...gesture.current, mode: 'none' };
+      teilUmschalten(point);
+      return;
+    }
     if (toolRef.current === 'keep') {
       armGesture();
       commitArmedGesture();
@@ -565,6 +617,7 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
 
   const layer = doc[slot];
   const hasImage = source?.kind === 'image';
+  const teileAnzahl = doc.autoMask?.teile?.anzahl ?? 0;
 
   return createPortal(
     <div className="stk-studio">
@@ -658,7 +711,9 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
                 ? '🧽 Radieren'
                 : tool === 'keep'
                   ? '👆 Antippen zum Behalten'
-                  : '✋ Verschieben'}
+                  : tool === 'teile'
+                    ? '🎯 Teile antippen'
+                    : '✋ Verschieben'}
             </span>
           )}
         </div>
@@ -877,6 +932,39 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
                 Freigestellt mit „{engineInfo(doc.autoMask.engine as EngineKey).label}“. Verschieben
                 und Zoomen geht weiterhin – der Ausschnitt bleibt am Motiv.
               </p>
+            )}
+            {/* Das Modell liefert eine Fläche; erst die Zerlegung macht daraus
+                antippbare Teile. Der Knopf erscheint nur, wenn es überhaupt
+                mehr als eines gibt – bei einem einzelnen Motiv wäre er eine
+                Wahl ohne Alternative. */}
+            {teileAnzahl > 1 && (
+              <>
+                <div className="stk-btn-row">
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${tool === 'teile' ? 'stk-chip-active' : ''}`}
+                    onClick={() => setTool(tool === 'teile' ? 'move' : 'teile')}
+                  >
+                    🎯 Teile antippen {tool === 'teile' ? 'an' : 'aus'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => {
+                      commit();
+                      setDoc((value) => ({ ...value, maskParts: [] }));
+                    }}
+                    disabled={doc.maskParts.length === 0}
+                  >
+                    Alle Teile behalten
+                  </button>
+                </div>
+                <p className="stk-hint">
+                  {doc.maskParts.length === 0
+                    ? `${teileAnzahl} getrennte Flächen erkannt. Tippe im Bild an, was bleiben soll – etwa erst die Flasche, dann die Person. Ohne Antippen bleibt alles.`
+                    : `${doc.maskParts.length} von ${teileAnzahl} Flächen ausgewählt. Das Schraffierte fällt weg – tippe es an, um es dazuzunehmen.`}
+                </p>
+              </>
             )}
             {!doc.autoMask && hasImage && rechnet === null && (
               <p className="stk-hint">

@@ -9,6 +9,8 @@
  * Order: source → background removal → shape mask → eraser → outline → text.
  */
 
+import { maskeAus, type Teile } from './engines/teile.js';
+
 export const STICKER_SIZE = 512;
 
 const FONT_STACK =
@@ -54,6 +56,14 @@ export interface AutoMask {
   height: number;
   /** `width * height` Werte, 0 = weg, 255 = bleibt. */
   alpha: Uint8Array;
+  /**
+   * Die Maske, zerlegt in zusammenhängende Flächen – damit man einzelne
+   * antippen kann. Siehe `engines/teile.ts`.
+   *
+   * Wie `alpha` nach dem Berechnen unveränderlich, also per Referenz
+   * weitergereicht statt kopiert.
+   */
+  teile?: Teile;
 }
 
 export interface StickerDoc {
@@ -66,6 +76,21 @@ export interface StickerDoc {
   keep: KeepSeed[];
   /** Die Maske eines Modells, falls eines gelaufen ist. */
   autoMask: AutoMask | null;
+  /**
+   * Welche Teile der Modell-Maske gewählt sind.
+   *
+   * Leer heisst **alle** – solange niemand etwas angetippt hat, verhält sich
+   * das Modell wie zuvor. Wer einmal tippt, sieht genau das Gewählte.
+   */
+  maskParts: number[];
+  /**
+   * Ob im Editor das Abgewählte gekennzeichnet statt weggenommen wird.
+   *
+   * Beim Auswählen will man sehen, was da ist – sonst tippt man ins Schwarze
+   * und kann nichts hinzunehmen. Auf dem fertigen Sticker ist es natürlich
+   * fort; das hier gilt nur für die Ansicht während der Arbeit.
+   */
+  showUnselected: boolean;
   tolerance: number;
   outline: boolean;
   outlineWidth: number;
@@ -88,6 +113,8 @@ export function createDoc(): StickerDoc {
     removeBg: false,
     keep: [],
     autoMask: null,
+    maskParts: [],
+    showUnselected: true,
     tolerance: 40,
     outline: true,
     outlineWidth: 10,
@@ -103,6 +130,7 @@ export function cloneDoc(doc: StickerDoc): StickerDoc {
     // Die Maske wird nach dem Berechnen nie mehr angefasst – eine Referenz
     // genuegt und spart pro Rueckgaengig-Schritt ein Megabyte.
     autoMask: doc.autoMask,
+    maskParts: doc.maskParts.slice(),
     keep: doc.keep.map((seed) => ({ ...seed })),
     strokes: doc.strokes.map((stroke) => ({ size: stroke.size, points: stroke.points.slice() })),
     top: { ...doc.top },
@@ -542,13 +570,19 @@ function applyAutoMask(
   const grauCtx = grau.getContext('2d');
   if (!grauCtx) return;
 
+  // Nur die gewaehlten Teile. Ohne Auswahl gilt die ganze Maske.
+  const alpha =
+    mask.teile && doc.maskParts.length > 0
+      ? maskeAus(mask.alpha, mask.teile, doc.maskParts)
+      : mask.alpha;
+
   const bild = new ImageData(mask.width, mask.height);
-  for (let i = 0; i < mask.alpha.length; i += 1) {
+  for (let i = 0; i < alpha.length; i += 1) {
     const at = i * 4;
     bild.data[at] = 255;
     bild.data[at + 1] = 255;
     bild.data[at + 2] = 255;
-    bild.data[at + 3] = mask.alpha[i];
+    bild.data[at + 3] = alpha[i];
   }
   grauCtx.putImageData(bild, 0, 0);
 
@@ -571,15 +605,106 @@ function applyAutoMask(
 }
 
 /**
+ * Kennzeichnet, was gerade NICHT gewählt ist – statt es wegzunehmen.
+ *
+ * Beim Auswählen ist das der Unterschied zwischen bedienbar und nicht: Wer die
+ * Bierflasche angetippt hat und nun die Person dazunehmen will, muss die
+ * Person noch sehen. Ist sie bereits fort, tippt er ins Schwarze.
+ *
+ * Deshalb wird das Abgewählte abgedunkelt und schraffiert, nicht entfernt. Die
+ * Schraffur ist dabei nicht Zierrat: Eine blosse Abdunklung ist von einem
+ * dunklen Bildteil nicht zu unterscheiden, und dann rät man wieder.
+ *
+ * Auf dem fertigen Sticker gibt es das nicht – dies gilt allein für die
+ * Ansicht während der Arbeit.
+ */
+function markiereAbgewaehltes(
+  ctx: CanvasRenderingContext2D,
+  source: Extract<EditorSource, { kind: 'image' }>,
+  doc: StickerDoc,
+  mask: AutoMask,
+): void {
+  if (!mask.teile || doc.maskParts.length === 0) return;
+
+  const gewaehlt = maskeAus(mask.alpha, mask.teile, doc.maskParts);
+
+  // Eine Karte des Abgewählten: dort deckend, wo die Maske etwas hat, die
+  // Auswahl aber nicht.
+  const karte = document.createElement('canvas');
+  karte.width = mask.width;
+  karte.height = mask.height;
+  const karteCtx = karte.getContext('2d');
+  if (!karteCtx) return;
+  const bild = new ImageData(mask.width, mask.height);
+  for (let i = 0; i < mask.alpha.length; i += 1) {
+    const at = i * 4;
+    bild.data[at] = 255;
+    bild.data[at + 1] = 255;
+    bild.data[at + 2] = 255;
+    bild.data[at + 3] = Math.max(0, mask.alpha[i] - gewaehlt[i]);
+  }
+  karteCtx.putImageData(bild, 0, 0);
+
+  const flaeche = document.createElement('canvas');
+  flaeche.width = STICKER_SIZE;
+  flaeche.height = STICKER_SIZE;
+  const flaecheCtx = flaeche.getContext('2d');
+  if (!flaecheCtx) return;
+
+  // Erst die Schraffur über die ganze Fläche, dann auf das Abgewählte
+  // beschneiden. Andersherum – Muster direkt in die Karte – bekäme man die
+  // Streifen nicht durch die weichen Kanten der Maske.
+  flaecheCtx.fillStyle = 'rgba(6, 10, 24, 0.5)';
+  flaecheCtx.fillRect(0, 0, STICKER_SIZE, STICKER_SIZE);
+  const muster = flaecheCtx.createPattern(schraffur(), 'repeat');
+  if (muster) {
+    flaecheCtx.fillStyle = muster;
+    flaecheCtx.fillRect(0, 0, STICKER_SIZE, STICKER_SIZE);
+  }
+
+  flaecheCtx.globalCompositeOperation = 'destination-in';
+  flaecheCtx.imageSmoothingQuality = 'high';
+  const rect = sourceRect(source, doc);
+  flaecheCtx.drawImage(karte, rect.x, rect.y, rect.width, rect.height);
+
+  ctx.drawImage(flaeche, 0, 0);
+}
+
+/** Ein kleines Kachelbild mit Schrägstreifen. */
+let schraffurCache: HTMLCanvasElement | null = null;
+function schraffur(): HTMLCanvasElement {
+  if (schraffurCache) return schraffurCache;
+  const kachel = document.createElement('canvas');
+  kachel.width = 12;
+  kachel.height = 12;
+  const ctx = kachel.getContext('2d');
+  if (ctx) {
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.34)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(-4, 16);
+    ctx.lineTo(16, -4);
+    ctx.moveTo(2, 22);
+    ctx.lineTo(22, 2);
+    ctx.stroke();
+  }
+  schraffurCache = kachel;
+  return kachel;
+}
+
+/**
  * Draws the whole document. `fast` skips the two expensive steps (flood fill
  * and dilation) so panning and pinching stay at 60 fps on a phone; the full
  * pipeline runs again as soon as the gesture ends.
+ *
+ * `auswahlZeigen` ist die Ansicht während der Arbeit: Abgewähltes bleibt
+ * sichtbar und wird nur gekennzeichnet. Für das Speichern niemals setzen.
  */
 export function renderSticker(
   canvas: HTMLCanvasElement,
   source: EditorSource | null,
   doc: StickerDoc,
-  options: { fast?: boolean } = {},
+  options: { fast?: boolean; auswahlZeigen?: boolean } = {},
 ): void {
   if (canvas.width !== STICKER_SIZE) canvas.width = STICKER_SIZE;
   if (canvas.height !== STICKER_SIZE) canvas.height = STICKER_SIZE;
@@ -596,8 +721,16 @@ export function renderSticker(
   // Die Maske eines Modells zuerst: sie beschreibt das Motiv genauer als jede
   // Farbschwelle. Antippen und "Ecken entfernen" wirken danach nur noch auf
   // das, was uebrig geblieben ist.
+  const zeigeAuswahl = Boolean(options.auswahlZeigen && doc.showUnselected);
   if (!options.fast && source?.kind === 'image' && doc.autoMask) {
-    applyAutoMask(ctx, source, doc, doc.autoMask);
+    if (zeigeAuswahl) {
+      // In der Auswahlansicht bleibt alles stehen, was das Modell gefunden
+      // hat; nur das Nicht-Gewählte wird gekennzeichnet.
+      applyAutoMask(ctx, source, { ...doc, maskParts: [] }, doc.autoMask);
+      markiereAbgewaehltes(ctx, source, doc, doc.autoMask);
+    } else {
+      applyAutoMask(ctx, source, doc, doc.autoMask);
+    }
   }
 
   // Angetippte Bereiche haben Vorrang: Wer sagt, was bleiben soll, braucht das
