@@ -6,6 +6,7 @@
 
 pub mod local;
 pub mod s3;
+pub mod tresor;
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -68,13 +69,16 @@ pub trait Storage: Send + Sync {
 }
 
 pub fn create_storage(config: &Config) -> AppResult<Arc<dyn Storage>> {
-    match config.storage_driver {
-        StorageDriver::Local => Ok(Arc::new(local::LocalStorage::new(
-            &config.local_storage_dir,
-        ))),
-        StorageDriver::R2 | StorageDriver::S3 => {
-            Ok(Arc::new(s3::S3Storage::new(config)?) as Arc<dyn Storage>)
-        }
+    let roh: Arc<dyn Storage> = match config.storage_driver {
+        StorageDriver::Local => Arc::new(local::LocalStorage::new(&config.local_storage_dir)),
+        StorageDriver::R2 | StorageDriver::S3 => Arc::new(s3::S3Storage::new(config)?),
+    };
+    // Ist ein Schlüssel gesetzt, kommt der Tresor davor und alles Neue wird
+    // verschlüsselt abgelegt. Ohne Schlüssel bleibt alles wie bisher – das
+    // Einschalten soll eine Zeile in der Umgebung sein, kein Umbau.
+    match config.media_key {
+        Some(schluessel) => Ok(Arc::new(tresor::Tresor::neu(roh, schluessel))),
+        None => Ok(roh),
     }
 }
 

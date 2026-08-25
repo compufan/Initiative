@@ -382,14 +382,22 @@ async fn serve(
         .await?
         .ok_or_else(|| AppError::not_found("Datei nicht gefunden"))?;
 
+    // Der Typ, mit dem wirklich ausgeliefert wird – nicht der aus der
+    // Datenbank. Beide können auseinanderlaufen (der lokale Speicher rät ihn
+    // aus der Dateiendung), und die Entscheidung darüber, was im Browser
+    // angezeigt werden darf, muss sich auf das beziehen, was tatsächlich im
+    // Content-Type steht.
+    let typ = object
+        .mime
+        .clone()
+        .unwrap_or_else(|| attachment.mime.clone());
+
+    // Alles, was nicht ausdrücklich anzeigbar ist, wird zum Herunterladen
+    // angeboten statt dargestellt.
+    let als_anhang = as_download || !darf_angezeigt_werden(&typ);
+
     let mut response = Response::builder()
-        .header(
-            header::CONTENT_TYPE,
-            object
-                .mime
-                .clone()
-                .unwrap_or_else(|| attachment.mime.clone()),
-        )
+        .header(header::CONTENT_TYPE, &typ)
         .header(
             header::CACHE_CONTROL,
             "private, max-age=31536000, immutable",
@@ -397,7 +405,22 @@ async fn serve(
         .header(header::ACCEPT_RANGES, "bytes")
         .header("x-content-type-options", "nosniff");
 
-    if as_download {
+    // `sandbox` steckt die Antwort in einen eigenen, leeren Ursprung: Selbst
+    // wenn ein Browser sie doch als Dokument darstellt, läuft darin kein
+    // Skript und es gibt keinen Zugriff auf das, was der App gehört.
+    //
+    // Für Bilder, Videos und Ton ist das folgenlos – die sind keine Dokumente,
+    // die Kopfzeile greift dort gar nicht. PDFs sind ausgenommen, weil der
+    // eingebaute Betrachter sonst je nach Browser nichts mehr anzeigt; ein PDF
+    // kann ohnehin kein Skript im Ursprung der Seite ausführen.
+    if !typ.starts_with("application/pdf") {
+        response = response.header(
+            "content-security-policy",
+            "default-src 'none'; sandbox; base-uri 'none'; form-action 'none'",
+        );
+    }
+
+    if als_anhang {
         let name = sanitise_file_name(attachment.file_name.as_deref().unwrap_or("datei"));
         response = response.header(
             header::CONTENT_DISPOSITION,
@@ -488,4 +511,111 @@ async fn remove(
         .execute(&state.pool)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Darf dieser Typ im Browser dargestellt werden, statt heruntergeladen?
+///
+/// # Warum es diese Liste gibt
+///
+/// Für `kind: "file"` ist jeder MIME-Typ erlaubt – das ist Absicht, in einen
+/// Chat gehört auch mal ein Kalendereintrag oder eine Tabelle. Solange die
+/// Dateien von einer anderen Domain kamen (Vercel für die App, R2 für die
+/// Medien), war das folgenlos.
+///
+/// Auf einem eigenen Server liegen App und Dateien unter **derselben** Domain.
+/// Damit wird aus einer hochgeladenen `.html` ein Dokument im Ursprung der App:
+/// Es liest den Anmelde-Token aus dem Speicher des Browsers und schickt ihn
+/// weg. Die Medienadresse ist absichtlich ohne Anmeldung abrufbar (damit
+/// `<img>` und der Service Worker funktionieren) – man muss also nur jemanden
+/// dazu bringen, den Link anzutippen.
+///
+/// `nosniff` allein hilft dagegen nicht: Es verhindert, dass der Browser einen
+/// Typ *errät*, nicht dass er einen mitgeschickten befolgt. Wenn im
+/// Content-Type `text/html` steht, ist es HTML.
+///
+/// Deshalb wird hier ausdrücklich aufgezählt, statt `image/*` zu erlauben:
+/// `image/svg+xml` ist ein Bild und gleichzeitig ein Dokument, in dem Skript
+/// läuft. Es steht bewusst nicht auf der Liste.
+fn darf_angezeigt_werden(mime: &str) -> bool {
+    let basis = mime
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    matches!(
+        basis.as_str(),
+        "image/jpeg"
+            | "image/pjpeg"
+            | "image/png"
+            | "image/webp"
+            | "image/gif"
+            | "image/avif"
+            | "image/heic"
+            | "image/heif"
+            | "application/pdf"
+    ) || basis.starts_with("video/")
+        || basis.starts_with("audio/")
+}
+
+#[cfg(test)]
+mod anzeige_tests {
+    use super::darf_angezeigt_werden;
+
+    #[test]
+    fn bilder_videos_und_ton_werden_angezeigt() {
+        for typ in [
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "image/gif",
+            "video/mp4",
+            "video/quicktime",
+            "audio/mpeg",
+            "application/pdf",
+        ] {
+            assert!(darf_angezeigt_werden(typ), "{typ} sollte anzeigbar sein");
+        }
+    }
+
+    #[test]
+    fn was_skript_ausfuehren_koennte_wird_heruntergeladen() {
+        // Der eigentliche Grund für diese Funktion. Alle vier waren über
+        // `kind: "file"` erlaubt und wären auf einer gemeinsamen Domain als
+        // Dokument im Ursprung der App gelandet.
+        for typ in [
+            "text/html",
+            "application/xhtml+xml",
+            "image/svg+xml",
+            "text/xml",
+            "application/xml",
+            "application/javascript",
+        ] {
+            assert!(
+                !darf_angezeigt_werden(typ),
+                "{typ} darf nicht angezeigt werden"
+            );
+        }
+    }
+
+    #[test]
+    fn der_zusatz_hinter_dem_semikolon_aendert_nichts() {
+        // `text/html; charset=utf-8` ist derselbe Typ. Ein Vergleich auf die
+        // ganze Zeichenkette hätte hier danebengegriffen.
+        assert!(!darf_angezeigt_werden("text/html; charset=utf-8"));
+        assert!(darf_angezeigt_werden("image/jpeg; charset=binary"));
+    }
+
+    #[test]
+    fn grossschreibung_hilft_niemandem_daran_vorbei() {
+        assert!(!darf_angezeigt_werden("TEXT/HTML"));
+        assert!(darf_angezeigt_werden("Image/PNG"));
+    }
+
+    #[test]
+    fn unbekanntes_wird_im_zweifel_heruntergeladen() {
+        assert!(!darf_angezeigt_werden(""));
+        assert!(!darf_angezeigt_werden("application/octet-stream"));
+        assert!(!darf_angezeigt_werden("text/plain"));
+    }
 }

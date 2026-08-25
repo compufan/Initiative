@@ -12,6 +12,14 @@
 #
 # Zum Zurückrollen: dasselbe mit der Kennung von gestern.
 
+# Gilt fuer jeden Dienst. `no-new-privileges` verhindert, dass ein Prozess im
+# Container ueber ein setuid-Programm mehr Rechte bekommt, als er gestartet hat
+# - der uebliche zweite Schritt nach einer Luecke im Dienst selbst. Kostet
+# nichts und bricht hier nichts.
+x-haerten: &haerten
+  security_opt:
+    - no-new-privileges:true
+
 x-logs: &logs
   logging:
     driver: json-file
@@ -26,7 +34,12 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
-    <<: *logs
+    <<: [*logs, *haerten]
+    # Absichtlich KEIN `cap_drop: [ALL]`: Der Einstiegspunkt des offiziellen
+    # Abbilds richtet beim ersten Start das Datenverzeichnis ein (chown, chmod)
+    # und wechselt dann auf den Benutzer postgres. Ohne CHOWN/FOWNER/SETUID
+    # scheitert genau das - und zwar beim allerersten Start, wenn man am
+    # wenigsten Lust auf Fehlersuche hat.
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-initiative}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?fehlt}
@@ -46,7 +59,18 @@ services:
   api:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-compufan}/initiative-api:${IMAGE_TAG:-live}
     restart: unless-stopped
-    <<: *logs
+    <<: [*logs, *haerten]
+    # Der Dienst laeuft ohnehin als eigener Benutzer (uid 10001) und lauscht auf
+    # 8080 - er braucht keine einzige Sonderberechtigung.
+    cap_drop:
+      - ALL
+    # Das Dateisystem des Containers ist schreibgeschuetzt. Wer es doch einmal
+    # bis in den Prozess schafft, kann damit nichts Bleibendes ablegen: kein
+    # nachgeladenes Programm, kein Hintertuerchen, das den Neustart ueberlebt.
+    # Geschrieben wird nur in /data/uploads (ein Volume) und nach /tmp.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     depends_on:
       postgres:
         condition: service_healthy
@@ -65,6 +89,12 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-initiative}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-initiative}
       LOCAL_STORAGE_DIR: /data/uploads
       STORAGE_DRIVER: local
+      # Verschluesselt die abgelegten Dateien. Ohne Schluessel liegen sie im
+      # Klartext - deshalb steht hier `:?` und nicht `:-`: Ein vergessener
+      # Eintrag soll den Start abbrechen und nicht stillschweigend den Schutz
+      # weglassen. Erzeugen: docker compose run --rm api initiative-api
+      # --generate-media-key
+      MEDIA_KEY: ${MEDIA_KEY:?fehlt - siehe .env.beispiel}
       # Bei genau einem Prozess ist das die robustere Wahl – siehe die
       # Begründung in der docker-compose.yml im Wurzelverzeichnis.
       REALTIME_BUS: memory
@@ -81,14 +111,23 @@ services:
   web:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-compufan}/initiative-web:${IMAGE_TAG:-live}
     restart: unless-stopped
-    <<: *logs
+    <<: [*logs, *haerten]
+    # Liefert nur fertige Dateien auf Port 8080 aus.
+    cap_drop:
+      - ALL
     depends_on:
       - api
 
   proxy:
     image: caddy:2-alpine
     restart: unless-stopped
-    <<: *logs
+    <<: [*logs, *haerten]
+    cap_drop:
+      - ALL
+    cap_add:
+      # Die einzige Ausnahme im ganzen Stapel: Ports unter 1024 zu belegen ist
+      # ein Sonderrecht, und 80 und 443 sind nicht verhandelbar.
+      - NET_BIND_SERVICE
     ports:
       - "80:80"
       - "443:443"

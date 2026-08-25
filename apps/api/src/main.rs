@@ -23,6 +23,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    // `initiative-api --generate-media-key` druckt einen frischen Schlüssel für
+    // die Dateiverschlüsselung. Bewusst hier und nicht „irgendwo mit openssl“:
+    // Der Server hat den Zufallsgenerator schon, und so steht in der Anleitung
+    // ein Befehl, der auf jedem Rechner dasselbe tut.
+    if std::env::args().any(|arg| arg == "--generate-media-key") {
+        use base64::Engine;
+        let bytes = initiative_api::auth::password::random_bytes(32);
+        println!(
+            "MEDIA_KEY={}",
+            base64::engine::general_purpose::STANDARD.encode(&bytes)
+        );
+        println!("\nDiesen Schlüssel getrennt von den Sicherungen aufbewahren.");
+        println!("Ohne ihn sind alle damit abgelegten Dateien unwiederbringlich verloren.");
+        return Ok(());
+    }
+
     // `.env` im Repo-Wurzelverzeichnis, alternativ neben der Crate.
     if dotenvy::dotenv().is_err() {
         let _ = dotenvy::from_filename("apps/api/.env");

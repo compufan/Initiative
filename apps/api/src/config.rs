@@ -129,6 +129,26 @@ pub struct Config {
     pub s3: Option<S3Config>,
     pub signed_url_ttl: Duration,
 
+    /**
+     * Schlüssel, mit dem hochgeladene Dateien im Ruhezustand verschlüsselt
+     * werden – 32 Bytes, base64.
+     *
+     * Ohne Angabe liegen die Dateien wie bisher im Klartext. Mit Angabe wird
+     * alles Neue verschlüsselt abgelegt; was vorher da war, bleibt lesbar
+     * (siehe `storage::tresor`).
+     *
+     * **Der Schlüssel gehört nicht in dieselbe Sicherung wie die Dateien.**
+     * Genau das ist der Sinn der Sache: Eine abhandengekommene Sicherung soll
+     * niemandem nützen. Liegt der Schlüssel daneben, ist die Verschlüsselung
+     * ein Placebo.
+     *
+     * **Und er darf nicht verloren gehen.** Es gibt keine Hintertür. Ohne den
+     * Schlüssel sind alle damit abgelegten Dateien endgültig weg.
+     *
+     * Erzeugen: `initiative-api --generate-media-key`
+     */
+    pub media_key: Option<[u8; 32]>,
+
     pub vapid: Option<VapidConfig>,
     pub realtime_bus: RealtimeBus,
     /// Wer die App betreibt – für die Datenschutzerklärung.
@@ -310,6 +330,10 @@ impl Config {
 
             storage_driver,
             local_storage_dir: var_or("LOCAL_STORAGE_DIR", "./.data/uploads"),
+            media_key: match var("MEDIA_KEY") {
+                None => None,
+                Some(roh) => Some(media_key_lesen(&roh)?),
+            },
             s3,
             signed_url_ttl: Duration::from_secs(number("SIGNED_URL_TTL", 3600u64)),
 
@@ -344,5 +368,64 @@ impl Config {
     /// Absolute URL of an attachment, used in every DTO.
     pub fn media_url(&self, attachment_id: &uuid::Uuid) -> String {
         format!("{}/api/v1/media/{attachment_id}", self.public_api_url)
+    }
+}
+
+/// Liest den Medienschlüssel aus der Umgebung – 32 Bytes, base64.
+///
+/// Ein falscher Schlüssel muss den Start abbrechen und nicht etwa dazu führen,
+/// dass die App ohne Verschlüsselung weiterläuft: Sonst schaltet ein Tippfehler
+/// in der `.env` den Schutz lautlos ab, und man merkt es erst, wenn die Daten
+/// schon eine Weile im Klartext auf der Platte liegen.
+fn media_key_lesen(roh: &str) -> Result<[u8; 32], AppError> {
+    use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+    use base64::Engine;
+
+    let roh = roh.trim();
+    let bytes = STANDARD
+        .decode(roh)
+        .or_else(|_| URL_SAFE_NO_PAD.decode(roh))
+        .map_err(|_| {
+            AppError::config(
+                "MEDIA_KEY ist kein gültiges base64 – erzeugen mit: initiative-api --generate-media-key",
+            )
+        })?;
+    let laenge = bytes.len();
+    bytes.try_into().map_err(|_| {
+        AppError::config(format!(
+            "MEDIA_KEY muss 32 Bytes lang sein, hier sind es {laenge} – erzeugen mit: initiative-api --generate-media-key"
+        ))
+    })
+}
+
+#[cfg(test)]
+mod media_key_tests {
+    use super::media_key_lesen;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+
+    #[test]
+    fn ein_richtiger_schluessel_wird_angenommen() {
+        let roh = STANDARD.encode([9u8; 32]);
+        assert_eq!(media_key_lesen(&roh).expect("gültig"), [9u8; 32]);
+    }
+
+    #[test]
+    fn ein_zu_kurzer_schluessel_bricht_den_start_ab() {
+        // Der wahrscheinliche Fehler: jemand tippt eine Passphrase hinein.
+        let fehler = media_key_lesen(&STANDARD.encode(b"geheim")).expect_err("muss scheitern");
+        assert!(format!("{fehler}").contains("32 Bytes"), "{fehler}");
+    }
+
+    #[test]
+    fn kein_base64_bricht_den_start_ab() {
+        assert!(media_key_lesen("mein super geheimes passwort!!").is_err());
+    }
+
+    #[test]
+    fn leerzeichen_am_rand_stoeren_nicht() {
+        // Beim Kopieren aus dem Terminal hängt schnell ein Zeilenumbruch dran.
+        let roh = format!("  {}\n", STANDARD.encode([1u8; 32]));
+        assert_eq!(media_key_lesen(&roh).expect("gültig"), [1u8; 32]);
     }
 }
