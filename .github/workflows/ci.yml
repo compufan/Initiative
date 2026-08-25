@@ -47,9 +47,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Ohne `version:`. Die verbindliche Angabe steht als `packageManager`
+      # in der package.json - das ist die Stelle, an der auch corepack und
+      # jeder Entwicklerrechner nachsehen. Steht sie zusaetzlich hier, bricht
+      # die Action seit einer ihrer letzten Fassungen ab ("Multiple versions
+      # of pnpm specified") statt nur zu warnen. Genau daran hingen hier
+      # sieben rote Laeufe hintereinander, ohne dass am Code etwas falsch war.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -93,9 +97,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/api
+      # Ohne `version:`. Die verbindliche Angabe steht als `packageManager`
+      # in der package.json - das ist die Stelle, an der auch corepack und
+      # jeder Entwicklerrechner nachsehen. Steht sie zusaetzlich hier, bricht
+      # die Action seit einer ihrer letzten Fassungen ab ("Multiple versions
+      # of pnpm specified") statt nur zu warnen. Genau daran hingen hier
+      # sieben rote Laeufe hintereinander, ohne dass am Code etwas falsch war.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
       - uses: actions/setup-node@v4
         with:
           node-version: 22
