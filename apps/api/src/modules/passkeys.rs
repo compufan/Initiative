@@ -21,6 +21,7 @@ use webauthn_rs::prelude::*;
 
 use crate::auth::AuthUser;
 use crate::db::UserRow;
+use crate::drossel::{regeln, Absender};
 use crate::dto::AuthSession;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
@@ -62,6 +63,13 @@ async fn store_state(
     purpose: &str,
     value: serde_json::Value,
 ) -> AppResult<Uuid> {
+    // Beim Anlegen gleich aufraeumen. Abgeholt wird ein Zustand nur im
+    // Erfolgsfall (`take_state`); jeder abgebrochene Versuch liesse sonst eine
+    // Zeile zurueck, die nie wieder jemand anfasst.
+    let _ = sqlx::query("delete from webauthn_states where expires_at < now()")
+        .execute(&state.pool)
+        .await;
+
     let id = Uuid::now_v7();
     sqlx::query(
         "insert into webauthn_states (id, user_id, purpose, state, expires_at)
@@ -258,8 +266,19 @@ struct LoginStartInput {
 
 async fn login_start(
     State(state): State<AppState>,
+    absender: Absender,
     Json(input): Json<LoginStartInput>,
 ) -> AppResult<Json<StartResponse>> {
+    // Jeder Aufruf legt - ohne Anmeldung - eine Zeile in `webauthn_states` an.
+    // Ohne Bremse ist das eine Schleife, die die Tabelle flutet.
+    if !state
+        .drossel
+        .erlaubt(&format!("passkey:{absender}"), regeln::PASSKEY)
+    {
+        return Err(AppError::too_many(
+            "Zu viele Versuche. Warte einen Moment und versuch es dann noch einmal.",
+        ));
+    }
     let webauthn = webauthn(&state)?;
     let username = input.username.trim().to_lowercase();
 

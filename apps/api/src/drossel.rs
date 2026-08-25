@@ -263,6 +263,19 @@ pub mod regeln {
     /// abzuholen.
     pub const SUCHEN: Regel = Regel::neu(60, Duration::from_secs(60));
 
+    /// Admin-Passwort: fünf Versuche je Stunde und Konto.
+    ///
+    /// Der engste Zähler von allen, und das aus gutem Grund: Jedes angemeldete
+    /// Konto darf hier probieren, das Passwort muss nur acht Zeichen lang
+    /// sein, und ein Treffer bedeutet Vollzugriff – Konten löschen,
+    /// Einladungscodes anlegen. Wer es wirklich weiss, tippt es einmal.
+    pub const ADMIN: Regel = Regel::neu(5, Duration::from_secs(3600));
+
+    /// Passkey-Anmeldung beginnen: Jeder Aufruf schreibt – ohne Anmeldung –
+    /// eine Zeile in die Datenbank. Zehn je fünf Minuten reichen für jeden
+    /// ehrlichen Versuch und machen das Fluten der Tabelle unattraktiv.
+    pub const PASSKEY: Regel = Regel::neu(10, Duration::from_secs(300));
+
     /// Passwort ändern – angemeldet, aber ein beliebter Weg, das alte Passwort
     /// zu erraten.
     pub const PASSWORT: Regel = Regel::neu(10, Duration::from_secs(600));

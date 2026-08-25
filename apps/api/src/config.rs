@@ -257,10 +257,21 @@ impl Config {
 
             trust_proxy: flag("TRUST_PROXY", false),
 
+            // Ein unbekannter Wert ist ein harter Startfehler, kein stiller
+            // Rueckfall auf "offen". Bisher machte ein Tippfehler - `Invite`
+            // statt `invite` - die Registrierung fuer jeden auf, ohne dass es
+            // irgendwo aufgefallen waere. Bei einer Einstellung mit dieser
+            // Tragweite ist ein Fehlstart die freundlichere Antwort.
+            // `STORAGE_DRIVER` macht es weiter oben schon genauso.
             registration_mode: match var_or("REGISTRATION_MODE", "open").as_str() {
+                "open" => RegistrationMode::Open,
                 "invite" => RegistrationMode::Invite,
                 "closed" => RegistrationMode::Closed,
-                _ => RegistrationMode::Open,
+                anderes => {
+                    return Err(AppError::config(format!(
+                        "REGISTRATION_MODE=\"{anderes}\" ist unbekannt - erlaubt sind open, invite, closed (klein geschrieben)"
+                    )))
+                }
             },
             invite_codes: list("INVITE_CODES"),
             admin_password: var("ADMIN_PASSWORD").filter(|value| value.len() >= 8),

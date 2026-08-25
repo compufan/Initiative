@@ -19,6 +19,27 @@ use crate::services::users::{load_user, to_self_user_dto};
 use crate::state::AppState;
 use crate::validate::{check_password, normalise_username, Validator};
 
+/**
+ * Ein echter Argon2-Hash, gegen den geprüft wird, wenn es das Konto nicht gibt.
+ *
+ * Hier stand vorher ein von Hand geschriebener Hash mit dem Kommentar, er sorge
+ * für gleiche Antwortzeiten. Er war **ungültig**: Der Hashteil ist nicht
+ * kanonisch base64-kodiert, `PasswordHash::new` scheiterte am Einlesen, und
+ * `verify_password` gab sofort `false` zurück, ohne Argon2 auch nur
+ * anzuwerfen.
+ *
+ * Gemessen: 8 µs für einen unbekannten Namen, 505 ms für einen bekannten. Ein
+ * einziges `curl -w %{time_total}` genügte, um die Mitgliederliste
+ * abzuklappern. Die Schutzmassnahme stand nur im Kommentar.
+ *
+ * Jetzt wird der Hash beim ersten Gebrauch wirklich erzeugt – damit rechnet
+ * der Vergleich genauso lange wie ein echter.
+ */
+static DUMMY_HASH: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    hash_password("kein-konto-mit-diesem-namen")
+        .unwrap_or_else(|_| String::from("$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHQ$c29tZXNhbHQ"))
+});
+
 /// Immer derselbe Satz – er darf nicht verraten, welche Grenze gegriffen hat.
 fn zu_schnell() -> AppError {
     AppError::too_many("Zu viele Versuche. Warte einen Moment und versuch es dann noch einmal.")
@@ -240,12 +261,12 @@ async fn login(
         .fetch_optional(&state.pool)
         .await?;
 
-    // Always run a verification so timing does not reveal existing accounts.
-    let dummy = "$argon2id$v=19$m=19456,t=2,p=1$c29tZXNhbHR2YWx1ZQ$3S1WQ8f0Y2v9m2r0Q3l0m4tZ7d1s8n0p2q4r6t8u0w2";
+    // Auch ohne Konto einmal richtig rechnen, damit die Antwortzeit nicht
+    // verraet, ob es den Namen gibt.
     let valid = match &user {
         Some(user) => verify_password(&input.password, &user.password_hash),
         None => {
-            let _ = verify_password(&input.password, dummy);
+            let _ = verify_password(&input.password, &DUMMY_HASH);
             false
         }
     };
@@ -301,6 +322,30 @@ async fn refresh(
             "Sitzung abgelaufen, bitte neu anmelden",
         ));
     };
+    // Ein schon eingeloester, aber noch nicht abgelaufener Token, der erneut
+    // vorgelegt wird, ist der Beweis, dass zwei Parteien dieselbe Kette
+    // benutzen: Wer ihn abgegriffen hat, hat ihn eingeloest, und das echte
+    // Geraet kommt mit dem alten Stueck hinterher (oder umgekehrt).
+    //
+    // Bisher gab es dafuer nur ein 401. Das Geraet meldete sich neu an, merkte
+    // nichts - und der Dieb behielt seine rotierende Kette sechzig Tage lang.
+    // Jetzt endet die ganze Sitzung, fuer beide.
+    if row.revoked_at.is_some() && row.expires_at > chrono::Utc::now() {
+        tracing::warn!(
+            user_id = %row.user_id,
+            "wiederverwendeter Refresh-Token - alle Sitzungen dieses Kontos werden beendet"
+        );
+        sqlx::query(
+            "update refresh_tokens set revoked_at = now()
+              where user_id = $1 and revoked_at is null",
+        )
+        .bind(row.user_id)
+        .execute(&state.pool)
+        .await?;
+        return Err(AppError::unauthorized(
+            "Sitzung abgelaufen, bitte neu anmelden",
+        ));
+    }
     if row.revoked_at.is_some() || row.expires_at <= chrono::Utc::now() {
         return Err(AppError::unauthorized(
             "Sitzung abgelaufen, bitte neu anmelden",
@@ -312,6 +357,19 @@ async fn refresh(
         .bind(row.id)
         .execute(&state.pool)
         .await?;
+
+    // Aufraeumen auch hier, nicht nur beim Anmelden: Bei sechzig Tagen
+    // Laufzeit und Erneuerung alle Viertelstunde sammelt jedes aktive Geraet
+    // Tausende Zeilen an, bevor die erste ueberhaupt loeschfaehig waere.
+    // Widerrufene braucht nach zwei Tagen niemand mehr - die
+    // Wiederverwendungserkennung oben greift lange davor.
+    let _ = sqlx::query(
+        "delete from refresh_tokens
+          where expires_at < now() - interval '7 days'
+             or (revoked_at is not null and revoked_at < now() - interval '2 days')",
+    )
+    .execute(&state.pool)
+    .await;
 
     let user = load_user(&state.pool, row.user_id).await?;
     Ok(Json(issue_session(&state, &user).await?))

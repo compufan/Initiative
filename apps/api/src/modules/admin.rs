@@ -14,6 +14,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::auth::{AdminUser, AuthUser};
+use crate::drossel::regeln;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -62,6 +63,19 @@ async fn unlock(
     user: AuthUser,
     Json(input): Json<UnlockInput>,
 ) -> AppResult<Json<AdminStatus>> {
+    // Ohne Bremse darf jedes angemeldete Konto das Admin-Passwort unbegrenzt
+    // durchprobieren - und die Mindestlaenge sind acht Zeichen. Ein Treffer
+    // ist Vollzugriff: Konten loeschen, Einladungscodes anlegen. Das war die
+    // gefaehrlichste offene Stelle der ganzen API.
+    if !state
+        .drossel
+        .erlaubt(&format!("admin:{}", user.id()), regeln::ADMIN)
+    {
+        return Err(AppError::too_many(
+            "Zu viele Versuche. Warte einen Moment und versuch es dann noch einmal.",
+        ));
+    }
+
     let Some(expected) = state.config.admin_password.as_deref() else {
         return Err(AppError::forbidden(
             "Es ist kein Admin-Passwort hinterlegt (ADMIN_PASSWORD).",
@@ -73,6 +87,10 @@ async fn unlock(
         tracing::warn!(user_id = %user.id(), "failed admin unlock attempt");
         return Err(AppError::forbidden("Falsches Passwort"));
     }
+
+    // Richtig geraten heisst: kein Verdacht mehr. Sonst bremst der Zaehler den
+    // Admin selbst aus, der sich einmal vertippt hat.
+    state.drossel.zuruecksetzen(&format!("admin:{}", user.id()));
 
     sqlx::query("update users set is_admin = true, updated_at = now() where id = $1")
         .bind(user.id())

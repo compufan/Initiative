@@ -187,3 +187,50 @@ async fn ein_gebremstes_konto_sperrt_kein_anderes() {
         "der Unbeteiligte muss weiterhin hineinkommen: {body}"
     );
 }
+
+#[tokio::test]
+async fn eine_unbekannte_kennung_braucht_genauso_lange_wie_eine_bekannte() {
+    // Der Kern der Sache: Wenn die Anmeldung fuer einen unbekannten Namen
+    // sofort antwortet und fuer einen bekannten eine halbe Sekunde rechnet,
+    // ist die Mitgliederliste mit einer Stoppuhr auslesbar. Genau das war der
+    // Fall - der von Hand geschriebene Dummy-Hash war ungueltig und wurde nie
+    // geprueft: 8 Mikrosekunden gegen 505 Millisekunden.
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL fehlt – übersprungen");
+        return;
+    };
+    let bekannt = kurz("zeit");
+    let (status, _) = probe
+        .post(
+            "/api/v1/auth/register",
+            json!({
+                "username": &bekannt,
+                "displayName": "Zeit Test",
+                "password": "richtigespasswort",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    async fn messen(probe: &Probe, name: &str) -> std::time::Duration {
+        let start = std::time::Instant::now();
+        let _ = probe.anmelden(name, "falschespasswort").await;
+        start.elapsed()
+    }
+
+    // Je einmal vorweg, damit einmalige Kosten (Verbindungsaufbau, das erste
+    // Erzeugen des Dummy-Hashes) nicht in die Messung fallen.
+    let _ = messen(&probe, &bekannt).await;
+    let _ = messen(&probe, &kurz("warm")).await;
+
+    let mit = messen(&probe, &bekannt).await;
+    let ohne = messen(&probe, &kurz("gibtsnicht")).await;
+
+    // Grosszuegig: Es geht nicht um Mikrosekunden, sondern darum, dass nicht
+    // die eine Antwort sofort kommt und die andere nach einer halben Sekunde.
+    let verhaeltnis = mit.as_secs_f64() / ohne.as_secs_f64().max(1e-9);
+    assert!(
+        (0.1..=10.0).contains(&verhaeltnis),
+        "Antwortzeiten verraten das Konto: bekannt {mit:?}, unbekannt {ohne:?} (Faktor {verhaeltnis:.0})"
+    );
+}
