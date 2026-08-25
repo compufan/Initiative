@@ -98,7 +98,23 @@ async function modelleLaden() {
   }
 }
 
+/**
+ * Mit `--optional` ist ein Fehlschlag kein Abbruch.
+ *
+ * Beim Entwickeln und in den Browser-Tests wird das Freistellen nicht
+ * gebraucht; ohne Netz sollte trotzdem `pnpm dev` starten. Beim Bauen fuer
+ * die Veroeffentlichung gilt das NICHT – dort waeren fehlende Modelle ein
+ * stiller 404 in der fertigen App.
+ */
+const optional = process.argv.includes('--optional');
+
 console.log('Freistell-Bausteine bereitlegen …');
-await wasmKopieren();
-await modelleLaden();
-console.log('Fertig.');
+try {
+  await wasmKopieren();
+  await modelleLaden();
+  console.log('Fertig.');
+} catch (fehler) {
+  if (!optional) throw fehler;
+  console.warn(`  Uebersprungen: ${fehler.message}`);
+  console.warn('  Das Freistellen mit Modellen steht in dieser Sitzung nicht zur Verfuegung.');
+}

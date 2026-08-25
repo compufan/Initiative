@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm run models && vite --host",
+    "dev": "node scripts/prepare-models.mjs --optional && vite --host",
     "models": "node scripts/prepare-models.mjs",
     "prebuild": "node scripts/prepare-models.mjs",
     "build": "vite build",

@@ -101,6 +101,13 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Wie im Web-Job: die Modelle zwischenspeichern statt sie jedes Mal zu
+      # laden. Die Browser-Tests brauchen sie nicht, `pnpm dev` ueberspringt
+      # sie notfalls - aber wenn sie schon da sind, geht der Start schneller.
+      - uses: actions/cache@v4
+        with:
+          path: apps/web/public/models
+          key: freistell-modelle-${{ hashFiles('apps/web/scripts/prepare-models.mjs') }}
       # Die API einmal vorbauen, damit der Playwright-Start nicht in den Timeout läuft.
       - run: cargo build --manifest-path apps/api/Cargo.toml --bin initiative-api
       - run: pnpm --filter @initiative/web exec playwright install --with-deps chromium
