@@ -51,12 +51,16 @@ export const useSession = create<SessionState>((set, get) => ({
       void writeMeta(USER_CACHE_KEY, user);
       realtime.connect();
     } catch (error) {
-      if (error instanceof ApiError && error.isOffline) {
-        // Server nicht erreichbar: mit dem zwischengespeicherten Profil
-        // weiterarbeiten, statt die Sitzung wegzuwerfen.
+      // Nur eine echte Abweisung beendet die Sitzung. Ein Netzwerkfehler oder
+      // ein Serverfehler ist voruebergehend – wer dabei ausgeloggt wird, muss
+      // sich nach jeder Stoerung neu anmelden.
+      const rejected = error instanceof ApiError && (error.status === 401 || error.status === 403);
+      if (!rejected) {
         set({
           status: 'authenticated',
-          error: cached ? null : 'Der Server ist gerade nicht erreichbar.',
+          error: cached
+            ? null
+            : 'Der Server ist gerade nicht erreichbar. Es werden gespeicherte Daten angezeigt.',
         });
         realtime.connect();
         return;
