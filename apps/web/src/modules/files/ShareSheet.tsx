@@ -5,11 +5,13 @@ import {
   type CollectionGrantDto,
   type ConversationDto,
   type GrantableLevel,
-  type UserDto,
 } from '@initiative/shared';
+import { PersonenWahl } from '../../components/PersonenWahl.js';
 import { Sheet } from '../../components/Sheet.js';
 import { Spinner } from '../../components/Feedback.js';
 import { api } from '../../lib/api.js';
+import { useNamen } from '../../state/leute.js';
+import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 
 interface ShareSheetProps {
@@ -32,10 +34,10 @@ const STUFEN_TEXT: Record<GrantableLevel, string> = {
  * dann noch stimmt, wenn später jemand dazukommt.
  */
 export function ShareSheet({ open, onClose, collection }: ShareSheetProps) {
+  const myId = useMyId();
   const [grants, setGrants] = useState<CollectionGrantDto[]>([]);
   const [chats, setChats] = useState<ConversationDto[]>([]);
-  const [suche, setSuche] = useState('');
-  const [treffer, setTreffer] = useState<UserDto[]>([]);
+  const [auswahl, setAuswahl] = useState<string[]>([]);
   const [stufe, setStufe] = useState<GrantableLevel>('view');
   const [laedt, setLaedt] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -66,45 +68,82 @@ export function ShareSheet({ open, onClose, collection }: ShareSheetProps) {
     };
   }, [open, collection.id]);
 
-  useEffect(() => {
-    const begriff = suche.trim();
-    if (begriff.length < 2) {
-      setTreffer([]);
-      return undefined;
-    }
-    // Kurz warten, statt bei jedem Tastendruck zu fragen.
-    const zeit = setTimeout(() => {
-      void api.users
-        .search(begriff)
-        .then((ergebnis) => setTreffer(ergebnis.items))
-        .catch(() => setTreffer([]));
-    }, 250);
-    return () => clearTimeout(zeit);
-  }, [suche]);
-
   const chatName = useMemo(() => {
     const namen = new Map(chats.map((chat) => [chat.id, chat.title ?? 'Chat']));
     return (id: string) => namen.get(id) ?? 'Chat';
   }, [chats]);
 
+  // Die Mitglieder des zugehoerigen Chats stehen ohne Suchen zur Wahl. Das ist
+  // fast immer der gemeinte Kreis, und ihn abtippen zu muessen, obwohl er
+  // bekannt ist, war der eigentliche Umweg an dieser Stelle.
+  const ausChat = useMemo(() => {
+    const chat = chats.find((eintrag) => eintrag.id === collection.conversationId);
+    return (chat?.members ?? []).map((mitglied) => ({
+      id: mitglied.userId,
+      displayName: mitglied.user.displayName,
+    }));
+  }, [chats, collection.conversationId]);
+
+  // Ein Recht stand bisher als nackte Kennung in der Liste – eine UUID, mit
+  // der niemand etwas anfangen kann.
+  const namen = useNamen(
+    grants.map((grant) => grant.userId),
+    myId,
+  );
+
+  function einsortieren(neu: CollectionGrantDto) {
+    setGrants((liste) => [
+      ...liste.filter(
+        (eintrag) =>
+          !(eintrag.userId && neu.userId && eintrag.userId === neu.userId) &&
+          !(
+            eintrag.conversationId &&
+            neu.conversationId &&
+            eintrag.conversationId === neu.conversationId
+          ),
+      ),
+      neu,
+    ]);
+  }
+
   async function vergeben(ziel: { userId?: string; conversationId?: string }) {
     setBusy(true);
     try {
-      const neu = await api.collections.grant(collection.id, { ...ziel, level: stufe });
-      setGrants((liste) => [
-        ...liste.filter(
-          (eintrag) =>
-            !(eintrag.userId && eintrag.userId === ziel.userId) &&
-            !(eintrag.conversationId && eintrag.conversationId === ziel.conversationId),
-        ),
-        neu,
-      ]);
-      setSuche('');
-      setTreffer([]);
+      einsortieren(await api.collections.grant(collection.id, { ...ziel, level: stufe }));
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Freigeben fehlgeschlagen');
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Mehrere auf einmal freigeben.
+   *
+   * Nacheinander und mit Zwischenstand: Bricht der dritte von fünf ab, sind
+   * die ersten beiden trotzdem vergeben und stehen auch so in der Liste. Ein
+   * stiller Teilerfolg wäre schlimmer als ein sichtbarer.
+   */
+  async function alleVergeben() {
+    if (auswahl.length === 0) return;
+    setBusy(true);
+    const gescheitert: string[] = [];
+    for (const userId of auswahl) {
+      try {
+        einsortieren(await api.collections.grant(collection.id, { userId, level: stufe }));
+      } catch {
+        gescheitert.push(namen(userId));
+      }
+    }
+    setBusy(false);
+    setAuswahl([]);
+    if (gescheitert.length === 0) {
+      toast(
+        auswahl.length === 1 ? 'Recht vergeben.' : `${auswahl.length} Rechte vergeben.`,
+        'success',
+      );
+    } else {
+      toast(`Nicht geklappt bei: ${gescheitert.join(', ')}`, 'error');
     }
   }
 
@@ -145,7 +184,7 @@ export function ShareSheet({ open, onClose, collection }: ShareSheetProps) {
                   <span className="truncate">
                     {grant.conversationId
                       ? `Alle in „${chatName(grant.conversationId)}“`
-                      : (grant.userId ?? 'Unbekannt')}
+                      : namen(grant.userId)}
                     {grant.itemId && ' (nur eine Datei)'}
                   </span>
                   <span className="fil-badge">{STUFEN_TEXT[grant.level]}</span>
@@ -167,7 +206,7 @@ export function ShareSheet({ open, onClose, collection }: ShareSheetProps) {
           {darfVergeben && (
             <>
               <fieldset className="field">
-                <legend>Neu vergeben – die Stufe gilt für den nächsten Eintrag</legend>
+                <legend>Neu vergeben – die Stufe gilt für alle unten Gewählten</legend>
                 {GRANTABLE_LEVELS.map((wert) => (
                   <label key={wert} className="fil-radio">
                     <input
@@ -181,36 +220,29 @@ export function ShareSheet({ open, onClose, collection }: ShareSheetProps) {
                 ))}
               </fieldset>
 
-              <div className="field">
-                <label htmlFor="fil-share-search">Person suchen</label>
-                <input
-                  id="fil-share-search"
-                  className="input"
-                  type="search"
-                  value={suche}
-                  placeholder="Name oder Benutzername"
-                  onChange={(event) => setSuche(event.target.value)}
-                />
-              </div>
-              {treffer.length > 0 && (
-                <ul className="list">
-                  {treffer.map((person) => (
-                    <li key={person.id}>
-                      <button
-                        type="button"
-                        className="list-row"
-                        disabled={busy}
-                        onClick={() => void vergeben({ userId: person.id })}
-                      >
-                        <span aria-hidden="true">👤</span>
-                        <span className="truncate">
-                          {person.displayName} · @{person.username}
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <PersonenWahl
+                label="Wem die Sammlung freigegeben wird"
+                vorschlaege={ausChat}
+                gewaehlt={auswahl}
+                onChange={setAuswahl}
+                zusatz={(id) => {
+                  const bestehend = grants.find((eintrag) => eintrag.userId === id);
+                  if (!bestehend) return null;
+                  // Sonst vergibt man blind ein Recht, das schon besteht – und
+                  // wundert sich, dass sich nichts aendert.
+                  return <span className="fil-badge">{STUFEN_TEXT[bestehend.level]}</span>;
+                }}
+              />
+              <button
+                type="button"
+                className="btn btn-primary btn-block"
+                disabled={busy || auswahl.length === 0}
+                onClick={() => void alleVergeben()}
+              >
+                {auswahl.length <= 1
+                  ? `Freigeben: ${STUFEN_TEXT[stufe]}`
+                  : `${auswahl.length} Personen freigeben: ${STUFEN_TEXT[stufe]}`}
+              </button>
 
               <p className="fil-section">Oder alle in einem Chat</p>
               <ul className="list">

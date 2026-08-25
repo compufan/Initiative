@@ -1,14 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LIMITS, type UserDto } from '@initiative/shared';
-import { Avatar } from '../../components/Avatar.js';
+import { PersonenWahl } from '../../components/PersonenWahl.js';
 import { Sheet } from '../../components/Sheet.js';
 import { api } from '../../lib/api.js';
 import { useChat } from '../../state/chat.js';
+import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 import { UserSearch } from './UserSearch.js';
 
 type Mode = 'direct' | 'group';
+
+/** Was das Schema erlaubt (packages/shared/src/schemas/conversation.ts). */
+const GRUPPE_MAX = 200;
 
 interface NewChatSheetProps {
   open: boolean;
@@ -19,7 +23,29 @@ interface NewChatSheetProps {
 export function NewChatSheet({ open, onClose }: NewChatSheetProps) {
   const navigate = useNavigate();
   const [mode, setMode] = useState<Mode>('direct');
-  const [picked, setPicked] = useState<UserDto[]>([]);
+  const conversations = useChat((state) => state.conversations);
+  const myId = useMyId();
+  const [picked, setPicked] = useState<string[]>([]);
+
+  /**
+   * Wen man schon kennt – aus den eigenen Unterhaltungen.
+   *
+   * „Dieselben Leute wie in der grossen Gruppe, aber ohne zwei“ war bisher
+   * reine Tipparbeit, obwohl die App diese Leute längst kennt.
+   */
+  const bekannte = useMemo(() => {
+    const gesammelt = new Map<string, { id: string; displayName: string }>();
+    for (const chat of conversations) {
+      for (const mitglied of chat.members) {
+        if (mitglied.userId === myId) continue;
+        gesammelt.set(mitglied.userId, {
+          id: mitglied.userId,
+          displayName: mitglied.user.displayName,
+        });
+      }
+    }
+    return [...gesammelt.values()].sort((a, b) => a.displayName.localeCompare(b.displayName, 'de'));
+  }, [conversations, myId]);
   const [title, setTitle] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -48,11 +74,17 @@ export function NewChatSheet({ open, onClose }: NewChatSheetProps) {
 
   async function createGroup() {
     if (picked.length === 0) return;
+    if (picked.length > GRUPPE_MAX) {
+      // Sonst kommt die Absage erst vom Server, nachdem man 200 Leute
+      // ausgewählt hat und nicht mehr weiss, welche zu viel sind.
+      toast(`Eine Gruppe fasst höchstens ${GRUPPE_MAX} Mitglieder`, 'error');
+      return;
+    }
     setBusy(true);
     try {
       const conversation = await api.conversations.create({
         type: 'group',
-        memberIds: picked.map((user) => user.id),
+        memberIds: picked,
         title: title.trim() || undefined,
       });
       useChat.getState().upsertConversation(conversation);
@@ -63,14 +95,6 @@ export function NewChatSheet({ open, onClose }: NewChatSheetProps) {
     } finally {
       setBusy(false);
     }
-  }
-
-  function togglePick(user: UserDto) {
-    setPicked((current) =>
-      current.some((item) => item.id === user.id)
-        ? current.filter((item) => item.id !== user.id)
-        : [...current, user],
-    );
   }
 
   return (
@@ -110,30 +134,23 @@ export function NewChatSheet({ open, onClose }: NewChatSheetProps) {
         </div>
       )}
 
-      {mode === 'group' && picked.length > 0 && (
-        <div className="msg-chip-row">
-          {picked.map((user) => (
-            <button
-              key={user.id}
-              type="button"
-              className="msg-chip"
-              onClick={() => togglePick(user)}
-              aria-label={`${user.displayName} entfernen`}
-            >
-              <Avatar name={user.displayName} id={user.id} url={user.avatarUrl} size={22} />
-              <span className="truncate">{user.displayName}</span>
-              <span aria-hidden="true">✕</span>
-            </button>
-          ))}
-        </div>
+      {/* Direkt bleibt beim Suchen-und-Antippen: Dort ist genau EINER gemeint,
+          der Chat entsteht mit dem Antippen, und eine Sammelauswahl wäre dort
+          schlicht falsch. Erst die Gruppe ist eine Mehrfachauswahl. */}
+      {mode === 'direct' ? (
+        <UserSearch
+          autoFocus
+          placeholder="Wen möchtest du anschreiben?"
+          onPick={(user) => void open1to1(user)}
+        />
+      ) : (
+        <PersonenWahl
+          label="Wer in die Gruppe soll"
+          vorschlaege={bekannte}
+          gewaehlt={picked}
+          onChange={setPicked}
+        />
       )}
-
-      <UserSearch
-        autoFocus
-        placeholder={mode === 'direct' ? 'Wen möchtest du anschreiben?' : 'Mitglieder suchen'}
-        selectedIds={picked.map((user) => user.id)}
-        onPick={(user) => (mode === 'direct' ? void open1to1(user) : togglePick(user))}
-      />
 
       {mode === 'group' && (
         <button

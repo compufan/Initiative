@@ -37,6 +37,15 @@ interface Props {
   onChange: (ids: string[]) => void;
   /** Kennungen, die nicht abwählbar sind (etwa man selbst). */
   fest?: string[];
+  /**
+   * Kennungen, die gar nicht erst zur Wahl stehen – auch nicht über die Suche.
+   *
+   * Der Unterschied zu `fest` ist wichtig: `fest` heisst „dabei und nicht
+   * abwählbar“, `ausschluss` heisst „kommt hier nicht vor“. Wer jemanden zu
+   * einem Chat hinzufügt, in dem er schon ist, löst sonst eine Systemnachricht
+   * „X wurde hinzugefügt“ für jemanden aus, der längst dabei ist.
+   */
+  ausschluss?: string[];
   /** Überschrift der Gruppe, für Vorlesehilfen. */
   label: string;
   /** Ob über die Vorschläge hinaus gesucht werden darf. */
@@ -50,6 +59,7 @@ export function PersonenWahl({
   gewaehlt,
   onChange,
   fest = [],
+  ausschluss = [],
   label,
   suchbar = true,
   zusatz,
@@ -94,16 +104,19 @@ export function PersonenWahl({
   const liste = useMemo(() => {
     const nach: Person[] = [];
     const gesehen = new Set<string>();
+    const draussen = new Set(ausschluss);
     const anhaengen = (person: Person | undefined) => {
-      if (!person || gesehen.has(person.id)) return;
+      if (!person || gesehen.has(person.id) || draussen.has(person.id)) return;
       gesehen.add(person.id);
       nach.push(person);
     };
     for (const id of gewaehlt) anhaengen(gemerkt[id]);
     for (const person of vorschlaege) anhaengen(person);
+    // Auch Suchtreffer gehen durch denselben Filter – sonst fördert die Suche
+    // genau die zutage, die hier nichts zu suchen haben.
     for (const person of treffer) anhaengen(person);
     return nach;
-  }, [gewaehlt, vorschlaege, treffer, gemerkt]);
+  }, [gewaehlt, vorschlaege, treffer, gemerkt, ausschluss]);
 
   const waehlbar = liste.filter((person) => !fest.includes(person.id));
   const alleGewaehlt =
@@ -111,9 +124,7 @@ export function PersonenWahl({
 
   function umschalten(id: string) {
     if (fest.includes(id)) return;
-    onChange(
-      gewaehlt.includes(id) ? gewaehlt.filter((wert) => wert !== id) : [...gewaehlt, id],
-    );
+    onChange(gewaehlt.includes(id) ? gewaehlt.filter((wert) => wert !== id) : [...gewaehlt, id]);
   }
 
   return (

@@ -1,17 +1,33 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  EXPENSE_VISIBILITIES,
   formatCents,
   parseAmount,
   splitEvenly,
   type ConversationDto,
   type ExpenseDto,
+  type ExpenseVisibility,
   type UserDto,
 } from '@initiative/shared';
+import { PersonenWahl } from '../../components/PersonenWahl.js';
 import { Sheet } from '../../components/Sheet.js';
 import { api } from '../../lib/api.js';
 import { useChat } from '../../state/chat.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
+
+/**
+ * Die drei Sichtbarkeiten in Worten.
+ *
+ * Bewusst „zusätzlich“ und nicht „nur“: Der Server gibt jedem mit Anteil
+ * immer Einsicht (services/expenses.rs, may_see). Wer hier „nur ausgewählte“
+ * schriebe, verspräche mehr, als die App halten kann.
+ */
+const SICHT_TEXT: Record<ExpenseVisibility, string> = {
+  participants: 'Nur wer mitzahlt',
+  conversation: 'Alle im Chat',
+  listed: 'Ausgewählte Personen zusätzlich',
+};
 
 interface ExpenseSheetProps {
   open: boolean;
@@ -50,6 +66,8 @@ export function ExpenseSheet({
   const [paidBy, setPaidBy] = useState(myId);
   const [beteiligte, setBeteiligte] = useState<string[]>([]);
   const [verborgen, setVerborgen] = useState<string[]>([]);
+  const [sichtbarkeit, setSichtbarkeit] = useState<ExpenseVisibility>('participants');
+  const [zuschauer, setZuschauer] = useState<string[]>([]);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [leute, setLeute] = useState<UserDto[]>([]);
@@ -73,6 +91,8 @@ export function ExpenseSheet({
     setBetrag('');
     setPaidBy(myId);
     setVerborgen([]);
+    setSichtbarkeit('participants');
+    setZuschauer([]);
     setNote('');
   }, [open, conversationId, conversations, myId]);
 
@@ -89,7 +109,8 @@ export function ExpenseSheet({
     let abgebrochen = false;
     void Promise.all(ids.map((id) => api.users.byId(id).catch(() => null)))
       .then((ergebnis) => {
-        if (!abgebrochen) setLeute(ergebnis.filter((eintrag): eintrag is UserDto => Boolean(eintrag)));
+        if (!abgebrochen)
+          setLeute(ergebnis.filter((eintrag): eintrag is UserDto => Boolean(eintrag)));
       })
       .catch(() => {});
     return () => {
@@ -131,6 +152,8 @@ export function ExpenseSheet({
         paidBy,
         shares: beteiligte.map((userId) => ({ userId })),
         hiddenFromIds: verborgen.length > 0 ? verborgen : undefined,
+        visibility: sichtbarkeit,
+        viewerIds: sichtbarkeit === 'listed' && zuschauer.length > 0 ? zuschauer : undefined,
       });
       onSaved?.(expense);
       onClose();
@@ -143,6 +166,18 @@ export function ExpenseSheet({
 
   // Verbergen geht nur bei Leuten ohne Anteil.
   const verbergbar = leute.filter((person) => !beteiligte.includes(person.id));
+
+  // Wer nachträglich mitzahlt, kann nicht mehr verborgen bleiben. Der Server
+  // lehnt das ab – mit einer klaren Meldung, aber erst beim Speichern, und
+  // dann ist das Blatt schon ausgefüllt. Also hier gleich aufräumen.
+  useEffect(() => {
+    setVerborgen((liste) => {
+      const uebrig = liste.filter((id) => !beteiligte.includes(id));
+      // Gleiche Liste zurückgeben, wenn nichts wegfällt: sonst rechnet React
+      // bei jeder Änderung an den Beteiligten eine Runde umsonst.
+      return uebrig.length === liste.length ? liste : uebrig;
+    });
+  }, [beteiligte]);
 
   return (
     <Sheet
@@ -233,28 +268,24 @@ export function ExpenseSheet({
           {leute.length === 0 ? (
             <p className="exp-hint">Wähle oben einen Chat.</p>
           ) : (
-            leute.map((person) => {
-              const index = beteiligte.indexOf(person.id);
-              return (
-                <label key={person.id} className="exp-check">
-                  <input
-                    type="checkbox"
-                    checked={index >= 0}
-                    onChange={(event) =>
-                      setBeteiligte((liste) =>
-                        event.target.checked
-                          ? [...liste, person.id]
-                          : liste.filter((id) => id !== person.id),
-                      )
-                    }
-                  />
-                  <span className="truncate">{name(person.id)}</span>
-                  {index >= 0 && vorschau[index] != null && (
-                    <span className="exp-share">{formatCents(vorschau[index])}</span>
-                  )}
-                </label>
-              );
-            })
+            <PersonenWahl
+              label="Wer zahlt mit?"
+              vorschlaege={leute.map((person) => ({
+                id: person.id,
+                displayName: name(person.id),
+              }))}
+              gewaehlt={beteiligte}
+              onChange={setBeteiligte}
+              // Auch jemand ausserhalb des Chats darf mitzahlen. Das geht
+              // wirklich und nicht nur an der Oberfläche: Wer einen Anteil
+              // hat, sieht die Ausgabe in seiner Liste, ganz unabhängig
+              // davon, ob er im Chat ist (services/expenses.rs, may_see).
+              zusatz={(id) => {
+                const index = beteiligte.indexOf(id);
+                if (index < 0 || vorschau[index] == null) return null;
+                return <span className="exp-share">{formatCents(vorschau[index])}</span>;
+              }}
+            />
           )}
           {vorschau.length > 0 && (
             <p className="exp-hint">
@@ -266,6 +297,44 @@ export function ExpenseSheet({
           )}
         </fieldset>
 
+        {/* Bisher entstand jede Ausgabe stillschweigend als 'participants' –
+            die Sichtbarkeit war in Schema und Server da, aber ueber die App
+            nicht erreichbar. */}
+        <fieldset className="field">
+          <legend>Wer darf sie sehen?</legend>
+          {EXPENSE_VISIBILITIES.map((wert) => (
+            <label key={wert} className="exp-check">
+              <input
+                type="radio"
+                name="exp-sichtbarkeit"
+                checked={sichtbarkeit === wert}
+                onChange={() => setSichtbarkeit(wert)}
+              />
+              <span>{SICHT_TEXT[wert]}</span>
+            </label>
+          ))}
+          <p className="exp-hint">
+            Wer mitzahlt, sieht die Ausgabe immer – das lässt sich hier nicht wegnehmen, sonst
+            stimmte sein Saldo nicht mehr. Die Wahl entscheidet nur, wer sie <em>zusätzlich</em>{' '}
+            sieht.
+          </p>
+        </fieldset>
+
+        {sichtbarkeit === 'listed' && (
+          <fieldset className="field">
+            <legend>Diese Personen zusätzlich</legend>
+            <PersonenWahl
+              label="Wer die Ausgabe zusätzlich sehen darf"
+              vorschlaege={leute.map((person) => ({
+                id: person.id,
+                displayName: name(person.id),
+              }))}
+              gewaehlt={zuschauer}
+              onChange={setZuschauer}
+            />
+          </fieldset>
+        )}
+
         {verbergbar.length > 0 && (
           <fieldset className="field">
             <legend>Verbergen vor …</legend>
@@ -273,22 +342,19 @@ export function ExpenseSheet({
               Für Geschenke: Diese Personen sehen die Ausgabe nicht. Zur Wahl stehen nur Leute, die
               nicht mitzahlen – sonst würde ihr Saldo nicht mehr stimmen.
             </p>
-            {verbergbar.map((person) => (
-              <label key={person.id} className="exp-check">
-                <input
-                  type="checkbox"
-                  checked={verborgen.includes(person.id)}
-                  onChange={(event) =>
-                    setVerborgen((liste) =>
-                      event.target.checked
-                        ? [...liste, person.id]
-                        : liste.filter((id) => id !== person.id),
-                    )
-                  }
-                />
-                <span className="truncate">{name(person.id)}</span>
-              </label>
-            ))}
+            <PersonenWahl
+              label="Verbergen vor"
+              vorschlaege={verbergbar.map((person) => ({
+                id: person.id,
+                displayName: name(person.id),
+              }))}
+              gewaehlt={verborgen}
+              onChange={setVerborgen}
+              // Hier ohne Suche: Jemanden zu verbergen, der die Ausgabe
+              // ohnehin nie zu sehen bekäme, ist keine Einstellung, sondern
+              // eine Falle.
+              suchbar={false}
+            />
           </fieldset>
         )}
 

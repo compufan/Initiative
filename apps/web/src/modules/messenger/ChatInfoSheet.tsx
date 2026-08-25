@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { ConversationDto, UserDto } from '@initiative/shared';
 import { Avatar } from '../../components/Avatar.js';
+import { PersonenWahl } from '../../components/PersonenWahl.js';
 import { Sheet } from '../../components/Sheet.js';
 import { api } from '../../lib/api.js';
 import { useChat } from '../../state/chat.js';
@@ -35,8 +36,32 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
   const navigate = useNavigate();
   const myId = useMyId();
   const presence = useChat((state) => state.presence);
+  const conversations = useChat((state) => state.conversations);
   const [adding, setAdding] = useState(false);
-  const [picked, setPicked] = useState<UserDto[]>([]);
+  const [picked, setPicked] = useState<string[]>([]);
+
+  /**
+   * Wen man schon kennt: alle aus den eigenen Unterhaltungen, die hier noch
+   * fehlen.
+   *
+   * Bisher musste man jeden Namen tippen – auch den von jemandem, mit dem man
+   * täglich schreibt. Wer nur das Gesicht kennt und nicht die Schreibweise,
+   * kam gar nicht weiter.
+   */
+  const bekannte = useMemo(() => {
+    const drin = new Set(conversation?.members.map((mitglied) => mitglied.userId) ?? []);
+    const gesammelt = new Map<string, { id: string; displayName: string }>();
+    for (const chat of conversations) {
+      for (const mitglied of chat.members) {
+        if (mitglied.userId === myId || drin.has(mitglied.userId)) continue;
+        gesammelt.set(mitglied.userId, {
+          id: mitglied.userId,
+          displayName: mitglied.user.displayName,
+        });
+      }
+    }
+    return [...gesammelt.values()].sort((a, b) => a.displayName.localeCompare(b.displayName, 'de'));
+  }, [conversations, conversation, myId]);
   const [busy, setBusy] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
 
@@ -73,10 +98,17 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
     if (!conversation || picked.length === 0) return;
     setBusy(true);
     try {
-      const updated = await api.conversations.addMembers(
-        conversation.id,
-        picked.map((user) => user.id),
-      );
+      // Nur wirklich Neue: `add_members` schreibt zwar doppelt ohne Schaden,
+      // setzt aber eine Systemnachricht „X wurde hinzugefügt“ ab – für
+      // jemanden, der längst dabei ist, wäre das eine Falschmeldung im Chat.
+      const drin = new Set(conversation.members.map((mitglied) => mitglied.userId));
+      const neue = picked.filter((id) => !drin.has(id));
+      if (neue.length === 0) {
+        setPicked([]);
+        setAdding(false);
+        return;
+      }
+      const updated = await api.conversations.addMembers(conversation.id, neue);
       useChat.getState().upsertConversation(updated);
       setPicked([]);
       setAdding(false);
@@ -107,17 +139,14 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
     return (
       <Sheet open={open} onClose={onClose} title="Mitglieder hinzufügen">
         <div className="stack">
-          <UserSearch
-            autoFocus
-            excludeIds={conversation.members.map((member) => member.userId)}
-            selectedIds={picked.map((user) => user.id)}
-            onPick={(user) =>
-              setPicked((current) =>
-                current.some((item) => item.id === user.id)
-                  ? current.filter((item) => item.id !== user.id)
-                  : [...current, user],
-              )
-            }
+          <PersonenWahl
+            label="Wer dazukommen soll"
+            vorschlaege={bekannte}
+            gewaehlt={picked}
+            onChange={setPicked}
+            // Wer schon drin ist, taucht gar nicht erst auf – auch nicht über
+            // die Suche.
+            ausschluss={conversation.members.map((member) => member.userId)}
           />
           <div className="row" style={{ gap: 'var(--space-2)' }}>
             <button type="button" className="btn btn-ghost" onClick={() => setAdding(false)}>
