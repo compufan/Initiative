@@ -37,6 +37,25 @@ export interface KeepSeed {
   y: number;
 }
 
+/**
+ * Das Ergebnis eines Modells: eine fertige Maske.
+ *
+ * Sie liegt bewusst in den Koordinaten des **Quellbildes**, nicht der
+ * Sticker-Fläche. Nur so bleibt sie beim Verschieben und Zoomen gültig –
+ * sonst müsste nach jeder Geste neu gerechnet werden.
+ *
+ * Einmal berechnet, wird sie nicht mehr verändert. `cloneDoc` reicht deshalb
+ * dieselbe Maske weiter, statt ein Megabyte pro Rückgängig-Schritt zu kopieren.
+ */
+export interface AutoMask {
+  /** Welches Verfahren sie erzeugt hat – für die Anzeige im Studio. */
+  engine: string;
+  width: number;
+  height: number;
+  /** `width * height` Werte, 0 = weg, 255 = bleibt. */
+  alpha: Uint8Array;
+}
+
 export interface StickerDoc {
   offsetX: number;
   offsetY: number;
@@ -45,6 +64,8 @@ export interface StickerDoc {
   removeBg: boolean;
   /** Angetippte Stellen, die im Sticker bleiben sollen. */
   keep: KeepSeed[];
+  /** Die Maske eines Modells, falls eines gelaufen ist. */
+  autoMask: AutoMask | null;
   tolerance: number;
   outline: boolean;
   outlineWidth: number;
@@ -66,6 +87,7 @@ export function createDoc(): StickerDoc {
     shape: 'square',
     removeBg: false,
     keep: [],
+    autoMask: null,
     tolerance: 40,
     outline: true,
     outlineWidth: 10,
@@ -78,6 +100,9 @@ export function createDoc(): StickerDoc {
 export function cloneDoc(doc: StickerDoc): StickerDoc {
   return {
     ...doc,
+    // Die Maske wird nach dem Berechnen nie mehr angefasst – eine Referenz
+    // genuegt und spart pro Rueckgaengig-Schritt ein Megabyte.
+    autoMask: doc.autoMask,
     keep: doc.keep.map((seed) => ({ ...seed })),
     strokes: doc.strokes.map((stroke) => ({ size: stroke.size, points: stroke.points.slice() })),
     top: { ...doc.top },
@@ -405,19 +430,51 @@ function drawTextLayer(ctx: CanvasRenderingContext2D, layer: TextLayer, slot: Te
 
 /* ---------- pipeline ---------- */
 
+/**
+ * Wohin das Quellbild auf der Sticker-Fläche gezeichnet wird.
+ *
+ * Steht hier allein, weil die Maske eines Modells **genau dieselbe** Geometrie
+ * braucht: Bild und Maske müssen deckungsgleich landen, sonst sitzt der
+ * Ausschnitt daneben.
+ */
+export function sourceRect(
+  source: { width: number; height: number },
+  doc: Pick<StickerDoc, 'scale' | 'offsetX' | 'offsetY'>,
+): { x: number; y: number; width: number; height: number } {
+  const cover = Math.max(STICKER_SIZE / source.width, STICKER_SIZE / source.height);
+  const scale = cover * doc.scale;
+  const width = source.width * scale;
+  const height = source.height * scale;
+  return {
+    x: (STICKER_SIZE - width) / 2 + doc.offsetX,
+    y: (STICKER_SIZE - height) / 2 + doc.offsetY,
+    width,
+    height,
+  };
+}
+
+/**
+ * Rechnet einen Punkt auf der Sticker-Fläche zurück ins Quellbild.
+ *
+ * Wird gebraucht, wenn jemand ein Gesicht antippt: das Modell arbeitet im
+ * Quellbild, der Finger auf der Fläche.
+ */
+export function toSourcePoint(
+  point: { x: number; y: number },
+  source: { width: number; height: number },
+  doc: Pick<StickerDoc, 'scale' | 'offsetX' | 'offsetY'>,
+): { x: number; y: number } {
+  const rect = sourceRect(source, doc);
+  return {
+    x: ((point.x - rect.x) / rect.width) * source.width,
+    y: ((point.y - rect.y) / rect.height) * source.height,
+  };
+}
+
 function drawSource(ctx: CanvasRenderingContext2D, source: EditorSource, doc: StickerDoc): void {
   if (source.kind === 'image') {
-    const cover = Math.max(STICKER_SIZE / source.width, STICKER_SIZE / source.height);
-    const scale = cover * doc.scale;
-    const width = source.width * scale;
-    const height = source.height * scale;
-    ctx.drawImage(
-      source.image,
-      (STICKER_SIZE - width) / 2 + doc.offsetX,
-      (STICKER_SIZE - height) / 2 + doc.offsetY,
-      width,
-      height,
-    );
+    const rect = sourceRect(source, doc);
+    ctx.drawImage(source.image, rect.x, rect.y, rect.width, rect.height);
     return;
   }
   if (source.kind === 'emoji') {
@@ -467,6 +524,53 @@ function applyStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[]): void {
 }
 
 /**
+ * Blendet die Maske eines Modells über das gezeichnete Bild.
+ *
+ * Die Maske liegt in Quellbild-Koordinaten und wird mit **derselben**
+ * Geometrie gezeichnet wie das Bild selbst – deshalb passt sie auch dann noch,
+ * wenn danach verschoben oder gezoomt wurde.
+ */
+function applyAutoMask(
+  ctx: CanvasRenderingContext2D,
+  source: Extract<EditorSource, { kind: 'image' }>,
+  doc: StickerDoc,
+  mask: AutoMask,
+): void {
+  const grau = document.createElement('canvas');
+  grau.width = mask.width;
+  grau.height = mask.height;
+  const grauCtx = grau.getContext('2d');
+  if (!grauCtx) return;
+
+  const bild = new ImageData(mask.width, mask.height);
+  for (let i = 0; i < mask.alpha.length; i += 1) {
+    const at = i * 4;
+    bild.data[at] = 255;
+    bild.data[at + 1] = 255;
+    bild.data[at + 2] = 255;
+    bild.data[at + 3] = mask.alpha[i];
+  }
+  grauCtx.putImageData(bild, 0, 0);
+
+  // Erst auf eine eigene Flaeche in Stickergroesse bringen. Direkt mit
+  // "destination-in" zu zeichnen ginge schief: alles ausserhalb des
+  // gezeichneten Rechtecks wuerde sonst ebenfalls stehenbleiben.
+  const flaeche = document.createElement('canvas');
+  flaeche.width = STICKER_SIZE;
+  flaeche.height = STICKER_SIZE;
+  const flaecheCtx = flaeche.getContext('2d');
+  if (!flaecheCtx) return;
+  flaecheCtx.imageSmoothingQuality = 'high';
+  const rect = sourceRect(source, doc);
+  flaecheCtx.drawImage(grau, rect.x, rect.y, rect.width, rect.height);
+
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-in';
+  ctx.drawImage(flaeche, 0, 0);
+  ctx.restore();
+}
+
+/**
  * Draws the whole document. `fast` skips the two expensive steps (flood fill
  * and dilation) so panning and pinching stay at 60 fps on a phone; the full
  * pipeline runs again as soon as the gesture ends.
@@ -488,6 +592,13 @@ export function renderSticker(
   ctx.imageSmoothingQuality = 'high';
 
   if (source) drawSource(ctx, source, doc);
+
+  // Die Maske eines Modells zuerst: sie beschreibt das Motiv genauer als jede
+  // Farbschwelle. Antippen und "Ecken entfernen" wirken danach nur noch auf
+  // das, was uebrig geblieben ist.
+  if (!options.fast && source?.kind === 'image' && doc.autoMask) {
+    applyAutoMask(ctx, source, doc, doc.autoMask);
+  }
 
   // Angetippte Bereiche haben Vorrang: Wer sagt, was bleiben soll, braucht das
   // Wegräumen von den Ecken her nicht mehr.

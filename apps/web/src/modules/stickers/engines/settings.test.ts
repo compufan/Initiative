@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ENGINE_INFO } from './types.js';
+import { ENGINE_INFO, downloadHint, firstUseMb } from './types.js';
 
 /** Kleiner Ersatz für `localStorage`, den es in der Testumgebung nicht gibt. */
 function fakeStorage() {
@@ -29,9 +29,11 @@ describe('Freistell-Verfahren pro Gerät', () => {
   });
 
   it('hat das grosse Modell von Haus aus aus', () => {
-    // 44 MB laedt man nicht ungefragt auf ein Handy.
+    // Mehrere Megabyte laedt man nicht ungefragt auf ein Handy.
     expect(settings.isEngineEnabled('object')).toBe(false);
-    expect(ENGINE_INFO.find((e) => e.key === 'object')?.downloadMb).toBeGreaterThan(20);
+    const objekt = ENGINE_INFO.find((e) => e.key === 'object');
+    expect(objekt).toBeDefined();
+    expect(firstUseMb(objekt!)).toBeGreaterThan(5);
   });
 
   it('merkt sich eine Aenderung', () => {
@@ -50,5 +52,23 @@ describe('Freistell-Verfahren pro Gerät', () => {
     const current = settings.readEngineSettings();
     expect(current.tap).toBe(true);
     expect(current.object).toBe(false);
+  });
+});
+
+describe('Groessenangaben', () => {
+  it('rechnet die geteilte Laufzeit mit ein', () => {
+    const person = ENGINE_INFO.find((e) => e.key === 'person')!;
+    const gesicht = ENGINE_INFO.find((e) => e.key === 'face')!;
+    // Beide brauchen dieselbe Laufzeit – deshalb ist die Summe der beiden
+    // Erstnutzungen groesser als das, was tatsaechlich uebertragen wird.
+    expect(person.runtime).toBe(gesicht.runtime);
+    expect(firstUseMb(person)).toBeGreaterThan(person.modelMb);
+    expect(downloadHint(person)).toContain('Gesicht');
+  });
+
+  it('sagt bei "Antippen" ausdruecklich, dass nichts geladen wird', () => {
+    const tippen = ENGINE_INFO.find((e) => e.key === 'tap')!;
+    expect(firstUseMb(tippen)).toBe(0);
+    expect(downloadHint(tippen)).toMatch(/kein download/i);
   });
 });

@@ -18,3 +18,9 @@
 
 /icons/*
   Cache-Control: public, max-age=604800
+
+/models/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/mediapipe/*
+  Cache-Control: public, max-age=31536000, immutable

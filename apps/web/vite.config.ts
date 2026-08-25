@@ -1,4 +1,4 @@
-import { defineConfig, loadEnv } from 'vite';
+import { defaultClientConditions, defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +21,12 @@ export default defineConfig(({ mode }) => {
     },
     resolve: {
       alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
+      // ONNX Runtime liefert zwei Fassungen aus. Ohne diese Bedingung nimmt
+      // Vite die "bundle"-Fassung, die ihre 14-MB-WASM-Datei per
+      // `new URL(...)` selbst mitzieht – dann liegt sie doppelt im Build,
+      // einmal in assets/ und einmal in public/onnx/. Mit der Bedingung
+      // greift die schlanke Fassung, und wir bestimmen den Pfad selbst.
+      conditions: [...defaultClientConditions, 'onnxruntime-web-use-extern-wasm'],
     },
     server: {
       port: 5173,
@@ -38,6 +44,17 @@ export default defineConfig(({ mode }) => {
         output: {
           manualChunks: {
             react: ['react', 'react-dom', 'react-router-dom'],
+            // Alles rund ums Freistellen in eigene Stuecke. Der Name ist
+            // nicht nur Kosmetik: `chunkFileNames` legt sie darueber in
+            // einen eigenen Ordner, den der Service Worker auslaesst.
+            'cutout-mediapipe': ['@mediapipe/tasks-vision'],
+            'cutout-onnx': ['onnxruntime-web/wasm'],
+          },
+          chunkFileNames: (chunk) => {
+            const freistellen =
+              chunk.name.startsWith('cutout') ||
+              chunk.facadeModuleId?.includes('/stickers/engines/');
+            return freistellen ? 'assets/cutout/[name]-[hash].js' : 'assets/[name]-[hash].js';
           },
         },
       },
@@ -54,6 +71,20 @@ export default defineConfig(({ mode }) => {
         injectRegister: null,
         injectManifest: {
           globPatterns: ['**/*.{js,css,html,svg,png,webp,woff2}'],
+          // Die Freistell-Bausteine sind zusammen ueber 22 MB. Sie duerfen
+          // NICHT beim Installieren mitgeladen werden – sonst zahlt jeder
+          // den Preis, auch wer nie einen Sticker baut. Der Service Worker
+          // legt sie stattdessen beim ersten Benutzen dauerhaft ab.
+          // Achtung: `globIgnores` ersetzt die Voreinstellung, deshalb steht
+          // node_modules hier wieder mit drin.
+          globIgnores: [
+            '**/node_modules/**/*',
+            'mediapipe/**/*',
+            'models/**/*',
+            // Der Klebe-Code der Modelle – zusammen ueber 200 KB, die nur
+            // braucht, wer wirklich einen Sticker freistellt.
+            'assets/cutout/**/*',
+          ],
           maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         },
         devOptions: {

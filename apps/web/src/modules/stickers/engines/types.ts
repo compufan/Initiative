@@ -12,13 +12,30 @@
 
 export type EngineKey = 'tap' | 'person' | 'face' | 'object';
 
+/**
+ * Welche Laufzeit ein Verfahren braucht.
+ *
+ * Wichtig für die Größenangabe: „Person“ und „Gesicht“ teilen sich dieselbe
+ * Laufzeit. Wer eines von beiden schon benutzt hat, lädt beim anderen nur
+ * noch das Modell – ein Fünftel Megabyte statt dreieinhalb.
+ */
+export type RuntimeKind = 'keine' | 'mediapipe' | 'onnx';
+
+/** Was die jeweilige Laufzeit einmalig kostet (komprimiert übertragen, MB). */
+export const RUNTIME_MB: Record<RuntimeKind, number> = {
+  keine: 0,
+  mediapipe: 3.3,
+  onnx: 3.4,
+};
+
 export interface EngineInfo {
   key: EngineKey;
   label: string;
   /** Ein Satz, der erklärt, wofür das Verfahren taugt. */
   description: string;
-  /** Einmaliger Download in Megabyte. `0` = nichts zu laden. */
-  downloadMb: number;
+  /** Das Modell selbst, komprimiert übertragen, in Megabyte. */
+  modelMb: number;
+  runtime: RuntimeKind;
   /** Ob es standardmäßig zur Verfügung steht. */
   defaultEnabled: boolean;
 }
@@ -39,29 +56,53 @@ export const ENGINE_INFO: EngineInfo[] = [
     key: 'tap',
     label: 'Antippen',
     description: 'Tippe an, was bleiben soll. Ohne Download, funktioniert auf jedem Gerät.',
-    downloadMb: 0,
+    modelMb: 0,
+    runtime: 'keine',
     defaultEnabled: true,
   },
   {
     key: 'person',
     label: 'Person',
     description: 'Erkennt Menschen und trennt sie vom Hintergrund.',
-    downloadMb: 3,
+    modelMb: 0.24,
+    runtime: 'mediapipe',
     defaultEnabled: true,
   },
   {
     key: 'face',
     label: 'Gesicht',
-    description: 'Findet Gesichter und schneidet passend zu.',
-    downloadMb: 1,
+    description: 'Findet Gesichter und schneidet als Kopf zu – mit Stirn und Haaren.',
+    modelMb: 0.22,
+    runtime: 'mediapipe',
     defaultEnabled: true,
   },
   {
     key: 'object',
     label: 'Beliebiges Objekt',
     description:
-      'Stellt auch Gegenstände frei. Braucht einen großen einmaligen Download und rechnet auf älteren Geräten spürbar länger.',
-    downloadMb: 44,
+      'Stellt auch Gegenstände frei – Tasse, Hund, Blume. Braucht den größten Download und rechnet auf älteren Geräten spürbar länger.',
+    modelMb: 4.0,
+    runtime: 'onnx',
     defaultEnabled: false,
   },
 ];
+
+/** Was das Verfahren beim allerersten Benutzen kostet, in Megabyte. */
+export function firstUseMb(info: EngineInfo): number {
+  return Math.round((info.modelMb + RUNTIME_MB[info.runtime]) * 10) / 10;
+}
+
+/** Ein Satz zur Downloadgröße, so wie er in den Einstellungen steht. */
+export function downloadHint(info: EngineInfo): string {
+  if (info.runtime === 'keine') return 'Kein Download nötig.';
+  const gesamt = firstUseMb(info).toLocaleString('de-DE');
+  const geteilt = ENGINE_INFO.filter(
+    (other) => other.runtime === info.runtime && other.key !== info.key,
+  );
+  const zusatz = info.modelMb.toLocaleString('de-DE');
+  if (geteilt.length === 0) {
+    return `Einmalig ${gesamt} MB laden, danach im Gerät gespeichert.`;
+  }
+  const namen = geteilt.map((other) => `„${other.label}“`).join(' und ');
+  return `Einmalig ${gesamt} MB laden, danach im Gerät gespeichert. Zusammen mit ${namen} genutzt – wer das schon geladen hat, braucht hier nur noch ${zusatz} MB.`;
+}

@@ -18,11 +18,21 @@ import {
   exportSticker,
   isEmptyDoc,
   renderSticker,
+  toSourcePoint,
   type EditorSource,
   type ShapeKind,
   type StickerDoc,
   type TextSlot,
 } from './render.js';
+import {
+  ENGINE_INFO,
+  EngineError,
+  engineAvailable,
+  engineInfo,
+  runEngine,
+  type EngineKey,
+} from './engines/index.js';
+import { kanteWeichzeichnen, maskeTraegt, vorlageAus } from './engines/prepare.js';
 
 type Tool = 'move' | 'erase' | 'keep';
 type Tab = 'source' | 'move' | 'shape' | 'cutout' | 'outline' | 'text';
@@ -81,6 +91,9 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
   const [brush, setBrush] = useState(56);
   const [emojiInput, setEmojiInput] = useState('');
   const [busy, setBusy] = useState(false);
+  /** Welches Modell gerade rechnet – für Spinner und gesperrte Knöpfe. */
+  const [rechnet, setRechnet] = useState<EngineKey | null>(null);
+  const [modellFehler, setModellFehler] = useState<string | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [result, setResult] = useState<{ blob: Blob; mime: string } | null>(null);
 
@@ -199,6 +212,63 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
     setDoc(createDoc());
     setTool('move');
   }, [commit]);
+
+  /**
+   * Ein Modell laufen lassen und seine Maske übernehmen.
+   *
+   * Alles rechnet im Gerät. Beim ersten Mal wird das Modell geladen – deshalb
+   * der Hinweis im Knopf, wie gross das ist.
+   */
+  const modellAnwenden = useCallback(
+    async (key: EngineKey) => {
+      const quelle = sourceRef.current;
+      if (!quelle || quelle.kind !== 'image') return;
+      setRechnet(key);
+      setModellFehler(null);
+      try {
+        const { image, faktor } = vorlageAus(quelle.image, quelle.width, quelle.height);
+
+        // Ein zuvor angetippter Punkt sagt dem Modell, welches Gesicht gemeint
+        // ist. Er liegt auf der Sticker-Fläche und muss zurück ins Bild.
+        const getippt = docRef.current.keep.at(-1);
+        const seed = getippt
+          ? (() => {
+              const p = toSourcePoint(getippt, quelle, docRef.current);
+              return { x: p.x * faktor, y: p.y * faktor };
+            })()
+          : undefined;
+
+        const roh = await runEngine(key, { image, seed });
+        const alpha = kanteWeichzeichnen(roh, image.width, image.height, 1);
+        if (!maskeTraegt(alpha)) {
+          throw new EngineError(
+            `„${engineInfo(key).label}“ hat nichts gefunden, was sich freistellen lässt. Versuche ein anderes Verfahren oder tippe das Motiv an.`,
+            key,
+          );
+        }
+
+        commit();
+        setDoc((value) => ({
+          ...value,
+          autoMask: { engine: key, width: image.width, height: image.height, alpha },
+          // Antippen und "Ecken entfernen" wuerden dem Modell nur ins Handwerk
+          // pfuschen – die faengt man neu an, wenn man sie braucht.
+          keep: [],
+          removeBg: false,
+        }));
+        setTool('move');
+      } catch (error) {
+        setModellFehler(
+          error instanceof EngineError
+            ? error.message
+            : `Freistellen fehlgeschlagen: ${errorMessage(error, 'Unbekannter Fehler')}`,
+        );
+      } finally {
+        setRechnet(null);
+      }
+    },
+    [commit],
+  );
 
   /* ---------- source ---------- */
 
@@ -757,6 +827,63 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
 
         {tab === 'cutout' && (
           <>
+            {/* Zuerst die Modelle: Ein Klick, und das Motiv steht frei. Das
+                Antippen darunter bleibt der Rückfall für alles, was kein
+                Modell trifft – und für Geräte ohne die Modelle. */}
+            <div className="stk-btn-row">
+              {ENGINE_INFO.filter((engine) => engine.key !== 'tap').map((engine) => {
+                const verfuegbar = engineAvailable(engine.key);
+                return (
+                  <button
+                    key={engine.key}
+                    type="button"
+                    className={`btn btn-sm ${doc.autoMask?.engine === engine.key ? 'stk-chip-active' : ''}`}
+                    onClick={() => void modellAnwenden(engine.key)}
+                    disabled={!hasImage || !verfuegbar || rechnet !== null}
+                    title={
+                      verfuegbar
+                        ? engine.description
+                        : 'In den Einstellungen unter „Freistellen für Sticker“ einschaltbar.'
+                    }
+                  >
+                    {rechnet === engine.key ? '⏳ ' : '🪄 '}
+                    {engine.label}
+                    {rechnet === engine.key ? ' rechnet …' : ''}
+                  </button>
+                );
+              })}
+              {doc.autoMask && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => {
+                    commit();
+                    setDoc((value) => ({ ...value, autoMask: null }));
+                    setModellFehler(null);
+                  }}
+                  disabled={rechnet !== null}
+                >
+                  Freistellen zurücknehmen
+                </button>
+              )}
+            </div>
+            {modellFehler && (
+              <p className="stk-hint stk-hint-warn" role="status">
+                {modellFehler}
+              </p>
+            )}
+            {doc.autoMask && !modellFehler && (
+              <p className="stk-hint" role="status">
+                Freigestellt mit „{engineInfo(doc.autoMask.engine as EngineKey).label}“. Verschieben
+                und Zoomen geht weiterhin – der Ausschnitt bleibt am Motiv.
+              </p>
+            )}
+            {!doc.autoMask && hasImage && rechnet === null && (
+              <p className="stk-hint">
+                Beim ersten Mal wird das Modell geladen (einmalig, danach im Gerät). Es rechnet auf
+                deinem Gerät – es wird kein Bild irgendwohin geschickt.
+              </p>
+            )}
             <div className="stk-btn-row">
               <button
                 type="button"

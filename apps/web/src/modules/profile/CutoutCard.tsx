@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { readEngineSettings, writeEngineSetting } from '../stickers/engines/settings.js';
-import { ENGINE_INFO, type EngineKey } from '../stickers/engines/types.js';
+import { ENGINE_INFO, downloadHint, type EngineKey } from '../stickers/engines/types.js';
 import { Toggle } from './Toggle.js';
 
 /**
@@ -31,7 +31,7 @@ export function CutoutCard() {
         <Toggle
           key={engine.key}
           label={engine.label}
-          description={`${engine.description} Einmalig ${engine.downloadMb} MB laden, danach im Zwischenspeicher.`}
+          description={`${engine.description} ${downloadHint(engine)}`}
           checked={enabled[engine.key]}
           onChange={(next) => toggle(engine.key, next)}
         />

@@ -4,4 +4,6 @@
 /manifest.webmanifest  /manifest.webmanifest  200
 /assets/*              /assets/:splat         200
 /icons/*               /icons/:splat          200
+/models/*              /models/:splat         200
+/mediapipe/*           /mediapipe/:splat      200
 /*                     /index.html            200

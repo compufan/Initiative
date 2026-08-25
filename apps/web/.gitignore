@@ -1,0 +1,7 @@
+
+# Freistell-Bausteine – werden von scripts/prepare-models.mjs vor dem Bauen geholt.
+public/mediapipe/
+public/models/
+
+# Testbild fuer scripts/check-cutout.mjs – wird bei Bedarf geladen.
+public/__test-portrait.jpg

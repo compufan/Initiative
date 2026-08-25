@@ -7,6 +7,14 @@ declare const self: ServiceWorkerGlobalScope & {
 };
 
 const MEDIA_CACHE = 'initiative-media-v1';
+/**
+ * Die Freistell-Modelle und ihre WASM-Laufzeit. Eigener Speicher, weil sie
+ * anders altern als Bilder: Sie werden einmal geladen und dann jahrelang
+ * unveraendert benutzt. Beim Aufraeumen bleibt dieser Speicher erhalten,
+ * damit ein Update nicht 22 MB erneut ueber das Mobilfunknetz zieht.
+ */
+const MODEL_CACHE = 'initiative-models-v1';
+const KEEP_CACHES = [MEDIA_CACHE, MODEL_CACHE];
 const SHELL_FALLBACK = '/index.html';
 
 cleanupOutdatedCaches();
@@ -22,7 +30,7 @@ self.addEventListener('activate', (event) => {
       const keys = await caches.keys();
       await Promise.all(
         keys
-          .filter((key) => key.startsWith('initiative-media-') && key !== MEDIA_CACHE)
+          .filter((key) => key.startsWith('initiative-') && !KEEP_CACHES.includes(key))
           .map((key) => caches.delete(key)),
       );
       await self.clients.claim();
@@ -42,6 +50,11 @@ function isMediaRequest(url: URL): boolean {
   );
 }
 
+/** Die Freistell-Bausteine: unter /mediapipe/ und /models/. */
+function isModelRequest(url: URL): boolean {
+  return url.pathname.startsWith('/mediapipe/') || url.pathname.startsWith('/models/');
+}
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
   const url = new URL(request.url);
@@ -56,7 +69,13 @@ self.addEventListener('fetch', (event) => {
 
   // Media is immutable once uploaded – cache first, then network.
   if (isMediaRequest(url)) {
-    event.respondWith(cacheFirst(request));
+    event.respondWith(cacheFirst(request, MEDIA_CACHE));
+    return;
+  }
+
+  // Modelle und WASM-Laufzeit: einmal laden, dann fuer immer aus dem Gerät.
+  if (isModelRequest(url)) {
+    event.respondWith(cacheFirst(request, MODEL_CACHE));
     return;
   }
 
@@ -75,8 +94,8 @@ self.addEventListener('fetch', (event) => {
   }
 });
 
-async function cacheFirst(request: Request): Promise<Response> {
-  const cache = await caches.open(MEDIA_CACHE);
+async function cacheFirst(request: Request, cacheName: string): Promise<Response> {
+  const cache = await caches.open(cacheName);
   const cached = await cache.match(request, { ignoreVary: true });
   if (cached) return cached;
   try {
