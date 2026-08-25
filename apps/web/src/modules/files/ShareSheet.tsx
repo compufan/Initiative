@@ -7,6 +7,7 @@ import {
   type GrantableLevel,
 } from '@initiative/shared';
 import { PersonenWahl } from '../../components/PersonenWahl.js';
+import { conversationTitle } from '../messenger/helpers.js';
 import { Sheet } from '../../components/Sheet.js';
 import { Spinner } from '../../components/Feedback.js';
 import { api } from '../../lib/api.js';
@@ -68,10 +69,13 @@ export function ShareSheet({ open, onClose, collection }: ShareSheetProps) {
     };
   }, [open, collection.id]);
 
+  // `chat.title` ist bei einem Direktchat null – mit `?? 'Chat'` hiess dort
+  // jeder einzelne woertlich „Chat", und man konnte sie nicht auseinander
+  // halten. Der Name entsteht erst aus dem Gegenueber.
   const chatName = useMemo(() => {
-    const namen = new Map(chats.map((chat) => [chat.id, chat.title ?? 'Chat']));
+    const namen = new Map(chats.map((chat) => [chat.id, conversationTitle(chat, myId)]));
     return (id: string) => namen.get(id) ?? 'Chat';
-  }, [chats]);
+  }, [chats, myId]);
 
   // Die Mitglieder des zugehoerigen Chats stehen ohne Suchen zur Wahl. Das ist
   // fast immer der gemeinte Kreis, und ihn abtippen zu muessen, obwohl er
@@ -255,7 +259,7 @@ export function ShareSheet({ open, onClose, collection }: ShareSheetProps) {
                       onClick={() => void vergeben({ conversationId: chat.id })}
                     >
                       <span aria-hidden="true">{chat.type === 'group' ? '👥' : '💬'}</span>
-                      <span className="truncate">{chat.title ?? 'Chat'}</span>
+                      <span className="truncate">{conversationTitle(chat, myId)}</span>
                     </button>
                   </li>
                 ))}

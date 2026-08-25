@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 import {
   EVENT_STATUSES,
   RSVP_STATUSES,
-  type ConversationDto,
   type EventStatus,
   type RsvpStatus,
 } from '@initiative/shared';
@@ -22,6 +21,7 @@ import {
   addDays,
   buildOccurrences,
   groupByDay,
+  conversationLabel,
   monthGridDays,
   startOfDay,
   startOfMonth,
@@ -42,13 +42,6 @@ const RSVP_TEXT: Record<RsvpStatus, string> = {
   maybe: 'Vielleicht',
   pending: 'Noch offen',
 };
-
-/** Wie ein Chat heisst – bei einem Direktchat der Name des Gegenübers. */
-function chatTitel(chat: ConversationDto, myId: string): string {
-  if (chat.title) return chat.title;
-  const gegenueber = chat.members.find((mitglied) => mitglied.userId !== myId);
-  return gegenueber?.user.displayName ?? 'Chat';
-}
 
 /** Calendar home: month grid, agenda, subscription card and the new-event FAB. */
 export function KalenderScreen() {
@@ -83,7 +76,12 @@ export function KalenderScreen() {
 
   // Der Name eines Chats steht nicht am Termin, sondern nur seine Kennung.
   const chatNamen = useMemo(() => {
-    const namen = new Map(conversations.map((chat) => [chat.id, chatTitel(chat, myId)]));
+    // Denselben Namen wie die Terminzeile darunter: `conversationLabel`
+    // bevorzugt den Spitznamen. Eine eigene Fassung nannte den Anzeigenamen –
+    // und dann widersprach der Filterknopf dem, was in der Liste stand.
+    const namen = new Map(
+      conversations.map((chat) => [chat.id, conversationLabel(chat, myId) ?? 'Chat']),
+    );
     return (id: string) => namen.get(id) ?? 'Chat';
   }, [conversations, myId]);
 
