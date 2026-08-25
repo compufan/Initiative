@@ -4,6 +4,13 @@
 FROM rust:1-slim-bookworm AS builder
 WORKDIR /build
 
+# OpenSSL wird für die Passkey-Anmeldung gebraucht: webauthn-rs prüft die
+# Signaturen darüber. Ohne diese Pakete bricht der Build in `openssl-sys` ab,
+# noch bevor eine Zeile eigener Code übersetzt wird.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends pkg-config libssl-dev \
+ && rm -rf /var/lib/apt/lists/*
+
 # Abhängigkeiten zuerst bauen, damit Docker sie zwischen Builds cachen kann.
 # Build-Context ist dieses Verzeichnis (apps/api) selbst, nicht das Repo-Root.
 COPY Cargo.toml Cargo.lock ./
@@ -29,8 +36,10 @@ RUN find src migrations -type f -exec touch {} + \
  && cargo build --release --locked --bin initiative-api --bin seed
 
 FROM debian:bookworm-slim AS runtime
+# `libssl3` gehört dazu, weil die Binary dynamisch gegen OpenSSL gelinkt ist
+# (siehe Kommentar in der Build-Stufe). Ohne das Paket startet sie nicht.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl \
+ && apt-get install -y --no-install-recommends ca-certificates curl libssl3 \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 10001 --create-home initiative
 

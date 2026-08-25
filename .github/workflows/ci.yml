@@ -104,3 +104,32 @@ jobs:
           name: playwright-report
           path: apps/web/playwright-report/
           retention-days: 7
+
+  image:
+    name: Docker-Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Baut genau das Image, das spaeter auf Fly.io landet. Ohne diesen
+      # Schritt faellt ein Fehler in der Build-Umgebung (fehlende
+      # Systembibliothek, kaputtes Dockerfile) erst beim Deploy auf – und
+      # dann steht die Live-App.
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile
+          push: false
+          load: true
+          tags: initiative-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # Beweist, dass die Binary wirklich startet: Ohne Datenbank muss sie
+      # sich mit einer klaren Meldung beenden, nicht stumm mit Code 0.
+      - name: Binary startet und meldet sich
+        run: |
+          set -o pipefail
+          output=$(docker run --rm initiative-api:ci 2>&1 || true)
+          echo "$output"
+          echo "$output" | grep -q "DATABASE_URL" \
+            || { echo "Die Binary hat sich nicht wie erwartet gemeldet."; exit 1; }
