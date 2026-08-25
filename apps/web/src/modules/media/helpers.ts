@@ -41,9 +41,30 @@ export function mediaSrc(attachment: AttachmentDto): string {
  * sähe das Bild, könnte es aber nicht speichern.
  */
 export async function mediaBytes(attachment: AttachmentDto): Promise<Blob> {
-  const antwort = await fetch(`${mediaSrc(attachment)}/bytes`, { credentials: 'include' });
+  // Ohne `credentials`: Die Medienrouten kennen keinen angemeldeten Benutzer,
+  // die Anhangskennung ist der Schluessel. Steht `CORS_ORIGINS` auf `*`,
+  // schaltet der Server `allow_credentials(false)` – eine Anfrage mit
+  // Anmeldedaten wuerde dann vom Browser verworfen.
+  const antwort = await fetch(`${mediaSrc(attachment)}/bytes`);
   if (!antwort.ok) throw new Error(`Das Bild konnte nicht geladen werden (${antwort.status})`);
   return await antwort.blob();
+}
+
+/**
+ * Dieselbe Datei, aber zum Speichern statt zum Anzeigen.
+ *
+ * Ein `download`-Attribut an einem Verweis wird von jedem Browser ignoriert,
+ * wenn das Ziel auf einer anderen Herkunft liegt – und die API liegt das. Der
+ * Verweis oeffnete die Datei also, statt sie zu sichern, und in der
+ * installierten App auf dem iPhone geschah gar nichts.
+ *
+ * Die API kann es besser: `/download` schickt `Content-Disposition:
+ * attachment`, und daran haelt sich jeder Browser. Kein Umweg ueber den
+ * Speicher der App, kein Blob im Arbeitsspeicher – auch ein Video von 300 MB
+ * geht so.
+ */
+export function mediaDownloadSrc(attachment: AttachmentDto): string {
+  return `${mediaSrc(attachment)}/download`;
 }
 
 const EXTENSIONS: Record<string, string> = {

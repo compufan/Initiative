@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type TouchEvent, type TouchLi
 import { createPortal } from 'react-dom';
 import type { AttachmentDto } from '@initiative/shared';
 import { FotoWerkstatt } from './FotoWerkstatt.js';
-import { mediaSrc } from './helpers.js';
+import { mediaDownloadSrc, mediaSrc } from './helpers.js';
 
 interface LightboxProps {
   items: AttachmentDto[];
@@ -201,8 +201,7 @@ export function Lightbox({ items, index, onClose, ablegen, zielName }: LightboxP
           />
           <a
             className="media-round-btn"
-            href={mediaSrc(item)}
-            download={item.fileName ?? 'foto'}
+            href={mediaDownloadSrc(item)}
             target="_blank"
             rel="noreferrer"
             aria-label="Herunterladen"

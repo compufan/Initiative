@@ -106,10 +106,3 @@ export async function herunterladen(blob: Blob, name: string): Promise<Ablage> {
   }
   return ueberVerweis(blob, name);
 }
-
-/** Dasselbe für etwas, das erst noch geholt werden muss. */
-export async function herunterladenVonUrl(url: string, name: string): Promise<Ablage> {
-  const antwort = await fetch(url, { credentials: 'include' });
-  if (!antwort.ok) throw new Error(`Konnte nicht geladen werden (${antwort.status})`);
-  return await herunterladen(await antwort.blob(), name);
-}

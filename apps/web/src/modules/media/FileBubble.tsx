@@ -1,7 +1,7 @@
 import { formatBytes } from '@initiative/shared';
 import type { MessageRendererProps } from '../types.js';
 import { MediaCaption, PendingMedia, surfaceClass } from './MediaFrame.js';
-import { fileIconFor, mediaSrc } from './helpers.js';
+import { fileIconFor, mediaDownloadSrc } from './helpers.js';
 
 /** File bubble – icon by mime type, name, size and a download link. */
 export function FileBubble({ message, isMine }: MessageRendererProps) {
@@ -20,8 +20,7 @@ export function FileBubble({ message, isMine }: MessageRendererProps) {
     <div className="media-bubble">
       <a
         className={surfaceClass('media-file', isMine)}
-        href={mediaSrc(attachment)}
-        download={name}
+        href={mediaDownloadSrc(attachment)}
         target="_blank"
         rel="noreferrer"
       >

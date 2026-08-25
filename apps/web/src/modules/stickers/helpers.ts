@@ -1,5 +1,5 @@
 import { API_BASE } from '../../lib/api.js';
-import { herunterladen, type Ablage } from '../../lib/herunterladen.js';
+import { timestampName } from '../media/helpers.js';
 
 /**
  * Small helpers shared by the sticker picker, the studio and the library.
@@ -96,7 +96,7 @@ export function supportsWebp(): boolean {
 }
 
 /**
- * Einen Sticker auf dem Geraet speichern.
+ * Die Bytes eines Stickers – zum Lesen, nicht zum Anzeigen.
  *
  * Ueber `/bytes`, nicht ueber die Adresse selbst: Die leitet zum Speicher um,
  * und nach einer Umleitung auf eine andere Herkunft schickt der Browser
@@ -104,23 +104,32 @@ export function supportsWebp(): boolean {
  * `fetch` bekommt nichts zurueck. Beim blossen Anzeigen (`<img src>`) ist das
  * egal, beim Lesen der Bytes nicht.
  *
- * Den Dateinamen bestimmt das, was wirklich ankommt, nicht das, was wir
- * erwarten – ein Sticker aus fruehen Tagen kann PNG sein.
+ * Bewusst OHNE `credentials`: Die Medienrouten kennen keinen angemeldeten
+ * Benutzer, die Anhangskennung ist der Schluessel. Steht `CORS_ORIGINS` auf
+ * `*`, schaltet der Server `allow_credentials(false)` (app.rs) – eine
+ * Anfrage mit Anmeldedaten wuerde dann vom Browser verworfen.
+ *
+ * Nur die Bytes, nicht das Speichern: Wer erst holt und dann teilt, hat auf
+ * dem iPhone die Nutzerhandlung schon verbraucht und das Teilen-Blatt geht
+ * nicht mehr auf. Die Aufrufer holen deshalb vorab und speichern erst auf
+ * Knopfdruck.
  */
-export async function stickerAufsGeraet(url: string): Promise<Ablage> {
-  const antwort = await fetch(`${stickerSrc(url)}/bytes`, { credentials: 'include' });
+export async function stickerBytes(url: string): Promise<Blob> {
+  const antwort = await fetch(`${stickerSrc(url)}/bytes`);
   if (!antwort.ok) throw new Error(`Der Sticker konnte nicht geladen werden (${antwort.status})`);
-  const blob = await antwort.blob();
-  return await herunterladen(blob, stickerFileName(blob.type));
+  return await antwort.blob();
 }
 
+/**
+ * `sticker-20260825-172531.webp`.
+ *
+ * Die Endung kommt aus der Tabelle in `media/helpers.ts` und nicht aus einer
+ * eigenen Abfrage: Die riet frueher „webp, ausser es steht png dran“ – und
+ * lieferte fuer eine Antwort mit `application/octet-stream` einen Namen, der
+ * ein Format behauptet, das nicht drin ist.
+ */
 export function stickerFileName(mime: string): string {
-  const now = new Date();
-  const pad = (value: number) => String(value).padStart(2, '0');
-  const stamp =
-    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
-    `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  return `sticker-${stamp}.${mime === 'image/png' ? 'png' : 'webp'}`;
+  return timestampName('sticker', mime);
 }
 
 /** First grapheme of the input – a sticker carries exactly one emoji. */

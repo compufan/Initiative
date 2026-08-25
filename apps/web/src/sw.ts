@@ -45,8 +45,12 @@ self.addEventListener('message', (event) => {
 });
 
 function isMediaRequest(url: URL): boolean {
+  // Auch `/bytes` und `/download`: Ohne die liesse sich eine Datei, die man
+  // gerade offline vor Augen hat, weder bearbeiten noch speichern – der
+  // Anker am Ende des Musters schloss beide bisher aus.
   return (
-    /\/api\/v1\/media\/[0-9a-f-]{36}$/.test(url.pathname) || url.pathname.startsWith('/media/')
+    /\/api\/v1\/media\/[0-9a-f-]{36}(\/(bytes|download))?$/.test(url.pathname) ||
+    url.pathname.startsWith('/media/')
   );
 }
 

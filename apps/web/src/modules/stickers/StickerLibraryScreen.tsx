@@ -6,7 +6,8 @@ import { Sheet } from '../../components/Sheet.js';
 import { api } from '../../lib/api.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
-import { errorMessage, stickerAufsGeraet, stickerSrc } from './helpers.js';
+import { herunterladen } from '../../lib/herunterladen.js';
+import { errorMessage, stickerBytes, stickerFileName, stickerSrc } from './helpers.js';
 import { StickerStudio } from './StickerStudio.js';
 
 type Tab = 'mine' | 'discover';
@@ -44,7 +45,7 @@ function PackGrid({
           type="button"
           className="stk-cell"
           onClick={() => onPick?.(sticker)}
-          aria-label={onPick ? 'Sticker bearbeiten' : 'Sticker'}
+          aria-label={onPick ? 'Sticker öffnen' : 'Sticker'}
           disabled={!onPick}
         >
           <img src={stickerSrc(sticker.url)} alt="" loading="lazy" decoding="async" />
@@ -87,17 +88,41 @@ export function StickerLibraryScreen() {
     sticker: StickerDto;
   } | null>(null);
   const [promptValue, setPromptValue] = useState('');
-  const [laedtHerunter, setLaedtHerunter] = useState(false);
+  /**
+   * Die Bytes des gerade offenen Stickers – schon geholt, bevor jemand tippt.
+   *
+   * Auf dem iPhone laeuft das Speichern in der installierten App ueber das
+   * Teilen-Blatt, und das verlangt eine frische Nutzerhandlung. Erst auf
+   * Knopfdruck zu laden und danach zu teilen verbraucht sie unterwegs.
+   */
+  const [stickerDaten, setStickerDaten] = useState<Blob | null>(null);
 
-  async function aufsGeraet(url: string) {
-    setLaedtHerunter(true);
+  const offenerSticker = stickerAction?.sticker.url;
+  useEffect(() => {
+    setStickerDaten(null);
+    if (!offenerSticker) return undefined;
+    let weg = false;
+    stickerBytes(offenerSticker)
+      .then((blob) => {
+        if (!weg) setStickerDaten(blob);
+      })
+      .catch(() => {
+        // Kein Toast: Das Blatt zeigt es am gesperrten Knopf, und ein
+        // Fehlerbanner fuer etwas, das man vielleicht gar nicht wollte, ist
+        // Laerm.
+      });
+    return () => {
+      weg = true;
+    };
+  }, [offenerSticker]);
+
+  async function aufsGeraet() {
+    if (!stickerDaten) return;
     try {
-      const weg = await stickerAufsGeraet(url);
+      const weg = await herunterladen(stickerDaten, stickerFileName(stickerDaten.type));
       if (weg === 'geladen') toast('Sticker gespeichert.', 'success');
     } catch (error) {
       toast(errorMessage(error, 'Speichern fehlgeschlagen'), 'error');
-    } finally {
-      setLaedtHerunter(false);
     }
   }
 
@@ -393,7 +418,10 @@ export function StickerLibraryScreen() {
                       </button>
                     }
                   />
-                  <PackGrid stickers={pack.stickers} />
+                  <PackGrid
+                    stickers={pack.stickers}
+                    onPick={(sticker) => setStickerAction({ pack, sticker })}
+                  />
                 </section>
               ))}
             </>
@@ -438,7 +466,10 @@ export function StickerLibraryScreen() {
                   </button>
                 }
               />
-              <PackGrid stickers={pack.stickers} />
+              <PackGrid
+                stickers={pack.stickers}
+                onPick={(sticker) => setStickerAction({ pack, sticker })}
+              />
             </section>
           ))}
         </>
@@ -455,28 +486,37 @@ export function StickerLibraryScreen() {
               loading="lazy"
             />
           </div>
+          {/* Speichern geht bei jedem Sticker – auch bei einem aus einem
+              fremden Paket. Ein Bild behalten zu duerfen, das man sieht, ist
+              keine Frage der Rechte am Paket; genau so steht es auch in
+              module.ts fuer den Chat. Cover und Loeschen dagegen sind Eingriffe
+              am Paket und nur beim eigenen zu haben. */}
           <button
             type="button"
-            className="btn btn-block"
-            onClick={() => setCover(stickerAction.pack, stickerAction.sticker)}
+            className="btn btn-primary btn-block"
+            disabled={!stickerDaten}
+            onClick={() => void aufsGeraet()}
           >
-            Als Cover festlegen
+            {stickerDaten ? '⬇ Aufs Handy speichern' : 'Wird vorbereitet …'}
           </button>
-          <button
-            type="button"
-            className="btn btn-block"
-            disabled={laedtHerunter}
-            onClick={() => void aufsGeraet(stickerAction.sticker.url)}
-          >
-            {laedtHerunter ? '…' : '⬇ Aufs Handy speichern'}
-          </button>
-          <button
-            type="button"
-            className="btn btn-danger btn-block"
-            onClick={() => deleteSticker(stickerAction.pack, stickerAction.sticker)}
-          >
-            Sticker löschen
-          </button>
+          {stickerAction.pack.ownerId === myId && (
+            <>
+              <button
+                type="button"
+                className="btn btn-block"
+                onClick={() => setCover(stickerAction.pack, stickerAction.sticker)}
+              >
+                Als Cover festlegen
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger btn-block"
+                onClick={() => deleteSticker(stickerAction.pack, stickerAction.sticker)}
+              >
+                Sticker löschen
+              </button>
+            </>
+          )}
         </Sheet>
       )}
 
