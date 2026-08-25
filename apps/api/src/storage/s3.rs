@@ -6,6 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use axum::body::Bytes;
 use chrono::Utc;
+use futures_util::TryStreamExt;
 use rusty_s3::{Bucket, Credentials, S3Action, UrlStyle};
 use url::Url;
 
@@ -135,9 +136,77 @@ impl Storage for S3Storage {
         Ok(())
     }
 
-    async fn read(&self, _key: &str, _range: Option<ByteRange>) -> AppResult<Option<ObjectStream>> {
-        // Objects are always served through a presigned URL; the API never proxies.
-        Ok(None)
+    /// Liest ein Objekt durch die API hindurch.
+    ///
+    /// Zum Anschauen ist das der falsche Weg – dafür gibt es `download_url`,
+    /// und der Browser holt die Bytes direkt beim Speicher. Gebraucht wird es
+    /// für den einen Fall, in dem die Umleitung nicht geht: Wer die Bildpunkte
+    /// *lesen* will (bearbeiten, freistellen, einen Sticker sichern), schickt
+    /// nach einer Umleitung auf eine fremde Herkunft `Origin: null` mit, und
+    /// die CORS-Regel des Buckets greift nicht mehr.
+    ///
+    /// Hier war vorher `Ok(None)` – mit der Begründung, die API reiche nie
+    /// Bytes durch. Das stimmte, bis es `/media/{id}/bytes` gab: Seitdem
+    /// antwortete der Endpunkt mit R2 schlicht „Datei nicht gefunden“, und das
+    /// Bearbeiten scheiterte in der Veröffentlichung, während es lokal lief.
+    async fn read(&self, key: &str, range: Option<ByteRange>) -> AppResult<Option<ObjectStream>> {
+        let url = self
+            .bucket
+            .get_object(Some(&self.credentials), key)
+            .sign(self.signed_url_ttl);
+
+        let mut anfrage = self.http.get(url);
+        if let Some(range) = &range {
+            anfrage = anfrage.header(
+                "range",
+                match range.end {
+                    Some(ende) => format!("bytes={}-{}", range.start, ende),
+                    None => format!("bytes={}-", range.start),
+                },
+            );
+        }
+
+        let antwort = anfrage
+            .send()
+            .await
+            .map_err(|error| AppError::internal(format!("Lesen aus S3 fehlgeschlagen: {error}")))?;
+
+        if antwort.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !antwort.status().is_success() {
+            return Err(AppError::internal(format!(
+                "Lesen aus S3 fehlgeschlagen: HTTP {}",
+                antwort.status()
+            )));
+        }
+
+        // Bei einer Teilantwort steht die Gesamtgrösse hinter dem Schrägstrich
+        // in `Content-Range`; ohne Bereich ist `Content-Length` die Gesamtgrösse.
+        let size = antwort.content_length();
+        let total_size = antwort
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|wert| wert.to_str().ok())
+            .and_then(|wert| wert.rsplit('/').next().map(str::to_string))
+            .and_then(|gesamt| gesamt.parse::<u64>().ok())
+            .or(size);
+        let mime = antwort
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|wert| wert.to_str().ok())
+            .map(str::to_string);
+
+        let stream = antwort
+            .bytes_stream()
+            .map_err(|error| std::io::Error::other(error.to_string()));
+
+        Ok(Some(ObjectStream {
+            stream: Box::pin(stream),
+            size,
+            total_size,
+            mime,
+        }))
     }
 
     async fn delete(&self, key: &str) -> AppResult<()> {
