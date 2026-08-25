@@ -89,7 +89,7 @@ export const ENGINE_INFO: EngineInfo[] = [
     key: 'birefnet',
     label: 'Hohe Qualität',
     description:
-      'Dasselbe wie „Beliebiges Objekt“, nur deutlich genauer an Haaren, Zäunen und Brillenbügeln. Dafür der mit Abstand größte Download und die längste Rechenzeit – auf einem älteren Telefon eine halbe Minute pro Bild.',
+      'Dasselbe wie „Beliebiges Objekt“, nur deutlich genauer an Haaren, Zäunen und Brillenbügeln. Dafür der mit Abstand größte Download. Rechnet auf der Grafikeinheit in Sekunden – hat das Gerät keine, dauert ein Bild mehrere Minuten.',
     modelMb: 93.9,
     runtime: 'onnx',
     defaultEnabled: false,

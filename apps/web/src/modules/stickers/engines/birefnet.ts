@@ -18,8 +18,10 @@
  */
 
 import type { InferenceSession } from 'onnxruntime-web';
-import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.wasm?url';
-import ortMjsUrl from 'onnxruntime-web/ort-wasm-simd-threaded.mjs?url';
+// Die JSEP-Fassung der Laufzeit: dieselben Rechenwerke, zusaetzlich der Weg
+// auf die Grafikeinheit. Ohne WebGPU verhaelt sie sich wie die normale.
+import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.wasm?url';
+import ortMjsUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.mjs?url';
 import { flaechenMittel } from './prepare.js';
 
 /** Kantenlänge, auf die diese Fassung festgelegt ist. */
@@ -34,6 +36,29 @@ export type Fortschritt = (anteil: number, text: string) => void;
 
 let session: InferenceSession | null = null;
 let ladend: Promise<InferenceSession> | null = null;
+/** Womit gerechnet wurde – für den Hinweis, warum es lange dauern kann. */
+let laufwerk: 'webgpu' | 'wasm' = 'wasm';
+
+export function birefnetLaufwerk(): 'webgpu' | 'wasm' {
+  return laufwerk;
+}
+
+/**
+ * Ob die Grafikeinheit zur Verfügung steht.
+ *
+ * Nicht nur `navigator.gpu` abfragen: Den Eintrag gibt es auch auf Geräten,
+ * die dann beim ersten Zugriff aussteigen. Erst ein tatsächlich zugeteilter
+ * Adapter ist eine Zusage.
+ */
+async function grafikVorhanden(): Promise<boolean> {
+  const gpu = (navigator as Navigator & { gpu?: { requestAdapter: () => Promise<unknown> } }).gpu;
+  if (!gpu) return false;
+  try {
+    return Boolean(await gpu.requestAdapter());
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Holt die Modelldatei und sagt dabei, wie weit sie ist.
@@ -85,12 +110,28 @@ async function loadSession(melden?: Fortschritt): Promise<InferenceSession> {
     ladend = (async () => {
       const daten = await modellHolen(melden);
       melden?.(1, 'Modell wird vorbereitet …');
-      const ort = await import('onnxruntime-web/wasm');
+      const ort = await import('onnxruntime-web/webgpu');
       ort.env.wasm.wasmPaths = { wasm: ortWasmUrl, mjs: ortMjsUrl };
       // Mehrere Threads brauchten COOP/COEP – die setzen wir nicht.
       ort.env.wasm.numThreads = 1;
+
+      // Hier hängt alles dran. Auf der Grafikeinheit rechnet dieses Modell in
+      // Sekunden, auf WebAssembly in Minuten – dasselbe Netz, derselbe
+      // Rechner. Deshalb wird zuerst gefragt, ob es eine gibt.
+      const gpu = await grafikVorhanden();
+      laufwerk = gpu ? 'webgpu' : 'wasm';
+      if (!gpu) {
+        // Ohne Grafikeinheit läuft es im Hauptfaden – und dann steht die
+        // Oberfläche für die gesamte Rechenzeit still. In einen Arbeiter
+        // auslagern, sonst sieht es auf dem Handy nach Absturz aus.
+        ort.env.wasm.proxy = true;
+      }
+
       const created = await ort.InferenceSession.create(daten, {
-        executionProviders: ['wasm'],
+        // Die Reihenfolge ist die Rangfolge: WebAssembly bleibt als Rückfall
+        // stehen, falls ein einzelner Rechenschritt auf der Grafikeinheit
+        // fehlt.
+        executionProviders: gpu ? ['webgpu', 'wasm'] : ['wasm'],
         graphOptimizationLevel: 'all',
       });
       session = created;
@@ -124,31 +165,35 @@ function vorbereiten(image: ImageData): Float32Array {
  */
 export async function birefnetMask(image: ImageData, melden?: Fortschritt): Promise<Uint8Array> {
   const runner = await loadSession(melden);
-  melden?.(1, 'Wird freigestellt …');
-  const ort = await import('onnxruntime-web/wasm');
+  melden?.(
+    1,
+    laufwerk === 'webgpu'
+      ? 'Wird freigestellt …'
+      : 'Wird freigestellt – ohne Grafikeinheit dauert das mehrere Minuten.',
+  );
+  const ort = await import('onnxruntime-web/webgpu');
 
   const eingabe = new ort.Tensor('float32', vorbereiten(image), [1, 3, EINGABE, EINGABE]);
   const ergebnis = await runner.run({ [runner.inputNames[0]]: eingabe });
   const roh = ergebnis[runner.outputNames[0]].data as Float32Array;
 
-  // Die Ausgabe ist eine Wahrscheinlichkeit je Punkt und liegt bereits in
-  // 0…1. Trotzdem gedehnt: Bei einem Motiv, das nie ganz sicher erkannt wird,
-  // bliebe die Maske sonst durchgehend halbdurchsichtig.
-  let min = Number.POSITIVE_INFINITY;
-  let max = Number.NEGATIVE_INFINITY;
-  for (const wert of roh) {
-    if (wert < min) min = wert;
-    if (wert > max) max = wert;
-  }
-  const spanne = max - min || 1;
-
+  // Das Netz endet auf einer Faltung, nicht auf einer Sigmoid-Schicht: Was
+  // herauskommt, sind Logits, keine Wahrscheinlichkeiten. Die Referenz von
+  // BiRefNet setzt deshalb `preds.sigmoid()` – ohne das ist der Hintergrund
+  // nicht null, sondern ein Mittelwert, und der Sticker behaelt einen
+  // grauen Schleier. Genau daran ist der erste Anlauf hier gescheitert
+  // (Ecken bei 57…69 statt bei 0).
+  //
+  // Ein Strecken auf min/max waere hier falsch: Die Sigmoid-Kurve ist
+  // geeicht, 0 heisst „gehoert nicht dazu“. Strecken machte aus einem Bild
+  // ohne Motiv erst recht eines.
   const { width, height } = image;
   const alpha = new Uint8Array(width * height);
   for (let y = 0; y < height; y += 1) {
     const sy = Math.min(EINGABE - 1, Math.floor((y * EINGABE) / height));
     for (let x = 0; x < width; x += 1) {
       const sx = Math.min(EINGABE - 1, Math.floor((x * EINGABE) / width));
-      const wert = (roh[sy * EINGABE + sx] - min) / spanne;
+      const wert = 1 / (1 + Math.exp(-roh[sy * EINGABE + sx]));
       alpha[y * width + x] = Math.max(0, Math.min(255, Math.round(wert * 255)));
     }
   }

@@ -1,5 +1,5 @@
 /**
- * Prüft die drei Freistell-Verfahren in einem echten Browser.
+ * Prüft die Freistell-Verfahren in einem echten Browser.
  *
  * Warum eigenes Skript statt Vitest: die Modelle brauchen WebAssembly, Canvas
  * und einen laufenden Server. In der Testumgebung von Vitest gibt es das
@@ -37,6 +37,7 @@ const ERWARTUNG = {
   // Ein Kopf ist deutlich kleiner als eine Person – und sitzt weiter oben.
   face: { minFlaeche: 0.03, maxFlaeche: 0.4, maxSchwerpunktY: 0.45 },
   object: { minFlaeche: 0.2, maxFlaeche: 0.8 },
+  birefnet: { minFlaeche: 0.2, maxFlaeche: 0.8 },
 };
 
 async function testbildBereitlegen() {
@@ -64,6 +65,19 @@ async function warteAufServer(versuche = 60) {
   throw new Error('Der Entwicklungsserver ist nicht hochgekommen.');
 }
 
+/**
+ * Mit `--nur person,object` laesst sich auf einzelne Verfahren einschraenken.
+ *
+ * Der Grund ist unfein, aber praktisch: „Hohe Qualitaet“ rechnet auf einem
+ * gedrosselten Rechner Minuten. Wer nur an diesem einen Verfahren
+ * herumprobiert, will nicht jedes Mal alle vier abwarten.
+ */
+const nurIndex = process.argv.indexOf('--nur');
+const NUR =
+  nurIndex >= 0 && process.argv[nurIndex + 1]
+    ? process.argv[nurIndex + 1].split(',').map((wert) => wert.trim())
+    : Object.keys(ERWARTUNG);
+
 console.log('Freistellen im Browser prüfen …');
 await testbildBereitlegen();
 
@@ -79,7 +93,8 @@ try {
   // Ueber @playwright/test, weil playwright-core nur mittelbar installiert ist.
   const { chromium } = await import('@playwright/test');
   const browser = await chromium.launch({
-    executablePath: process.env.CHROMIUM_PATH ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
+    executablePath:
+      process.env.CHROMIUM_PATH ?? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
     args: ['--no-sandbox'],
   });
   const page = await (await browser.newContext()).newPage();
@@ -95,13 +110,14 @@ try {
       await import('/src/modules/stickers/engines/person.ts');
       await import('/src/modules/stickers/engines/face.ts');
       await import('/src/modules/stickers/engines/object.ts');
+      await import('/src/modules/stickers/engines/birefnet.ts');
     })
     .catch(() => {});
   await page.waitForTimeout(9000);
   await page.goto(APP, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(1500);
 
-  const bericht = await page.evaluate(async () => {
+  const bericht = await page.evaluate(async (verfahren) => {
     const engines = await import('/src/modules/stickers/engines/index.ts');
     const { vorlageAus, maskeTraegt } = await import('/src/modules/stickers/engines/prepare.ts');
 
@@ -113,7 +129,7 @@ try {
     const h = image.height;
 
     const ergebnis = {};
-    for (const key of ['person', 'face', 'object']) {
+    for (const key of verfahren) {
       const start = performance.now();
       try {
         // Das grosse Modell ist von Haus aus aus – zum Prüfen einschalten.
@@ -154,7 +170,7 @@ try {
       }
     }
     return ergebnis;
-  });
+  }, NUR);
 
   await browser.close();
 
@@ -174,13 +190,16 @@ try {
     if (!sp) gruende.push('kein Motiv gefunden');
     else {
       if (e.amSchwerpunkt <= 192) gruende.push(`Schwerpunkt nicht gedeckt (${e.amSchwerpunkt})`);
-      if (sp[0] < 0.15 || sp[0] > 0.85) gruende.push(`Schwerpunkt liegt seitlich (${sp[0].toFixed(2)})`);
+      if (sp[0] < 0.15 || sp[0] > 0.85)
+        gruende.push(`Schwerpunkt liegt seitlich (${sp[0].toFixed(2)})`);
       if (soll.maxSchwerpunktY && sp[1] > soll.maxSchwerpunktY) {
         gruende.push(`Schwerpunkt zu tief (${sp[1].toFixed(2)} > ${soll.maxSchwerpunktY})`);
       }
     }
     if (e.anteil < soll.minFlaeche || e.anteil > soll.maxFlaeche) {
-      gruende.push(`Fläche ${(e.anteil * 100).toFixed(0)}% ausserhalb von ${soll.minFlaeche * 100}–${soll.maxFlaeche * 100}%`);
+      gruende.push(
+        `Fläche ${(e.anteil * 100).toFixed(0)}% ausserhalb von ${soll.minFlaeche * 100}–${soll.maxFlaeche * 100}%`,
+      );
     }
 
     if (gruende.length > 0) alleOk = false;
