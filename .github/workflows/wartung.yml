@@ -23,6 +23,11 @@ on:
           - starten
           - protokoll
           - secret-setzen
+          - neu-anlegen
+      # „neu-anlegen“ ist der Notnagel: eine festgefahrene Maschine wird
+      # weggeworfen und aus dem Abbild neu erzeugt. Daten gehen dabei keine
+      # verloren – die liegen in der Datenbank und im Objektspeicher, nicht
+      # auf der Maschine.
       secret_name:
         description: "Nur bei „secret-setzen“: Name, z. B. S3_BUCKET"
         required: false
@@ -45,6 +50,8 @@ jobs:
     name: ${{ inputs.aufgabe }}
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Auf hinterlegtes Token prüfen
         run: |
           if [ -z "${{ secrets.FLY_API_TOKEN }}" ]; then
@@ -113,6 +120,28 @@ jobs:
             echo "Starte $id …"
             flyctl machines start "$id" --app "$FLY_APP"
           done
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # Der Notnagel. Anlass war eine Maschine, die sich nicht mehr starten
+      # liess: Der Fly-Vermittler versuchte es bei jeder eingehenden Anfrage
+      # erneut, lief dabei in die Drosselung der Machines-API („rate limit
+      # exceeded“), und damit kam auch `fly deploy` nicht mehr durch. Aus
+      # dieser Schleife kommt man am sichersten heraus, indem man die
+      # Maschine wegwirft und eine neue erzeugen laesst.
+      - name: Maschine neu anlegen
+        if: inputs.aufgabe == 'neu-anlegen'
+        run: |
+          set -euo pipefail
+          flyctl machines list --app "$FLY_APP" --json > maschinen.json
+          jq -r '.[] | "  \(.id)  \(.state)"' maschinen.json
+          for id in $(jq -r '.[].id' maschinen.json); do
+            echo "Werfe $id weg …"
+            flyctl machines destroy "$id" --app "$FLY_APP" --force
+          done
+          echo "Lege aus dem Abbild neu an …"
+          flyctl deploy apps/api --app "$FLY_APP" --remote-only \
+            --build-arg GIT_SHA=${{ github.sha }}
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
