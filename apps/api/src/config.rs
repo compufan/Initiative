@@ -85,6 +85,24 @@ pub struct Config {
      * erfinden.
      */
     pub trust_proxy: bool,
+    /**
+     * Der Name, an den Passkeys gebunden werden – die „Relying Party ID“.
+     *
+     * Ohne Angabe ist es der Hostname aus `PUBLIC_APP_URL`. Das ist bequem und
+     * für den Anfang richtig, aber es ist eine Entscheidung, die sich später
+     * **nicht** mehr korrigieren lässt: Ein Passkey gilt genau für den Namen,
+     * unter dem er angelegt wurde.
+     *
+     * Wer die App unter `app.beispiel.de` betreibt und hier `beispiel.de`
+     * einträgt, kann sie später auf `beispiel.de` oder `neu.beispiel.de`
+     * verschieben, ohne dass jemand seinen Schlüssel verliert. Wer nichts
+     * einträgt, ist an `app.beispiel.de` gebunden – für immer.
+     *
+     * Erlaubt ist nur ein Name, der auf den Hostnamen der App passt (er selbst
+     * oder eine seiner übergeordneten Ebenen). Alles andere lehnen die Geräte
+     * ab, und zwar erst beim Anlegen des ersten Schlüssels.
+     */
+    pub webauthn_rp_id: Option<String>,
 
     pub registration_mode: RegistrationMode,
     pub invite_codes: Vec<String>,
@@ -256,6 +274,7 @@ impl Config {
             cors_origins: list("CORS_ORIGINS").into_iter().map(trim_slash).collect(),
 
             trust_proxy: flag("TRUST_PROXY", false),
+            webauthn_rp_id: var("WEBAUTHN_RP_ID"),
 
             // Ein unbekannter Wert ist ein harter Startfehler, kein stiller
             // Rueckfall auf "offen". Bisher machte ein Tippfehler - `Invite`

@@ -41,16 +41,39 @@ pub fn router() -> Router<AppState> {
 
 /// Baut die WebAuthn-Konfiguration aus der öffentlichen Adresse der App.
 ///
-/// Die „Relying Party ID“ ist der nackte Hostname – ohne Schema und Port.
-/// Passt sie nicht exakt zur Adresse im Browser, lehnt das Gerät ab.
+/**
+ * Die „Relying Party ID“ ist der nackte Hostname – ohne Schema und Port.
+ * Passt sie nicht zur Adresse im Browser, lehnt das Gerät ab.
+ *
+ * `WEBAUTHN_RP_ID` darf sie auf eine übergeordnete Ebene setzen: Wer unter
+ * `app.beispiel.de` läuft und `beispiel.de` einträgt, kann später umziehen,
+ * ohne dass jemand seinen Schlüssel verliert. Ein Passkey gilt für genau den
+ * Namen, unter dem er angelegt wurde – diese Entscheidung fällt einmal und ist
+ * danach nicht mehr zu korrigieren.
+ */
 fn webauthn(state: &AppState) -> AppResult<Webauthn> {
     let origin = Url::parse(&state.config.public_app_url).map_err(|error| {
         AppError::config(format!("PUBLIC_APP_URL ist keine gültige URL: {error}"))
     })?;
-    let rp_id = origin
+    let host = origin
         .host_str()
         .ok_or_else(|| AppError::config("PUBLIC_APP_URL hat keinen Hostnamen"))?
         .to_string();
+
+    let rp_id = match state.config.webauthn_rp_id.as_deref() {
+        None => host,
+        Some(gewuenscht) => {
+            // Der Name muss zum Hostnamen passen, sonst lehnt jedes Gerät ab –
+            // und zwar erst, wenn jemand den ersten Schlüssel anlegen will.
+            // Lieber hier scheitern, wo es in der Einrichtung auffällt.
+            if host != gewuenscht && !host.ends_with(&format!(".{gewuenscht}")) {
+                return Err(AppError::config(format!(
+                    "WEBAUTHN_RP_ID=\"{gewuenscht}\" passt nicht zu PUBLIC_APP_URL (\"{host}\"). Erlaubt ist der Hostname selbst oder eine seiner übergeordneten Ebenen."
+                )));
+            }
+            gewuenscht.to_string()
+        }
+    };
 
     WebauthnBuilder::new(&rp_id, &origin)
         .and_then(|builder| builder.rp_name("Initiative").build())

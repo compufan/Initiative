@@ -73,6 +73,8 @@ services:
       # schreibt sich jeder Angreifer eine fremde Adresse hinein und sperrt
       # damit den aus, dem sie gehoert.
       TRUST_PROXY: "true"
+      # Siehe .env: die eine Entscheidung, die sich nie mehr korrigieren laesst.
+      WEBAUTHN_RP_ID: ${WEBAUTHN_RP_ID:-}
     volumes:
       - uploads:/data/uploads
 
