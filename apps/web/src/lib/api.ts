@@ -10,7 +10,11 @@ import type {
   CollectionItemDto,
   ConversationDto,
   CreateCollectionInput,
+  CreatePlanningInput,
   CreateUploadResult,
+  EventAttachmentDto,
+  EventNoteDto,
+  EventNoteInput,
   GameInfoDto,
   GameSessionDto,
   GrantCollectionInput,
@@ -441,6 +445,34 @@ export const api = {
     icsUrl: (calendarToken: string) =>
       `${API_BASE}${API_PREFIX}/calendar/${calendarToken}/feed.ics`,
     eventIcsUrl: (id: string) => `${API_BASE}${API_PREFIX}/calendar/events/${id}/event.ics`,
+
+    /** Ein Termin, dessen Zeitpunkt noch abgestimmt wird. */
+    plan: (body: CreatePlanningInput) => post<CalendarEventDto>('/calendar/planning', body),
+    /**
+     * Legt den Zeitpunkt fest. Ohne `optionId` gewinnt der beste Vorschlag.
+     * Es entsteht kein zweiter Termin – der bestehende rückt an seinen Platz.
+     */
+    confirm: (id: string, body: { optionId?: string; closePoll?: boolean } = {}) =>
+      post<CalendarEventDto>(`/calendar/events/${id}/confirm`, body),
+
+    notes: (id: string) => get<ListResult<EventNoteDto>>(`/calendar/events/${id}/notes`),
+    addNote: (id: string, body: EventNoteInput) =>
+      post<EventNoteDto>(`/calendar/events/${id}/notes`, body),
+    updateNote: (id: string, noteId: string, body: Partial<EventNoteInput> & { position?: number }) =>
+      patch<EventNoteDto>(`/calendar/events/${id}/notes/${noteId}`, body),
+    removeNote: (id: string, noteId: string) =>
+      del<void>(`/calendar/events/${id}/notes/${noteId}`),
+
+    documents: (id: string) =>
+      get<ListResult<EventAttachmentDto>>(`/calendar/events/${id}/documents`),
+    addDocument: (id: string, body: { attachmentId: string; title?: string }) =>
+      post<EventAttachmentDto>(`/calendar/events/${id}/documents`, body),
+    removeDocument: (id: string, documentId: string) =>
+      del<void>(`/calendar/events/${id}/documents/${documentId}`),
+
+    /** Hängt eine Sammlung an den Termin – `null` löst die Verknüpfung. */
+    linkCollection: (id: string, collectionId: string | null) =>
+      patch<CalendarEventDto>(`/calendar/events/${id}/collection`, { collectionId }),
   },
   polls: {
     create: (body: Record<string, unknown>) => post<PollDto>('/polls', body),
@@ -453,6 +485,27 @@ export const api = {
     reopen: (id: string) => post<PollDto>(`/polls/${id}/reopen`),
     createEvent: (id: string, body: Record<string, unknown>) =>
       post<CalendarEventDto>(`/polls/${id}/event`, body),
+
+    /** In welchen Chats dieselbe Umfrage steht – ein Ergebnis für alle. */
+    placements: (id: string) =>
+      get<{
+        originConversationId: string;
+        conversationIds: string[];
+        items: {
+          id: string;
+          conversationId: string;
+          messageId: string | null;
+          createdBy: string | null;
+          createdAt: string;
+        }[];
+      }>(`/polls/${id}/placements`),
+    place: (id: string, conversationId: string) =>
+      post<{ id?: string; conversationId?: string; alreadyThere?: boolean }>(
+        `/polls/${id}/placements`,
+        { conversationId },
+      ),
+    unplace: (id: string, placementId: string) =>
+      del<void>(`/polls/${id}/placements/${placementId}`),
   },
   games: {
     catalog: () => get<ListResult<GameInfoDto>>('/games'),

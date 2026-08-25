@@ -276,6 +276,28 @@
   flex: none;
 }
 
+/* Zwei Knoepfe nebeneinander: "Neuer Termin" und "Abstimmen". Der Container
+   traegt die Position, die Knoepfe selbst stehen dann relativ darin. */
+.cal-fab-group {
+  position: fixed;
+  right: calc(var(--space-4) + var(--safe-right));
+  bottom: calc(var(--nav-height) + var(--safe-bottom) + var(--space-4));
+  z-index: 30;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.cal-fab-group .cal-fab {
+  position: static;
+  right: auto;
+  bottom: auto;
+}
+
+.cal-fab-plan {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
 .cal-fab {
   position: fixed;
   right: calc(var(--space-4) + var(--safe-right));
@@ -799,4 +821,145 @@
   .cal-cell {
     min-height: 56px;
   }
+}
+
+/* ---- Ereignisse: Abstimmung, Notizen, Dokumente ---- */
+
+.cal-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.cal-tag-off {
+  color: var(--warning);
+}
+
+.cal-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: center;
+}
+
+.cal-slot {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr auto;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.cal-slot-nr {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/* Auf schmalen Geraeten passen zwei Zeitfelder nicht nebeneinander. */
+@media (max-width: 520px) {
+  .cal-slot {
+    grid-template-columns: auto 1fr auto;
+  }
+  .cal-slot input:last-of-type {
+    grid-column: 2 / 4;
+  }
+}
+
+.cal-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 0;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.cal-poll-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cal-poll-option {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-2);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.cal-poll-when {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.cal-poll-answers,
+.cal-poll-counts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cal-poll-counts {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.cal-note {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.cal-note-body {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.cal-note-edit {
+  border: 1px solid var(--accent);
+}
+
+.cal-doc {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cal-doc-open {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 10px 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cal-doc-meta {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  white-space: nowrap;
 }

@@ -32,7 +32,13 @@ export function EventRow({ occurrence, chatLabel, rsvp }: EventRowProps) {
         )}
       </span>
       <span className="cal-row-main">
-        <span className="cal-row-title truncate">{event.title}</span>
+        <span className="cal-row-title truncate">
+          {event.title}
+          {/* Ein Termin in Abstimmung steht mit dem fruehesten Vorschlag im
+              Kalender. Ohne diesen Hinweis liest man ihn als feststehend. */}
+          {event.status === 'planning' && <span className="cal-tag">in Abstimmung</span>}
+          {event.status === 'cancelled' && <span className="cal-tag cal-tag-off">abgesagt</span>}
+        </span>
         {meta.length > 0 && <span className="cal-row-meta truncate">{meta.join(' · ')}</span>}
       </span>
       {status && (

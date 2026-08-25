@@ -1,6 +1,14 @@
 import { z } from 'zod';
 import { LIMITS, RSVP_STATUSES, type RsvpStatus } from '../constants.js';
+import type { AttachmentDto } from './media.js';
 import { isoDateSchema } from './common.js';
+
+export const EVENT_STATUSES = ['planning', 'confirmed', 'cancelled'] as const;
+export type EventStatus = (typeof EVENT_STATUSES)[number];
+
+/** Wer eine Notiz am Termin ändern darf. */
+export const NOTE_SCOPES = ['author', 'members', 'listed'] as const;
+export type NoteScope = (typeof NOTE_SCOPES)[number];
 
 export interface EventAttendeeDto {
   userId: string;
@@ -24,6 +32,15 @@ export interface CalendarEventDto {
   color: string | null;
   /** Set when the event was created from a date poll (Terminfindung). */
   sourcePollId: string | null;
+  /**
+   * `planning` – der Zeitpunkt wird noch abgestimmt, `startsAt` trägt so lange
+   * den frühesten Vorschlag. `confirmed` – er steht fest. `cancelled` – abgesagt.
+   */
+  status: EventStatus;
+  /** Die laufende Terminfindung, solange `status` = `planning`. */
+  pollId: string | null;
+  /** Die Sammlung mit den Dateien zu diesem Termin. */
+  collectionId: string | null;
   attendees: EventAttendeeDto[];
   reminderMinutes: number[];
   createdAt: string;
@@ -93,3 +110,66 @@ export const eventFromPollSchema = z.object({
   /** Close the poll once the event has been created. */
   closePoll: z.boolean().default(true),
 });
+
+/**
+ * Eine Notiz am Termin.
+ *
+ * `editScope` ist der Punkt der ganzen Sache: „Einkaufsliste, an der alle
+ * mitschreiben“ und „Ansprache, an der niemand herumbessert“ sind beides
+ * Notizen und sollen sich trotzdem verschieden verhalten.
+ */
+export interface EventNoteDto {
+  id: string;
+  eventId: string;
+  authorId: string | null;
+  title: string | null;
+  body: string;
+  editScope: NoteScope;
+  /** Bei `listed`: wer namentlich ändern darf. */
+  editorIds: string[];
+  /** Ob **ich** sie ändern darf. Entschieden wird es auf dem Server. */
+  canEdit: boolean;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EventAttachmentDto {
+  id: string;
+  eventId: string;
+  addedBy: string | null;
+  title: string | null;
+  attachment: AttachmentDto;
+  createdAt: string;
+}
+
+/** Ein Zeitvorschlag in der Terminfindung. */
+export const planningSlotSchema = z.object({
+  startsAt: isoDateSchema,
+  endsAt: isoDateSchema.optional(),
+});
+
+export const createPlanningSchema = z.object({
+  conversationId: z.string().uuid(),
+  title: z.string().trim().min(1).max(LIMITS.eventTitleMax),
+  description: z.string().max(LIMITS.eventDescriptionMax).optional(),
+  location: z.string().max(200).optional(),
+  slots: z.array(planningSlotSchema).min(2).max(LIMITS.pollOptionsMax),
+  /** Weitere Chats, in denen dieselbe Abstimmung stehen soll. */
+  alsoIn: z.array(z.string().uuid()).max(50).optional(),
+  closesAt: isoDateSchema.optional(),
+});
+export type CreatePlanningInput = z.infer<typeof createPlanningSchema>;
+
+export const eventNoteSchema = z.object({
+  title: z.string().max(200).optional(),
+  body: z.string().max(LIMITS.eventDescriptionMax),
+  editScope: z.enum(NOTE_SCOPES).optional(),
+  editorIds: z.array(z.string().uuid()).max(100).optional(),
+});
+export type EventNoteInput = z.infer<typeof eventNoteSchema>;
+
+/** Ob ein Termin noch auf seinen Zeitpunkt wartet. */
+export function isPlanning(event: Pick<CalendarEventDto, 'status'>): boolean {
+  return event.status === 'planning';
+}

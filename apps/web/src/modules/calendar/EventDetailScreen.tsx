@@ -9,7 +9,10 @@ import { api } from '../../lib/api.js';
 import { useChat } from '../../state/chat.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
+import { EventDocuments } from './EventDocuments.js';
 import { EventEditor } from './EventEditor.js';
+import { EventNotes } from './EventNotes.js';
+import { EventPollCard } from './EventPollCard.js';
 import { RsvpButtons } from './RsvpButtons.js';
 import { useLiveEvent } from './useCalendarEvents.js';
 import {
@@ -188,8 +191,16 @@ export function EventDetailScreen() {
         </p>
       )}
 
+      {event.status === 'planning' && (
+        <EventPollCard event={event} canManage={isCreator} onConfirmed={setEvent} />
+      )}
+
       <section className="card cal-block" aria-label="Deine Antwort">
-        <h2 className="cal-block-title">Bist du dabei?</h2>
+        <h2 className="cal-block-title">
+          {/* Solange der Zeitpunkt offen ist, waere "Bist du dabei?" die
+              falsche Frage - beantwortet wird sie in der Abstimmung. */}
+          {event.status === 'planning' ? 'Grundsätzlich dabei?' : 'Bist du dabei?'}
+        </h2>
         <RsvpButtons event={event} onChanged={setEvent} />
         <p className="cal-hint">
           {mine && mine !== 'pending'
@@ -228,6 +239,17 @@ export function EventDetailScreen() {
           </ul>
         )}
       </section>
+
+      <EventNotes
+        eventId={event.id}
+        people={attendees.map((attendee) => ({
+          id: attendee.userId,
+          displayName:
+            attendee.userId === myId ? 'Du' : (users[attendee.userId]?.displayName ?? 'Unbekannt'),
+        }))}
+      />
+
+      <EventDocuments eventId={event.id} />
 
       <section className="card cal-block" aria-label="Zum Kalender hinzufügen">
         <h2 className="cal-block-title">Zum Kalender hinzufügen</h2>

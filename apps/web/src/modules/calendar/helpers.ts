@@ -143,6 +143,16 @@ export function toTimeInput(date: Date): string {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+/**
+ * Für `<input type="datetime-local">` – in Ortszeit, ohne Zeitzonenkennung.
+ *
+ * `toISOString()` wäre hier falsch: das liefert UTC, und der Browser zeigte
+ * dann bei einem Termin um 19 Uhr je nach Jahreszeit 17 oder 18 Uhr an.
+ */
+export function toLocalInput(date: Date): string {
+  return `${toDateInput(date)}T${toTimeInput(date)}`;
+}
+
 /** Combines the two native inputs into a local Date (null when incomplete). */
 export function fromInputs(dateValue: string, timeValue: string): Date | null {
   const dateMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateValue.trim());

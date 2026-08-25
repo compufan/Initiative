@@ -14,10 +14,12 @@ import {
 interface AgendaViewProps {
   byDay: Map<string, Occurrence[]>;
   onCreate: () => void;
+  /** „Termin abstimmen“ – wenn der Zeitpunkt noch offen ist. */
+  onPlan?: () => void;
 }
 
 /** Flat list of the next ~60 days, grouped by day and skipping empty ones. */
-export function AgendaView({ byDay, onCreate }: AgendaViewProps) {
+export function AgendaView({ byDay, onCreate, onPlan }: AgendaViewProps) {
   const days = useMemo(() => {
     const first = startOfDay(new Date());
     const result: { key: string; date: Date; occurrences: Occurrence[] }[] = [];
@@ -37,9 +39,16 @@ export function AgendaView({ byDay, onCreate }: AgendaViewProps) {
         title="Nichts geplant"
         description="In den nächsten 60 Tagen steht nichts an. Leg den ersten Termin an."
         action={
-          <button type="button" className="btn btn-primary" onClick={onCreate}>
-            Termin anlegen
-          </button>
+          <div className="cal-empty-actions">
+            <button type="button" className="btn btn-primary" onClick={onCreate}>
+              Termin anlegen
+            </button>
+            {onPlan && (
+              <button type="button" className="btn" onClick={onPlan}>
+                Termin abstimmen
+              </button>
+            )}
+          </div>
         }
       />
     );

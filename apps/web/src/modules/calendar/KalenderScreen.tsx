@@ -3,6 +3,7 @@ import { Screen } from '../../components/Screen.js';
 import { Spinner } from '../../components/Feedback.js';
 import { AgendaView } from './AgendaView.js';
 import { EventEditor } from './EventEditor.js';
+import { PlanningSheet } from './PlanningSheet.js';
 import { MonthView } from './MonthView.js';
 import { SubscribeCard } from './SubscribeCard.js';
 import { useCalendarEvents } from './useCalendarEvents.js';
@@ -24,6 +25,7 @@ export function KalenderScreen() {
   const [month, setMonth] = useState(() => startOfMonth(new Date()));
   const [selectedDay, setSelectedDay] = useState(() => startOfDay(new Date()));
   const [editorOpen, setEditorOpen] = useState(false);
+  const [planOpen, setPlanOpen] = useState(false);
 
   // One window covers both views, so switching between them never refetches.
   const range = useMemo(() => {
@@ -117,21 +119,41 @@ export function KalenderScreen() {
           byDay={byDay}
         />
       ) : (
-        <AgendaView byDay={byDay} onCreate={() => setEditorOpen(true)} />
+        <AgendaView
+          byDay={byDay}
+          onCreate={() => setEditorOpen(true)}
+          onPlan={() => setPlanOpen(true)}
+        />
       )}
 
       <SubscribeCard />
 
       <div className="cal-fab-spacer" aria-hidden="true" />
 
-      <button type="button" className="cal-fab" onClick={() => setEditorOpen(true)}>
-        <span aria-hidden="true">＋</span>
-        <span>Neuer Termin</span>
-      </button>
+      {/* Zwei Wege zu einem Termin: Zeitpunkt steht fest, oder er wird
+          abgestimmt. Beides gehoert hierher - der abgestimmte Termin steht
+          von Anfang an im Kalender, nur eben als "in Abstimmung". */}
+      <div className="cal-fab-group">
+        <button type="button" className="cal-fab cal-fab-plan" onClick={() => setPlanOpen(true)}>
+          <span aria-hidden="true">🗳️</span>
+          <span>Abstimmen</span>
+        </button>
+        <button type="button" className="cal-fab" onClick={() => setEditorOpen(true)}>
+          <span aria-hidden="true">＋</span>
+          <span>Neuer Termin</span>
+        </button>
+      </div>
 
       <EventEditor
         open={editorOpen}
         onClose={() => setEditorOpen(false)}
+        initialDate={selectedDay}
+        onSaved={apply}
+      />
+
+      <PlanningSheet
+        open={planOpen}
+        onClose={() => setPlanOpen(false)}
         initialDate={selectedDay}
         onSaved={apply}
       />
