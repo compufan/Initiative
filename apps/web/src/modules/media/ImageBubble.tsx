@@ -3,7 +3,8 @@ import type { AttachmentDto } from '@initiative/shared';
 import type { MessageRendererProps } from '../types.js';
 import { Lightbox } from './Lightbox.js';
 import { MediaCaption, PendingMedia } from './MediaFrame.js';
-import { mediaSrc } from './helpers.js';
+import { buildAttachment, mediaSrc, sendMedia } from './helpers.js';
+import { prepareImage } from '../../lib/upload.js';
 
 function ImageTile({
   attachment,
@@ -78,7 +79,28 @@ export function ImageBubble({ message, isMine }: MessageRendererProps) {
       )}
       <MediaCaption body={message.body} isMine={isMine} />
       {openIndex !== null && (
-        <Lightbox items={images} index={openIndex} onClose={() => setOpenIndex(null)} />
+        <Lightbox
+          items={images}
+          index={openIndex}
+          onClose={() => setOpenIndex(null)}
+          zielName="In den Chat"
+          ablegen={async (blob, name) => {
+            // Als neue Nachricht, nicht als Ersatz: Das Original bleibt im
+            // Verlauf stehen, wo es steht.
+            const bild = await prepareImage(blob);
+            await sendMedia(message.conversationId, 'image', null, [
+              buildAttachment({
+                kind: 'image',
+                mime: bild.mime,
+                fileName: name,
+                blob: bild.blob,
+                width: bild.width,
+                height: bild.height,
+                previewDataUrl: bild.previewDataUrl,
+              }),
+            ]);
+          }}
+        />
       )}
     </div>
   );

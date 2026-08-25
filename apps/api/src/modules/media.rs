@@ -29,6 +29,7 @@ pub fn router() -> Router<AppState> {
         .route("/media/uploads/{id}/complete", post(complete_upload))
         .route("/media/{id}", get(deliver).delete(remove))
         .route("/media/{id}/download", get(download))
+        .route("/media/{id}/bytes", get(bytes_through_api))
 }
 
 #[derive(Debug, Deserialize)]
@@ -283,6 +284,7 @@ async fn serve(
     id: Uuid,
     headers: HeaderMap,
     as_download: bool,
+    direkt: bool,
 ) -> AppResult<Response> {
     let attachment = load_attachment(&state.pool, id).await?;
     let options = DownloadOptions {
@@ -291,10 +293,18 @@ async fn serve(
         download: as_download,
     };
 
-    if let Some(url) = state
-        .storage
-        .download_url(&attachment.storage_key, &options)?
-    {
+    // Nur auf dem Umleitungsweg fragen wir den Speicher nach einer Adresse;
+    // ein Fehler dabei bleibt ein Fehler und wird nicht stillschweigend zum
+    // Weiterreichen umgedeutet.
+    let umleitung = if direkt {
+        state
+            .storage
+            .download_url(&attachment.storage_key, &options)?
+    } else {
+        None
+    };
+
+    if let Some(url) = umleitung {
         // R2/S3 serve the bytes directly – the API never proxies media.
         return Ok((
             [(header::CACHE_CONTROL, "private, max-age=60")],
@@ -381,7 +391,29 @@ async fn deliver(
     Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    serve(state, id, headers, false).await
+    serve(state, id, headers, false, true).await
+}
+
+/**
+ * Dieselben Bytes, aber garantiert über die API statt per Umleitung.
+ *
+ * Für `<img src>` ist die Umleitung zum Speicher richtig – der Browser holt
+ * dort direkt, die API bleibt aus dem Weg. Für alles, was die Bilddaten
+ * *lesen* muss (Bearbeiten, Sticker daraus machen), ist sie ein Problem:
+ * Nach einer Umleitung auf eine andere Herkunft schickt der Browser
+ * `Origin: null` mit, und eine CORS-Regel, die auf die Adresse der App
+ * ausgestellt ist, greift dann nicht mehr. Das Ergebnis wäre ein Bild, das
+ * man sehen, aber nicht anfassen kann.
+ *
+ * Deshalb hier der gerade Weg. Er kostet Bandbreite auf dem Server, aber nur
+ * beim Bearbeiten – nicht beim Anschauen.
+ */
+async fn bytes_through_api(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    serve(state, id, headers, false, false).await
 }
 
 async fn download(
@@ -389,7 +421,7 @@ async fn download(
     Path(id): Path<Uuid>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    serve(state, id, headers, true).await
+    serve(state, id, headers, true, true).await
 }
 
 async fn remove(

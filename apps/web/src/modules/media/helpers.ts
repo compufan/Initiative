@@ -30,6 +30,22 @@ export function mediaSrc(attachment: AttachmentDto): string {
   return `${API_BASE}${url}`;
 }
 
+/**
+ * Die Bilddaten eines Anhangs – zum Lesen, nicht zum Anzeigen.
+ *
+ * `mediaSrc` reicht für `<img src>`: Der Browser folgt der Umleitung zum
+ * Speicher und zeigt an. Wer die Punkte *lesen* will (bearbeiten, freistellen),
+ * braucht den geraden Weg über die API: Nach einer Umleitung auf eine andere
+ * Herkunft schickt der Browser `Origin: null`, die CORS-Regel des Speichers
+ * greift nicht mehr, und die Leinwand wäre anschliessend „verunreinigt“ – man
+ * sähe das Bild, könnte es aber nicht speichern.
+ */
+export async function mediaBytes(attachment: AttachmentDto): Promise<Blob> {
+  const antwort = await fetch(`${mediaSrc(attachment)}/bytes`, { credentials: 'include' });
+  if (!antwort.ok) throw new Error(`Das Bild konnte nicht geladen werden (${antwort.status})`);
+  return await antwort.blob();
+}
+
 const EXTENSIONS: Record<string, string> = {
   'image/jpeg': 'jpg',
   'image/png': 'png',

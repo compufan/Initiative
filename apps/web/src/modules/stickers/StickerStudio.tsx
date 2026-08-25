@@ -74,6 +74,14 @@ const HISTORY_MAX = 30;
 interface StickerStudioProps {
   onClose: () => void;
   onSaved?: (pack: StickerPackDto) => void;
+  /**
+   * Ein Bild, mit dem das Studio gleich beginnt.
+   *
+   * Damit wird aus „Sticker erstellen“ ein „aus diesem Foto“: Wer ein Bild im
+   * Chat oder in einer Sammlung offen hat, muss es nicht erst herunterladen
+   * und wieder auswählen.
+   */
+  startBild?: Blob | null;
 }
 
 interface GestureState {
@@ -91,7 +99,7 @@ interface GestureState {
  * masks, an eraser, the simple background removal, the white sticker outline
  * and two text layers. Everything is rendered into a 512×512 canvas.
  */
-export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
+export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProps) {
   useHideNav(true);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -374,6 +382,42 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
     setTool('move');
     setLupe({ zoom: 1, x: STICKER_SIZE / 2, y: STICKER_SIZE / 2 });
   }
+
+  /**
+   * Ein mitgegebenes Bild uebernehmen – einmal, nicht bei jedem Rendern.
+   *
+   * Die Kennung im Abhaengigkeitsfeld ist bewusst das Blob selbst: Bekommt
+   * das Studio spaeter ein anderes Bild, faengt es damit neu an; bekommt es
+   * dasselbe nochmal, passiert nichts. Ein `useState`-Wechsel darf die Arbeit
+   * des Anwenders nicht wegwerfen.
+   */
+  useEffect(() => {
+    if (!startBild) return;
+    let abgebrochen = false;
+    setBusy(true);
+    loadImageFromBlob(startBild)
+      .then((image) => {
+        if (abgebrochen) return;
+        applySource({
+          kind: 'image',
+          image,
+          width: image.naturalWidth,
+          height: image.naturalHeight,
+        });
+        setTab('move');
+      })
+      .catch((error: unknown) => {
+        if (!abgebrochen) toast(errorMessage(error, 'Das Bild konnte nicht geladen werden'), 'error');
+      })
+      .finally(() => {
+        if (!abgebrochen) setBusy(false);
+      });
+    return () => {
+      abgebrochen = true;
+    };
+    // applySource haengt an nichts, was sich aendert; das Bild ist der Ausloeser.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startBild]);
 
   async function pickImage(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];

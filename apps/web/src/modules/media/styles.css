@@ -755,3 +755,10 @@
     max-width: 360px;
   }
 }
+
+/* Die Werkzeuge oben rechts im Fotobetrachter: Bearbeiten, Sticker, Laden. */
+.media-lightbox-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}

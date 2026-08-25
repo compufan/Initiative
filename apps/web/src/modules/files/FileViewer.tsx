@@ -1,12 +1,19 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { formatBytes, formatDuration, type AttachmentDto } from '@initiative/shared';
+import { FotoWerkstatt } from '../media/FotoWerkstatt.js';
 import { mediaSrc } from '../media/helpers.js';
 
 interface FileViewerProps {
   items: AttachmentDto[];
   index: number;
   onClose: () => void;
+  /**
+   * Wohin eine bearbeitete Fassung gehört – bei einer Sammlung: in dieselbe.
+   * Ohne das erscheinen Bearbeiten und Sticker gar nicht erst.
+   */
+  ablegen?: (blob: Blob, name: string) => Promise<void>;
+  zielName?: string;
 }
 
 /**
@@ -17,24 +24,32 @@ interface FileViewerProps {
  * zum Öffnen – ein leerer schwarzer Kasten wäre schlechter als die Auskunft,
  * dass dieser Dateityp sich hier nicht anzeigen lässt.
  */
-export function FileViewer({ items, index, onClose }: FileViewerProps) {
+export function FileViewer({ items, index, onClose, ablegen, zielName }: FileViewerProps) {
   const [aktuell, setAktuell] = useState(index);
+  /** Solange Editor oder Studio offen sind, deutet der Betrachter keine Tasten. */
+  const [werkstattOffen, setWerkstattOffen] = useState(false);
   const datei = items[aktuell];
 
+  // Die Seite dahinter bleibt gesperrt, solange der Betrachter offen ist –
+  // auch waehrend Editor oder Studio darueber liegen.
   useEffect(() => {
+    const vorher = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = vorher;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (werkstattOffen) return undefined;
     const beiTaste = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
       if (event.key === 'ArrowRight') setAktuell((wert) => (wert + 1) % items.length);
       if (event.key === 'ArrowLeft') setAktuell((wert) => (wert - 1 + items.length) % items.length);
     };
-    const vorher = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
     window.addEventListener('keydown', beiTaste);
-    return () => {
-      document.body.style.overflow = vorher;
-      window.removeEventListener('keydown', beiTaste);
-    };
-  }, [items.length, onClose]);
+    return () => window.removeEventListener('keydown', beiTaste);
+  }, [items.length, onClose, werkstattOffen]);
 
   if (!datei) return null;
 
@@ -48,6 +63,14 @@ export function FileViewer({ items, index, onClose }: FileViewerProps) {
           <strong className="truncate">{datei.fileName ?? 'Datei'}</strong>
           <span className="fv-meta">{formatBytes(datei.size)}</span>
         </div>
+        {datei.kind === 'image' && (
+          <FotoWerkstatt
+            foto={datei}
+            ablegen={ablegen}
+            zielName={zielName}
+            onOffen={setWerkstattOffen}
+          />
+        )}
         <a
           className="icon-btn"
           href={mediaSrc(datei)}

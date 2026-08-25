@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useRef, useState, type TouchEvent, type TouchList } from 'react';
 import { createPortal } from 'react-dom';
 import type { AttachmentDto } from '@initiative/shared';
+import { FotoWerkstatt } from './FotoWerkstatt.js';
 import { mediaSrc } from './helpers.js';
 
 interface LightboxProps {
   items: AttachmentDto[];
   index: number;
   onClose: () => void;
+  /**
+   * Wohin eine bearbeitete Fassung gehört. Ohne das bleibt vom Bearbeiten nur
+   * das Speichern aufs Telefon.
+   */
+  ablegen?: (blob: Blob, name: string) => Promise<void>;
+  zielName?: string;
 }
 
 type GestureMode = 'none' | 'pan' | 'pinch' | 'dismiss';
@@ -39,11 +46,17 @@ function distanceBetween(touches: TouchList): number {
  * Full screen photo viewer: pinch and double tap to zoom, drag to pan, swipe
  * down to close. `touch-action: none` keeps Safari from hijacking the gesture.
  */
-export function Lightbox({ items, index, onClose }: LightboxProps) {
+export function Lightbox({ items, index, onClose, ablegen, zielName }: LightboxProps) {
   const [current, setCurrent] = useState(index);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [dismissY, setDismissY] = useState(0);
+  /**
+   * Solange Editor oder Studio offen sind, hört der Betrachter auf, Tasten zu
+   * deuten – sonst schlösse Escape beides auf einmal und die Pfeiltasten
+   * blätterten hinter dem Editor weiter.
+   */
+  const [werkstattOffen, setWerkstattOffen] = useState(false);
   const gesture = useRef<GestureState>({
     mode: 'none',
     startDistance: 0,
@@ -81,6 +94,7 @@ export function Lightbox({ items, index, onClose }: LightboxProps) {
   }, []);
 
   useEffect(() => {
+    if (werkstattOffen) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
       if (event.key === 'ArrowRight') go(1);
@@ -88,7 +102,7 @@ export function Lightbox({ items, index, onClose }: LightboxProps) {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [go, onClose]);
+  }, [go, onClose, werkstattOffen]);
 
   const toggleZoom = useCallback(() => {
     setScale((value) => (value > 1 ? 1 : DOUBLE_TAP_SCALE));
@@ -178,16 +192,24 @@ export function Lightbox({ items, index, onClose }: LightboxProps) {
             {current + 1} / {items.length}
           </span>
         )}
-        <a
-          className="media-round-btn"
-          href={mediaSrc(item)}
-          download={item.fileName ?? 'foto'}
-          target="_blank"
-          rel="noreferrer"
-          aria-label="Herunterladen"
-        >
-          ⬇
-        </a>
+        <div className="media-lightbox-tools">
+          <FotoWerkstatt
+            foto={item}
+            ablegen={ablegen}
+            zielName={zielName}
+            onOffen={setWerkstattOffen}
+          />
+          <a
+            className="media-round-btn"
+            href={mediaSrc(item)}
+            download={item.fileName ?? 'foto'}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Herunterladen"
+          >
+            ⬇
+          </a>
+        </div>
       </div>
 
       <div

@@ -1,0 +1,160 @@
+/* Bildbearbeitung – Vollbild, Leinwand oben, Werkzeuge unten am Daumen. */
+
+.bild-editor {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.bild-kopf {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  padding-top: calc(var(--space-2) + env(safe-area-inset-top));
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.bild-kopf strong {
+  flex: 1;
+  min-width: 0;
+}
+
+.bild-buehne {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-3);
+  background: var(--surface-2);
+}
+
+.bild-leinwand {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.bild-panel {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  max-height: 42vh;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+
+.bild-reihe {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.bild-reihe .btn.is-active,
+.bild-reiter-knopf.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.bild-hinweis {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.bild-farben {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bild-farbe {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-full);
+  border: 2px solid var(--border);
+  padding: 0;
+}
+
+.bild-farbe.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.bild-schieber {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.bild-schieber input {
+  flex: 1;
+  min-width: 0;
+}
+
+.bild-wert {
+  min-width: 3ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.bild-textfeld {
+  width: 100%;
+  resize: vertical;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  padding: var(--space-2);
+  font: inherit;
+}
+
+.bild-fuss {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.bild-reiter {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+}
+
+.bild-reiter-knopf {
+  flex: 1;
+  min-height: 44px;
+  border-radius: var(--radius-full);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.bild-fuss .bild-reihe .btn-primary {
+  flex: 1;
+}

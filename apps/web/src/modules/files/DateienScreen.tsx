@@ -10,6 +10,7 @@ import {
 import { EmptyState, Spinner } from '../../components/Feedback.js';
 import { Screen } from '../../components/Screen.js';
 import { api } from '../../lib/api.js';
+import { prepareImage, uploadBlob } from '../../lib/upload.js';
 import { toast } from '../../state/ui.js';
 import { CollectionSheet } from './CollectionSheet.js';
 import { UploadToCollectionSheet } from './UploadToCollectionSheet.js';
@@ -265,7 +266,36 @@ export function DateienScreen() {
         <ShareSheet open={teilen} onClose={() => setTeilen(false)} collection={aktuell} />
       )}
       {betrachter != null && anhaenge.length > 0 && (
-        <FileViewer items={anhaenge} index={betrachter} onClose={() => setBetrachter(null)} />
+        <FileViewer
+          items={anhaenge}
+          index={betrachter}
+          onClose={() => setBetrachter(null)}
+          zielName={darfAendern ? 'In die Sammlung' : undefined}
+          ablegen={
+            darfAendern && aktuell
+              ? async (blob, name) => {
+                  // Die bearbeitete Fassung kommt als eigener Eintrag dazu; das
+                  // Original bleibt unberuehrt daneben stehen.
+                  const bild = await prepareImage(blob);
+                  const anhang = await uploadBlob({
+                    kind: 'image',
+                    mime: bild.mime,
+                    fileName: name,
+                    blob: bild.blob,
+                    width: bild.width,
+                    height: bild.height,
+                    previewDataUrl: bild.previewDataUrl,
+                  });
+                  await api.collections.addItem(aktuell.id, {
+                    attachmentId: anhang.id,
+                    title: name,
+                  });
+                  await useFiles.getState().loadItems(aktuell.id, true);
+                  toast('Bearbeitete Fassung hinzugefügt.', 'success');
+                }
+              : undefined
+          }
+        />
       )}
     </Screen>
   );
