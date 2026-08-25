@@ -3,9 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { LIMITS, type CalendarEventDto, type ConversationDto } from '@initiative/shared';
 import { Sheet } from '../../components/Sheet.js';
 import { api } from '../../lib/api.js';
+import { useMyId } from '../../state/session.js';
 import { useChat } from '../../state/chat.js';
 import { toast } from '../../state/ui.js';
-import { toLocalInput } from './helpers.js';
+import { conversationLabel, toLocalInput } from './helpers.js';
 
 interface PlanningSheetProps {
   open: boolean;
@@ -40,6 +41,7 @@ function neuerSlot(start: Date): Slot {
  */
 export function PlanningSheet({ open, onClose, initialDate, onSaved }: PlanningSheetProps) {
   const navigate = useNavigate();
+  const myId = useMyId();
   const conversations = useChat((state) => state.conversations);
 
   const [title, setTitle] = useState('');
@@ -155,7 +157,7 @@ export function PlanningSheet({ open, onClose, initialDate, onSaved }: PlanningS
             <option value="">Bitte wählen</option>
             {conversations.map((chat) => (
               <option key={chat.id} value={chat.id}>
-                {chatName(chat)}
+                {chatName(chat, myId)}
               </option>
             ))}
           </select>
@@ -227,7 +229,7 @@ export function PlanningSheet({ open, onClose, initialDate, onSaved }: PlanningS
                     )
                   }
                 />
-                <span className="truncate">{chatName(chat)}</span>
+                <span className="truncate">{chatName(chat, myId)}</span>
               </label>
             ))}
           </fieldset>
@@ -260,6 +262,16 @@ export function PlanningSheet({ open, onClose, initialDate, onSaved }: PlanningS
   );
 }
 
-function chatName(chat: ConversationDto): string {
-  return chat.title ?? (chat.type === 'group' ? 'Gruppe' : 'Chat');
+/**
+ * Der Name eines Chats – bei Direktchats der Name des Gegenübers.
+ *
+ * Vorher stand hier für alles, was keine Gruppe ist, wörtlich „Chat“. Genau
+ * das Szenario der Anforderung – dieselbe Umfrage zusätzlich in drei
+ * Einzelchats spiegeln – war damit unbedienbar: In der Liste standen
+ * dreimal „Chat“, und niemand konnte wissen, welcher welcher ist.
+ *
+ * Der richtige Helfer lag daneben und wurde nur nicht benutzt.
+ */
+function chatName(chat: ConversationDto, myId: string): string {
+  return conversationLabel(chat, myId) ?? 'Chat';
 }

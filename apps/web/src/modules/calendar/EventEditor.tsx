@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { LIMITS, describeRrule, type CalendarEventDto } from '@initiative/shared';
 import { Sheet } from '../../components/Sheet.js';
+import { PersonenWahl, type Person } from '../../components/PersonenWahl.js';
 import { ApiError, api } from '../../lib/api.js';
 import { useChat } from '../../state/chat.js';
 import { useMyId } from '../../state/session.js';
@@ -41,6 +42,16 @@ interface FormState {
   repeat: RepeatState;
   conversationId: string | null;
   announce: boolean;
+  /**
+   * Wer eingeladen ist.
+   *
+   * Leer heisst: alle aus dem gewählten Chat – so war es bisher immer, weil
+   * die Oberfläche `attendeeIds` schlicht nie mitschickte. Der Server nimmt
+   * sie seit jeher entgegen; es gab nur kein Feld dafür. Folge: Ein Termin
+   * ohne Chat konnte niemanden einladen, und seine Notizen und Unterlagen
+   * waren damit für niemanden sonst erreichbar.
+   */
+  attendeeIds: string[];
 }
 
 interface EventEditorProps {
@@ -87,6 +98,7 @@ function emptyForm(props: EventEditorProps): FormState {
     repeat: defaultRepeat(start),
     conversationId: props.conversationId ?? null,
     announce: props.conversationId != null,
+    attendeeIds: [],
   };
 }
 
@@ -106,6 +118,7 @@ function formFromEvent(event: CalendarEventDto): FormState {
     reminders: [...event.reminderMinutes].sort((a, b) => a - b),
     repeat: repeatFromRrule(event.rrule, start),
     conversationId: event.conversationId,
+    attendeeIds: event.attendees?.map((teilnehmer) => teilnehmer.userId) ?? [],
     announce: false,
   };
 }
@@ -126,6 +139,26 @@ export function EventEditor(props: EventEditorProps) {
   );
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+
+  // Vorschlaege sind die Leute aus dem gewaehlten Chat – gesucht werden darf
+  // darueber hinaus, siehe PersonenWahl.
+  const [chatLeute, setChatLeute] = useState<Person[]>([]);
+  useEffect(() => {
+    const chat = conversations.find((eintrag) => eintrag.id === form.conversationId);
+    if (!chat) {
+      setChatLeute([]);
+      return undefined;
+    }
+    let abgebrochen = false;
+    void Promise.all(
+      chat.members.map((member) => api.users.byId(member.userId).catch(() => null)),
+    ).then((ergebnis) => {
+      if (!abgebrochen) setChatLeute(ergebnis.filter((person) => person != null));
+    });
+    return () => {
+      abgebrochen = true;
+    };
+  }, [conversations, form.conversationId]);
 
   const eventId = event?.id ?? null;
   const eventStamp = event?.updatedAt ?? null;
@@ -224,6 +257,9 @@ export function EventEditor(props: EventEditorProps) {
       rrule: buildRrule(form.repeat),
       color: form.color,
       reminderMinutes: form.reminders,
+      // Leer lassen heisst weiterhin „alle aus dem Chat“ – so bleibt der
+      // haeufige Fall ein Handgriff.
+      ...(form.attendeeIds.length > 0 ? { attendeeIds: form.attendeeIds } : {}),
     };
 
     setSaving(true);
@@ -555,6 +591,31 @@ export function EventEditor(props: EventEditorProps) {
           Der Termin gehört zu <strong>{conversationLabel(selectedConversation, myId)}</strong>.
         </p>
       )}
+
+      {/*
+        Eingeladene. Vorher gab es dieses Feld gar nicht – der Teilnehmerkreis
+        war immer „alle aus dem gewaehlten Chat“, weil die App `attendeeIds`
+        nie mitschickte. Ein persoenlicher Termin ohne Chat konnte damit
+        niemanden einladen, und seine Notizen erreichten niemanden.
+
+        Leer lassen bleibt erlaubt und heisst weiterhin „alle aus dem Chat“ –
+        der haeufige Fall soll ein Handgriff bleiben.
+      */}
+      <fieldset className="field">
+        <legend>Eingeladen</legend>
+        <p className="cal-hint">
+          {form.conversationId && form.attendeeIds.length === 0
+            ? 'Ohne Auswahl sind alle aus dem Chat eingeladen.'
+            : 'Wer hier steht, sieht den Termin, die Notizen und die Unterlagen.'}
+        </p>
+        <PersonenWahl
+          label="Eingeladene"
+          vorschlaege={chatLeute}
+          gewaehlt={form.attendeeIds}
+          onChange={(ids) => patch({ attendeeIds: ids })}
+          fest={[myId]}
+        />
+      </fieldset>
 
       {!event && form.conversationId && (
         <label className="cal-switch">

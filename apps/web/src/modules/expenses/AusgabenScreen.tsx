@@ -290,7 +290,11 @@ function ExpenseCard({
   async function abhaken() {
     setBusy(true);
     try {
-      await api.expenses.settle(expense.id, { settled: meiner?.settledAt == null });
+      // Umschalten anhand des Zustands: „offen“ und „bestaetigt“ heissen beide,
+      // dass ICH noch nichts gemeldet habe.
+      await api.expenses.settle(expense.id, {
+        settled: meiner?.status === 'open' || meiner?.status === 'confirmed',
+      });
       await onChanged();
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Nicht gespeichert');
@@ -345,25 +349,20 @@ function ExpenseCard({
 
       <ul className="exp-shares">
         {expense.shares.map((share) => (
-          <li key={share.userId} className={share.settledAt ? 'exp-settled' : undefined}>
+          <li key={share.userId} className={share.status !== 'open' ? 'exp-settled' : undefined}>
             <span className="truncate">{name(share.userId)}</span>
             <span>{formatCents(share.amountCents, expense.currency)}</span>
-            {share.settledAt && (
-              // Der Unterschied zwischen „ich habe überwiesen“ und „ist
-              // angekommen“ ist genau der Punkt, an dem es sonst Streit gibt.
-              <span
-                aria-label={
-                  share.settledBy === expense.paidBy
-                    ? `${name(expense.paidBy)} hat den Eingang bestätigt`
-                    : `${name(share.settledBy)} hat als bezahlt gemeldet`
-                }
-                title={
-                  share.settledBy === expense.paidBy
-                    ? `Eingang bestätigt von ${name(expense.paidBy)}`
-                    : `Als bezahlt gemeldet von ${name(share.settledBy)}`
-                }
-              >
-                {share.settledBy === expense.paidBy ? '✓✓' : '✓'}
+            {/* Der Unterschied zwischen „ich habe überwiesen“ und „ist
+                angekommen“ ist genau der Punkt, an dem es sonst Streit gibt –
+                also steht er dabei, nicht nur als Haken. */}
+            {share.status !== 'open' && (
+              <span className="exp-share-status" title={anteilHinweis(share, expense, name)}>
+                {share.status === 'closed' ? '✓✓' : '✓'}{' '}
+                {share.status === 'closed'
+                  ? 'erledigt'
+                  : share.status === 'reported'
+                    ? 'gemeldet'
+                    : 'bestätigt'}
               </span>
             )}
           </li>
@@ -373,24 +372,39 @@ function ExpenseCard({
       <div className="row">
         {meiner && meiner.userId !== expense.paidBy && (
           <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void abhaken()}>
-            {meiner.settledAt ? 'Doch noch offen' : 'Bezahlt'}
+            {meiner.status === 'reported' || meiner.status === 'closed'
+              ? 'Doch noch offen'
+              : 'Bezahlt'}
           </button>
         )}
         {/* Wer ausgelegt hat, bestaetigt den Eingang. Der Server liess das von
             Anfang an zu (expenses.rs: „Fremde Anteile darf nur abhaken, wer
             ausgelegt oder eingetragen hat“) – nur gab es dafuer keinen Knopf. */}
+        {/*
+          Der Knopf zum Bestaetigen darf NICHT verschwinden, sobald der andere
+          gemeldet hat – genau dann braucht man ihn ja erst. Vorher hing er an
+          `settledAt == null`, und damit war „Bezahlung erhalten“ nach einer
+          Meldung nicht mehr erreichbar. Massgeblich ist, ob ICH schon
+          bestaetigt habe, und das steht im Zustand des Anteils.
+        */}
         {expense.paidBy === myId &&
           expense.shares
-            .filter((share) => share.userId !== myId && share.settledAt == null)
+            .filter(
+              (share) =>
+                share.userId !== myId &&
+                (share.status === 'open' || share.status === 'reported'),
+            )
             .map((share) => (
               <button
                 key={share.userId}
                 type="button"
-                className="btn btn-sm"
+                className={share.status === 'reported' ? 'btn btn-sm btn-primary' : 'btn btn-sm'}
                 disabled={busy}
                 onClick={() => void bestaetigen(share.userId)}
               >
-                {name(share.userId)} hat gezahlt
+                {share.status === 'reported'
+                  ? `${name(share.userId)} meldet bezahlt – bestätigen`
+                  : `${name(share.userId)} hat gezahlt`}
               </button>
             ))}
         {expense.canEdit && (
@@ -413,4 +427,22 @@ function chatName(conversations: ConversationDto[], id: string): string {
   const chat = conversations.find((eintrag) => eintrag.id === id);
   if (!chat) return 'Chat';
   return chat.title ?? (chat.type === 'group' ? 'Gruppe' : 'Direktchat');
+}
+
+/** Wer sich zu einem Anteil geäußert hat – im Klartext für den Hinweis. */
+function anteilHinweis(
+  share: ExpenseDto['shares'][number],
+  expense: ExpenseDto,
+  name: (id: string | null) => string,
+): string {
+  switch (share.status) {
+    case 'closed':
+      return `${name(share.userId)} hat bezahlt gemeldet, ${name(expense.paidBy)} hat den Eingang bestätigt`;
+    case 'reported':
+      return `${name(share.userId)} meldet, bezahlt zu haben – noch nicht bestätigt`;
+    case 'confirmed':
+      return `${name(expense.paidBy)} hat den Eingang bestätigt`;
+    default:
+      return 'Noch offen';
+  }
 }

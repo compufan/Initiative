@@ -447,3 +447,165 @@ async fn nur_der_empfaenger_reicht_nicht_zum_abschluss() {
         "eine Seite allein schliesst nicht ab: {body}"
     );
 }
+
+/// Einer legt für mehrere aus – und für jeden bedeutet dieselbe Ausgabe etwas
+/// anderes.
+///
+/// Der Anwender hat die Regel klar benannt: Bei jedem Einzelnen rückt sie
+/// weiter, sobald er „bezahlt“ gedrückt hat. Beim Auslegenden bleibt sie
+/// offen, bis er bei ALLEN bestätigt hat. Ein gemeinsamer Zustand für alle
+/// kann das nicht abbilden – deshalb hängt er am Betrachter.
+#[tokio::test(flavor = "multi_thread")]
+async fn einer_legt_fuer_mehrere_aus() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let simple = Uuid::now_v7().simple().to_string();
+    let suffix = simple[simple.len() - 8..].to_string();
+
+    let (pia_token, pia_id) = probe.anmelden(&suffix, "pia").await;
+    let (rob_token, rob_id) = probe.anmelden(&suffix, "rob").await;
+    let (tom_token, tom_id) = probe.anmelden(&suffix, "tom").await;
+
+    let (status, chat) = probe
+        .call(
+            "POST",
+            "/api/v1/conversations",
+            Some(&pia_token),
+            Some(json!({ "type": "group", "title": "Huette", "memberIds": [rob_id, tom_id] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{chat}");
+
+    let (_, ausgabe) = probe
+        .call(
+            "POST",
+            "/api/v1/expenses",
+            Some(&pia_token),
+            Some(json!({
+                "conversationId": chat["id"],
+                "title": "Huettenmiete",
+                "amountCents": 9000,
+                "paidBy": pia_id,
+                "shares": [{ "userId": pia_id }, { "userId": rob_id }, { "userId": tom_id }],
+            })),
+        )
+        .await;
+    let id = ausgabe["id"].as_str().unwrap().to_string();
+
+    async fn zustand(probe: &Probe, token: &str, id: &str) -> String {
+        let (_, body) = probe
+            .call("GET", &format!("/api/v1/expenses/{id}"), Some(token), None)
+            .await;
+        body["status"].as_str().unwrap_or("?").to_string()
+    }
+
+    // Am Anfang ist für alle drei alles offen.
+    assert_eq!(zustand(&probe, &pia_token, &id).await, "open");
+    assert_eq!(zustand(&probe, &rob_token, &id).await, "open");
+    assert_eq!(zustand(&probe, &tom_token, &id).await, "open");
+
+    // Pias EIGENER Anteil ist erledigt – sie schuldet sich nichts. Ohne das
+    // stand die Auslegende in ihrer eigenen Ausgabe als offener Posten.
+    let (_, body) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/expenses/{id}"),
+            Some(&pia_token),
+            None,
+        )
+        .await;
+    let ihrer = body["shares"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|share| share["userId"] == json!(pia_id))
+        .unwrap();
+    assert_eq!(
+        ihrer["status"], "closed",
+        "der eigene Anteil ist erledigt: {ihrer}"
+    );
+
+    // --- Rob meldet, dass er gezahlt hat --------------------------------
+    probe
+        .call(
+            "POST",
+            &format!("/api/v1/expenses/{id}/settle"),
+            Some(&rob_token),
+            Some(json!({ "settled": true })),
+        )
+        .await;
+
+    assert_eq!(
+        zustand(&probe, &rob_token, &id).await,
+        "reported",
+        "bei Rob rueckt sie sofort weiter"
+    );
+    assert_eq!(
+        zustand(&probe, &tom_token, &id).await,
+        "open",
+        "Tom geht Robs Zahlung nichts an"
+    );
+    assert_eq!(
+        zustand(&probe, &pia_token, &id).await,
+        "open",
+        "bei Pia bleibt sie offen – sie hat noch nichts bestaetigt"
+    );
+
+    // --- Pia bestätigt Rob, Tom hat noch nicht gezahlt ------------------
+    let (status, _) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/expenses/{id}/settle"),
+            Some(&pia_token),
+            Some(json!({ "userId": rob_id, "settled": true })),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "bestaetigen muss auch NACH der Meldung gehen"
+    );
+
+    assert_eq!(
+        zustand(&probe, &rob_token, &id).await,
+        "closed",
+        "fuer Rob erledigt"
+    );
+    assert_eq!(
+        zustand(&probe, &pia_token, &id).await,
+        "open",
+        "bei Pia weiter offen – Tom fehlt noch"
+    );
+
+    // --- Tom zahlt, Pia bestätigt ---------------------------------------
+    probe
+        .call(
+            "POST",
+            &format!("/api/v1/expenses/{id}/settle"),
+            Some(&tom_token),
+            Some(json!({ "settled": true })),
+        )
+        .await;
+    assert_eq!(
+        zustand(&probe, &pia_token, &id).await,
+        "open",
+        "eine Meldung allein schliesst fuer die Auslegende nichts ab"
+    );
+
+    probe
+        .call(
+            "POST",
+            &format!("/api/v1/expenses/{id}/settle"),
+            Some(&pia_token),
+            Some(json!({ "userId": tom_id, "settled": true })),
+        )
+        .await;
+
+    assert_eq!(
+        zustand(&probe, &pia_token, &id).await,
+        "closed",
+        "erst wenn Pia bei allen bestaetigt hat"
+    );
+    assert_eq!(zustand(&probe, &tom_token, &id).await, "closed");
+}

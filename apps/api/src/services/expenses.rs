@@ -121,45 +121,101 @@ pub fn may_edit(expense: &ExpenseRow, user_id: Uuid) -> bool {
     expense.created_by == Some(user_id)
 }
 
-/// Der Zustand eines Anteils in einem Wort.
+/// Hat der Schuldner selbst gemeldet, dass er gezahlt hat?
+fn gemeldet(share: &ExpenseShareRow) -> bool {
+    share.settled_by == Some(share.user_id) || share.confirmed_by == Some(share.user_id)
+}
+
+/// Hat der Auslegende den Eingang bestätigt?
+fn bestaetigt(share: &ExpenseShareRow, paid_by: Option<Uuid>) -> bool {
+    paid_by.is_some() && (share.settled_by == paid_by || share.confirmed_by == paid_by)
+}
+
+/// Der Zustand eines Anteils in einem Wort – als **Tatsache**, unabhängig
+/// davon, wer hinsieht.
 ///
 /// Vier Stufen, und der Unterschied zwischen den mittleren beiden ist der
 /// Punkt: „gemeldet“ heißt, der Schuldner sagt, er habe gezahlt. „bestätigt“
-/// heißt, der Empfänger sagt, es sei angekommen. Beides ist eine einseitige
-/// Aussage; erst wenn beide sie treffen, ist der Vorgang abgeschlossen und
-/// niemand muss sich später erinnern.
+/// heißt, der Auslegende sagt, es sei angekommen. Beides ist eine einseitige
+/// Aussage; erst zusammen ist der Vorgang abgeschlossen.
 ///
-/// Wer den EIGENEN Anteil traegt, also der Auslegende selbst, schuldet
-/// naturgemaess nichts – sein Anteil gilt sofort als abgeschlossen.
+/// Wer selbst ausgelegt hat, schuldet sich nichts – sein eigener Anteil ist
+/// von vornherein erledigt. Ohne diese Zeile stand der Auslegende in seiner
+/// eigenen Ausgabe als offener Posten.
 pub fn share_status(share: &ExpenseShareRow, paid_by: Option<Uuid>) -> &'static str {
     if paid_by == Some(share.user_id) {
         return "closed";
     }
-    match (share.settled_at.is_some(), share.confirmed_at.is_some()) {
-        (false, _) => "open",
+    match (gemeldet(share), bestaetigt(share, paid_by)) {
         (true, true) => "closed",
-        // Nur eine Seite hat sich geäußert – welche, sagt `settled_by`.
-        (true, false) if share.settled_by == paid_by => "confirmed",
         (true, false) => "reported",
+        (false, true) => "confirmed",
+        (false, false) => "open",
     }
 }
 
-/// Der Zustand einer ganzen Ausgabe: der schwaechste ihrer Anteile.
+/// Was diese Ausgabe **für mich** bedeutet – und das ist für jeden anders.
 ///
-/// Eine Ausgabe, bei der einer gezahlt hat und zwei nicht, ist nicht
-/// „bezahlt“ – sie ist offen. Alles andere waere geschoente Buchhaltung.
-pub fn expense_status(shares: &[ExpenseShareRow], paid_by: Option<Uuid>) -> &'static str {
-    let mut schlechtester = 3;
-    for share in shares {
-        let rang = match share_status(share, paid_by) {
-            "open" => 0,
-            "reported" => 1,
-            "confirmed" => 2,
-            _ => 3,
-        };
-        schlechtester = schlechtester.min(rang);
+/// Der Anwender hat die Regel klar benannt: Legt A für B aus, wandert die
+/// Ausgabe bei B in die erledigten, sobald B „bezahlt“ gedrückt hat – und bei
+/// A erst, wenn A den Eingang bestätigt hat. Legt A für mehrere aus, bleibt
+/// sie bei A so lange offen, bis er bei jedem bestätigt hat, während sie bei
+/// jedem Einzelnen sofort weiterrückt.
+///
+/// Ein gemeinsamer Zustand für alle kann das nicht abbilden. Deshalb hängt er
+/// hier am Betrachter:
+///
+/// - Ich schulde: mein eigener Anteil, sonst nichts. Was die anderen tun,
+///   geht mich nichts an.
+/// - Ich habe ausgelegt: der schwächste aller fremden Anteile – und „schwach“
+///   heißt aus meiner Sicht: solange ich nicht bestätigt habe, ist er offen.
+///   Dass jemand gemeldet hat, ist für mich eine Aufforderung, kein Abschluss.
+/// - Ich bin weder noch (sehe die Ausgabe nur): die Tatsachenlage.
+pub fn expense_status_for(
+    shares: &[ExpenseShareRow],
+    paid_by: Option<Uuid>,
+    viewer: Uuid,
+) -> &'static str {
+    let ich_lege_aus = paid_by == Some(viewer);
+
+    let betroffen: Vec<&ExpenseShareRow> = if ich_lege_aus {
+        shares.iter().filter(|s| s.user_id != viewer).collect()
+    } else if let Some(meiner) = shares.iter().find(|s| s.user_id == viewer) {
+        vec![meiner]
+    } else {
+        shares
+            .iter()
+            .filter(|s| Some(s.user_id) != paid_by)
+            .collect()
+    };
+
+    if betroffen.is_empty() {
+        return "closed";
     }
-    match schlechtester {
+
+    let mut schwaechster = 3;
+    for share in betroffen {
+        let tatsache = share_status(share, paid_by);
+        let rang = if ich_lege_aus {
+            // Aus Sicht des Auslegenden zählt nur die eigene Bestätigung.
+            // „gemeldet“ ist für ihn noch nichts Erledigtes.
+            match tatsache {
+                "closed" => 3,
+                "confirmed" => 2,
+                _ => 0,
+            }
+        } else {
+            match tatsache {
+                "open" => 0,
+                "reported" => 1,
+                "confirmed" => 2,
+                _ => 3,
+            }
+        };
+        schwaechster = schwaechster.min(rang);
+    }
+
+    match schwaechster {
         0 => "open",
         1 => "reported",
         2 => "confirmed",
@@ -203,7 +259,7 @@ pub async fn to_expense_dto(
         visibility: expense.visibility,
         viewer_ids,
         hidden_from_ids,
-        status: expense_status(&shares, expense.paid_by),
+        status: expense_status_for(&shares, expense.paid_by, viewer),
         shares: shares
             .into_iter()
             .map(|share| ExpenseShareDto {

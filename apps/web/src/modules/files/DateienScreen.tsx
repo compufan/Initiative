@@ -12,6 +12,7 @@ import { Screen } from '../../components/Screen.js';
 import { api } from '../../lib/api.js';
 import { toast } from '../../state/ui.js';
 import { CollectionSheet } from './CollectionSheet.js';
+import { UploadToCollectionSheet } from './UploadToCollectionSheet.js';
 import { FileViewer } from './FileViewer.js';
 import { ShareSheet } from './ShareSheet.js';
 import { pfadZu, useFiles } from './state.js';
@@ -36,6 +37,7 @@ export function DateienScreen() {
   const loadItems = useFiles((state) => state.loadItems);
 
   const [neu, setNeu] = useState(false);
+  const [hochladen, setHochladen] = useState(false);
   const [bearbeiten, setBearbeiten] = useState(false);
   const [teilen, setTeilen] = useState(false);
   const [betrachter, setBetrachter] = useState<number | null>(null);
@@ -94,14 +96,29 @@ export function DateienScreen() {
       back={collectionId ? (aktuell?.parentId ? `/dateien/${aktuell.parentId}` : '/dateien') : false}
       actions={
         darfAendern && (
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="Neue Sammlung"
-            onClick={() => setNeu(true)}
-          >
-            ＋
-          </button>
+          <>
+            {/* Der Weg, der bisher ganz fehlte: eine Datei direkt hierher
+                legen, ohne sie vorher durch einen Chat zu schicken. */}
+            {collectionId && (
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label="Dateien hinzufügen"
+                title="Dateien hinzufügen"
+                onClick={() => setHochladen(true)}
+              >
+                ⬆️
+              </button>
+            )}
+            <button
+              type="button"
+              className="icon-btn"
+              aria-label="Neue Sammlung"
+              onClick={() => setNeu(true)}
+            >
+              ＋
+            </button>
+          </>
         )
       }
     >
@@ -167,8 +184,19 @@ export function DateienScreen() {
           title={collectionId ? 'Noch nichts drin' : 'Noch keine Sammlung'}
           description={
             collectionId
-              ? 'Dateien kommen aus dem Chat hierher: Nachricht lange antippen → „Zur Sammlung hinzufügen“.'
-              : 'Leg eine Sammlung an – oder tippe im Chat eine Datei lange an und wähle „Zur Sammlung hinzufügen“.'
+              ? 'Lade Dateien direkt hoch – oder tippe im Chat eine Nachricht lange an und wähle „Zur Sammlung hinzufügen“.'
+              : 'Leg eine Sammlung an. Dateien kommen dann direkt hinein oder aus einem Chat dazu.'
+          }
+          action={
+            collectionId && darfAendern ? (
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => setHochladen(true)}
+              >
+                Dateien hinzufügen
+              </button>
+            ) : undefined
           }
         />
       ) : (
@@ -208,6 +236,14 @@ export function DateienScreen() {
             </ul>
           )}
         </div>
+      )}
+
+      {collectionId && (
+        <UploadToCollectionSheet
+          open={hochladen}
+          onClose={() => setHochladen(false)}
+          collectionId={collectionId}
+        />
       )}
 
       <CollectionSheet

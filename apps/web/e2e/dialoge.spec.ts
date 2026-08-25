@@ -71,6 +71,11 @@ test('ohne offenen Dialog führt Zurück wie gewohnt aus dem Chat', async ({ bro
   await page.getByRole('button', { name: 'Schließen' }).click();
   await expect(page.getByRole('heading', { name: 'Hinzufügen' })).toHaveCount(0);
 
+  // Kurz warten, bis der Verlaufseintrag wirklich zurückgenommen ist. Das
+  // geschieht aufgeschoben (siehe lib/dialogVerlauf.ts) – ein Mensch braucht
+  // fürs Antippen länger als der Browser für einen Durchgang, ein Test nicht.
+  await page.waitForFunction(() => !(window.history.state as { initiativeDialog?: boolean } | null)?.initiativeDialog);
+
   await page.goBack();
   await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
 });

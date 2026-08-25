@@ -963,3 +963,20 @@
   font-size: 0.78rem;
   white-space: nowrap;
 }
+
+/* „Wo wird gefragt?“ – zusammengeklappt, weil es die Ausnahme ist. Wer die
+   Umfrage nachtraeglich in einen weiteren Chat haengen will, findet es; alle
+   anderen sehen eine Zeile statt einer Chatliste. */
+.cal-mirror {
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+
+.cal-mirror > summary {
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 600;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+}

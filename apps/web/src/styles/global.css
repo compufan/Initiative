@@ -653,3 +653,47 @@ canvas {
 .lf-reset {
   align-self: flex-start;
 }
+
+/* ---------- Personenwahl (components/PersonenWahl.tsx) ---------- */
+
+.pw {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.pw-kopf {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.pw-zahl,
+.pw-hinweis {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* Bei vielen Leuten darf die Liste nicht das ganze Blatt fuellen – sonst ist
+   der Speichern-Knopf ausser Reichweite. */
+.pw-liste {
+  display: flex;
+  flex-direction: column;
+  max-height: 44vh;
+  overflow-y: auto;
+}
+
+.pw-zeile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding: 4px 2px;
+  min-width: 0;
+}
+
+.pw-zeile.is-fest {
+  opacity: 0.65;
+}

@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { LIMITS, NOTE_SCOPES, type EventNoteDto, type NoteScope } from '@initiative/shared';
 import { Spinner } from '../../components/Feedback.js';
+import { PersonenWahl } from '../../components/PersonenWahl.js';
 import { api } from '../../lib/api.js';
+import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 
 interface EventNotesProps {
@@ -182,26 +184,46 @@ function NoteEditor({
   onCancel: () => void;
   onSaved: (note: EventNoteDto) => void;
 }) {
+  const myId = useMyId();
   const [title, setTitle] = useState(note?.title ?? '');
   const [body, setBody] = useState(note?.body ?? '');
   const [scope, setScope] = useState<NoteScope>(note?.editScope ?? 'author');
   const [editorIds, setEditorIds] = useState<string[]>(note?.editorIds ?? []);
   const [busy, setBusy] = useState(false);
 
-  // Wer ändern darf, bestimmt der Verfasser. Bei einer fremden Notiz, die man
-  // ändern darf, bleibt die Wahl deshalb gesperrt – der Server lehnt sie
-  // ohnehin ab, und ein Feld, das nichts bewirkt, ist schlimmer als keines.
-  const darfScopeAendern = !note || note.canEdit === true;
+  /*
+   * Wer ändern darf, bestimmt der VERFASSER – nicht jeder, der ändern darf.
+   * Sonst könnte sich jemand mit Schreibrecht zum alleinigen Bearbeiter
+   * machen, und der Server lehnt es folgerichtig ab.
+   *
+   * Genau daran hing der schwerste Fehler in den Terminen: Hier stand
+   * `note.canEdit`, also „darf ändern“ statt „hat verfasst“. Damit schickte
+   * die App bei JEDEM Speichern die Rechte mit – und der Server wies jeden
+   * ausser dem Verfasser ab. Die Packliste, an der alle mitschreiben sollten,
+   * liess sich von niemandem sonst speichern. Die Einstellung war da, die
+   * Absicht war da, und trotzdem war das Ganze funktionslos.
+   */
+  const binVerfasser = !note || note.authorId === myId;
 
   async function speichern() {
     setBusy(true);
     try {
-      const daten = {
+      const daten: {
+        body: string;
+        title?: string;
+        editScope?: NoteScope;
+        editorIds?: string[];
+      } = {
         title: title.trim() || undefined,
         body,
-        editScope: scope,
-        editorIds: scope === 'listed' ? editorIds : [],
       };
+      // Die Rechte nur mitschicken, wenn ich sie auch bestimmen darf. Ein
+      // unveraendert mitgesendeter Wert ist fuer den Server nicht von einer
+      // Aenderung zu unterscheiden.
+      if (binVerfasser) {
+        daten.editScope = scope;
+        daten.editorIds = scope === 'listed' ? editorIds : [];
+      }
       const ergebnis = note
         ? await api.calendar.updateNote(eventId, note.id, daten)
         : await api.calendar.addNote(eventId, daten);
@@ -237,7 +259,7 @@ function NoteEditor({
         />
       </div>
 
-      <fieldset className="field" disabled={!darfScopeAendern}>
+      <fieldset className="field" disabled={!binVerfasser}>
         <legend>Ändern darf</legend>
         {NOTE_SCOPES.map((wert) => (
           <label key={wert} className="cal-check">
@@ -253,28 +275,14 @@ function NoteEditor({
       </fieldset>
 
       {scope === 'listed' && (
-        <fieldset className="field">
+        <fieldset className="field" disabled={!binVerfasser}>
           <legend>Diese Personen</legend>
-          {people.length === 0 ? (
-            <p className="cal-hint">Zu diesem Termin ist sonst niemand eingeladen.</p>
-          ) : (
-            people.map((person) => (
-              <label key={person.id} className="cal-check">
-                <input
-                  type="checkbox"
-                  checked={editorIds.includes(person.id)}
-                  onChange={(event) =>
-                    setEditorIds((liste) =>
-                      event.target.checked
-                        ? [...liste, person.id]
-                        : liste.filter((id) => id !== person.id),
-                    )
-                  }
-                />
-                <span className="truncate">{person.displayName}</span>
-              </label>
-            ))
-          )}
+          <PersonenWahl
+            label="Wer diese Notiz ändern darf"
+            vorschlaege={people}
+            gewaehlt={editorIds}
+            onChange={setEditorIds}
+          />
         </fieldset>
       )}
 

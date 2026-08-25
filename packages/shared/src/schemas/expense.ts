@@ -71,8 +71,17 @@ export interface ExpenseDto {
   hiddenFromIds: string[];
   shares: ExpenseShareDto[];
   settledAt: string | null;
-  /** Der schwächste Zustand aller Anteile – eine Ausgabe ist erst
-   *  abgeschlossen, wenn es jeder Anteil ist. */
+  /**
+   * Was diese Ausgabe **für mich** bedeutet – und das ist für jeden anders.
+   *
+   * Wer schuldet, sieht seinen eigenen Anteil: „bezahlt“, sobald er es
+   * gemeldet hat. Wer ausgelegt hat, sieht den schwächsten aller fremden
+   * Anteile – und für ihn zählt allein seine eigene Bestätigung. Dass jemand
+   * gemeldet hat, ist für ihn eine Aufforderung, kein Abschluss.
+   *
+   * Legt einer für mehrere aus, rückt die Ausgabe bei jedem Einzelnen sofort
+   * weiter und bleibt bei ihm offen, bis er bei allen bestätigt hat.
+   */
   status: ExpenseStatus;
   canEdit: boolean;
   createdAt: string;

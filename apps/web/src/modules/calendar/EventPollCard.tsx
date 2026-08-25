@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { CalendarEventDto, PollDto } from '@initiative/shared';
+import type { CalendarEventDto, ConversationDto, PollDto } from '@initiative/shared';
 import { Spinner } from '../../components/Feedback.js';
 import { api } from '../../lib/api.js';
+import { realtime } from '../../lib/realtime.js';
 import { useChat } from '../../state/chat.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
-import { formatFullDate, formatTime } from './helpers.js';
+import { conversationLabel, formatFullDate, formatTime } from './helpers.js';
 
 interface EventPollCardProps {
   event: CalendarEventDto;
@@ -61,6 +62,39 @@ export function EventPollCard({ event, canManage, onConfirmed }: EventPollCardPr
     };
   }, [pollId]);
 
+  /*
+   * Mitbekommen, wenn woanders abgestimmt wird.
+   *
+   * Der ganze Sinn der gespiegelten Umfrage ist, dass eine Antwort im
+   * Einzelchat auch am Termin steht. Ohne dieses Zuhoeren erschien sie erst
+   * nach dem Neuladen – der Server schickt sie laengst an alle Beteiligten.
+   */
+  useEffect(() => {
+    if (!pollId) return undefined;
+    return realtime.on('poll.updated', (payload) => {
+      if (payload.poll.id === pollId) setPoll(payload.poll);
+    });
+  }, [pollId]);
+
+  /** Wo die Umfrage ueberall auftritt – nachtraeglich aenderbar. */
+  async function auftrittUmschalten(conversationId: string, an: boolean) {
+    if (!pollId) return;
+    setBusy(true);
+    try {
+      if (an) {
+        await api.polls.place(pollId, conversationId);
+        setOrte((liste) => [...new Set([...liste, conversationId])]);
+      } else {
+        await api.polls.unplace(pollId, conversationId);
+        setOrte((liste) => liste.filter((id) => id !== conversationId));
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Nicht geändert');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const meineStimmen = useMemo(() => {
     const map = new Map<string, 'yes' | 'no' | 'maybe'>();
     for (const vote of poll?.votes ?? []) {
@@ -94,9 +128,10 @@ export function EventPollCard({ event, canManage, onConfirmed }: EventPollCardPr
     }
   }
 
-  const chatNamen = orte
-    .map((id) => conversations.find((chat) => chat.id === id)?.title ?? null)
-    .filter((name): name is string => Boolean(name));
+  // Auch Direktchats nennen. Vorher wurde nur `title` genommen – und der ist
+  // bei einem Direktchat leer, sodass genau die Chats aus der Aufzaehlung
+  // fielen, um die es bei der Spiegelung geht.
+  const chatNamen = orte.map((id) => chatName(conversations, id, myId));
 
   return (
     <section className="card stack" aria-labelledby="cal-poll-title">
@@ -155,14 +190,53 @@ export function EventPollCard({ event, canManage, onConfirmed }: EventPollCardPr
             })}
           </ul>
 
-          {chatNamen.length > 1 && (
+          {chatNamen.length > 0 && (
             <p className="cal-hint">
               Dieselbe Abstimmung läuft in: {chatNamen.join(', ')}. Ein Ergebnis für alle – wer
               dort antwortet, hat auch hier geantwortet.
             </p>
           )}
+
+          {/*
+            Spiegeln liess sich bisher nur im Augenblick des Anlegens. Wer
+            hinterher merkte, dass noch jemand gefragt werden muss, hatte keine
+            Handhabe – obwohl der Server es kann und der Aufruf im Client
+            fertig dalag, nur nirgends benutzt wurde.
+          */}
+          {canManage && (
+            <details className="cal-mirror">
+              <summary>Wo wird gefragt?</summary>
+              <p className="cal-hint">
+                Ein Ergebnis für alle. Eine Antwort in einem dieser Chats zählt überall.
+              </p>
+              {conversations.map((chat) => (
+                <label key={chat.id} className="cal-check">
+                  <input
+                    type="checkbox"
+                    disabled={busy || chat.id === event.conversationId}
+                    checked={orte.includes(chat.id) || chat.id === event.conversationId}
+                    onChange={(änderung) =>
+                      void auftrittUmschalten(chat.id, änderung.target.checked)
+                    }
+                  />
+                  <span className="truncate">
+                    {chatName(conversations, chat.id, myId)}
+                    {chat.id === event.conversationId && ' (Ursprung)'}
+                  </span>
+                </label>
+              ))}
+            </details>
+          )}
         </>
       )}
     </section>
   );
+}
+
+/** Der Name eines Chats – bei Direktchats der des Gegenübers. */
+function chatName(conversations: ConversationDto[], id: string, myId: string): string {
+  return conversationLabel(
+    conversations.find((chat) => chat.id === id),
+    myId,
+  ) ?? 'Chat';
 }
