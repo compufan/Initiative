@@ -3,10 +3,15 @@
    full screen surfaces respect the safe areas. */
 
 .media-bubble {
+  /* Die Breite einer Bildnachricht - EINMAL festgelegt und unten
+     weitergereicht. Sie muss hier stehen und nicht nur als max-width, sonst
+     hat das Bild gar keine Breite: siehe .media-frame. */
+  --media-width: min(74vw, 320px);
+
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-width: min(74vw, 320px);
+  max-width: var(--media-width);
   min-width: 0;
 }
 
@@ -39,10 +44,25 @@
 
 /* ---------- image / video frame ---------- */
 
+/*
+ * Der Rahmen um Foto und Video.
+ *
+ * `width` ist hier ein FESTER Wert und ausdruecklich kein `100%`. Mit `100%`
+ * war ein Foto ohne Bildunterschrift im Chat unsichtbar, und das ohne jede
+ * Fehlermeldung: Der Rahmen enthaelt nur absolut positionierte Kinder, hat
+ * also von sich aus keine Breite. Die Blase darum richtet sich nach ihrem
+ * Inhalt, der Rahmen nach der Blase - beide warten aufeinander, und der
+ * Browser loest das mit null auf. Nachgemessen im Browser: 0x0 ohne
+ * Unterschrift, 127x127 mit einer kurzen. Im zweiten Fall gab der TEXT dem
+ * Bild seine Groesse, was ebenso falsch war.
+ *
+ * Ein fester Wert bricht den Kreis. Im Raster gilt weiter die Spaltenbreite,
+ * siehe unten.
+ */
 .media-frame {
   position: relative;
   display: block;
-  width: 100%;
+  width: var(--media-width, 100%);
   overflow: hidden;
   border-radius: var(--radius);
   background: var(--surface-2);
@@ -104,9 +124,14 @@
   pointer-events: none;
 }
 
+/* Aus demselben Grund wie oben: Ein Raster aus `1fr`-Spalten, deren Kacheln
+   keine eigene Breite mitbringen, faellt sonst ebenfalls auf null zusammen.
+   Ausserhalb einer Nachrichtenblase (etwa in der Auswahl vor dem Senden) ist
+   `--media-width` nicht gesetzt, dort gilt wie bisher die volle Breite. */
 .media-grid {
   display: grid;
   gap: 4px;
+  width: var(--media-width, 100%);
 }
 
 .media-grid-2 {
@@ -118,6 +143,8 @@
 }
 
 .media-grid .media-frame {
+  /* Im Raster bestimmt die Spalte die Breite. */
+  width: 100%;
   aspect-ratio: 1 / 1;
   border-radius: var(--radius-sm);
 }
