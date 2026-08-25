@@ -32,6 +32,7 @@ Gelesen in `apps/api/src/config.rs`. Was hier nicht steht, wird nicht gelesen.
 | `PORT`           | `8080`        | Port der API.                                                                                                                       |
 | `LOG_LEVEL`      | `info`        | `error` \| `warn` \| `info` \| `debug` \| `trace`. `RUST_LOG` überschreibt das.                                                     |
 | `RUN_MIGRATIONS` | `true`        | Migrationen beim Start anwenden. Nur `false` schaltet ab.                                                                           |
+| `MIGRATIONS_REPAIR` | –          | Notfall-Schalter, siehe [Wenn Migrationen blockieren](#wenn-migrationen-blockieren). Gehört nicht in den Dauerbetrieb.               |
 
 ### Datenbank
 
@@ -653,8 +654,10 @@ curl.exe https://initiative-api.fly.dev/healthz
 
 Kurz gelesen: `storage` sollte `r2` sein (nicht `local`), `bus` bei mehreren
 Instanzen `postgres`, `push` `true`, sobald VAPID gesetzt ist. Bei
-`"status": "degraded"` erreicht die API die Datenbank nicht – dann steht der
-Grund im Feld `error` und in `fly logs`.
+`"status": "degraded"` steht der Grund im Feld `error` – entweder ist die
+Datenbank nicht erreichbar, oder der Start hat ein Problem gemeldet (etwa
+blockierte Migrationen, siehe unten). Die API läuft in beiden Fällen und
+antwortet; sie sagt nur, dass etwas fehlt.
 
 Ein Blick auf die Wurzel zeigt die geladenen Module – auch das reicht als
 Adresse im Browser, oder im Terminal (Windows: `curl.exe`):
@@ -663,6 +666,56 @@ Adresse im Browser, oder im Terminal (Windows: `curl.exe`):
 curl.exe https://initiative-api.fly.dev/
 # { "name": "Initiative API", "version": 1, "runtime": "rust", "modules": [ … ] }
 ```
+
+### Wenn Migrationen blockieren
+
+sqlx merkt sich zu jeder ausgeführten Migration eine Prüfsumme über den
+Dateiinhalt. Wird eine Datei danach noch verändert – und sei es ein Leerzeichen
+–, verweigert sqlx **jede** Migration, auch die neuen:
+
+```
+Error: VersionMismatch(1)
+```
+
+Das ist im Kern richtig: Eine Migration, die auf einer echten Datenbank lief,
+ist Geschichte und kein Entwurf mehr. Neue Änderungen gehören in eine neue
+Datei.
+
+Die API beendet sich deswegen **nicht**. Sie läuft weiter und meldet über
+`/healthz`:
+
+```json
+{
+  "status": "degraded",
+  "error": "Migration 1 (0001_init.sql) wurde nach dem Ausführen verändert. …"
+}
+```
+
+Das ist Absicht. Beendet sich der Prozess, startet Fly ihn neu, wieder und
+wieder, bis „machine has reached its max restart count of 10“ – und von aussen
+sieht man davon nichts: Der Fly-Vermittler nimmt jede Anfrage an, sucht eine
+Maschine, findet keine und lässt den Browser ins Leere laufen. Kein Fehlercode,
+keine Meldung, nur Warten. Eine App, die antwortet und sagt was fehlt, ist in
+Minuten repariert; eine, die sich auflöst, kostet Stunden.
+
+**Lösen – ohne Rechner, vom Handy aus:**
+
+GitHub-App oder github.com im Browser → Repository → **Actions** →
+**API-Wartung** → **Run workflow** → Aufgabe **`migration-reparieren`** →
+starten.
+
+Der Ablauf setzt `MIGRATIONS_REPAIR=1`, wartet, bis die Migrationen durch sind,
+und entfernt den Schalter wieder. Der Schalter bleibt bewusst nicht stehen –
+sonst würde er künftige Änderungen an bereits ausgeführten Migrationen
+stillschweigend durchwinken, statt sie zu melden.
+
+Was genau angeglichen wurde, steht anschliessend im Protokoll (Aufgabe
+`protokoll`, dort nach „Prüfsumme“ suchen).
+
+> Der Schalter gleicht nur die Prüfsumme an. Er kann nicht wissen, ob die Datei
+> um *neues* SQL gewachsen ist – das käme dann nie in der Datenbank an. Wenn
+> die Änderung mehr war als Formatierung: Den fraglichen Teil zusätzlich als
+> neue Migrationsdatei anlegen.
 
 ### Erstes Konto anlegen
 
@@ -743,6 +796,8 @@ Bestehende Sitzungen bleiben davon unberührt.
 | `push: false` im Healthcheck                        | VAPID unvollständig               | beide Schlüssel setzen und neu starten                                          |
 | API startet nicht, Log nennt `Konfigurationsfehler` | Pflichtvariable fehlt             | Meldung lesen – sie nennt die Variable im Klartext                              |
 | `status: degraded`                                  | Datenbank nicht erreichbar        | `DATABASE_URL`, TLS und IP-Freigabe prüfen                                      |
+| `status: degraded`, `error` nennt eine Migration    | Eine bereits ausgeführte Migrationsdatei wurde nachträglich verändert | GitHub → Actions → „API-Wartung“ → `migration-reparieren` (siehe [Wenn Migrationen blockieren](#wenn-migrationen-blockieren)) |
+| URL lädt ewig, Log zeigt `VersionMismatch(n)` und `max restart count of 10` | Derselbe Fall, nur mit einer älteren API-Version, die sich dabei noch beendet hat | Neu deployen (die Version danach läuft weiter statt abzustürzen), dann `migration-reparieren` |
 | URL lädt ewig, Log zeigt nur `Main child exited normally with code: 0` | Die Binary im Image ist die leere Platzhalter-Version aus der Cache-Stufe des Dockerfiles | Im `apps/api/Dockerfile` muss vor dem zweiten `cargo build` ein `find src migrations -type f -exec touch {} +` stehen – sonst hält Cargo den echten Code für unverändert (siehe Kommentar dort) |
 
 ---

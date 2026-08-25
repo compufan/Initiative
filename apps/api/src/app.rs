@@ -89,7 +89,22 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
     )
     .await;
 
+    // Ein Problem beim Hochfahren – etwa eine blockierte Migration – macht
+    // die App nicht tot, aber auch nicht gesund. `degraded` mit Klartext ist
+    // die einzige Antwort, mit der man ohne Fly-Protokoll weiterkommt.
+    let startup = state.startup_problem();
+
     match ping {
+        Ok(Ok(_)) if startup.is_some() => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "status": "degraded",
+                "error": startup,
+                "storage": state.storage.kind(),
+                "bus": state.bus.kind(),
+                "version": state.config.git_sha,
+            })),
+        ),
         Ok(Ok(_)) => (
             StatusCode::OK,
             Json(json!({
@@ -106,11 +121,19 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
         ),
         Ok(Err(error)) => (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "status": "degraded", "error": error.to_string() })),
+            Json(json!({
+                "status": "degraded",
+                "error": error.to_string(),
+                "startupProblem": startup,
+            })),
         ),
         Err(_) => (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "status": "degraded", "error": "database timeout" })),
+            Json(json!({
+                "status": "degraded",
+                "error": "database timeout",
+                "startupProblem": startup,
+            })),
         ),
     }
 }

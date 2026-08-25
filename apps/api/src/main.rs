@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 
 use initiative_api::config::Config;
+use initiative_api::migrate;
 use initiative_api::push::vapid;
 use initiative_api::state::AppState;
 use initiative_api::{app, MIGRATOR};
@@ -35,11 +36,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
     let run_migrations = config.run_migrations;
+    let repair_migrations = config.repair_migrations;
     let state = AppState::new(config).await?;
 
+    // Ab hier wird nichts mehr mit `?` nach oben gereicht, was den Prozess
+    // beenden würde. Ein Server, der sich bei einem Problem auflöst, ist von
+    // aussen nicht von einem Netzausfall zu unterscheiden: Fly nimmt die
+    // Anfrage an, sucht eine Maschine, findet keine – und der Browser wartet
+    // ohne Fehlermeldung. Genau das hat hier einen Ausfall unsichtbar
+    // gemacht. Also: hochkommen, antworten, und sagen was fehlt.
     if run_migrations {
-        MIGRATOR.run(&state.pool).await?;
-        tracing::info!("migrations up to date");
+        if repair_migrations {
+            tracing::warn!(
+                "MIGRATIONS_REPAIR ist gesetzt: Prüfsummen ausgeführter Migrationen \
+                 werden an die Dateien angeglichen. Nach dem Reparieren wieder entfernen."
+            );
+        }
+        match migrate::hochfahren(&state.pool, &MIGRATOR, repair_migrations).await {
+            Ok(bericht) => {
+                for zeile in &bericht.angeglichen {
+                    tracing::warn!("{zeile}");
+                }
+                tracing::info!("migrations up to date");
+            }
+            Err(problem) => {
+                tracing::error!("{problem}");
+                state.set_startup_problem(problem);
+            }
+        }
     }
     state.spawn_realtime_listener();
 

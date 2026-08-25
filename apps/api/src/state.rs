@@ -1,7 +1,7 @@
 //! Everything a request handler needs. Feature modules receive this state, so
 //! they never reach for globals and stay testable in isolation.
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -21,16 +21,29 @@ pub struct AppState {
     pub hub: Arc<Hub>,
     pub bus: Arc<RealtimeBus>,
     pub push: Arc<PushService>,
+    /// Was beim Hochfahren schiefging – etwa eine nicht erreichbare Datenbank
+    /// oder eine gescheiterte Migration.
+    ///
+    /// Der Server läuft in so einem Fall bewusst weiter, statt sich zu
+    /// beenden. Ein Dienst, der sich bei einem Problem einfach auflöst,
+    /// hinterlässt nichts als hängende Anfragen: Die Fly-Vermittlung nimmt
+    /// die Verbindung an, wartet auf eine Maschine, die immer wieder
+    /// abstürzt, und schickt nicht einmal einen Fehler. Genau das hat hier
+    /// einen ganzen Ausfall unsichtbar gemacht. Wer stattdessen antwortet und
+    /// sagt, was fehlt, ist in einer Minute repariert statt in einer Stunde.
+    startup_problem: Arc<RwLock<Option<String>>>,
 }
 
 impl AppState {
     pub async fn new(config: Config) -> AppResult<Self> {
         let config = Arc::new(config);
+        // `connect_lazy` statt `connect`: Der Aufbau der Verbindung darf den
+        // Start nicht verhindern. Ist die Datenbank gerade weg, soll der
+        // Server trotzdem hochkommen und über /healthz sagen, was fehlt.
         let pool = PgPoolOptions::new()
             .max_connections(config.database_pool_max)
             .acquire_timeout(std::time::Duration::from_secs(15))
-            .connect(&config.database_url)
-            .await?;
+            .connect_lazy(&config.database_url)?;
 
         Self::from_pool(pool, config).await
     }
@@ -48,7 +61,22 @@ impl AppState {
             storage,
             hub,
             bus,
+            startup_problem: Arc::new(RwLock::new(None)),
         })
+    }
+
+    /// Hält fest, was beim Hochfahren schiefging. `/healthz` nennt es dann.
+    pub fn set_startup_problem(&self, text: impl Into<String>) {
+        if let Ok(mut slot) = self.startup_problem.write() {
+            *slot = Some(text.into());
+        }
+    }
+
+    pub fn startup_problem(&self) -> Option<String> {
+        self.startup_problem
+            .read()
+            .ok()
+            .and_then(|slot| slot.clone())
     }
 
     /// Starts the LISTEN/NOTIFY task that fans events out across instances.

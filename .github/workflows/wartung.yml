@@ -23,7 +23,16 @@ on:
           - starten
           - protokoll
           - secret-setzen
+          - migration-reparieren
           - neu-anlegen
+      # „migration-reparieren“ löst die Blockade, die am 25. August einen
+      # halben Tag Ausfall verursacht hat: Eine Migrationsdatei war nach dem
+      # Ausführen verändert worden, sqlx verweigerte daraufhin JEDE Migration
+      # („VersionMismatch“), der Prozess beendete sich, Fly startete ihn neu –
+      # zehnmal, dann gar nicht mehr. Diese Aufgabe gleicht die Prüfsumme an,
+      # lässt die offenen Migrationen durchlaufen und räumt den Schalter danach
+      # wieder weg. Ein Knopfdruck, kein Rechner nötig.
+      #
       # „neu-anlegen“ ist der Notnagel: eine festgefahrene Maschine wird
       # weggeworfen und aus dem Abbild neu erzeugt. Daten gehen dabei keine
       # verloren – die liegen in der Datenbank und im Objektspeicher, nicht
@@ -94,6 +103,51 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
+      # Zwei Neustarts in einem Griff: Schalter an, Migrationen laufen lassen,
+      # Schalter wieder aus. Der Schalter bleibt bewusst nicht stehen – er
+      # würde sonst jede künftige Änderung an einer bereits ausgeführten
+      # Migration stillschweigend durchwinken, statt sie zu melden.
+      - name: Migration reparieren
+        if: inputs.aufgabe == 'migration-reparieren'
+        run: |
+          set -euo pipefail
+
+          warten() {
+            for versuch in $(seq 1 24); do
+              code=$(curl -s -o antwort.json -w '%{http_code}' -m 6 "$API_URL/healthz" || echo 000)
+              if [ "$code" = "200" ]; then
+                echo "  … antwortet: $(cat antwort.json)"
+                return 0
+              fi
+              echo "  Versuch $versuch: HTTP $code"
+              sleep 5
+            done
+            echo "  keine gesunde Antwort nach rund zwei Minuten"
+            [ -s antwort.json ] && cat antwort.json
+            return 1
+          }
+
+          echo "1/3 Schalter setzen (die Maschine startet dabei neu) …"
+          flyctl secrets set --app "$FLY_APP" MIGRATIONS_REPAIR=1
+
+          echo "2/3 Warten, bis die Migrationen durch sind …"
+          if ! warten; then
+            echo "::error::Die App wurde nach dem Reparaturlauf nicht gesund. Schalter wird trotzdem entfernt."
+            flyctl secrets unset --app "$FLY_APP" MIGRATIONS_REPAIR || true
+            exit 1
+          fi
+
+          echo "3/3 Schalter wieder entfernen …"
+          flyctl secrets unset --app "$FLY_APP" MIGRATIONS_REPAIR
+
+          {
+            echo "### Migrationen repariert"
+            echo "Was genau angeglichen wurde, steht im Protokoll –"
+            echo "Aufgabe „protokoll“ ausführen und nach „Prüfsumme“ suchen."
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
       - name: Neu starten
         if: inputs.aufgabe == 'neustart' || inputs.aufgabe == 'secret-setzen'
         run: |
@@ -149,14 +203,17 @@ jobs:
       # meldet auch dieser Ablauf faelschlich Erfolg.
       - name: Antwortet die App?
         if: inputs.aufgabe != 'protokoll' && inputs.aufgabe != 'zustand'
+             && inputs.aufgabe != 'migration-reparieren'
         run: |
           set -uo pipefail
           # Bewusst kurz und wenige Versuche. Eine haengende Fly-App bringt
           # den Vermittler dazu, bei JEDER Anfrage einen Maschinenstart zu
           # versuchen; zu langes Anklopfen treibt ihn in die Drosselung der
           # Machines-API und macht die Lage schlimmer statt besser.
+          letzter=000
           for versuch in $(seq 1 12); do
             code=$(curl -s -o antwort.json -w '%{http_code}' -m 6 "$API_URL/healthz" || echo 000)
+            letzter=$code
             if [ "$code" = "200" ]; then
               echo "Die App antwortet:"
               cat antwort.json
@@ -169,10 +226,29 @@ jobs:
               } >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
+            # Ein Fehlercode ist eine ANTWORT – und die App sagt darin, was ihr
+            # fehlt. Das ist etwas ganz anderes als Funkstille, und der
+            # Unterschied gehoert in den Bericht, statt unter „antwortet nicht“
+            # zu verschwinden.
+            if [ "$code" != "000" ] && [ -s antwort.json ]; then
+              echo "Die App antwortet mit HTTP $code:"
+              cat antwort.json
+            fi
             echo "Versuch $versuch: HTTP $code – warte 5 s"
             sleep 5
           done
-          echo "::error::Die API antwortet nicht (12 Versuche, rund zwei Minuten)."
+          if [ "$letzter" != "000" ] && [ -s antwort.json ]; then
+            {
+              echo "### API laeuft, ist aber nicht gesund (HTTP $letzter)"
+              echo '```json'
+              cat antwort.json
+              echo
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Die API laeuft, meldet aber ein Problem (HTTP $letzter) – siehe Zusammenfassung."
+          else
+            echo "::error::Die API antwortet ueberhaupt nicht (12 Versuche, rund zwei Minuten)."
+          fi
           exit 1
 
       - name: Protokoll

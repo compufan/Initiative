@@ -9,6 +9,7 @@ pub mod dto;
 pub mod error;
 pub mod games;
 pub mod ical;
+pub mod migrate;
 pub mod modules;
 pub mod push;
 pub mod realtime;

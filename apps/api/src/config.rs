@@ -80,6 +80,10 @@ pub struct Config {
     pub vapid: Option<VapidConfig>,
     pub realtime_bus: RealtimeBus,
     pub run_migrations: bool,
+    /// Einmal-Schalter (`MIGRATIONS_REPAIR=1`): Gleicht die Prüfsummen bereits
+    /// ausgeführter Migrationen an die mitgelieferten Dateien an. Bewusst kein
+    /// Dauerzustand – siehe `crate::migrate`.
+    pub repair_migrations: bool,
     /// Commit, aus dem dieses Abbild gebaut wurde. Wird in der App angezeigt.
     pub git_sha: String,
 }
@@ -242,6 +246,7 @@ impl Config {
                 _ => RealtimeBus::Postgres,
             },
             run_migrations: var("RUN_MIGRATIONS").as_deref() != Some("false"),
+            repair_migrations: flag("MIGRATIONS_REPAIR", false),
             git_sha: var("GIT_SHA")
                 .map(|value| value.chars().take(7).collect())
                 .unwrap_or_else(|| "unbekannt".to_string()),
