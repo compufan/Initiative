@@ -10,6 +10,7 @@ pub mod auth;
 pub mod calendar;
 pub mod collections;
 pub mod conversations;
+pub mod datenschutz;
 pub mod expenses;
 pub mod games;
 pub mod media;

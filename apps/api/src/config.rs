@@ -42,6 +42,14 @@ pub struct VapidConfig {
     pub subject: String,
 }
 
+/// Betreiberangaben für die Datenschutzerklärung.
+#[derive(Debug, Clone)]
+pub struct Operator {
+    pub name: String,
+    pub email: String,
+    pub address: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub environment: String,
@@ -79,6 +87,12 @@ pub struct Config {
 
     pub vapid: Option<VapidConfig>,
     pub realtime_bus: RealtimeBus,
+    /// Wer die App betreibt – für die Datenschutzerklärung.
+    ///
+    /// Ohne diese Angaben ist die Seite unvollständig, und sie sagt das auch
+    /// deutlich: Art. 13 DSGVO verlangt Namen und Kontakt des
+    /// Verantwortlichen. Eine Erklärung ohne ihn erfüllt ihren Zweck nicht.
+    pub operator: Option<Operator>,
     pub run_migrations: bool,
     /// Einmal-Schalter (`MIGRATIONS_REPAIR=1`): Gleicht die Prüfsummen bereits
     /// ausgeführter Migrationen an die mitgelieferten Dateien an. Bewusst kein
@@ -245,6 +259,13 @@ impl Config {
                 "memory" => RealtimeBus::Memory,
                 _ => RealtimeBus::Postgres,
             },
+            operator: var("OPERATOR_NAME")
+                .zip(var("OPERATOR_EMAIL"))
+                .map(|(name, email)| Operator {
+                    name,
+                    email,
+                    address: var("OPERATOR_ADDRESS"),
+                }),
             run_migrations: var("RUN_MIGRATIONS").as_deref() != Some("false"),
             repair_migrations: flag("MIGRATIONS_REPAIR", false),
             git_sha: var("GIT_SHA")

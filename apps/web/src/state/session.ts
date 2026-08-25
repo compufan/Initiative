@@ -93,9 +93,16 @@ export const useSession = create<SessionState>((set, get) => ({
   async logout() {
     const tokens = getTokens();
     realtime.disconnect();
+
+    // Das Push-Abo ZUERST loesen, solange der Token noch gilt. Danach kaeme
+    // der Server nicht mehr an die Anfrage – und das Geraet bekaeme weiter
+    // Benachrichtigungen fuer ein Konto, von dem es sich abgemeldet hat.
+    await pushAbmelden().catch(() => {});
+
     if (tokens) await api.auth.logout(tokens.refreshToken).catch(() => {});
     setTokens(null);
     await clearOfflineData();
+    await medienSpeicherLeeren();
     set({ status: 'anonymous', user: null });
   },
 
@@ -123,4 +130,39 @@ export function useMyId(): string {
 /** Der eigene Anzeigename – etwa fuer einen Verwendungszweck. */
 export function useMyName(): string {
   return useSession((state) => state.user?.displayName ?? '');
+}
+
+/**
+ * Das Push-Abo dieses Geräts lösen.
+ *
+ * Ohne das läuft es weiter: Der Browser behält die Anmeldung beim Push-Dienst,
+ * der Server behält die Adresse – und das Gerät bekäme Benachrichtigungen für
+ * ein Konto, von dem es sich gerade abgemeldet hat.
+ */
+async function pushAbmelden(): Promise<void> {
+  if (!('serviceWorker' in navigator)) return;
+  const registration = await navigator.serviceWorker.getRegistration();
+  const abo = await registration?.pushManager.getSubscription();
+  if (!abo) return;
+  // Erst beim Server abmelden (dafür braucht es den noch gültigen Token),
+  // dann beim Browser.
+  await api.push.unsubscribe(abo.endpoint).catch(() => {});
+  await abo.unsubscribe().catch(() => {});
+}
+
+/**
+ * Den Medien-Zwischenspeicher des Service Workers leeren.
+ *
+ * `clearOfflineData` räumt die eigene Datenbank – die Bilder und Videos liegen
+ * aber woanders: in einem Cache, den der Service Worker führt. Der überlebte
+ * das Abmelden bisher. Wer sein Gerät weitergibt oder sich auf einem fremden
+ * abmeldet, ließ Fotos zurück, die auf dem Server längst nicht mehr für ihn
+ * bestimmt sind.
+ */
+async function medienSpeicherLeeren(): Promise<void> {
+  if (!('caches' in window)) return;
+  const namen = await caches.keys();
+  await Promise.all(
+    namen.filter((name) => name.includes('media')).map((name) => caches.delete(name)),
+  );
 }

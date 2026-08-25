@@ -351,6 +351,10 @@ export const api = {
     batch: (ids: string[]) =>
       get<ListResult<UserDto>>('/users/batch', { query: { ids: ids.join(',') } }),
     updateMe: (body: Record<string, unknown>) => patch<SelfUserDto>('/users/me', body),
+    /** Auskunft und Mitnahme (Art. 15 und 20 DSGVO). */
+    export: () => get<Record<string, unknown>>('/users/me/export'),
+    /** Das eigene Konto loeschen (Art. 17 DSGVO). Passwort als Gegenprobe. */
+    remove: (password: string) => del<void>('/users/me', { body: { password } }),
   },
   conversations: {
     list: (archived = false) =>

@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { Screen } from '../../components/Screen.js';
 import { AboutCard } from './AboutCard.js';
 import { AccountCard } from './AccountCard.js';
+import { PrivacyCard } from './PrivacyCard.js';
 import { AdminCard } from './AdminCard.js';
 import { CutoutCard } from './CutoutCard.js';
 import { PaymentProfileCard } from '../expenses/PaymentProfileCard.js';
@@ -37,6 +38,7 @@ export function SettingsScreen() {
       <PaymentProfileCard />
       <PasskeyCard />
       <AdminCard />
+      <PrivacyCard />
       <AccountCard />
       <AboutCard />
     </Screen>

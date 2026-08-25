@@ -19,6 +19,10 @@ pub fn build(state: AppState) -> Router {
         .route("/", get(index))
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
+        // Bewusst auf der Wurzel und nicht unter /api/v1: Wer wissen will, was
+        // mit seinen Daten geschieht, soll dafuer weder ein Konto brauchen
+        // noch die App installieren muessen.
+        .merge(crate::modules::datenschutz::router())
         .nest(API_PREFIX, crate::modules::router())
         .merge(crate::realtime::ws::router())
         .fallback(not_found)

@@ -293,7 +293,13 @@ async fn me(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> AppResult<Json<crate::dto::SelfUserDto>> {
-    let row = load_user(&state.pool, user.id()).await?;
+    // Gibt es das Konto nicht mehr, ist der Token wertlos – und das muss auch
+    // so heissen. „Nicht gefunden“ liest der Client als Stoerung und bleibt
+    // angemeldet; nach einer Kontoloeschung auf einem anderen Geraet stuende
+    // hier weiter eine Oberflaeche voller Daten, die es nicht mehr gibt.
+    let row = load_user(&state.pool, user.id())
+        .await
+        .map_err(|_| AppError::unauthorized("Dieses Konto gibt es nicht mehr."))?;
     Ok(Json(to_self_user_dto(&row, &state.config)))
 }
 
