@@ -56,6 +56,16 @@ export function MessageBubble({
     }
   }
 
+  async function discard() {
+    if (!message.clientId) return;
+    try {
+      await useChat.getState().discardFailed(message.conversationId, message.clientId);
+      toast('Nachricht verworfen', 'success');
+    } catch {
+      toast('Verwerfen fehlgeschlagen', 'error');
+    }
+  }
+
   async function toggleReaction(emoji: string, mine: boolean) {
     try {
       await useChat.getState().toggleReaction(message, emoji, mine);
@@ -110,9 +120,14 @@ export function MessageBubble({
           <span>{formatTime(message.createdAt)}</span>
           {isMine && message.pending && <span aria-label="wird gesendet">⏳</span>}
           {isMine && message.failed && (
-            <button type="button" className="msg-retry" onClick={() => void retry()}>
-              ⚠️ Erneut senden
-            </button>
+            <>
+              <button type="button" className="msg-retry" onClick={() => void retry()}>
+                ⚠️ Erneut senden
+              </button>
+              <button type="button" className="msg-retry" onClick={() => void discard()}>
+                Verwerfen
+              </button>
+            </>
           )}
           {isMine && !message.pending && !message.failed && <span aria-label="gesendet">✓</span>}
         </div>

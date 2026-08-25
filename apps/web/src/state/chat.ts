@@ -60,6 +60,7 @@ interface ChatState {
   loadOlder: (conversationId: string) => Promise<void>;
   sendMessage: (conversationId: string, draft: Draft) => Promise<void>;
   retryFailed: (conversationId: string, clientId: string) => Promise<void>;
+  discardFailed: (conversationId: string, clientId: string) => Promise<void>;
   flushOutbox: () => Promise<void>;
   deleteMessage: (message: MessageDto) => Promise<void>;
   toggleReaction: (message: MessageDto, emoji: string, mine: boolean) => Promise<void>;
@@ -237,6 +238,24 @@ export const useChat = create<ChatState>((set, get) => ({
     await updateOutbox(entry);
     markPending(set, conversationId, clientId);
     await get().flushOutbox();
+  },
+
+  /**
+   * Wirft eine nicht zustellbare Nachricht weg.
+   *
+   * Sie existiert nur lokal in der Outbox – der Server hat sie nie gesehen.
+   * Deshalb reicht es, den Eintrag zu löschen und die Blase zu entfernen.
+   */
+  async discardFailed(conversationId, clientId) {
+    await removeOutbox(clientId);
+    set((state) => ({
+      messages: {
+        ...state.messages,
+        [conversationId]: (state.messages[conversationId] ?? []).filter(
+          (message) => message.clientId !== clientId,
+        ),
+      },
+    }));
   },
 
   async flushOutbox() {

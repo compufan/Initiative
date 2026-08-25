@@ -91,10 +91,39 @@ export function onTokenChange(listener: TokenListener): () => void {
   return () => listeners.delete(listener);
 }
 
+/**
+ * Übernimmt eine Rotation, die ein anderer Tab vorgenommen hat.
+ *
+ * Der Server verbrennt bei jedem Refresh den alten Token. Ohne diesen Abgleich
+ * würde ein zweiter Tab weiter mit dem verbrannten Token arbeiten, eine 401
+ * kassieren und die Sitzung wegwerfen – obwohl nebenan längst ein gültiger
+ * Token liegt.
+ */
+function adoptStoredTokens(): StoredTokens | null {
+  const stored = readTokens();
+  if (stored && stored.refreshToken !== tokens?.refreshToken) {
+    tokens = stored;
+    for (const listener of listeners) listener(tokens);
+  }
+  return tokens;
+}
+
+if (typeof window !== 'undefined') {
+  // Ein anderer Tab hat die Token erneuert oder sich abgemeldet.
+  window.addEventListener('storage', (event) => {
+    if (event.key !== TOKEN_KEY) return;
+    const next = readTokens();
+    if (next?.refreshToken === tokens?.refreshToken) return;
+    tokens = next;
+    for (const listener of listeners) listener(tokens);
+  });
+}
+
 let refreshInFlight: Promise<StoredTokens | null> | null = null;
 
 async function refreshTokens(): Promise<StoredTokens | null> {
-  const current = tokens;
+  // Erst nachsehen, ob ein anderer Tab schon erneuert hat.
+  const current = adoptStoredTokens();
   if (!current) return null;
   if (!refreshInFlight) {
     refreshInFlight = (async () => {
@@ -105,12 +134,22 @@ async function refreshTokens(): Promise<StoredTokens | null> {
           body: JSON.stringify({ refreshToken: current.refreshToken }),
         });
         if (!response.ok) {
+          // Abgelehnt heißt nicht zwangsläufig „abgemeldet“: Zwischen Lesen und
+          // Senden kann ein anderer Tab rotiert haben. Nur wegwerfen, wenn im
+          // Speicher wirklich nichts Neueres steht.
+          const stored = readTokens();
+          if (stored && stored.refreshToken !== current.refreshToken) {
+            tokens = stored;
+            for (const listener of listeners) listener(tokens);
+            return tokens;
+          }
           setTokens(null);
           return null;
         }
         const session = (await response.json()) as AuthSession;
         return setTokens(session);
       } catch {
+        // Netzwerkfehler: Die Sitzung bleibt bestehen, es wird später erneut versucht.
         return current;
       } finally {
         refreshInFlight = null;
@@ -118,6 +157,19 @@ async function refreshTokens(): Promise<StoredTokens | null> {
     })();
   }
   return refreshInFlight;
+}
+
+/** Gültiges Zugriffstoken, notfalls frisch geholt. Für den WebSocket. */
+export async function validAccessToken(): Promise<string | null> {
+  const current = adoptStoredTokens();
+  if (!current) return null;
+  if (current.expiresAt - Date.now() >= 30_000) return current.accessToken;
+  return (await refreshTokens())?.accessToken ?? null;
+}
+
+/** Erzwingt eine Erneuerung, etwa wenn der WebSocket mit 4401 abgewiesen wurde. */
+export async function forceRefresh(): Promise<StoredTokens | null> {
+  return refreshTokens();
 }
 
 export interface RequestOptions {
@@ -166,7 +218,7 @@ export async function request<T>(
 
   let accessToken: string | null = null;
   if (!options.anonymous) {
-    let current = tokens;
+    let current = adoptStoredTokens();
     if (current && current.expiresAt - Date.now() < 30_000) current = await refreshTokens();
     accessToken = current?.accessToken ?? null;
   }
