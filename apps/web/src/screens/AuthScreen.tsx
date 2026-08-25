@@ -1,5 +1,6 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { ApiError } from '../lib/api.js';
+import { loginWithPasskey, passkeysUsable } from '../lib/passkeys.js';
 import { useSession } from '../state/session.js';
 
 type Mode = 'login' | 'register';
@@ -14,8 +15,45 @@ export function AuthScreen() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const [biometricsReady, setBiometricsReady] = useState(false);
+
   const login = useSession((state) => state.login);
   const register = useSession((state) => state.register);
+  const applySession = useSession((state) => state.applySession);
+
+  useEffect(() => {
+    let cancelled = false;
+    void passkeysUsable().then((value) => {
+      if (!cancelled) setBiometricsReady(value);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** Anmelden mit Face ID, Fingerabdruck oder Geräte-PIN. */
+  async function signInWithDevice() {
+    if (!username.trim()) {
+      setError('Bitte zuerst den Benutzernamen eintragen.');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      applySession(await loginWithPasskey(username.trim()));
+    } catch (caught) {
+      const name = caught instanceof DOMException ? caught.name : '';
+      if (name === 'NotAllowedError' || name === 'AbortError') {
+        setError(null);
+      } else if (caught instanceof ApiError) {
+        setError(caught.message);
+      } else {
+        setError('Anmeldung mit diesem Gerät hat nicht geklappt.');
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -134,6 +172,17 @@ export function AuthScreen() {
             {busy ? '…' : mode === 'login' ? 'Anmelden' : 'Konto erstellen'}
           </button>
         </form>
+
+        {mode === 'login' && biometricsReady && (
+          <button
+            type="button"
+            className="btn btn-block"
+            disabled={busy}
+            onClick={() => void signInWithDevice()}
+          >
+            🔐 Mit diesem Gerät anmelden
+          </button>
+        )}
 
         <button
           type="button"

@@ -58,7 +58,7 @@ struct ChangePasswordInput {
     new_password: String,
 }
 
-async fn issue_session(state: &AppState, user: &UserRow) -> AppResult<AuthSession> {
+pub(crate) async fn issue_session(state: &AppState, user: &UserRow) -> AppResult<AuthSession> {
     let access_token = jwt::encode(
         &user.id.to_string(),
         "access",

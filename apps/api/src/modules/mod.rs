@@ -12,6 +12,7 @@ pub mod conversations;
 pub mod games;
 pub mod media;
 pub mod messages;
+pub mod passkeys;
 pub mod polls;
 pub mod push;
 pub mod stickers;
@@ -28,6 +29,7 @@ pub fn router() -> Router<AppState> {
         .merge(auth::router())
         .merge(admin::router())
         .merge(storage_check::router())
+        .merge(passkeys::router())
         .merge(users::router())
         .merge(conversations::router())
         .merge(messages::router())
@@ -42,6 +44,7 @@ pub fn router() -> Router<AppState> {
 pub const MODULE_KEYS: &[&str] = &[
     "auth",
     "admin",
+    "passkeys",
     "users",
     "conversations",
     "messages",

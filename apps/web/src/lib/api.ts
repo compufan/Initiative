@@ -426,7 +426,29 @@ export const api = {
     removeMember: (id: string) => del<{ removed: boolean }>(`/admin/members/${id}`),
     storageCheck: () => get<StorageCheck>('/admin/storage-check'),
   },
+  passkeys: {
+    list: () => get<PasskeyDto[]>('/passkeys'),
+    remove: (id: string) => del<{ removed: boolean }>(`/passkeys/${id}`),
+    registerStart: () => post<PasskeyStart>('/passkeys/register/start'),
+    registerFinish: (body: unknown) => post<PasskeyDto>('/passkeys/register/finish', body),
+    loginStart: (username: string) =>
+      post<PasskeyStart>('/passkeys/login/start', { username }, { anonymous: true }),
+    loginFinish: (body: unknown) =>
+      post<AuthSession>('/passkeys/login/finish', body, { anonymous: true }),
+  },
 };
+
+export interface PasskeyDto {
+  id: string;
+  label: string;
+  lastUsedAt: string | null;
+  createdAt: string;
+}
+
+export interface PasskeyStart {
+  requestId: string;
+  options: unknown;
+}
 
 export interface StorageCheck {
   driver: string;

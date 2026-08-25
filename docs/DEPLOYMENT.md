@@ -49,11 +49,26 @@ Gelesen in `apps/api/src/config.rs`. Was hier nicht steht, wird nicht gelesen.
 | Variable                 | Standard           | Bedeutung                                                                                                                    |
 | ------------------------ | ------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
 | `JWT_SECRET`             | zufällig (nur Dev) | Signaturschlüssel der Access-Token (HS256). Mindestens 16 Zeichen, in `production` Pflicht. Ändern entwertet alle Sitzungen. |
-| `ACCESS_TOKEN_TTL`       | `900`              | Laufzeit des Access-Tokens in Sekunden (15 Minuten).                                                                         |
-| `REFRESH_TOKEN_TTL_DAYS` | `60`               | Laufzeit des Refresh-Tokens in Tagen. Er rotiert bei jedem Refresh.                                                          |
+| `ACCESS_TOKEN_TTL`       | `900`              | Laufzeit des Access-Tokens in Sekunden. Laeuft er ab, erneuert die App ihn selbst – davon merkt man nichts.                  |
+| `REFRESH_TOKEN_TTL_DAYS` | `60`               | **Hier stellt man die Sitzungsdauer ein.** So viele Tage bleibt man angemeldet: `365` fuer ein Jahr, `7` fuer eine Woche.     |
 | `REGISTRATION_MODE`      | `open`             | `open` \| `invite` \| `closed`.                                                                                              |
 | `INVITE_CODES`           | leer               | Kommaliste fest verdrahteter Codes, wirkt bei `REGISTRATION_MODE=invite`. Zusätzlich zu den Codes, die Admins in der App anlegen – gedacht als Notnagel. |
 | `ADMIN_PASSWORD`         | leer               | Schaltet den Admin-Modus frei (mind. 8 Zeichen). Ohne gesetztes Passwort ist die Verwaltung komplett aus. Gehört als Secret gesetzt, **nie** ins Repository. |
+
+### Anmelden ohne Passwort (Face ID / Fingerabdruck)
+
+Passkeys brauchen keine Konfiguration. Die API leitet die nötige Kennung
+(„Relying Party ID") aus `PUBLIC_APP_URL` ab – deshalb muss die Variable exakt
+zur Adresse passen, unter der die App im Browser läuft. Stimmt sie nicht,
+lehnt das Gerät ab.
+
+Einrichten in der App unter **Profil → Einstellungen → Ohne Passwort
+anmelden**, und zwar je Gerät einmal. Der private Schlüssel entsteht im Gerät
+(Secure Enclave beim iPhone, Keystore bei Android) und verlässt es nie; hier
+liegt nur der öffentliche Teil.
+
+Auf dem iPhone geht das nur in der **zum Home-Bildschirm hinzugefügten App**,
+nicht im normalen Safari-Tab.
 
 ### URLs und CORS
 
