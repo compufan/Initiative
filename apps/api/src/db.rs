@@ -339,3 +339,43 @@ pub struct EventAttachmentRow {
     pub title: Option<String>,
     pub created_at: DateTime<Utc>,
 }
+
+/// Eine Ausgabe (`migrations/0006_expenses.sql`).
+#[derive(Debug, Clone, FromRow)]
+pub struct ExpenseRow {
+    pub id: Uuid,
+    pub conversation_id: Option<Uuid>,
+    pub event_id: Option<Uuid>,
+    pub created_by: Option<Uuid>,
+    pub title: String,
+    pub note: Option<String>,
+    pub amount_cents: i64,
+    pub currency: String,
+    pub paid_by: Option<Uuid>,
+    pub spent_at: DateTime<Utc>,
+    pub visibility: String,
+    pub settled_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct ExpenseShareRow {
+    pub expense_id: Uuid,
+    pub user_id: Uuid,
+    pub amount_cents: i64,
+    pub settled_at: Option<DateTime<Utc>>,
+}
+
+/// Wie jemandem Geld zurueckgegeben werden kann.
+#[derive(Debug, Clone, FromRow)]
+pub struct PaymentProfileRow {
+    pub user_id: Uuid,
+    pub paypal_me: Option<String>,
+    pub iban: Option<String>,
+    pub bic: Option<String>,
+    pub account_holder: Option<String>,
+    pub note: Option<String>,
+    pub updated_at: DateTime<Utc>,
+}

@@ -400,3 +400,61 @@ pub struct EventAttachmentDto {
     pub attachment: AttachmentDto,
     pub created_at: DateTime<Utc>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpenseShareDto {
+    pub user_id: Uuid,
+    pub amount_cents: i64,
+    pub settled_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpenseDto {
+    pub id: Uuid,
+    pub conversation_id: Option<Uuid>,
+    pub event_id: Option<Uuid>,
+    pub created_by: Option<Uuid>,
+    pub title: String,
+    pub note: Option<String>,
+    /// In Cent – Fließkomma wäre bei Geld die falsche Zahlenart.
+    pub amount_cents: i64,
+    pub currency: String,
+    pub paid_by: Option<Uuid>,
+    pub spent_at: DateTime<Utc>,
+    /// `participants`, `conversation` oder `listed`.
+    pub visibility: String,
+    /// Bei `listed`: wer sie sehen darf.
+    pub viewer_ids: Vec<Uuid>,
+    /// Wem sie ausdrücklich verborgen bleibt – das Geschenk vor dem Beschenkten.
+    pub hidden_from_ids: Vec<Uuid>,
+    pub shares: Vec<ExpenseShareDto>,
+    pub settled_at: Option<DateTime<Utc>>,
+    /// Ob **ich** sie ändern darf.
+    pub can_edit: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Was zwei Personen einander schulden – aus Sicht des Abfragenden.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BalanceDto {
+    pub user_id: Uuid,
+    /// Positiv: diese Person schuldet mir. Negativ: ich schulde ihr.
+    pub net_cents: i64,
+    pub currency: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PaymentProfileDto {
+    pub user_id: Uuid,
+    /// Nur der Name aus dem persönlichen PayPal.Me-Link – kein Geschäftskonto.
+    pub paypal_me: Option<String>,
+    pub iban: Option<String>,
+    pub bic: Option<String>,
+    pub account_holder: Option<String>,
+    pub note: Option<String>,
+}

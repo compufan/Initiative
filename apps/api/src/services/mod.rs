@@ -3,6 +3,7 @@ pub mod calendar;
 pub mod conversations;
 pub mod events;
 pub mod expanders;
+pub mod expenses;
 pub mod games;
 pub mod messages;
 pub mod notify;

@@ -10,6 +10,7 @@ pub mod auth;
 pub mod calendar;
 pub mod collections;
 pub mod conversations;
+pub mod expenses;
 pub mod games;
 pub mod media;
 pub mod messages;
@@ -38,6 +39,7 @@ pub fn router() -> Router<AppState> {
         .merge(stickers::router())
         .merge(collections::router())
         .merge(calendar::router())
+        .merge(expenses::router())
         .merge(polls::router())
         .merge(games::router())
         .merge(push::router())
@@ -54,6 +56,7 @@ pub const MODULE_KEYS: &[&str] = &[
     "stickers",
     "collections",
     "calendar",
+    "expenses",
     "polls",
     "games",
     "push",

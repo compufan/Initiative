@@ -1439,6 +1439,302 @@ async fn full_api_scenario() {
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
+    // ---- Ausgaben ---------------------------------------------------------
+    // Der interessante Fall ist das Geschenk: Drei legen zusammen, der
+    // Beschenkte ist im selben Chat und soll nichts davon merken.
+    let (status, ausgabe) = app
+        .call(
+            "POST",
+            "/api/v1/expenses",
+            Some(&alice_token),
+            Some(json!({
+                "conversationId": gruppe_id,
+                "title": "Kohle und Fleisch",
+                "amountCents": 4500,
+                "shares": [
+                    { "userId": alice_id },
+                    { "userId": bob_id },
+                    { "userId": carol_id }
+                ]
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{ausgabe:?}");
+    let ausgabe_id = ausgabe["id"].as_str().unwrap().to_string();
+    // 45,00 auf drei geht glatt auf.
+    let anteile: Vec<i64> = ausgabe["shares"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|share| share["amountCents"].as_i64().unwrap())
+        .collect();
+    assert_eq!(anteile.iter().sum::<i64>(), 4500);
+    assert_eq!(anteile, vec![1500, 1500, 1500]);
+
+    // Bob schuldet Alice seinen Anteil.
+    let (status, salden) = app
+        .call(
+            "GET",
+            &format!("/api/v1/expenses/balances?conversationId={gruppe_id}"),
+            Some(&bob_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let gegen_alice = salden["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|eintrag| eintrag["userId"] == alice_id.as_str())
+        .unwrap();
+    // Negativ heisst: Bob schuldet.
+    assert_eq!(gegen_alice["netCents"], -1500);
+
+    // Und umgekehrt sieht Alice zweimal 1500 offen.
+    let (status, alices_salden) = app
+        .call(
+            "GET",
+            &format!("/api/v1/expenses/balances?conversationId={gruppe_id}"),
+            Some(&alice_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let summe: i64 = alices_salden["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|eintrag| eintrag["netCents"].as_i64().unwrap())
+        .sum();
+    assert_eq!(summe, 3000);
+
+    // ---- Ungerader Betrag: kein Cent darf verlorengehen -------------------
+    let (status, krumm) = app
+        .call(
+            "POST",
+            "/api/v1/expenses",
+            Some(&alice_token),
+            Some(json!({
+                "conversationId": gruppe_id,
+                "title": "Getraenke",
+                "amountCents": 1000,
+                "shares": [
+                    { "userId": alice_id },
+                    { "userId": bob_id },
+                    { "userId": carol_id }
+                ]
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let krumme_anteile: Vec<i64> = krumm["shares"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|share| share["amountCents"].as_i64().unwrap())
+        .collect();
+    // 10 Euro auf drei: 3,34 + 3,33 + 3,33. Dreimal 3,33 waeren 9,99.
+    assert_eq!(krumme_anteile.iter().sum::<i64>(), 1000);
+    assert_eq!(krumme_anteile, vec![334, 333, 333]);
+
+    // ---- Das Geschenk ----------------------------------------------------
+    // Alice und Bob legen fuer Carol zusammen. Carol darf nichts davon sehen.
+    let (status, geschenk) = app
+        .call(
+            "POST",
+            "/api/v1/expenses",
+            Some(&alice_token),
+            Some(json!({
+                "conversationId": gruppe_id,
+                "title": "Geschenk fuer Carol",
+                "amountCents": 6000,
+                "shares": [{ "userId": alice_id }, { "userId": bob_id }],
+                "hiddenFromIds": [carol_id]
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{geschenk:?}");
+    let geschenk_id = geschenk["id"].as_str().unwrap().to_string();
+
+    // Fuer Carol gibt es diese Ausgabe schlicht nicht - und zwar 404, nicht
+    // 403: "verboten" hiesse, dass es sie gibt.
+    let (status, _) = app
+        .call(
+            "GET",
+            &format!("/api/v1/expenses/{geschenk_id}"),
+            Some(&carol_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, carols_liste) = app
+        .call(
+            "GET",
+            &format!("/api/v1/expenses?conversationId={gruppe_id}"),
+            Some(&carol_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !carols_liste["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|eintrag| eintrag["id"] == geschenk_id.as_str()),
+        "Carol sieht ihr eigenes Geschenk: {carols_liste:?}"
+    );
+
+    // Bob dagegen schon - er zahlt ja mit.
+    let (status, bobs_liste) = app
+        .call(
+            "GET",
+            &format!("/api/v1/expenses?conversationId={gruppe_id}"),
+            Some(&bob_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(bobs_liste["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|eintrag| eintrag["id"] == geschenk_id.as_str()));
+
+    // Und Carols Saldo bleibt davon unberuehrt - sie hat keinen Anteil.
+    let (status, carols_salden) = app
+        .call(
+            "GET",
+            &format!("/api/v1/expenses/balances?conversationId={gruppe_id}"),
+            Some(&carol_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let carol_gegen_alice = carols_salden["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|eintrag| eintrag["userId"] == alice_id.as_str())
+        .unwrap();
+    // Nur die beiden gemeinsamen Ausgaben: 1500 + 333.
+    assert_eq!(carol_gegen_alice["netCents"], -1833);
+
+    // ---- Verbergen geht NICHT bei jemandem, der mitzahlt ------------------
+    // Sonst schuldete er Geld, das in seinem Saldo nicht auftaucht.
+    let (status, abgelehnt) = app
+        .call(
+            "POST",
+            "/api/v1/expenses",
+            Some(&alice_token),
+            Some(json!({
+                "conversationId": gruppe_id,
+                "title": "Unsinn",
+                "amountCents": 1000,
+                "shares": [{ "userId": alice_id }, { "userId": bob_id }],
+                "hiddenFromIds": [bob_id]
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{abgelehnt:?}");
+
+    // Auch nachtraeglich nicht.
+    let (status, _) = app
+        .call(
+            "POST",
+            &format!("/api/v1/expenses/{ausgabe_id}/hidden/{bob_id}"),
+            Some(&alice_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // ---- Abhaken ----------------------------------------------------------
+    let (status, abgehakt) = app
+        .call(
+            "POST",
+            &format!("/api/v1/expenses/{ausgabe_id}/settle"),
+            Some(&bob_token),
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{abgehakt:?}");
+    let bobs_anteil = abgehakt["shares"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|share| share["userId"] == bob_id.as_str())
+        .unwrap();
+    assert!(bobs_anteil["settledAt"].is_string());
+
+    // Danach schuldet Bob aus dieser Ausgabe nichts mehr.
+    let (status, salden) = app
+        .call(
+            "GET",
+            &format!("/api/v1/expenses/balances?conversationId={gruppe_id}"),
+            Some(&bob_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let rest = salden["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|eintrag| eintrag["userId"] == alice_id.as_str())
+        .map(|eintrag| eintrag["netCents"].as_i64().unwrap())
+        .unwrap_or(0);
+    // Nur noch die Getraenke (333) und sein Anteil am Geschenk (3000).
+    assert_eq!(rest, -3333);
+
+    // ---- Zahlungsweg ohne PayPal-Geschaeftskonto -------------------------
+    let (status, profil) = app
+        .call(
+            "PUT",
+            "/api/v1/expenses/payment-profile",
+            Some(&alice_token),
+            Some(json!({
+                "paypalMe": "https://paypal.me/alicemuster",
+                "iban": "DE02 1203 0000 0000 2020 51",
+                "accountHolder": "Alice Muster"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{profil:?}");
+    // Der ganze Link wird auf den Namen zurueckgefuehrt.
+    assert_eq!(profil["paypalMe"], "https://paypal.me/alicemuster");
+    // Und die IBAN ohne Leerzeichen gespeichert.
+    assert_eq!(profil["iban"], "DE02120300000000202051");
+
+    // Bob bekommt daraus einen fertigen Link mit Betrag.
+    let (status, zahlweg) = app
+        .call(
+            "GET",
+            &format!("/api/v1/expenses/payment-profile/{alice_id}?amountCents=3333&currency=EUR"),
+            Some(&bob_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        zahlweg["paypalUrl"],
+        "https://paypal.me/alicemuster/33.33EUR"
+    );
+    assert_eq!(zahlweg["profile"]["accountHolder"], "Alice Muster");
+
+    // Ein unbrauchbarer Name wird gleich beim Speichern abgewiesen, nicht
+    // erst beim Bezahlen.
+    let (status, _) = app
+        .call(
+            "PUT",
+            "/api/v1/expenses/payment-profile",
+            Some(&alice_token),
+            Some(json!({ "paypalMe": "alice muster?x=1" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
     // ---- profile update broadcasts ---------------------------------------
     let (status, profile) = app
         .call(
