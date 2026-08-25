@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::auth::password::{hash_password, random_token, sha256_hex, verify_password};
+use crate::auth::password::{hash_password, hash_password_async, random_token, sha256_hex, verify_password_async};
 use crate::auth::{jwt, AuthUser};
 use crate::config::RegistrationMode;
 use crate::db::UserRow;
@@ -168,6 +168,7 @@ async fn register(
         return Err(AppError::conflict("Benutzername ist bereits vergeben"));
     }
 
+    let password_hash = hash_password_async(input.password).await?;
     let user = sqlx::query_as::<_, UserRow>(
         "insert into users (id, username, display_name, password_hash, calendar_token)
          values ($1, $2, $3, $4, $5)
@@ -176,7 +177,7 @@ async fn register(
     .bind(Uuid::now_v7())
     .bind(&username)
     .bind(&display_name)
-    .bind(hash_password(&input.password)?)
+    .bind(password_hash)
     .bind(random_token(24))
     .fetch_one(&state.pool)
     .await?;
@@ -264,9 +265,9 @@ async fn login(
     // Auch ohne Konto einmal richtig rechnen, damit die Antwortzeit nicht
     // verraet, ob es den Namen gibt.
     let valid = match &user {
-        Some(user) => verify_password(&input.password, &user.password_hash),
+        Some(user) => verify_password_async(input.password.clone(), user.password_hash.clone()).await,
         None => {
-            let _ = verify_password(&input.password, &DUMMY_HASH);
+            let _ = verify_password_async(input.password, DUMMY_HASH.clone()).await;
             false
         }
     };
@@ -416,13 +417,14 @@ async fn change_password(
         return Err(zu_schnell());
     }
     let row = load_user(&state.pool, user.id()).await?;
-    if !verify_password(&input.current_password, &row.password_hash) {
+    if !verify_password_async(input.current_password, row.password_hash.clone()).await {
         return Err(AppError::unauthorized("Aktuelles Passwort ist falsch"));
     }
     check_password(&input.new_password)?;
 
+    let password_hash = hash_password_async(input.new_password).await?;
     sqlx::query("update users set password_hash = $1, updated_at = now() where id = $2")
-        .bind(hash_password(&input.new_password)?)
+        .bind(password_hash)
         .bind(row.id)
         .execute(&state.pool)
         .await?;

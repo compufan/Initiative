@@ -20,6 +20,12 @@ pub fn hash_password(password: &str) -> AppResult<String> {
         })
 }
 
+pub async fn hash_password_async(password: String) -> AppResult<String> {
+    tokio::task::spawn_blocking(move || hash_password(&password))
+        .await
+        .map_err(|_| AppError::internal("Password hashing task panicked"))?
+}
+
 pub fn verify_password(password: &str, stored: &str) -> bool {
     match PasswordHash::new(stored) {
         Ok(parsed) => Argon2::default()
@@ -27,6 +33,12 @@ pub fn verify_password(password: &str, stored: &str) -> bool {
             .is_ok(),
         Err(_) => false,
     }
+}
+
+pub async fn verify_password_async(password: String, stored: String) -> bool {
+    tokio::task::spawn_blocking(move || verify_password(&password, &stored))
+        .await
+        .unwrap_or(false)
 }
 
 /// URL-safe random token (refresh tokens, calendar feed tokens).

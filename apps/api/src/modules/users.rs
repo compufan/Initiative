@@ -9,6 +9,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
+use crate::auth::password::verify_password_async;
 use crate::db::UserRow;
 use crate::drossel::regeln;
 use crate::dto::{ListResult, SelfUserDto, UserDto};
@@ -241,7 +242,7 @@ async fn loeschen(
         .await?
         .ok_or_else(|| AppError::not_found("Konto nicht gefunden"))?;
 
-    if !crate::auth::password::verify_password(&input.password, &konto.password_hash) {
+    if !verify_password_async(input.password, konto.password_hash.clone()).await {
         return Err(AppError::unauthorized("Das Passwort stimmt nicht."));
     }
 
