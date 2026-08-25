@@ -26,10 +26,17 @@ export interface TextLayer {
   outline: boolean;
 }
 
-/** One eraser stroke in canvas coordinates, points stored as a flat x/y list. */
+/**
+ * Ein Pinselstrich in Sticker-Koordinaten, Punkte als flache x/y-Liste.
+ *
+ * `weg` radiert, `zurueck` holt das Original wieder hervor. Das zweite ist
+ * kein Luxus: Ein Modell frisst gern eine Ohrspitze oder eine Haarsträhne
+ * weg, und ohne Zurückholen bliebe nur, das Freistellen ganz zu verwerfen.
+ */
 export interface Stroke {
   size: number;
   points: number[];
+  mode: 'weg' | 'zurueck';
 }
 
 /** Ein Antippen im Bild: alles, was farblich daran hängt, bleibt erhalten. */
@@ -132,7 +139,7 @@ export function cloneDoc(doc: StickerDoc): StickerDoc {
     autoMask: doc.autoMask,
     maskParts: doc.maskParts.slice(),
     keep: doc.keep.map((seed) => ({ ...seed })),
-    strokes: doc.strokes.map((stroke) => ({ size: stroke.size, points: stroke.points.slice() })),
+    strokes: doc.strokes.map((stroke) => ({ ...stroke, points: stroke.points.slice() })),
     top: { ...doc.top },
     bottom: { ...doc.bottom },
   };
@@ -525,30 +532,151 @@ function applyShape(ctx: CanvasRenderingContext2D, shape: ShapeKind): void {
   ctx.restore();
 }
 
-function applyStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[]): void {
+/**
+ * Fasst aufeinanderfolgende Striche derselben Richtung zusammen.
+ *
+ * Das ist der ganze Trick an der Reihenfolge: Radieren und Zurückholen sind
+ * gegenläufig, und wer dieselbe Stelle radiert, zurückholt und wieder radiert,
+ * erwartet, dass der letzte Strich gewinnt. Alle Radierstriche in einem Rutsch
+ * und danach alle Zurückhol-Striche wäre einfacher – und falsch.
+ */
+export function strichBloecke(strokes: Stroke[]): Stroke[][] {
+  const bloecke: Stroke[][] = [];
+  for (const stroke of strokes) {
+    const letzter = bloecke[bloecke.length - 1];
+    if (letzter && letzter[0].mode === stroke.mode) letzter.push(stroke);
+    else bloecke.push([stroke]);
+  }
+  return bloecke;
+}
+
+/**
+ * Hält die Lupe im Bild.
+ *
+ * `zoom` ist die Vergrösserung, `x`/`y` der Punkt, der in der Mitte steht.
+ * Ohne die Begrenzung könnte man bis in die leere Fläche neben dem Sticker
+ * schieben und fände nicht mehr zurück.
+ */
+export function lupeGrenzen(
+  next: { zoom: number; x: number; y: number },
+  maxZoom: number,
+): { zoom: number; x: number; y: number } {
+  const zoom = Math.min(Math.max(next.zoom, 1), maxZoom);
+  const halb = STICKER_SIZE / (2 * zoom);
+  const halten = (wert: number) => Math.min(Math.max(wert, halb), STICKER_SIZE - halb);
+  return { zoom, x: halten(next.x), y: halten(next.y) };
+}
+
+/** Zeichnet einen Strich – als Kreis, wenn er nur aus einem Antippen besteht. */
+function strichZeichnen(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
+  const points = stroke.points;
+  if (points.length < 2) return;
+  if (points.length === 2) {
+    ctx.beginPath();
+    ctx.arc(points[0], points[1], stroke.size / 2, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  ctx.lineWidth = stroke.size;
+  ctx.beginPath();
+  ctx.moveTo(points[0], points[1]);
+  for (let i = 2; i < points.length; i += 2) ctx.lineTo(points[i], points[i + 1]);
+  ctx.stroke();
+}
+
+/**
+ * Wendet die Pinselstriche an – Radieren und Zurückholen in der Reihenfolge,
+ * in der sie gemacht wurden.
+ *
+ * Die Reihenfolge ist nicht egal: Wer radiert, zurückholt und dieselbe Stelle
+ * wieder radiert, erwartet, dass der letzte Strich gewinnt. Deshalb werden nur
+ * *aufeinanderfolgende* Striche derselben Richtung zusammengefasst – in der
+ * Praxis sind das ein oder zwei Blöcke, und die Reihenfolge stimmt trotzdem.
+ *
+ * `original` ist das Bild, wie es vor dem Freistellen gezeichnet war. Ohne das
+ * gäbe es nichts zurückzuholen.
+ */
+function applyStrokes(
+  ctx: CanvasRenderingContext2D,
+  strokes: Stroke[],
+  original: HTMLCanvasElement | null,
+): void {
   if (strokes.length === 0) return;
   ctx.save();
-  ctx.globalCompositeOperation = 'destination-out';
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.fillStyle = '#000000';
   ctx.strokeStyle = '#000000';
-  for (const stroke of strokes) {
-    const points = stroke.points;
-    if (points.length < 2) continue;
-    if (points.length === 2) {
-      ctx.beginPath();
-      ctx.arc(points[0], points[1], stroke.size / 2, 0, Math.PI * 2);
-      ctx.fill();
+
+  for (const block of strichBloecke(strokes)) {
+    const mode = block[0].mode;
+
+    if (mode === 'weg') {
+      ctx.globalCompositeOperation = 'destination-out';
+      for (const stroke of block) strichZeichnen(ctx, stroke);
       continue;
     }
-    ctx.lineWidth = stroke.size;
-    ctx.beginPath();
-    ctx.moveTo(points[0], points[1]);
-    for (let i = 2; i < points.length; i += 2) ctx.lineTo(points[i], points[i + 1]);
-    ctx.stroke();
+
+    // Zurückholen: das Original durch die Strichform hindurch aufs Bild legen.
+    if (!original) continue;
+    const hilf = hilfsflaeche();
+    const hctx = hilf.getContext('2d');
+    if (!hctx) continue;
+    hctx.setTransform(1, 0, 0, 1, 0, 0);
+    hctx.globalCompositeOperation = 'source-over';
+    hctx.clearRect(0, 0, STICKER_SIZE, STICKER_SIZE);
+    hctx.drawImage(original, 0, 0);
+    hctx.globalCompositeOperation = 'destination-in';
+    hctx.lineCap = 'round';
+    hctx.lineJoin = 'round';
+    hctx.fillStyle = '#000000';
+    hctx.strokeStyle = '#000000';
+    for (const stroke of block) strichZeichnen(hctx, stroke);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(hilf, 0, 0);
   }
   ctx.restore();
+}
+
+/**
+ * Legt eine Kopie des aktuellen Standes ab – das Bild vor dem Freistellen.
+ *
+ * Eigene Flaeche, nicht die aus `hilfsflaeche()`: die wird beim Zurueckholen
+ * selbst gebraucht, und beides auf derselben Flaeche wuerde sich gegenseitig
+ * ueberschreiben.
+ */
+let originalCanvas: HTMLCanvasElement | null = null;
+function originalMerken(ctx: CanvasRenderingContext2D): HTMLCanvasElement {
+  if (!originalCanvas) {
+    originalCanvas = document.createElement('canvas');
+    originalCanvas.width = STICKER_SIZE;
+    originalCanvas.height = STICKER_SIZE;
+  }
+  const octx = originalCanvas.getContext('2d');
+  if (octx) {
+    octx.setTransform(1, 0, 0, 1, 0, 0);
+    octx.globalCompositeOperation = 'source-over';
+    octx.clearRect(0, 0, STICKER_SIZE, STICKER_SIZE);
+    octx.drawImage(ctx.canvas, 0, 0);
+  }
+  return originalCanvas;
+}
+
+/**
+ * Eine wiederverwendete Arbeitsfläche.
+ *
+ * Bei jedem Strich eine neue anzulegen hiesse, waehrend des Malens im
+ * Sekundentakt 512x512-Flaechen zu erzeugen und dem Aufraeumer zu ueberlassen
+ * – auf einem Handy merkt man das als Ruckeln.
+ */
+let hilfsCanvas: HTMLCanvasElement | null = null;
+function hilfsflaeche(): HTMLCanvasElement {
+  if (!hilfsCanvas) {
+    hilfsCanvas = document.createElement('canvas');
+    hilfsCanvas.width = STICKER_SIZE;
+    hilfsCanvas.height = STICKER_SIZE;
+  }
+  return hilfsCanvas;
 }
 
 /**
@@ -718,6 +846,12 @@ export function renderSticker(
 
   if (source) drawSource(ctx, source, doc);
 
+  // Das unberuehrte Bild festhalten, solange es das noch ist – nur wenn es
+  // auch jemand braucht. Fuer den Normalfall ohne Zurueckhol-Striche waere
+  // die Kopie reine Arbeit ohne Wirkung.
+  const braucht = doc.strokes.some((stroke) => stroke.mode === 'zurueck');
+  const original = braucht ? originalMerken(ctx) : null;
+
   // Die Maske eines Modells zuerst: sie beschreibt das Motiv genauer als jede
   // Farbschwelle. Antippen und "Ecken entfernen" wirken danach nur noch auf
   // das, was uebrig geblieben ist.
@@ -743,7 +877,7 @@ export function renderSticker(
   }
 
   applyShape(ctx, doc.shape);
-  applyStrokes(ctx, doc.strokes);
+  applyStrokes(ctx, doc.strokes, original);
 
   if (!options.fast && doc.outline && doc.outlineWidth > 0) {
     applyOutline(canvas, Math.round(doc.outlineWidth));

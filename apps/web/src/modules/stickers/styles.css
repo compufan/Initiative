@@ -554,3 +554,10 @@
     grid-template-columns: repeat(6, 1fr);
   }
 }
+
+/* Die Lupenanzeige sitzt gegenüber dem Werkzeugnamen, damit sich beide nicht
+   überdecken, wenn beide zu sehen sind. */
+.stk-mode-badge-right {
+  left: auto;
+  right: 8px;
+}

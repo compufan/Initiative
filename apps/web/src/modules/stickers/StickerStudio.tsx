@@ -17,6 +17,7 @@ import {
   createDoc,
   exportSticker,
   isEmptyDoc,
+  lupeGrenzen,
   renderSticker,
   toSourcePoint,
   type EditorSource,
@@ -36,13 +37,14 @@ import { kanteWeichzeichnen, maskeTraegt, vorlageAus } from './engines/prepare.j
 import { teilAn, teileFinden } from './engines/teile.js';
 
 type Tool = 'move' | 'erase' | 'keep' | 'teile';
-type Tab = 'source' | 'move' | 'shape' | 'cutout' | 'outline' | 'text';
+type Tab = 'source' | 'move' | 'shape' | 'cutout' | 'detail' | 'outline' | 'text';
 
 const TABS: { key: Tab; icon: string; label: string }[] = [
   { key: 'source', icon: '🖼️', label: 'Quelle' },
   { key: 'move', icon: '✋', label: 'Bewegen' },
   { key: 'shape', icon: '⬜', label: 'Form' },
   { key: 'cutout', icon: '🪄', label: 'Freistellen' },
+  { key: 'detail', icon: '🔍', label: 'Detail' },
   { key: 'outline', icon: '✨', label: 'Kontur' },
   { key: 'text', icon: '🅣', label: 'Text' },
 ];
@@ -58,6 +60,15 @@ const TEXT_COLORS = ['#ffffff', '#111111', '#ff3b30', '#ffcc00', '#34c759', '#0a
 
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 5;
+
+/**
+ * Wie weit die Lupe vergrössert.
+ *
+ * Acht ist kein willkürlicher Wert: Bei 512 Bildpunkten auf etwa 360 CSS-Pixeln
+ * Anzeige ist ein Bildpunkt sonst 0,7 Pixel gross – mit dem Finger nicht zu
+ * treffen. Bei 8x sind es gut fünf, und man kommt an eine Kontur heran.
+ */
+const MAX_LUPE = 8;
 const HISTORY_MAX = 30;
 
 interface StickerStudioProps {
@@ -66,7 +77,7 @@ interface StickerStudioProps {
 }
 
 interface GestureState {
-  mode: 'none' | 'pan' | 'pinch' | 'erase';
+  mode: 'none' | 'pan' | 'pinch' | 'erase' | 'lupe' | 'lupenpinch';
   startX: number;
   startY: number;
   startOffsetX: number;
@@ -90,6 +101,16 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
   const [tool, setTool] = useState<Tool>('move');
   const [slot, setSlot] = useState<TextSlot>('top');
   const [brush, setBrush] = useState(56);
+  /** Ob der Pinsel wegnimmt oder das Original zurückholt. */
+  const [pinsel, setPinsel] = useState<'weg' | 'zurueck'>('weg');
+  /**
+   * Die Lupe: reine Ansicht, nicht Teil des Stickers.
+   *
+   * Sie steht bewusst nicht im `doc` – sonst landete jedes Heranzoomen im
+   * Rückgängig-Verlauf und, schlimmer, im gespeicherten Sticker. `x`/`y` ist
+   * der Punkt, der in der Mitte steht, in Sticker-Koordinaten.
+   */
+  const [lupe, setLupe] = useState({ zoom: 1, x: STICKER_SIZE / 2, y: STICKER_SIZE / 2 });
   const [emojiInput, setEmojiInput] = useState('');
   const [busy, setBusy] = useState(false);
   /** Welches Modell gerade rechnet – für Spinner und gesperrte Knöpfe. */
@@ -102,10 +123,20 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
   const sourceRef = useRef(source);
   const toolRef = useRef(tool);
   const brushRef = useRef(brush);
+  const pinselRef = useRef(pinsel);
+  const lupeRef = useRef(lupe);
   const history = useRef<StickerDoc[]>([]);
   const lastCommit = useRef<{ label: string; at: number }>({ label: '', at: 0 });
   const pending = useRef<{ doc: StickerDoc; used: boolean } | null>(null);
-  const pointers = useRef(new Map<number, { x: number; y: number }>());
+  /**
+   * Die liegenden Finger – in Sticker- *und* in Bildschirmkoordinaten.
+   *
+   * Beides wird gebraucht: Die Werkzeuge rechnen im Sticker, die Lupe muss auf
+   * dem Bildschirm messen. Rechnete die Lupe im Sticker, veraenderte ihr
+   * eigenes Zoomen die Messung, und das Zusammenziehen zweier Finger bliebe
+   * ohne Wirkung.
+   */
+  const pointers = useRef(new Map<number, { x: number; y: number; cx: number; cy: number }>());
   const gesture = useRef<GestureState>({
     mode: 'none',
     startX: 0,
@@ -115,6 +146,14 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
     startDistance: 0,
     startScale: 1,
   });
+  /**
+   * Der laufende Lupenzug – in Bildschirmpixeln, nicht in Sticker-Koordinaten.
+   *
+   * Das ist wichtig: Waehrend des Ziehens verschiebt sich die Lupe, und damit
+   * auch die Umrechnung Bildschirm -> Sticker. Rechnete man in
+   * Sticker-Koordinaten, jagte sich das Bild selbst hinterher.
+   */
+  const lupenZug = useRef({ clientX: 0, clientY: 0, x: 0, y: 0, faktor: 1, distanz: 1, zoom: 1 });
   const busyGesture = useRef(false);
   const frame = useRef<number | null>(null);
 
@@ -145,6 +184,14 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
   useEffect(() => {
     toolRef.current = tool;
   }, [tool]);
+
+  useEffect(() => {
+    pinselRef.current = pinsel;
+  }, [pinsel]);
+
+  useEffect(() => {
+    lupeRef.current = lupe;
+  }, [lupe]);
 
   useEffect(() => {
     brushRef.current = brush;
@@ -216,6 +263,7 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
     commit();
     setDoc(createDoc());
     setTool('move');
+    setLupe({ zoom: 1, x: STICKER_SIZE / 2, y: STICKER_SIZE / 2 });
   }, [commit]);
 
   /**
@@ -324,6 +372,7 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
     setSource(next);
     setDoc(createDoc());
     setTool('move');
+    setLupe({ zoom: 1, x: STICKER_SIZE / 2, y: STICKER_SIZE / 2 });
   }
 
   async function pickImage(event: ChangeEvent<HTMLInputElement>) {
@@ -354,6 +403,31 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
     setTab('text');
   }
 
+  /* ---------- Lupe ---------- */
+
+  const lupeSetzen = useCallback((next: { zoom: number; x: number; y: number }) => {
+    setLupe(lupeGrenzen(next, MAX_LUPE));
+  }, []);
+
+  /**
+   * Was die Lupe mit dem Bild macht: erst vergroessern, dann den gewaehlten
+   * Punkt in die Mitte schieben. In CSS wirkt die rechte Angabe zuerst,
+   * deshalb steht `scale` hinten.
+   */
+  const lupeStil =
+    lupe.zoom === 1
+      ? undefined
+      : {
+          transformOrigin: '0 0',
+          transform: `translate(${(0.5 - (lupe.zoom * lupe.x) / STICKER_SIZE) * 100}%, ${
+            (0.5 - (lupe.zoom * lupe.y) / STICKER_SIZE) * 100
+          }%) scale(${lupe.zoom})`,
+          // Ab einer gewissen Vergroesserung sieht man ohnehin einzelne
+          // Bildpunkte. Scharfe Kanten helfen dabei, weichgezeichneter Brei
+          // nicht.
+          imageRendering: lupe.zoom >= 4 ? ('pixelated' as const) : undefined,
+        };
+
   /* ---------- canvas gestures ---------- */
 
   function canvasPoint(clientX: number, clientY: number): { x: number; y: number } {
@@ -376,6 +450,15 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
     };
   }
 
+  /** Der Fingerabstand auf dem Bildschirm – unabhaengig von der Lupe. */
+  function clientDistance(): number {
+    const list = [...pointers.current.values()];
+    const a = list[0];
+    const b = list[1];
+    if (!a || !b) return 1;
+    return Math.hypot(a.cx - b.cx, a.cy - b.cy) || 1;
+  }
+
   function beginPinch() {
     const mid = midpoint();
     const current = docRef.current;
@@ -393,7 +476,7 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
   function onPointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
     if (!source) return;
     const point = canvasPoint(event.clientX, event.clientY);
-    pointers.current.set(event.pointerId, point);
+    pointers.current.set(event.pointerId, { ...point, cx: event.clientX, cy: event.clientY });
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
     } catch {
@@ -402,6 +485,14 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
 
     busyGesture.current = true;
     if (pointers.current.size >= 2) {
+      // Ueber 1x gehoeren beide Finger der Lupe: Wer eine Kontur bearbeitet,
+      // will sich naeher heranholen und nicht den Bildausschnitt umbauen. Die
+      // Lupe aendert am Sticker nichts, also gibt es dafuer auch nichts
+      // rueckgaengig zu machen.
+      if (lupeRef.current.zoom > 1) {
+        beginLupenPinch();
+        return;
+      }
       armGesture();
       beginPinch();
       return;
@@ -429,8 +520,28 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
       gesture.current = { ...gesture.current, mode: 'erase' };
       setDoc((value) => ({
         ...value,
-        strokes: [...value.strokes, { size: brushRef.current, points: [point.x, point.y] }],
+        strokes: [
+          ...value.strokes,
+          { size: brushRef.current, points: [point.x, point.y], mode: pinselRef.current },
+        ],
       }));
+      return;
+    }
+
+    if (lupeRef.current.zoom > 1) {
+      // Verschieben heisst hier: den Ausschnitt unter der Lupe bewegen.
+      const canvas = canvasRef.current;
+      const rect = canvas?.getBoundingClientRect();
+      lupenZug.current = {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        x: lupeRef.current.x,
+        y: lupeRef.current.y,
+        faktor: STICKER_SIZE / (rect?.width || 1),
+        distanz: 1,
+        zoom: lupeRef.current.zoom,
+      };
+      gesture.current = { ...gesture.current, mode: 'lupe' };
       return;
     }
 
@@ -446,10 +557,26 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
     };
   }
 
+  /** Zwei Finger auf der Lupe: naeher heran oder wieder heraus. */
+  function beginLupenPinch() {
+    const canvas = canvasRef.current;
+    const rect = canvas?.getBoundingClientRect();
+    lupenZug.current = {
+      clientX: 0,
+      clientY: 0,
+      x: lupeRef.current.x,
+      y: lupeRef.current.y,
+      faktor: STICKER_SIZE / (rect?.width || 1),
+      distanz: clientDistance(),
+      zoom: lupeRef.current.zoom,
+    };
+    gesture.current = { ...gesture.current, mode: 'lupenpinch' };
+  }
+
   function onPointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
     if (!pointers.current.has(event.pointerId)) return;
     const point = canvasPoint(event.clientX, event.clientY);
-    pointers.current.set(event.pointerId, point);
+    pointers.current.set(event.pointerId, { ...point, cx: event.clientX, cy: event.clientY });
     const state = gesture.current;
 
     if (state.mode === 'pinch' && pointers.current.size >= 2) {
@@ -470,6 +597,22 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
       return;
     }
 
+    if (state.mode === 'lupe') {
+      const zug = lupenZug.current;
+      lupeSetzen({
+        zoom: zug.zoom,
+        x: zug.x - (event.clientX - zug.clientX) * zug.faktor,
+        y: zug.y - (event.clientY - zug.clientY) * zug.faktor,
+      });
+      return;
+    }
+
+    if (state.mode === 'lupenpinch' && pointers.current.size >= 2) {
+      const zug = lupenZug.current;
+      lupeSetzen({ zoom: (zug.zoom * clientDistance()) / zug.distanz, x: zug.x, y: zug.y });
+      return;
+    }
+
     if (state.mode === 'pan') {
       commitArmedGesture();
       setDoc((value) => ({
@@ -486,7 +629,7 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
         const last = strokes[strokes.length - 1];
         if (!last) return value;
         strokes[strokes.length - 1] = {
-          size: last.size,
+          ...last,
           points: [...last.points, point.x, point.y],
         };
         return { ...value, strokes };
@@ -497,7 +640,12 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
   function endPointer(event: ReactPointerEvent<HTMLCanvasElement>) {
     if (!pointers.current.delete(event.pointerId)) return;
     if (pointers.current.size >= 2) {
-      beginPinch();
+      if (lupeRef.current.zoom > 1) beginLupenPinch();
+      else beginPinch();
+      return;
+    }
+    if (pointers.current.size === 1 && gesture.current.mode === 'lupenpinch') {
+      gesture.current = { ...gesture.current, mode: 'none' };
       return;
     }
     if (pointers.current.size === 1 && gesture.current.mode === 'pinch') {
@@ -530,6 +678,14 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
     const onWheel = (event: WheelEvent) => {
       if (!sourceRef.current) return;
       event.preventDefault();
+      if (lupeRef.current.zoom > 1) {
+        const aktuell = lupeRef.current;
+        lupeSetzen({
+          ...aktuell,
+          zoom: aktuell.zoom * (event.deltaY < 0 ? 1.12 : 1 / 1.12),
+        });
+        return;
+      }
       const rect = canvas.getBoundingClientRect();
       const factor = STICKER_SIZE / (rect.width || 1);
       const anchorX = (event.clientX - rect.left) * factor;
@@ -552,7 +708,7 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
     };
     canvas.addEventListener('wheel', onWheel, { passive: false });
     return () => canvas.removeEventListener('wheel', onWheel);
-  }, [commit]);
+  }, [commit, lupeSetzen]);
 
   /** Slider zoom keeps the canvas centre fixed, so the offset scales with it. */
   function setZoom(next: number) {
@@ -571,6 +727,7 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
   function chooseShape(shape: ShapeKind) {
     commit();
     setDoc((value) => ({ ...value, shape }));
+    setPinsel('weg');
     setTool(shape === 'free' ? 'erase' : 'move');
   }
 
@@ -658,6 +815,7 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
           <canvas
             ref={canvasRef}
             className="stk-canvas"
+            style={lupeStil}
             width={STICKER_SIZE}
             height={STICKER_SIZE}
             onPointerDown={onPointerDown}
@@ -705,10 +863,17 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
               </div>
             </div>
           )}
+          {source && lupe.zoom > 1 && (
+            <span className="stk-mode-badge stk-mode-badge-right">
+              🔍 {Math.round(lupe.zoom * 10) / 10}×
+            </span>
+          )}
           {source && (
             <span className="stk-mode-badge">
               {tool === 'erase'
-                ? '🧽 Radieren'
+                ? pinsel === 'weg'
+                  ? '🧽 Radieren'
+                  : '↩️ Zurückholen'
                 : tool === 'keep'
                   ? '👆 Antippen zum Behalten'
                   : tool === 'teile'
@@ -860,10 +1025,13 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
             <div className="stk-btn-row">
               <button
                 type="button"
-                className={`btn btn-sm ${tool === 'erase' ? 'stk-chip-active' : ''}`}
-                onClick={() => setTool(tool === 'erase' ? 'move' : 'erase')}
+                className={`btn btn-sm ${tool === 'erase' && pinsel === 'weg' ? 'stk-chip-active' : ''}`}
+                onClick={() => {
+                  setPinsel('weg');
+                  setTool(tool === 'erase' && pinsel === 'weg' ? 'move' : 'erase');
+                }}
               >
-                🧽 Radiergummi {tool === 'erase' ? 'an' : 'aus'}
+                🧽 Radiergummi {tool === 'erase' && pinsel === 'weg' ? 'an' : 'aus'}
               </button>
               <button
                 type="button"
@@ -1037,6 +1205,116 @@ export function StickerStudio({ onClose, onSaved }: StickerStudioProps) {
                   ? 'Die Toleranz bestimmt, wie weit ein Antippen ins Bild wächst. Bleibt zu wenig stehen: erhöhen. Greift es auf den Hintergrund über: senken.'
                   : 'Tippe oben auf „Antippen zum Behalten“ und dann im Bild auf das, was im Sticker bleiben soll. „Ecken entfernen“ ist die einfachere Variante für einfarbige Hintergründe.'}
             </p>
+          </>
+        )}
+
+        {tab === 'detail' && (
+          <>
+            {/* Detailarbeit heisst: nah heran und mit kleinem Pinsel. Die Lupe
+                vergroessert nur die Ansicht – am Sticker aendert sie nichts,
+                deshalb landet sie auch nicht im Rueckgaengig-Verlauf. */}
+            <label className="stk-slider">
+              <span>Lupe</span>
+              <input
+                type="range"
+                min={10}
+                max={MAX_LUPE * 10}
+                value={Math.round(lupe.zoom * 10)}
+                disabled={!source}
+                onChange={(event) => lupeSetzen({ ...lupe, zoom: Number(event.target.value) / 10 })}
+              />
+              <span className="stk-slider-value">{Math.round(lupe.zoom * 10) / 10}×</span>
+            </label>
+            <div className="stk-btn-row">
+              <button
+                type="button"
+                className={`btn btn-sm ${tool === 'erase' && pinsel === 'weg' ? 'stk-chip-active' : ''}`}
+                onClick={() => {
+                  setPinsel('weg');
+                  setTool('erase');
+                }}
+                disabled={!source}
+              >
+                🧽 Wegradieren
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${tool === 'erase' && pinsel === 'zurueck' ? 'stk-chip-active' : ''}`}
+                onClick={() => {
+                  setPinsel('zurueck');
+                  setTool('erase');
+                }}
+                disabled={!hasImage}
+                title="Holt das Original an dieser Stelle zurück – gegen ein Modell, das zu viel weggenommen hat."
+              >
+                ↩️ Zurückholen
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${tool === 'move' ? 'stk-chip-active' : ''}`}
+                onClick={() => setTool('move')}
+                disabled={!source}
+              >
+                ✋ Nur schauen
+              </button>
+            </div>
+            <label className="stk-slider">
+              <span>Pinsel</span>
+              <input
+                type="range"
+                min={2}
+                max={160}
+                value={brush}
+                disabled={!source}
+                onChange={(event) => setBrush(Number(event.target.value))}
+              />
+              <span className="stk-slider-value">{brush}</span>
+            </label>
+            <div className="stk-btn-row">
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  commit();
+                  setDoc((value) => ({ ...value, strokes: value.strokes.slice(0, -1) }));
+                }}
+                disabled={doc.strokes.length === 0}
+              >
+                Letzten Strich zurück
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  commit();
+                  setDoc((value) => ({ ...value, strokes: [] }));
+                }}
+                disabled={doc.strokes.length === 0}
+              >
+                Alle Striche zurück
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => lupeSetzen({ zoom: 1, x: STICKER_SIZE / 2, y: STICKER_SIZE / 2 })}
+                disabled={lupe.zoom === 1}
+              >
+                Lupe aus
+              </button>
+            </div>
+            <p className="stk-hint">
+              {!source
+                ? 'Erst ein Bild wählen.'
+                : lupe.zoom === 1
+                  ? 'Zieh die Lupe auf, um an eine Kontur heranzukommen. Ein kleiner Pinsel und viel Vergrösserung sind zusammen so genau, wie es mit dem Finger geht.'
+                  : 'Solange die Lupe an ist, gehören die Finger ihr: Ziehen verschiebt den Ausschnitt, zwei Finger zoomen. Der Sticker selbst bleibt unberührt – zum Verschieben des Motivs die Lupe wieder aus.'}
+            </p>
+            {lupe.zoom >= 4 && (
+              <p className="stk-hint">
+                Ab hier siehst du einzelne Bildpunkte. Feiner als das wird der Sticker nicht – er
+                ist {STICKER_SIZE} Punkte breit.
+              </p>
+            )}
           </>
         )}
 
