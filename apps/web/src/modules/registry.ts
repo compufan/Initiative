@@ -5,6 +5,7 @@ import media from './media/module.js';
 import stickers from './stickers/module.js';
 import files from './files/module.js';
 import calendar from './calendar/module.js';
+import expenses from './expenses/module.js';
 import polls from './polls/module.js';
 import games from './games/module.js';
 import profile from './profile/module.js';
@@ -27,6 +28,7 @@ export const appModules: AppModuleDefinition[] = [
   media,
   files,
   calendar,
+  expenses,
   games,
   stickers,
   polls,

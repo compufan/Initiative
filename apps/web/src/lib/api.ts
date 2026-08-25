@@ -10,8 +10,10 @@ import type {
   CollectionItemDto,
   ConversationDto,
   CreateCollectionInput,
+  CreateExpenseInput,
   CreatePlanningInput,
   CreateUploadResult,
+  BalanceDto,
   EventAttachmentDto,
   EventNoteDto,
   EventNoteInput,
@@ -19,6 +21,9 @@ import type {
   GameSessionDto,
   GrantCollectionInput,
   MessageDto,
+  ExpenseDto,
+  PaymentProfileDto,
+  PaymentProfileInput,
   PollDto,
   SelfUserDto,
   StickerPackDto,
@@ -506,6 +511,35 @@ export const api = {
       ),
     unplace: (id: string, placementId: string) =>
       del<void>(`/polls/${id}/placements/${placementId}`),
+  },
+  expenses: {
+    list: (query: { conversationId?: string; eventId?: string; includeSettled?: boolean } = {}) =>
+      get<ListResult<ExpenseDto>>('/expenses', { query }),
+    byId: (id: string) => get<ExpenseDto>(`/expenses/${id}`),
+    create: (body: CreateExpenseInput) => post<ExpenseDto>('/expenses', body),
+    update: (id: string, body: Record<string, unknown>) => patch<ExpenseDto>(`/expenses/${id}`, body),
+    remove: (id: string) => del<void>(`/expenses/${id}`),
+    /** Einen Anteil abhaken. Ohne `userId`: den eigenen. */
+    settle: (id: string, body: { userId?: string; settled?: boolean } = {}) =>
+      post<ExpenseDto>(`/expenses/${id}/settle`, body),
+
+    /** Wer schuldet mir was – und was schulde ich. */
+    balances: (conversationId?: string) =>
+      get<ListResult<BalanceDto>>('/expenses/balances', { query: { conversationId } }),
+
+    /** Vor dieser Person verbergen – geht nur, wenn sie keinen Anteil trägt. */
+    hide: (id: string, userId: string) => post<ExpenseDto>(`/expenses/${id}/hidden/${userId}`),
+    unhide: (id: string, userId: string) => del<ExpenseDto>(`/expenses/${id}/hidden/${userId}`),
+
+    myPaymentProfile: () => get<PaymentProfileDto>('/expenses/payment-profile'),
+    savePaymentProfile: (body: PaymentProfileInput) =>
+      put<PaymentProfileDto>('/expenses/payment-profile', body),
+    /** Wie ich dieser Person Geld zurückgeben kann – mit fertigem PayPal-Link. */
+    paymentProfileOf: (userId: string, amountCents?: number, currency = 'EUR') =>
+      get<{ profile: PaymentProfileDto; paypalUrl: string | null }>(
+        `/expenses/payment-profile/${userId}`,
+        { query: { amountCents, currency } },
+      ),
   },
   games: {
     catalog: () => get<ListResult<GameInfoDto>>('/games'),

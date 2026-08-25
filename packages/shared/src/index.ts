@@ -18,6 +18,7 @@ export * from './schemas/message.js';
 export * from './schemas/sticker.js';
 export * from './schemas/collection.js';
 export * from './schemas/calendar.js';
+export * from './schemas/expense.js';
 export * from './schemas/poll.js';
 export * from './schemas/game.js';
 export * from './schemas/push.js';

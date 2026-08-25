@@ -1,0 +1,157 @@
+/* Ausgaben. */
+
+.exp-title {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--text-muted);
+}
+
+.exp-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.exp-warn {
+  color: var(--warning);
+  font-size: 0.8rem;
+}
+
+.exp-summe {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+.exp-plus {
+  color: var(--success, #34c759);
+}
+
+.exp-minus {
+  color: var(--warning);
+}
+
+.exp-balance {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 10px 0;
+}
+
+.exp-balance > .truncate {
+  flex: 1;
+  min-width: 0;
+}
+
+.exp-balance + .exp-balance {
+  border-top: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+
+.exp-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.exp-amount {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.exp-meta {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.exp-note {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.exp-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.exp-shares {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.88rem;
+}
+
+.exp-shares li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.exp-shares li > .truncate {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Ein beglichener Anteil wird ruhiger, nicht unlesbar. */
+.exp-settled {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.exp-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 0;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.exp-check > .truncate {
+  flex: 1;
+  min-width: 0;
+}
+
+.exp-share {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.exp-bank {
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.exp-bank-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.exp-bank-label {
+  width: 90px;
+  flex: none;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.exp-bank-value {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+}

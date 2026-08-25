@@ -13,6 +13,7 @@ import { EventDocuments } from './EventDocuments.js';
 import { EventEditor } from './EventEditor.js';
 import { EventNotes } from './EventNotes.js';
 import { EventPollCard } from './EventPollCard.js';
+import { EventExpenses } from './EventExpenses.js';
 import { RsvpButtons } from './RsvpButtons.js';
 import { useLiveEvent } from './useCalendarEvents.js';
 import {
@@ -250,6 +251,8 @@ export function EventDetailScreen() {
       />
 
       <EventDocuments eventId={event.id} />
+
+      <EventExpenses eventId={event.id} conversationId={event.conversationId} />
 
       <section className="card cal-block" aria-label="Zum Kalender hinzufügen">
         <h2 className="cal-block-title">Zum Kalender hinzufügen</h2>
