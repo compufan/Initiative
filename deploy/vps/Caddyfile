@@ -1,0 +1,46 @@
+# Der äussere Proxy: TLS, Domain, und sonst nichts.
+#
+# **Warum ein zweiter Caddy und nicht der aus dem Web-Abbild.** Der naheliegende
+# Weg wäre, in `apps/web/Caddyfile` das `:8080` durch die Domain zu ersetzen und
+# 80/443 zu veröffentlichen. Das ist eine Falle: Der Web-Container wird bei
+# jeder Frontend-Änderung neu gebaut und ersetzt. Ohne dauerhaften Ablageort
+# verliert Caddy dabei jedes Mal seinen ACME-Zustand und fordert ein neues
+# Zertifikat an – Let's Encrypt erlaubt fünf gleiche Zertifikate pro Woche. Wer
+# vom Handy aus mehrmals täglich veröffentlicht, steht nach zwei Tagen ohne
+# gültiges Zertifikat da, und zwar für eine Woche.
+#
+# Dieser Dienst hier wird nie neu gebaut, und sein `/data` liegt in einem
+# benannten Volume.
+{
+	# Für die Ablaufwarnungen von Let's Encrypt.
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# API und WebSocket direkt an den Rust-Dienst. Alles andere geht an das
+	# Web-Abbild – dort stehen die Sicherheits- und Cache-Kopfzeilen, und der
+	# innere Caddy reicht /datenschutz, /healthz und /readyz selbst weiter.
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+	handle /ws* {
+		reverse_proxy api:8080
+	}
+	handle {
+		reverse_proxy web:8080
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

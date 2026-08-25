@@ -1,0 +1,100 @@
+# Der Stapel auf dem eigenen Server.
+#
+# Anders als die `docker-compose.yml` im Wurzelverzeichnis baut diese hier
+# nichts: Sie holt fertige Abbilder aus der GitHub-Registry. Das ist kein
+# Geschmack, sondern Notwendigkeit – ein Rust-Release-Build braucht mehrere
+# Gigabyte Arbeitsspeicher und Minuten an Rechenzeit. Auf einer Maschine, auf
+# der gleichzeitig Postgres und die laufende App liegen, ist das kein
+# Bauvorgang, sondern ein Ausfall.
+#
+#   cp .env.beispiel .env   # Werte eintragen
+#   ./deploy.sh <git-sha>
+#
+# Zum Zurückrollen: dasselbe mit der Kennung von gestern.
+
+x-logs: &logs
+  logging:
+    driver: json-file
+    options:
+      # Der Standardtreiber rotiert NICHT. Ein gesprächiger Dienst füllt über
+      # Monate still die Platte, und ein volles /var legt Postgres lahm – die
+      # häufigste Ursache für „der Server ist plötzlich tot".
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    <<: *logs
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-initiative}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?fehlt}
+      POSTGRES_DB: ${POSTGRES_DB:-initiative}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    # KEIN ports:-Eintrag. Docker schreibt eigene iptables-Regeln und umgeht
+    # damit ufw – eine offene 5432 wäre aus dem Internet erreichbar, obwohl die
+    # Firewall sie scheinbar sperrt. Wer von aussen an die Datenbank will,
+    # tunnelt: ssh -L 5432:localhost:5432 und dann `docker compose exec`.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-initiative}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-compufan}/initiative-api:${IMAGE_TAG:-live}
+    restart: unless-stopped
+    <<: *logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8080
+      DATABASE_URL: postgres://${POSTGRES_USER:-initiative}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-initiative}
+      LOCAL_STORAGE_DIR: /data/uploads
+      STORAGE_DRIVER: local
+      # Bei genau einem Prozess ist das die robustere Wahl – siehe die
+      # Begründung in der docker-compose.yml im Wurzelverzeichnis.
+      REALTIME_BUS: memory
+    volumes:
+      - uploads:/data/uploads
+
+  web:
+    image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-compufan}/initiative-web:${IMAGE_TAG:-live}
+    restart: unless-stopped
+    <<: *logs
+    depends_on:
+      - api
+
+  proxy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    <<: *logs
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?fehlt}
+      ACME_EMAIL: ${ACME_EMAIL:?fehlt}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Ohne dieses Volume holt Caddy nach jedem Neustart ein neues
+      # Zertifikat – und läuft in die Ratenbremse von Let's Encrypt.
+      - caddy-data:/data
+      - caddy-config:/config
+      - caddy-logs:/var/log/caddy
+    depends_on:
+      - web
+      - api
+
+volumes:
+  postgres-data:
+  uploads:
+  caddy-data:
+  caddy-config:
+  caddy-logs:

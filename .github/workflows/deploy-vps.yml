@@ -1,0 +1,204 @@
+# Deployt auf den eigenen Server – ohne dass jemand am Rechner sitzen muss.
+#
+# Der Ablauf ist bewusst zweigeteilt:
+#
+#   1. GitHub baut beide Abbilder und legt sie in die GitHub-Registry.
+#   2. Ein kurzer SSH-Schritt sagt dem Server, welchen Stand er holen soll,
+#      und danach wird gegen die echte Domain geprüft, ob die App antwortet.
+#
+# **Warum nicht auf dem Server bauen.** Der Rust-Release-Build braucht mehrere
+# Gigabyte Arbeitsspeicher und Minuten an Rechenzeit, und die Freistell-Modelle
+# sind knapp 130 MB. Auf einer Maschine, auf der gleichzeitig Postgres und die
+# laufende App liegen, ist das kein Bauvorgang, sondern ein Ausfall. Dazu
+# kommt: Ein fertiges Abbild lässt sich zurückrollen, ein Bauvorgang nicht –
+# „nimm wieder den Stand von gestern" hiesse sonst „baue zwölf Minuten neu".
+#
+# **Der Prüfschritt am Ende ist der eigentliche Punkt.** Ein Deploy, nach dem
+# die App nicht antwortet, darf nicht grün sein. Genau das ist bei Fly.io
+# dreimal hintereinander passiert – siehe die Begründung in deploy.yml.
+#
+# Ohne hinterlegte Zugangsdaten überspringt sich der Ablauf stillschweigend,
+# statt bei jedem Push rot zu werden. So können der alte und der neue Weg
+# nebeneinander stehen, bis der Umzug wirklich durch ist.
+#
+# Einmalige Einrichtung: siehe docs/UMZUG.md.
+
+name: Deploy VPS
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Zurückrollen: Kennung eines früheren Stands (leer = aktueller)"
+        required: false
+        type: string
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  bauen:
+    name: Abbilder bauen
+    runs-on: ubuntu-latest
+    outputs:
+      ready: ${{ steps.guard.outputs.ready }}
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha || github.sha }}
+
+      - name: Auf hinterlegte Zugangsdaten prüfen
+        id: guard
+        run: |
+          if [ -n "${{ secrets.VPS_HOST }}" ] && [ -n "${{ secrets.VPS_SSH_KEY }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "VPS_HOST/VPS_SSH_KEY sind nicht hinterlegt – Deploy wird übersprungen." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Kennung festlegen
+        id: tag
+        run: echo "tag=${{ inputs.sha || github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.guard.outputs.ready == 'true'
+
+      - uses: docker/login-action@v3
+        if: steps.guard.outputs.ready == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Die Freistell-Modelle werden im Web-Build geholt. Zwischenspeichern,
+      # damit nicht jeder Lauf 130 MB von fremden Servern zieht.
+      - uses: actions/cache@v4
+        if: steps.guard.outputs.ready == 'true'
+        with:
+          path: apps/web/public/models
+          key: freistell-modelle-${{ hashFiles('apps/web/scripts/prepare-models.mjs') }}
+
+      - name: API
+        if: steps.guard.outputs.ready == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile
+          push: true
+          build-args: |
+            GIT_SHA=${{ steps.tag.outputs.tag }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/initiative-api:${{ steps.tag.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/initiative-api:live
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: PWA
+        if: steps.guard.outputs.ready == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: true
+          # VITE_API_URL bleibt leer: PWA und API liegen unter derselben
+          # Domain, alle Anfragen sind relativ, der WebSocket folgt von allein.
+          build-args: |
+            GITHUB_SHA=${{ steps.tag.outputs.tag }}
+            VITE_REPO_URL=${{ github.server_url }}/${{ github.repository }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/initiative-web:${{ steps.tag.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/initiative-web:live
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  ausrollen:
+    name: Auf dem Server starten
+    needs: bauen
+    if: needs.bauen.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Anstossen
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER || 'initiative' }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || 22 }}
+          script: /opt/initiative/deploy.sh ${{ needs.bauen.outputs.tag }}
+
+      # Ein Deploy, nach dem die App nicht antwortet, darf nicht grün sein.
+      # Zwei Fälle, die man auseinanderhalten muss: Funkstille heisst, dass
+      # niemand die Anfrage übernimmt. Eine Antwort mit „degraded" heisst, dass
+      # die App läuft und selbst sagt, was ihr fehlt.
+      - name: Antwortet die App wirklich?
+        env:
+          APP_URL: ${{ secrets.VPS_APP_URL }}
+        run: |
+          set -uo pipefail
+          if [ -z "$APP_URL" ]; then
+            echo "::warning::VPS_APP_URL ist nicht hinterlegt – die Erreichbarkeit wurde nicht geprüft."
+            exit 0
+          fi
+          letzter=000
+          for versuch in $(seq 1 30); do
+            code=$(curl -s -o antwort.json -w '%{http_code}' -m 10 "$APP_URL/healthz" || echo 000)
+            letzter=$code
+            [ "$code" = "200" ] && break
+            echo "Versuch $versuch: HTTP $code – warte 5 s"
+            sleep 5
+          done
+
+          if [ "$letzter" != "200" ]; then
+            echo "::error::Die API antwortet überhaupt nicht (zuletzt HTTP $letzter)."
+            exit 1
+          fi
+
+          status=$(jq -r '.status // "unbekannt"' antwort.json)
+          cat antwort.json; echo
+          {
+            echo "### API antwortet – status: $status"
+            echo "Stand: \`${{ needs.bauen.outputs.tag }}\`"
+            echo '```json'
+            cat antwort.json
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          [ "$status" = "ok" ] && exit 0
+          echo "::error::Die API läuft, ist aber nicht betriebsbereit: $(jq -r '.error // "kein Grund genannt"' antwort.json)"
+          exit 1
+
+  aufraeumen:
+    name: Alte Abbilder wegräumen
+    needs: [bauen, ausrollen]
+    if: needs.bauen.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      # Bei einem privaten Repository sind im kostenlosen Tarif 500 MB
+      # Paketspeicher frei. Zwei Abbilder je Push sprengen das in Tagen. Die
+      # letzten zehn reichen zum Zurückrollen mehr als aus.
+      - uses: actions/delete-package-versions@v5
+        continue-on-error: true
+        with:
+          package-name: initiative-api
+          package-type: container
+          min-versions-to-keep: 10
+          delete-only-untagged-versions: false
+      - uses: actions/delete-package-versions@v5
+        continue-on-error: true
+        with:
+          package-name: initiative-web
+          package-type: container
+          min-versions-to-keep: 10
+          delete-only-untagged-versions: false
