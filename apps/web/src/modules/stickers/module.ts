@@ -3,6 +3,7 @@ import { defineWebModule } from '../types.js';
 import { StickerBubble } from './StickerBubble.js';
 import { StickerLibraryScreen } from './StickerLibraryScreen.js';
 import { StickerPickerSheet } from './StickerPickerSheet.js';
+import { SaveStickerSheet } from './SaveStickerSheet.js';
 import './styles.css';
 
 /**
@@ -16,6 +17,18 @@ export default defineWebModule({
   description: 'Sticker senden, eigene Sticker erstellen und Pakete verwalten.',
   routes: [{ path: '/sticker', element: createElement(StickerLibraryScreen) }],
   messageRenderers: { sticker: StickerBubble },
+  messageActions: [
+    {
+      key: 'sticker-speichern',
+      label: 'Sticker aufs Handy',
+      icon: '⬇',
+      order: 40,
+      // Auch bei fremden Stickern: Ein Bild behalten zu duerfen, das einem
+      // geschickt wurde, ist keine Frage der Rechte am Paket.
+      applies: (message) => Boolean(message.sticker) && !message.deletedAt,
+      render: SaveStickerSheet,
+    },
+  ],
   composerActions: [
     {
       key: 'sticker',

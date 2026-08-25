@@ -1,4 +1,5 @@
 import { API_BASE } from '../../lib/api.js';
+import { herunterladen, type Ablage } from '../../lib/herunterladen.js';
 
 /**
  * Small helpers shared by the sticker picker, the studio and the library.
@@ -92,6 +93,25 @@ export function supportsWebp(): boolean {
     webpSupport = false;
   }
   return webpSupport;
+}
+
+/**
+ * Einen Sticker auf dem Geraet speichern.
+ *
+ * Ueber `/bytes`, nicht ueber die Adresse selbst: Die leitet zum Speicher um,
+ * und nach einer Umleitung auf eine andere Herkunft schickt der Browser
+ * `Origin: null` – die CORS-Regel des Speichers greift dann nicht mehr und
+ * `fetch` bekommt nichts zurueck. Beim blossen Anzeigen (`<img src>`) ist das
+ * egal, beim Lesen der Bytes nicht.
+ *
+ * Den Dateinamen bestimmt das, was wirklich ankommt, nicht das, was wir
+ * erwarten – ein Sticker aus fruehen Tagen kann PNG sein.
+ */
+export async function stickerAufsGeraet(url: string): Promise<Ablage> {
+  const antwort = await fetch(`${stickerSrc(url)}/bytes`, { credentials: 'include' });
+  if (!antwort.ok) throw new Error(`Der Sticker konnte nicht geladen werden (${antwort.status})`);
+  const blob = await antwort.blob();
+  return await herunterladen(blob, stickerFileName(blob.type));
 }
 
 export function stickerFileName(mime: string): string {

@@ -6,7 +6,7 @@ import { Sheet } from '../../components/Sheet.js';
 import { api } from '../../lib/api.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
-import { errorMessage, stickerSrc } from './helpers.js';
+import { errorMessage, stickerAufsGeraet, stickerSrc } from './helpers.js';
 import { StickerStudio } from './StickerStudio.js';
 
 type Tab = 'mine' | 'discover';
@@ -87,6 +87,19 @@ export function StickerLibraryScreen() {
     sticker: StickerDto;
   } | null>(null);
   const [promptValue, setPromptValue] = useState('');
+  const [laedtHerunter, setLaedtHerunter] = useState(false);
+
+  async function aufsGeraet(url: string) {
+    setLaedtHerunter(true);
+    try {
+      const weg = await stickerAufsGeraet(url);
+      if (weg === 'geladen') toast('Sticker gespeichert.', 'success');
+    } catch (error) {
+      toast(errorMessage(error, 'Speichern fehlgeschlagen'), 'error');
+    } finally {
+      setLaedtHerunter(false);
+    }
+  }
 
   const load = useCallback(async () => {
     try {
@@ -448,6 +461,14 @@ export function StickerLibraryScreen() {
             onClick={() => setCover(stickerAction.pack, stickerAction.sticker)}
           >
             Als Cover festlegen
+          </button>
+          <button
+            type="button"
+            className="btn btn-block"
+            disabled={laedtHerunter}
+            onClick={() => void aufsGeraet(stickerAction.sticker.url)}
+          >
+            {laedtHerunter ? '…' : '⬇ Aufs Handy speichern'}
           </button>
           <button
             type="button"

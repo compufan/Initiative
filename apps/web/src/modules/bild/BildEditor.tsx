@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { dialogAnmelden } from '../../lib/dialogVerlauf.js';
+import { herunterladen } from '../../lib/herunterladen.js';
 import { toast, useHideNav } from '../../state/ui.js';
 import { errorMessage, loadImageFromBlob } from '../stickers/helpers.js';
 import {
@@ -545,15 +546,9 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     try {
       const fertig = await ergebnis();
       if (!fertig) return;
-      const url = URL.createObjectURL(fertig.blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = fertig.name;
-      document.body.append(link);
-      link.click();
-      link.remove();
-      // Erst freigeben, wenn der Browser den Download angefasst hat.
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      await herunterladen(fertig.blob, fertig.name);
+    } catch (error) {
+      toast(errorMessage(error, 'Speichern fehlgeschlagen'), 'error');
     } finally {
       setSpeichert(false);
     }

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { herunterladen } from '../../lib/herunterladen.js';
 import { Sheet } from '../../components/Sheet.js';
 import { api, API_BASE } from '../../lib/api.js';
 import { useSession } from '../../state/session.js';
@@ -20,12 +21,10 @@ export function PrivacyCard() {
     try {
       const daten = await api.users.export();
       const blob = new Blob([JSON.stringify(daten, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `initiative-meine-daten-${new Date().toISOString().slice(0, 10)}.json`;
-      link.click();
-      URL.revokeObjectURL(url);
+      await herunterladen(
+        blob,
+        `initiative-meine-daten-${new Date().toISOString().slice(0, 10)}.json`,
+      );
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Export fehlgeschlagen', 'error');
     } finally {
@@ -40,23 +39,29 @@ export function PrivacyCard() {
       </h2>
 
       <p className="muted" style={{ margin: 0, fontSize: '0.88rem' }}>
-        Diese App sammelt nichts über dich, was sie nicht zum Funktionieren braucht. Keine
-        Werbung, keine Analyse, keine fremden Dienste im Hintergrund.
+        Diese App sammelt nichts über dich, was sie nicht zum Funktionieren braucht. Keine Werbung,
+        keine Analyse, keine fremden Dienste im Hintergrund.
       </p>
 
-      <a className="btn btn-block" href={`${API_BASE}/datenschutz`} target="_blank" rel="noreferrer">
+      <a
+        className="btn btn-block"
+        href={`${API_BASE}/datenschutz`}
+        target="_blank"
+        rel="noreferrer"
+      >
         Datenschutzerklärung lesen
       </a>
 
-      <button type="button" className="btn btn-block" disabled={laedt} onClick={() => void exportieren()}>
+      <button
+        type="button"
+        className="btn btn-block"
+        disabled={laedt}
+        onClick={() => void exportieren()}
+      >
         {laedt ? 'Wird zusammengestellt …' : 'Meine Daten herunterladen'}
       </button>
 
-      <button
-        type="button"
-        className="btn btn-block btn-danger"
-        onClick={() => setLoeschen(true)}
-      >
+      <button type="button" className="btn btn-block btn-danger" onClick={() => setLoeschen(true)}>
         Konto löschen
       </button>
 

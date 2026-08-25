@@ -3,6 +3,7 @@ import { LIMITS, type StickerPackDto } from '@initiative/shared';
 import { Sheet } from '../../components/Sheet.js';
 import { Spinner } from '../../components/Feedback.js';
 import { api } from '../../lib/api.js';
+import { herunterladen } from '../../lib/herunterladen.js';
 import { uploadBlob } from '../../lib/upload.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
@@ -27,6 +28,7 @@ export function SavePackSheet({ blob, mime, onClose, onSaved }: SavePackSheetPro
   const [name, setName] = useState('Meine Sticker');
   const [emoji, setEmoji] = useState('');
   const [saving, setSaving] = useState(false);
+  const [laedtHerunter, setLaedtHerunter] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
 
   useEffect(() => {
@@ -62,6 +64,18 @@ export function SavePackSheet({ blob, mime, onClose, onSaved }: SavePackSheetPro
     if (saving) return false;
     return target === 'new' ? trimmedName.length > 0 : true;
   }, [saving, target, trimmedName]);
+
+  async function aufsGeraet() {
+    setLaedtHerunter(true);
+    try {
+      const weg = await herunterladen(blob, stickerFileName(mime));
+      if (weg === 'geladen') toast('Sticker gespeichert.', 'success');
+    } catch (error) {
+      toast(errorMessage(error, 'Speichern fehlgeschlagen'), 'error');
+    } finally {
+      setLaedtHerunter(false);
+    }
+  }
 
   async function save() {
     if (!canSave) return;
@@ -189,6 +203,17 @@ export function SavePackSheet({ blob, mime, onClose, onSaved }: SavePackSheetPro
         disabled={!canSave}
       >
         {saving ? 'Wird gespeichert …' : 'Speichern'}
+      </button>
+      {/* Der Sticker liegt hier schon fertig als Blob vor – das ist der
+          natuerliche Ort fuers Speichern aufs Geraet, und man muss ihn nicht
+          erst irgendwohin schicken, um ihn zu behalten. */}
+      <button
+        type="button"
+        className="btn btn-block"
+        onClick={() => void aufsGeraet()}
+        disabled={saving || laedtHerunter}
+      >
+        {laedtHerunter ? '…' : '⬇ Aufs Handy speichern'}
       </button>
       <button type="button" className="btn btn-ghost btn-block" onClick={onClose} disabled={saving}>
         Abbrechen
