@@ -145,18 +145,6 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
-      - name: Protokoll
-        if: inputs.aufgabe == 'protokoll' || failure()
-        run: |
-          set -uo pipefail
-          echo "## Protokoll" >> "$GITHUB_STEP_SUMMARY"
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-          timeout 60 flyctl logs --app "$FLY_APP" --no-tail 2>&1 \
-            | tail -200 | tee -a "$GITHUB_STEP_SUMMARY" || true
-          echo '```' >> "$GITHUB_STEP_SUMMARY"
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-
       # Nach jedem Eingriff nachsehen, ob die App wirklich antwortet – sonst
       # meldet auch dieser Ablauf faelschlich Erfolg.
       - name: Antwortet die App?
@@ -182,3 +170,15 @@ jobs:
           done
           echo "::error::Die API antwortet nach 150 Sekunden nicht."
           exit 1
+
+      - name: Protokoll
+        if: inputs.aufgabe == 'protokoll' || failure()
+        run: |
+          set -uo pipefail
+          echo "## Protokoll" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          timeout 60 flyctl logs --app "$FLY_APP" --no-tail 2>&1 \
+            | tail -200 | tee -a "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

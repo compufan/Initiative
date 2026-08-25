@@ -27,6 +27,7 @@ import type { InferenceSession } from 'onnxruntime-web';
 // die Adresse.
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.wasm?url';
 import ortMjsUrl from 'onnxruntime-web/ort-wasm-simd-threaded.mjs?url';
+import { flaechenMittel } from './prepare.js';
 
 /** Kantenlänge, mit der U²-Net trainiert wurde. */
 const EINGABE = 320;
@@ -69,13 +70,19 @@ async function loadSession(): Promise<InferenceSession> {
  * drei Farbkanäle nacheinander (nicht verschränkt), normalisiert.
  */
 function vorbereiten(image: ImageData): Float32Array {
-  const { width, height, data } = image;
+  // Verkleinern als Flächenmittel, nicht durch Herausgreifen einzelner
+  // Punkte: Sonst wirft man auf dem Weg von 1024 auf 320 rund neun von zehn
+  // Bildpunkten ungesehen weg – und damit genau die dünnen Strukturen, die
+  // hier den Unterschied machen.
+  const { data } = flaechenMittel(image, EINGABE);
   const flaeche = EINGABE * EINGABE;
   const tensor = new Float32Array(3 * flaeche);
 
-  // Das Original teilt vor dem Normalisieren durch den hellsten Wert im
-  // Bild. Bei einem dunklen Foto macht das den Unterschied zwischen Maske
-  // und grauem Brei.
+  // Das Original teilt vor dem Normalisieren durch den hellsten Wert – und
+  // zwar den des BEREITS verkleinerten Bildes, genau wie die Referenz-
+  // Umsetzung (rembg: erst skalieren, dann `im / np.max(im)`). Bei einem
+  // dunklen Foto macht dieser Schritt den Unterschied zwischen Maske und
+  // grauem Brei.
   let hellster = 0;
   for (let i = 0; i < data.length; i += 4) {
     if (data[i] > hellster) hellster = data[i];
@@ -84,16 +91,11 @@ function vorbereiten(image: ImageData): Float32Array {
   }
   if (hellster === 0) hellster = 255;
 
-  for (let y = 0; y < EINGABE; y += 1) {
-    const sy = Math.min(height - 1, Math.floor((y * height) / EINGABE));
-    for (let x = 0; x < EINGABE; x += 1) {
-      const sx = Math.min(width - 1, Math.floor((x * width) / EINGABE));
-      const at = (sy * width + sx) * 4;
-      const ziel = y * EINGABE + x;
-      for (let k = 0; k < 3; k += 1) {
-        const wert = data[at + k] / hellster;
-        tensor[k * flaeche + ziel] = (wert - MITTEL[k]) / ABWEICHUNG[k];
-      }
+  for (let i = 0; i < flaeche; i += 1) {
+    const at = i * 4;
+    for (let k = 0; k < 3; k += 1) {
+      const wert = data[at + k] / hellster;
+      tensor[k * flaeche + i] = (wert - MITTEL[k]) / ABWEICHUNG[k];
     }
   }
   return tensor;

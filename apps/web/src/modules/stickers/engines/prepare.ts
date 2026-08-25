@@ -43,6 +43,65 @@ export function vorlageAus(
   return { image: ctx.getImageData(0, 0, w, h), faktor };
 }
 
+/** Ein Bild als blosse Zahlen – damit sich das ohne Browser prüfen lässt. */
+export interface Bildpunkte {
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
+}
+
+/**
+ * Verkleinert ein Bild auf eine feste Kantenlänge – als **Flächenmittel**.
+ *
+ * Der naheliegende Weg wäre, für jeden Zielpunkt den nächstgelegenen
+ * Quellpunkt zu nehmen. Genau das ist hier falsch: Ein Modell rechnet mit
+ * 320 Bildpunkten Kantenlänge, ein Handyfoto hat 3000. Beim Herausgreifen
+ * einzelner Punkte werden 99 von 100 Bildpunkten **ungesehen weggeworfen** –
+ * und mit ihnen genau die dünnen Strukturen, um die es beim Freistellen geht.
+ * Eine Haarsträhne, die zwischen zwei Abtastpunkte fällt, existiert für das
+ * Modell dann nicht.
+ *
+ * Das Flächenmittel sieht jeden Quellpunkt genau einmal. Es kostet nichts
+ * Nennenswertes und ist die beste Investition an dieser Stelle.
+ */
+export function flaechenMittel(image: Bildpunkte, ziel: number): Bildpunkte {
+  const { width, height, data } = image;
+  const out = new Uint8ClampedArray(ziel * ziel * 4);
+
+  for (let ty = 0; ty < ziel; ty += 1) {
+    const y0 = Math.floor((ty * height) / ziel);
+    const y1 = Math.max(y0 + 1, Math.ceil(((ty + 1) * height) / ziel));
+    for (let tx = 0; tx < ziel; tx += 1) {
+      const x0 = Math.floor((tx * width) / ziel);
+      const x1 = Math.max(x0 + 1, Math.ceil(((tx + 1) * width) / ziel));
+
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let a = 0;
+      let n = 0;
+      for (let y = y0; y < Math.min(y1, height); y += 1) {
+        for (let x = x0; x < Math.min(x1, width); x += 1) {
+          const at = (y * width + x) * 4;
+          r += data[at];
+          g += data[at + 1];
+          b += data[at + 2];
+          a += data[at + 3];
+          n += 1;
+        }
+      }
+      if (n === 0) n = 1;
+      const zielAt = (ty * ziel + tx) * 4;
+      out[zielAt] = r / n;
+      out[zielAt + 1] = g / n;
+      out[zielAt + 2] = b / n;
+      out[zielAt + 3] = a / n;
+    }
+  }
+
+  return { width: ziel, height: ziel, data: out };
+}
+
 /**
  * Glättet die Maskenkante.
  *
