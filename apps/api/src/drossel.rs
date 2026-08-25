@@ -65,6 +65,8 @@ impl Regel {
 }
 
 pub struct Drossel {
+    /// Ob überhaupt gebremst wird – siehe `Config::rate_limit`.
+    an: bool,
     eimer: Mutex<HashMap<String, Eimer>>,
     /// Ab wie vielen Einträgen aufgeräumt wird.
     ///
@@ -76,13 +78,14 @@ pub struct Drossel {
 
 impl Default for Drossel {
     fn default() -> Self {
-        Self::neu()
+        Self::neu(true)
     }
 }
 
 impl Drossel {
-    pub fn neu() -> Self {
+    pub fn neu(an: bool) -> Self {
         Self {
+            an,
             eimer: Mutex::new(HashMap::new()),
             aufraeumen_ab: 10_000,
         }
@@ -95,6 +98,9 @@ impl Drossel {
 
     /// Dasselbe mit vorgegebener Zeit – so lässt es sich prüfen, ohne zu warten.
     pub fn erlaubt_um(&self, schluessel: &str, regel: Regel, jetzt: Instant) -> bool {
+        if !self.an {
+            return true;
+        }
         let mut karte = match self.eimer.lock() {
             Ok(karte) => karte,
             // Ein vergifteter Mutex darf nicht dazu führen, dass sich niemand
@@ -294,6 +300,17 @@ mod tests {
     }
 
     #[test]
+    fn abgeschaltet_laesst_sie_alles_durch() {
+        // Fuer die Browser-Tests: Sie legen zwei Dutzend Konten in zwei
+        // Minuten an, alle von derselben Adresse.
+        let drossel = Drossel::neu(false);
+        let jetzt = Instant::now();
+        for _ in 0..100 {
+            assert!(drossel.erlaubt_um("a", TEST, jetzt));
+        }
+    }
+
+    #[test]
     fn nimmt_ohne_vertrauen_immer_die_gegenstelle() {
         let peer: std::net::IpAddr = "203.0.113.9".parse().unwrap();
         // Der Absender behauptet, jemand anderes zu sein – ohne Proxy davor
@@ -320,7 +337,7 @@ mod tests {
 
     #[test]
     fn laesst_den_vorrat_durch_und_bremst_danach() {
-        let drossel = Drossel::neu();
+        let drossel = Drossel::neu(true);
         let jetzt = Instant::now();
         assert!(drossel.erlaubt_um("a", TEST, jetzt));
         assert!(drossel.erlaubt_um("a", TEST, jetzt));
@@ -330,7 +347,7 @@ mod tests {
 
     #[test]
     fn fuellt_sich_mit_der_zeit_wieder_auf() {
-        let drossel = Drossel::neu();
+        let drossel = Drossel::neu(true);
         let jetzt = Instant::now();
         for _ in 0..3 {
             assert!(drossel.erlaubt_um("a", TEST, jetzt));
@@ -346,7 +363,7 @@ mod tests {
     #[test]
     fn laeuft_nicht_ueber_den_vorrat_hinaus_voll() {
         // Wer eine Woche nichts tut, hat drei Versuche – nicht dreitausend.
-        let drossel = Drossel::neu();
+        let drossel = Drossel::neu(true);
         let jetzt = Instant::now();
         assert!(drossel.erlaubt_um("a", TEST, jetzt));
         let viel_spaeter = jetzt + Duration::from_secs(7 * 24 * 3600);
@@ -358,7 +375,7 @@ mod tests {
 
     #[test]
     fn zaehlt_jeden_schluessel_fuer_sich() {
-        let drossel = Drossel::neu();
+        let drossel = Drossel::neu(true);
         let jetzt = Instant::now();
         for _ in 0..3 {
             assert!(drossel.erlaubt_um("a", TEST, jetzt));
@@ -370,7 +387,7 @@ mod tests {
 
     #[test]
     fn eine_geglueckte_anmeldung_loescht_die_fehlversuche() {
-        let drossel = Drossel::neu();
+        let drossel = Drossel::neu(true);
         let jetzt = Instant::now();
         assert!(drossel.erlaubt_um("a", TEST, jetzt));
         assert!(drossel.erlaubt_um("a", TEST, jetzt));
@@ -385,7 +402,7 @@ mod tests {
     fn raeumt_alte_eintraege_weg_statt_zu_wachsen() {
         // Genau der Fall, den ein Angreifer auslöst: viele verschiedene
         // Adressen. Ohne Aufräumen wäre die Bremse selbst das Leck.
-        let mut drossel = Drossel::neu();
+        let mut drossel = Drossel::neu(true);
         drossel.aufraeumen_ab = 50;
         let jetzt = Instant::now();
         for i in 0..60 {

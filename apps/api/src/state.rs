@@ -60,7 +60,7 @@ impl AppState {
         Ok(Self {
             pool,
             push: Arc::new(PushService::new(config.clone())),
-            drossel: Arc::new(Drossel::neu()),
+            drossel: Arc::new(Drossel::neu(config.rate_limit)),
             config,
             storage,
             hub,

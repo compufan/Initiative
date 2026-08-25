@@ -81,7 +81,13 @@ export default defineConfig({
     {
       command: 'cargo run --manifest-path ../../apps/api/Cargo.toml --bin initiative-api',
       url: `${API_URL}/healthz`,
-      env: { ...rootEnv(), ...process.env } as Record<string, string>,
+      // Die Ratenbremse muss hier aus. Die Testreihe legt zwei Dutzend Konten
+      // in wenigen Minuten an, alle von derselben Adresse – für die Bremse
+      // nicht von einem Angriff zu unterscheiden. Dass sie wirkt, prüft
+      // `apps/api/tests/bremse.rs`, dort ist sie an. `process.env` steht
+      // dahinter, damit man sie für einen gezielten Versuch wieder anschalten
+      // kann.
+      env: { RATE_LIMIT: 'false', ...rootEnv(), ...process.env } as Record<string, string>,
       reuseExistingServer: true,
       timeout: 300_000,
       stdout: 'pipe',
