@@ -1,0 +1,155 @@
+# Fernbedienung für die API – bedienbar vom Handy.
+#
+# Gedacht für den Fall, dass man unterwegs ist und keinen Rechner hat:
+# GitHub-App öffnen (oder github.com im Browser) → Actions → „API-Wartung“ →
+# „Run workflow“ → Aufgabe wählen → starten. Das ersetzt `flyctl` auf dem
+# eigenen Rechner für genau die Handgriffe, die im Betrieb wirklich anfallen.
+#
+# Braucht dasselbe FLY_API_TOKEN wie der Deploy-Ablauf.
+
+name: API-Wartung
+
+on:
+  workflow_dispatch:
+    inputs:
+      aufgabe:
+        description: "Was soll passieren?"
+        required: true
+        default: neustart
+        type: choice
+        options:
+          - zustand
+          - neustart
+          - starten
+          - protokoll
+          - secret-setzen
+      secret_name:
+        description: "Nur bei „secret-setzen“: Name, z. B. S3_BUCKET"
+        required: false
+        type: string
+      secret_wert:
+        description: "Nur bei „secret-setzen“: Wert, z. B. initiative"
+        required: false
+        type: string
+
+concurrency:
+  group: deploy-api
+  cancel-in-progress: false
+
+env:
+  FLY_APP: initiative-api
+  API_URL: https://initiative-api.fly.dev
+
+jobs:
+  wartung:
+    name: ${{ inputs.aufgabe }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Auf hinterlegtes Token prüfen
+        run: |
+          if [ -z "${{ secrets.FLY_API_TOKEN }}" ]; then
+            echo "::error::FLY_API_TOKEN ist nicht hinterlegt."
+            exit 1
+          fi
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Zustand vorher
+        run: |
+          set -uo pipefail
+          echo "## Maschinen" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          flyctl machines list --app "$FLY_APP" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+          echo "## Antwortet die App?" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          curl -s -m 15 -w '\nHTTP %{http_code} nach %{time_total}s\n' "$API_URL/healthz" \
+            2>&1 | tee -a "$GITHUB_STEP_SUMMARY" || echo "keine Antwort" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Secret setzen
+        if: inputs.aufgabe == 'secret-setzen'
+        run: |
+          set -euo pipefail
+          if [ -z "${{ inputs.secret_name }}" ] || [ -z "${{ inputs.secret_wert }}" ]; then
+            echo "::error::Name und Wert werden beide gebraucht."
+            exit 1
+          fi
+          # `--stage` setzt es, ohne sofort neu zu starten. Der Neustart kommt
+          # gleich darunter kontrolliert – sonst laufen zwei Vorgaenge gegen-
+          # einander und die Maschine bleibt womoeglich wieder stehen.
+          flyctl secrets set --app "$FLY_APP" --stage \
+            "${{ inputs.secret_name }}=${{ inputs.secret_wert }}"
+          echo "Gesetzt: ${{ inputs.secret_name }} (Wert wird nicht angezeigt)" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Neu starten
+        if: inputs.aufgabe == 'neustart' || inputs.aufgabe == 'secret-setzen'
+        run: |
+          set -euo pipefail
+          flyctl machines list --app "$FLY_APP" --json > maschinen.json
+          for id in $(jq -r '.[].id' maschinen.json); do
+            echo "Starte $id neu …"
+            flyctl machines restart "$id" --app "$FLY_APP"
+          done
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Starten
+        if: inputs.aufgabe == 'starten'
+        run: |
+          set -euo pipefail
+          flyctl machines list --app "$FLY_APP" --json > maschinen.json
+          gestoppt=$(jq -r '.[] | select(.state != "started") | .id' maschinen.json)
+          if [ -z "$gestoppt" ]; then
+            echo "Alle Maschinen laufen bereits." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          for id in $gestoppt; do
+            echo "Starte $id …"
+            flyctl machines start "$id" --app "$FLY_APP"
+          done
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Protokoll
+        if: inputs.aufgabe == 'protokoll' || failure()
+        run: |
+          set -uo pipefail
+          echo "## Protokoll" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          timeout 60 flyctl logs --app "$FLY_APP" --no-tail 2>&1 \
+            | tail -200 | tee -a "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # Nach jedem Eingriff nachsehen, ob die App wirklich antwortet – sonst
+      # meldet auch dieser Ablauf faelschlich Erfolg.
+      - name: Antwortet die App?
+        if: inputs.aufgabe != 'protokoll' && inputs.aufgabe != 'zustand'
+        run: |
+          set -uo pipefail
+          for versuch in $(seq 1 30); do
+            code=$(curl -s -o antwort.json -w '%{http_code}' -m 10 "$API_URL/healthz" || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "Die App antwortet:"
+              cat antwort.json
+              {
+                echo "### API ist oben"
+                echo '```json'
+                cat antwort.json
+                echo
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Versuch $versuch: HTTP $code – warte 5 s"
+            sleep 5
+          done
+          echo "::error::Die API antwortet nach 150 Sekunden nicht."
+          exit 1

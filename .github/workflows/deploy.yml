@@ -28,6 +28,10 @@ concurrency:
   group: deploy-api
   cancel-in-progress: false
 
+env:
+  FLY_APP: initiative-api
+  API_URL: https://initiative-api.fly.dev
+
 jobs:
   deploy:
     name: Fly.io
@@ -53,7 +57,77 @@ jobs:
       - name: Deploy
         if: steps.guard.outputs.ready == 'true'
         run: |
-          flyctl deploy apps/api --app initiative-api --remote-only \
+          flyctl deploy apps/api --app "$FLY_APP" --remote-only \
             --build-arg GIT_SHA=${{ github.sha }}
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # ------------------------------------------------------------------
+      # Der wichtigste Schritt, und er fehlte.
+      #
+      # `flyctl deploy` aktualisiert die Konfiguration einer GESTOPPTEN
+      # Maschine, lässt sie gestoppt und meldet trotzdem Erfolg:
+      #
+      #     > Machine … reached stopped state
+      #     ✔ Machine … is now in a good state
+      #
+      # Für flyctl ist "stopped" ein guter Zustand. Für eine App, auf die
+      # jemand wartet, nicht. Genau so lief hier dreimal hintereinander ein
+      # grüner Deploy, während die App tot war.
+      # ------------------------------------------------------------------
+      - name: Gestoppte Maschinen starten
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          set -euo pipefail
+          flyctl machines list --app "$FLY_APP" --json > maschinen.json
+          echo "Zustand nach dem Deploy:"
+          jq -r '.[] | "  \(.id)  \(.state)  \(.region)"' maschinen.json
+
+          gestoppt=$(jq -r '.[] | select(.state != "started") | .id' maschinen.json)
+          if [ -z "$gestoppt" ]; then
+            echo "Alle Maschinen laufen bereits."
+            exit 0
+          fi
+          for id in $gestoppt; do
+            echo "Starte $id …"
+            flyctl machines start "$id" --app "$FLY_APP"
+          done
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      # Ein Deploy, nach dem die App nicht antwortet, darf nicht grün sein.
+      - name: Antwortet die App wirklich?
+        if: steps.guard.outputs.ready == 'true'
+        run: |
+          set -uo pipefail
+          for versuch in $(seq 1 30); do
+            code=$(curl -s -o antwort.json -w '%{http_code}' -m 10 "$API_URL/healthz" || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "Die App antwortet (Versuch $versuch):"
+              cat antwort.json
+              echo
+              {
+                echo "### API ist oben"
+                echo '```json'
+                cat antwort.json
+                echo
+                echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Versuch $versuch: HTTP $code – warte 5 s"
+            sleep 5
+          done
+          echo "::error::Die API antwortet nach 150 Sekunden nicht."
+          exit 1
+
+      # Nur wenn etwas schiefging: zeigen, woran es lag.
+      - name: Protokoll bei Fehlschlag
+        if: failure() && steps.guard.outputs.ready == 'true'
+        run: |
+          echo "=== Maschinen ==="
+          flyctl machines list --app "$FLY_APP" || true
+          echo "=== Die letzten Protokollzeilen ==="
+          timeout 60 flyctl logs --app "$FLY_APP" --no-tail || true
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

@@ -3,7 +3,7 @@
 # Von der Repo-Wurzel ausführen (nicht aus apps/api heraus):
 #
 #   fly apps create initiative-api
-#   fly secrets set --app initiative-api DATABASE_URL="postgres://…" JWT_SECRET="…" PUBLIC_APP_URL="https://initiative.example.com" PUBLIC_API_URL="https://initiative-api.fly.dev" CORS_ORIGINS="https://initiative.example.com" STORAGE_DRIVER=r2 S3_ENDPOINT="https://<account>.r2.cloudflarestorage.com" S3_BUCKET=initiative-media S3_ACCESS_KEY_ID=… S3_SECRET_ACCESS_KEY=… VAPID_PUBLIC_KEY=… VAPID_PRIVATE_KEY=… VAPID_SUBJECT="mailto:du@example.com"
+#   fly secrets set --app initiative-api DATABASE_URL="postgres://…" JWT_SECRET="…" PUBLIC_APP_URL="https://initiative.example.com" PUBLIC_API_URL="https://initiative-api.fly.dev" CORS_ORIGINS="https://initiative.example.com" STORAGE_DRIVER=r2 S3_ENDPOINT="https://<account>.r2.cloudflarestorage.com" S3_BUCKET=initiative S3_ACCESS_KEY_ID=… S3_SECRET_ACCESS_KEY=… VAPID_PUBLIC_KEY=… VAPID_PRIVATE_KEY=… VAPID_SUBJECT="mailto:du@example.com"
 #   fly deploy apps/api --app initiative-api
 #
 # WICHTIG: "apps/api" als erstes Argument von `fly deploy`, nicht nur
@@ -32,9 +32,17 @@ primary_region = "fra"
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "suspend"
+  # Bewusst AUS. Diese App ist kein zustandsloser Webserver: Sie hält
+  # WebSocket-Verbindungen offen und lauscht über LISTEN dauerhaft an der
+  # Datenbank (REALTIME_BUS = postgres). Beides überlebt ein Anhalten nicht.
+  #
+  # Vorher stand hier "suspend". Die Maschine ist dabei irgendwann stehen
+  # geblieben und nicht wieder hochgekommen: Anfragen liefen dann ins Nichts,
+  # weil die Fly-Vermittlung wartet, statt einen Fehler zu schicken – und
+  # `fly deploy` meldete trotzdem Erfolg, weil "stopped" für flyctl ein guter
+  # Zustand ist.
+  auto_stop_machines = "off"
   auto_start_machines = true
-  # Mindestens eine Maschine bleibt wach, damit WebSockets nicht abreißen.
   min_machines_running = 1
 
   [http_service.concurrency]
