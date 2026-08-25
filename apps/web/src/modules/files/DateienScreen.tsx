@@ -41,7 +41,15 @@ export function DateienScreen() {
   const [betrachter, setBetrachter] = useState<number | null>(null);
 
   const aktuell = collectionId ? collections.find((entry) => entry.id === collectionId) : undefined;
-  const ordner = useFiles((state) => state.childrenOf(collectionId ?? null));
+  // Nicht als Selektor: `childrenOf` baut jedes Mal ein neues Feld, und zustand
+  // haelt das fuer eine Aenderung – die Ansicht liefe endlos im Kreis und
+  // bliebe leer. Deshalb aus `collections` ableiten, das sich wirklich nur
+  // aendert, wenn es sich geaendert hat.
+  const ordner = useMemo(
+    () => useFiles.getState().childrenOf(collectionId ?? null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [collections, collectionId],
+  );
   const items = collectionId ? (alleItems[collectionId] ?? []) : [];
   const inhaltGeladen = collectionId ? Boolean(geladen[collectionId]) : true;
 
