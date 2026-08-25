@@ -9,6 +9,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
+use std::time::Duration;
+use tokio::time::timeout;
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
@@ -203,39 +205,46 @@ async fn upload_data(
         .await
         .map_err(|_| AppError::internal("Upload-Warteschlange nicht verfügbar"))?;
 
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|error| AppError::bad_request(format!("Upload fehlgeschlagen: {error}")))?
-    {
-        if field.name() != Some("file") {
-            continue;
-        }
-        original_name = field.file_name().map(sanitise_file_name);
-        let bytes = field
-            .bytes()
+    // Timeout um Slowloris-Angriffe zu verhindern.
+    timeout(Duration::from_secs(20), async {
+        while let Some(field) = multipart
+            .next_field()
             .await
-            .map_err(|error| AppError::bad_request(format!("Upload fehlgeschlagen: {error}")))?;
-        if bytes.len() as i64 > limit {
-            state.storage.delete(&attachment.storage_key).await.ok();
-            sqlx::query("delete from attachments where id = $1")
+            .map_err(|error| AppError::bad_request(format!("Upload fehlgeschlagen: {error}")))?
+        {
+            if field.name() != Some("file") {
+                continue;
+            }
+            original_name = field.file_name().map(sanitise_file_name);
+            let bytes = timeout(Duration::from_secs(20), field.bytes())
+                .await
+                .map_err(|_| AppError::bad_request("Upload-Timeout: Dateiübertragung zu langsam"))?
+                .map_err(|error| AppError::bad_request(format!("Upload fehlgeschlagen: {error}")))?;
+            if bytes.len() as i64 > limit {
+                state.storage.delete(&attachment.storage_key).await.ok();
+                sqlx::query("delete from attachments where id = $1")
+                    .bind(id)
+                    .execute(&state.pool)
+                    .await?;
+                return Err(AppError::too_large("Datei überschreitet das Upload-Limit"));
+            }
+            state
+                .storage
+                .put(&attachment.storage_key, bytes.clone(), &attachment.mime)
+                .await?;
+            sqlx::query("update attachments set size = $2 where id = $1")
                 .bind(id)
+                .bind(bytes.len() as i64)
                 .execute(&state.pool)
                 .await?;
-            return Err(AppError::too_large("Datei überschreitet das Upload-Limit"));
+            stored = true;
+            break;
         }
-        state
-            .storage
-            .put(&attachment.storage_key, bytes.clone(), &attachment.mime)
-            .await?;
-        sqlx::query("update attachments set size = $2 where id = $1")
-            .bind(id)
-            .bind(bytes.len() as i64)
-            .execute(&state.pool)
-            .await?;
-        stored = true;
-        break;
-    }
+        Ok::<(), AppError>(())
+    })
+    .await
+    .map_err(|_| AppError::bad_request("Upload-Timeout: Anfrage dauerte zu lange"))?
+    .map_err(|e| e)?;
 
     if !stored {
         return Err(AppError::bad_request("Es wurde keine Datei übertragen"));
