@@ -276,7 +276,11 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
               ...wert,
               striche: [
                 ...wert.striche,
-                { farbe: farbeRef.current, breite: breiteRef.current, punkte: [amBild.x, amBild.y] },
+                {
+                  farbe: farbeRef.current,
+                  breite: breiteRef.current,
+                  punkte: [amBild.x, amBild.y],
+                },
               ],
             }
           : wert,
@@ -390,7 +394,10 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     if (art === 'text') {
       const start = nachAnsicht(zug.current.startText, W, H, aktuell);
       const ziel = nachOriginal(
-        { x: start.x + (punkt.x - zug.current.start.x), y: start.y + (punkt.y - zug.current.start.y) },
+        {
+          x: start.x + (punkt.x - zug.current.start.x),
+          y: start.y + (punkt.y - zug.current.start.y),
+        },
         W,
         H,
         aktuell,
@@ -802,7 +809,8 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
                   <span className="bild-wert">{aktiverText.groesse}</span>
                 </label>
                 <p className="bild-hinweis">
-                  Tipp ins Bild, um den Schriftzug dorthin zu setzen – oder zieh ihn an seinen Platz.
+                  Tipp ins Bild, um den Schriftzug dorthin zu setzen – oder zieh ihn an seinen
+                  Platz.
                 </p>
               </>
             ) : (

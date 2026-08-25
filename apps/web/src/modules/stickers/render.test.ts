@@ -118,7 +118,14 @@ describe('keepAtSeeds', () => {
     expect(alphaAt(image, 35, 20)).toBe(0); // zweites Feld noch nicht angetippt
 
     const both = makeImage(40, (x) => (x < 20 ? [10, 200, 10, 255] : [200, 200, 10, 255]));
-    keepAtSeeds(both, [{ x: 5, y: 20 }, { x: 35, y: 20 }], 30);
+    keepAtSeeds(
+      both,
+      [
+        { x: 5, y: 20 },
+        { x: 35, y: 20 },
+      ],
+      30,
+    );
     expect(alphaAt(both, 5, 20)).toBeGreaterThan(200);
     expect(alphaAt(both, 35, 20)).toBeGreaterThan(200);
   });

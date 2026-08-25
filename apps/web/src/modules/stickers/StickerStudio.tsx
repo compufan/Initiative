@@ -124,6 +124,8 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   /** Welches Modell gerade rechnet – für Spinner und gesperrte Knöpfe. */
   const [rechnet, setRechnet] = useState<EngineKey | null>(null);
   const [modellFehler, setModellFehler] = useState<string | null>(null);
+  /** Was das Modell gerade tut – bei knapp 94 MB die halbe Miete. */
+  const [modellStand, setModellStand] = useState<string | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [result, setResult] = useState<{ blob: Blob; mime: string } | null>(null);
 
@@ -317,6 +319,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       if (!quelle || quelle.kind !== 'image') return;
       setRechnet(key);
       setModellFehler(null);
+      setModellStand(null);
       try {
         const { image, faktor } = vorlageAus(quelle.image, quelle.width, quelle.height);
 
@@ -330,7 +333,11 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
             })()
           : undefined;
 
-        const roh = await runEngine(key, { image, seed });
+        const roh = await runEngine(key, {
+          image,
+          seed,
+          fortschritt: (_anteil, text) => setModellStand(text),
+        });
         const alpha = kanteWeichzeichnen(roh, image.width, image.height, 1);
         if (!maskeTraegt(alpha)) {
           throw new EngineError(
@@ -366,6 +373,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
         );
       } finally {
         setRechnet(null);
+        setModellStand(null);
       }
     },
     [commit],
@@ -407,7 +415,8 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
         setTab('move');
       })
       .catch((error: unknown) => {
-        if (!abgebrochen) toast(errorMessage(error, 'Das Bild konnte nicht geladen werden'), 'error');
+        if (!abgebrochen)
+          toast(errorMessage(error, 'Das Bild konnte nicht geladen werden'), 'error');
       })
       .finally(() => {
         if (!abgebrochen) setBusy(false);
@@ -1134,6 +1143,11 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                 </button>
               )}
             </div>
+            {modellStand && (
+              <p className="stk-hint" role="status">
+                {modellStand}
+              </p>
+            )}
             {modellFehler && (
               <p className="stk-hint stk-hint-warn" role="status">
                 {modellFehler}

@@ -101,7 +101,11 @@ async function cacheFirst(request: Request, cacheName: string): Promise<Response
   try {
     const response = await fetch(request);
     if (response.ok && response.status === 200) {
-      void cache.put(request, response.clone());
+      // Fehlschlagen darf das: Das groesste Modell ist knapp 94 MB, und auf
+      // einem iPhone mit knappem Speicherkontingent lehnt der Browser die
+      // Ablage ab. Dann wird eben beim naechsten Mal wieder geladen – das ist
+      // besser, als das Freistellen an einer vollen Ablage scheitern zu lassen.
+      cache.put(request, response.clone()).catch(() => {});
     }
     return response;
   } catch (error) {

@@ -19,6 +19,12 @@ export interface MaskRequest {
   image: ImageData;
   /** Der angetippte Punkt in Bildkoordinaten, falls es einen gibt. */
   seed?: { x: number; y: number };
+  /**
+   * Wird waehrend eines laengeren Ladens gerufen: Anteil 0…1 und ein Satz,
+   * den man zeigen kann. Bei knapp 94 MB ist das kein Schmuck – ohne
+   * Rueckmeldung steht der Anwender vor einem Knopf, der nichts tut.
+   */
+  fortschritt?: (anteil: number, text: string) => void;
 }
 
 /** Was beim Freistellen schiefgehen kann – mit einem Satz, den man zeigen kann. */
@@ -80,6 +86,10 @@ export async function runEngine(key: EngineKey, request: MaskRequest): Promise<U
         const { objectMask } = await import('./object.js');
         return await objectMask(request.image);
       }
+      case 'birefnet': {
+        const { birefnetMask } = await import('./birefnet.js');
+        return await birefnetMask(request.image, request.fortschritt);
+      }
     }
   } catch (error) {
     if (error instanceof EngineError) throw error;
@@ -99,14 +109,9 @@ export async function releaseEngines(): Promise<void> {
   // Die Module selbst sind ein paar Kilobyte Code; das Modell laden sie erst
   // beim Rechnen. Das Aufräumen zieht also nichts herunter.
   await Promise.all([
-    import('./person.js')
-      .then((m) => m.releasePerson())
-      .catch(() => {}),
-    import('./face.js')
-      .then((m) => m.releaseFace())
-      .catch(() => {}),
-    import('./object.js')
-      .then((m) => m.releaseObject())
-      .catch(() => {}),
+    import('./person.js').then((m) => m.releasePerson()).catch(() => {}),
+    import('./face.js').then((m) => m.releaseFace()).catch(() => {}),
+    import('./object.js').then((m) => m.releaseObject()).catch(() => {}),
+    import('./birefnet.js').then((m) => m.releaseBirefnet()).catch(() => {}),
   ]);
 }

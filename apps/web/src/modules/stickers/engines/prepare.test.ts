@@ -103,7 +103,12 @@ describe('Verkleinern als Flaechenmittel', () => {
   it('mittelt, statt Punkte herauszugreifen', () => {
     // Ein Schachbrett aus 1x1-Feldern: Beim Herausgreifen einzelner Punkte
     // kaeme entweder ganz Schwarz oder ganz Weiss heraus. Richtig ist Grau.
-    const gross = bild(64, 64, (x, y) => [(x + y) % 2 ? 255 : 0, (x + y) % 2 ? 255 : 0, (x + y) % 2 ? 255 : 0, 255]);
+    const gross = bild(64, 64, (x, y) => [
+      (x + y) % 2 ? 255 : 0,
+      (x + y) % 2 ? 255 : 0,
+      (x + y) % 2 ? 255 : 0,
+      255,
+    ]);
     const klein = flaechenMittel(gross, 8);
 
     expect(klein.width).toBe(8);

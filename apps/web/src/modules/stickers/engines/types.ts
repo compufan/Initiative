@@ -10,7 +10,7 @@
  * es entstehen keine laufenden Kosten.
  */
 
-export type EngineKey = 'tap' | 'person' | 'face' | 'object';
+export type EngineKey = 'tap' | 'person' | 'face' | 'object' | 'birefnet';
 
 /**
  * Welche Laufzeit ein Verfahren braucht.
@@ -80,8 +80,17 @@ export const ENGINE_INFO: EngineInfo[] = [
     key: 'object',
     label: 'Beliebiges Objekt',
     description:
-      'Stellt auch Gegenstände frei – Tasse, Hund, Blume. Braucht den größten Download und rechnet auf älteren Geräten spürbar länger.',
+      'Stellt auch Gegenstände frei – Tasse, Hund, Blume. Rechnet auf älteren Geräten spürbar länger.',
     modelMb: 4.0,
+    runtime: 'onnx',
+    defaultEnabled: false,
+  },
+  {
+    key: 'birefnet',
+    label: 'Hohe Qualität',
+    description:
+      'Dasselbe wie „Beliebiges Objekt“, nur deutlich genauer an Haaren, Zäunen und Brillenbügeln. Dafür der mit Abstand größte Download und die längste Rechenzeit – auf einem älteren Telefon eine halbe Minute pro Bild.',
+    modelMb: 93.9,
     runtime: 'onnx',
     defaultEnabled: false,
   },

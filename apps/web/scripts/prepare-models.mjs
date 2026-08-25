@@ -11,8 +11,12 @@
  * wenn jemand das jeweilige Verfahren zum ersten Mal benutzt.
  */
 import { createRequire } from 'node:module';
-import { mkdir, copyFile, writeFile, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
+import { mkdir, copyFile, readFile, rm, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
 const hier = dirname(fileURLToPath(import.meta.url));
@@ -54,6 +58,24 @@ const MODELLE = [
     url: 'https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx',
     mindestGroesse: 4_000_000,
   },
+  {
+    // BiRefNet-lite, 512er-Fassung, halbe Genauigkeit. MIT-Lizenz, wie das
+    // Grundmodell ZhengPeng7/BiRefNet_lite. Deutlich sauberere Kanten als
+    // U^2-Net – Haare, Zaeune, Brillenbuegel –, dafuer knapp 94 MB und
+    // spuerbar mehr Rechenzeit. Deshalb ist es ein *zusaetzliches* Verfahren
+    // und kein Ersatz, und es ist von Haus aus abgeschaltet.
+    //
+    // Feste Fassung ueber den Commit statt `main`: Ein Build von heute soll
+    // dieselbe Datei bekommen wie einer von naechster Woche.
+    name: 'birefnet-lite-512.onnx',
+    url: 'https://huggingface.co/studioludens/birefnet-lite-512/resolve/4a3c40c36c94093cc1e724d9ea428b8fa4b57dc7/onnx/model_fp16.onnx',
+    mindestGroesse: 90_000_000,
+    sha256: 'eff9216bb2f9d3f023d9c2b7196845a7485739ab1f231593633e4d2344ffc516',
+    // Ein fremder Server, der gerade nicht erreichbar ist, darf keine
+    // Veroeffentlichung verhindern. Fehlt die Datei, meldet die App das
+    // Verfahren schlicht als nicht verfuegbar.
+    optional: true,
+  },
 ];
 
 async function vorhanden(pfad, mindestGroesse = 1) {
@@ -76,25 +98,71 @@ async function wasmKopieren() {
   console.log(`  MediaPipe-Laufzeit: ${WASM_DATEIEN.length} Dateien nach public/mediapipe/`);
 }
 
+/**
+ * Laedt eine Datei auf die Platte und rechnet dabei ihre Pruefsumme mit.
+ *
+ * Nicht ueber `arrayBuffer()`: Das groesste Modell ist knapp 94 MB, und die
+ * komplett in den Speicher zu ziehen, nur um sie gleich wieder wegzuschreiben,
+ * ist unnoetig – auf einem kleinen Bauknecht kann es sogar schiefgehen.
+ */
+async function laden(url, pfad) {
+  const antwort = await fetch(url);
+  if (!antwort.ok || !antwort.body) throw new Error(`HTTP ${antwort.status} von ${url}`);
+  const hash = createHash('sha256');
+  const strom = Readable.fromWeb(antwort.body);
+  strom.on('data', (stueck) => hash.update(stueck));
+  await pipeline(strom, createWriteStream(pfad));
+  return hash.digest('hex');
+}
+
+async function pruefsummeVon(pfad) {
+  // Nur fuer die kleinen Dateien beim erneuten Pruefen – die grosse traegt
+  // ihre Summe schon vom Laden her.
+  return createHash('sha256')
+    .update(await readFile(pfad))
+    .digest('hex');
+}
+
 async function modelleLaden() {
   const ziel = join(publicDir, 'models');
   await mkdir(ziel, { recursive: true });
+  const uebersprungen = [];
   for (const modell of MODELLE) {
     const pfad = join(ziel, modell.name);
-    if (await vorhanden(pfad, modell.mindestGroesse)) {
-      console.log(`  ${modell.name}: schon da`);
-      continue;
+    try {
+      if (await vorhanden(pfad, modell.mindestGroesse)) {
+        // Eine vorhandene Datei nur dann noch einmal pruefen, wenn wir wissen,
+        // wie sie aussehen soll – sonst vertrauen wir wie bisher der Groesse.
+        if (modell.sha256 && (await pruefsummeVon(pfad)) !== modell.sha256) {
+          console.warn(`  ${modell.name}: Pruefsumme passt nicht, wird neu geladen`);
+          await rm(pfad, { force: true });
+        } else {
+          console.log(`  ${modell.name}: schon da`);
+          continue;
+        }
+      }
+
+      const summe = await laden(modell.url, pfad);
+      const groesse = (await stat(pfad)).size;
+      if (groesse < modell.mindestGroesse) {
+        // Ein Fehlerbild oder eine HTML-Seite statt des Modells – lieber laut
+        // scheitern als eine kaputte Datei ausliefern.
+        await rm(pfad, { force: true });
+        throw new Error(`nur ${groesse} Bytes erhalten, das kann nicht stimmen`);
+      }
+      if (modell.sha256 && summe !== modell.sha256) {
+        await rm(pfad, { force: true });
+        throw new Error(`Pruefsumme ${summe} statt ${modell.sha256}`);
+      }
+      console.log(`  ${modell.name}: ${(groesse / 1024 / 1024).toFixed(1)} MB geladen`);
+    } catch (fehler) {
+      if (!modell.optional) throw new Error(`${modell.name}: ${fehler.message}`);
+      uebersprungen.push(`${modell.name} (${fehler.message})`);
     }
-    const antwort = await fetch(modell.url);
-    if (!antwort.ok) throw new Error(`${modell.name}: HTTP ${antwort.status} von ${modell.url}`);
-    const daten = Buffer.from(await antwort.arrayBuffer());
-    if (daten.length < modell.mindestGroesse) {
-      // Ein Fehlerbild oder eine HTML-Seite statt des Modells – lieber laut
-      // scheitern als eine kaputte Datei ausliefern.
-      throw new Error(`${modell.name}: nur ${daten.length} Bytes erhalten, das kann nicht stimmen`);
-    }
-    await writeFile(pfad, daten);
-    console.log(`  ${modell.name}: ${(daten.length / 1024).toFixed(0)} KB geladen`);
+  }
+  for (const eintrag of uebersprungen) {
+    console.warn(`  Uebersprungen: ${eintrag}`);
+    console.warn('  Dieses Verfahren steht in dieser Fassung der App nicht zur Verfuegung.');
   }
 }
 

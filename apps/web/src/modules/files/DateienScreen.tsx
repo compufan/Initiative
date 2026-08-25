@@ -94,7 +94,9 @@ export function DateienScreen() {
         aktuell?.description ??
         (collectionId ? undefined : 'Ordner und Dateien, geteilt mit wem du willst')
       }
-      back={collectionId ? (aktuell?.parentId ? `/dateien/${aktuell.parentId}` : '/dateien') : false}
+      back={
+        collectionId ? (aktuell?.parentId ? `/dateien/${aktuell.parentId}` : '/dateien') : false
+      }
       actions={
         darfAendern && (
           <>
@@ -158,7 +160,11 @@ export function DateienScreen() {
               <button type="button" className="btn btn-sm" onClick={() => setBearbeiten(true)}>
                 Bearbeiten
               </button>
-              <button type="button" className="btn btn-sm btn-danger" onClick={() => void loeschen()}>
+              <button
+                type="button"
+                className="btn btn-sm btn-danger"
+                onClick={() => void loeschen()}
+              >
                 Löschen
               </button>
             </>
@@ -190,11 +196,7 @@ export function DateienScreen() {
           }
           action={
             collectionId && darfAendern ? (
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => setHochladen(true)}
-              >
+              <button type="button" className="btn btn-primary" onClick={() => setHochladen(true)}>
                 Dateien hinzufügen
               </button>
             ) : undefined

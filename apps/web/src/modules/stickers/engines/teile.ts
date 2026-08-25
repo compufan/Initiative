@@ -142,11 +142,7 @@ export function teilAn(teile: Teile, x: number, y: number, umkreis = 12): number
  * wie bisher, solange niemand etwas antippt. Wer einmal getippt hat, sieht
  * genau das, was er gewählt hat.
  */
-export function maskeAus(
-  alpha: Uint8Array,
-  teile: Teile,
-  gewaehlt: readonly number[],
-): Uint8Array {
+export function maskeAus(alpha: Uint8Array, teile: Teile, gewaehlt: readonly number[]): Uint8Array {
   if (gewaehlt.length === 0) return alpha;
   const dabei = new Set(gewaehlt);
   const heraus = new Uint8Array(alpha.length);

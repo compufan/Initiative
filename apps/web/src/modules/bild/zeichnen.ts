@@ -26,9 +26,17 @@ import {
  * etwas Ähnliches erscheint wie auf dem iPhone.
  */
 export const SCHRIFTEN: { key: string; label: string; stack: string }[] = [
-  { key: 'system', label: 'Normal', stack: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif' },
+  {
+    key: 'system',
+    label: 'Normal',
+    stack: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+  },
   { key: 'serif', label: 'Serifen', stack: 'Georgia, "Times New Roman", Times, serif' },
-  { key: 'mono', label: 'Technisch', stack: '"SF Mono", "Roboto Mono", Menlo, Consolas, monospace' },
+  {
+    key: 'mono',
+    label: 'Technisch',
+    stack: '"SF Mono", "Roboto Mono", Menlo, Consolas, monospace',
+  },
   { key: 'rund', label: 'Rund', stack: '"Comic Sans MS", "Chalkboard SE", "Comic Neue", cursive' },
   {
     key: 'schmal',
