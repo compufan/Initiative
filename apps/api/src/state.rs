@@ -7,6 +7,7 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 
 use crate::config::Config;
+use crate::drossel::Drossel;
 use crate::error::AppResult;
 use crate::push::PushService;
 use crate::realtime::bus::RealtimeBus;
@@ -21,6 +22,8 @@ pub struct AppState {
     pub hub: Arc<Hub>,
     pub bus: Arc<RealtimeBus>,
     pub push: Arc<PushService>,
+    /// Wie oft jemand dieselbe Sache hintereinander darf – siehe `drossel`.
+    pub drossel: Arc<Drossel>,
     /// Was beim Hochfahren schiefging – etwa eine nicht erreichbare Datenbank
     /// oder eine gescheiterte Migration.
     ///
@@ -57,6 +60,7 @@ impl AppState {
         Ok(Self {
             pool,
             push: Arc::new(PushService::new(config.clone())),
+            drossel: Arc::new(Drossel::neu()),
             config,
             storage,
             hub,

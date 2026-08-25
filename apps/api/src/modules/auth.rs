@@ -12,11 +12,17 @@ use crate::auth::password::{hash_password, random_token, sha256_hex, verify_pass
 use crate::auth::{jwt, AuthUser};
 use crate::config::RegistrationMode;
 use crate::db::UserRow;
+use crate::drossel::{regeln, Absender};
 use crate::dto::AuthSession;
 use crate::error::{AppError, AppResult};
 use crate::services::users::{load_user, to_self_user_dto};
 use crate::state::AppState;
 use crate::validate::{check_password, normalise_username, Validator};
+
+/// Immer derselbe Satz – er darf nicht verraten, welche Grenze gegriffen hat.
+fn zu_schnell() -> AppError {
+    AppError::too_many("Zu viele Versuche. Warte einen Moment und versuch es dann noch einmal.")
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -89,8 +95,18 @@ pub(crate) async fn issue_session(state: &AppState, user: &UserRow) -> AppResult
 
 async fn register(
     State(state): State<AppState>,
+    absender: Absender,
     Json(input): Json<RegisterInput>,
 ) -> AppResult<(StatusCode, Json<AuthSession>)> {
+    // Ohne Bremse liesse sich ein Einladungscode durchprobieren – und mit ihm
+    // steht die Tuer zur ganzen App offen.
+    if !state
+        .drossel
+        .erlaubt(&format!("register:{absender}"), regeln::REGISTRIEREN)
+    {
+        return Err(zu_schnell());
+    }
+
     match state.config.registration_mode {
         RegistrationMode::Closed => {
             return Err(AppError::forbidden("Registrierung ist deaktiviert"))
@@ -203,9 +219,22 @@ async fn redeem_invite_code(state: &AppState, code: &str, user_id: Uuid) -> AppR
 
 async fn login(
     State(state): State<AppState>,
+    absender: Absender,
     Json(input): Json<LoginInput>,
 ) -> AppResult<Json<AuthSession>> {
     let username = input.username.trim().to_lowercase();
+
+    // Zwei Schlüssel, weil es zwei Angriffe gibt: von einer Adresse aus viele
+    // Konten durchprobieren, und von vielen Adressen aus ein Konto. Beide
+    // Zähler laufen, beide bremsen.
+    let von = format!("login:ip:{absender}");
+    let konto = format!("login:konto:{username}");
+    if !state.drossel.erlaubt(&von, regeln::ANMELDEN_ADRESSE)
+        || !state.drossel.erlaubt(&konto, regeln::ANMELDEN)
+    {
+        return Err(zu_schnell());
+    }
+
     let user = sqlx::query_as::<_, UserRow>("select * from users where username = $1")
         .bind(&username)
         .fetch_optional(&state.pool)
@@ -227,6 +256,11 @@ async fn login(
         ));
     };
 
+    // Wer sich zweimal vertippt und dann richtig liegt, faengt bei null an.
+    // Sonst zaehlt die Bremse die Fehlversuche eines ganzen Tages zusammen.
+    state.drossel.zuruecksetzen(&von);
+    state.drossel.zuruecksetzen(&konto);
+
     let _ = sqlx::query("update users set last_seen_at = now() where id = $1")
         .bind(user.id)
         .execute(&state.pool)
@@ -240,8 +274,15 @@ async fn login(
 
 async fn refresh(
     State(state): State<AppState>,
+    absender: Absender,
     Json(input): Json<RefreshInput>,
 ) -> AppResult<Json<AuthSession>> {
+    if !state
+        .drossel
+        .erlaubt(&format!("refresh:{absender}"), regeln::ERNEUERN)
+    {
+        return Err(zu_schnell());
+    }
     let token = input
         .refresh_token
         .ok_or_else(|| AppError::unauthorized("Kein Refresh-Token"))?;
@@ -308,6 +349,14 @@ async fn change_password(
     user: AuthUser,
     Json(input): Json<ChangePasswordInput>,
 ) -> AppResult<StatusCode> {
+    // Angemeldet, aber ein bequemer Weg, das alte Passwort zu erraten – etwa
+    // an einem Geraet, das jemand kurz unbeaufsichtigt liess.
+    if !state
+        .drossel
+        .erlaubt(&format!("pw:{}", user.id()), regeln::PASSWORT)
+    {
+        return Err(zu_schnell());
+    }
     let row = load_user(&state.pool, user.id()).await?;
     if !verify_password(&input.current_password, &row.password_hash) {
         return Err(AppError::unauthorized("Aktuelles Passwort ist falsch"));

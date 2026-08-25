@@ -63,6 +63,15 @@ impl AppError {
         Self::api(StatusCode::CONFLICT, "conflict", message)
     }
 
+    /// 429 – zu viele Versuche in zu kurzer Zeit.
+    ///
+    /// Bewusst dieselbe Meldung für alle Fälle: Wer beim Durchprobieren von
+    /// Passwörtern gebremst wird, soll daraus nicht ablesen können, ob das
+    /// Konto überhaupt existiert.
+    pub fn too_many(message: impl Into<String>) -> Self {
+        Self::api(StatusCode::TOO_MANY_REQUESTS, "too_many_requests", message)
+    }
+
     pub fn too_large(message: impl Into<String>) -> Self {
         Self::api(StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large", message)
     }

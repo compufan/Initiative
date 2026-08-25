@@ -81,9 +81,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Initiative API bereit"
     );
 
-    axum::serve(listener, router)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    // Mit Verbindungsinformationen: Ohne sie kennt die Ratenbremse die
+    // Gegenstelle nicht und wuerde alle direkten Aufrufe in einen Topf werfen.
+    // Hinter einem Reverse Proxy zaehlt ohnehin `X-Forwarded-For` – aber nur,
+    // wenn TRUST_PROXY gesetzt ist.
+    axum::serve(
+        listener,
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 

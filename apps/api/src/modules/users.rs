@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::db::UserRow;
+use crate::drossel::regeln;
 use crate::dto::{ListResult, SelfUserDto, UserDto};
 use crate::error::{AppError, AppResult};
 use crate::realtime::Event;
@@ -42,6 +43,16 @@ async fn search(
     let needle = query.q.trim().to_lowercase();
     if needle.is_empty() {
         return Ok(Json(ListResult::new(Vec::new())));
+    }
+    // Die Suche liest ueber den ganzen Bestand. Ohne Bremse holt sich ein
+    // angemeldetes Konto das Verzeichnis Buchstabe fuer Buchstabe ab.
+    if !state
+        .drossel
+        .erlaubt(&format!("suche:{}", user.id()), regeln::SUCHEN)
+    {
+        return Err(AppError::too_many(
+            "Zu viele Suchanfragen. Warte einen Moment.",
+        ));
     }
     let pattern = format!("%{needle}%");
     let rows = sqlx::query_as::<_, UserRow>(

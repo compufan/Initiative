@@ -5,6 +5,7 @@ pub mod auth;
 pub mod config;
 pub mod constants;
 pub mod db;
+pub mod drossel;
 pub mod dto;
 pub mod error;
 pub mod games;

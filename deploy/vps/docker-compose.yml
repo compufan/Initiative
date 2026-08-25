@@ -68,6 +68,11 @@ services:
       # Bei genau einem Prozess ist das die robustere Wahl – siehe die
       # Begründung in der docker-compose.yml im Wurzelverzeichnis.
       REALTIME_BUS: memory
+      # Hier steht wirklich Caddy davor, und die API hat keinen eigenen Port
+      # nach aussen. Nur dann darf X-Forwarded-For geglaubt werden - sonst
+      # schreibt sich jeder Angreifer eine fremde Adresse hinein und sperrt
+      # damit den aus, dem sie gehoert.
+      TRUST_PROXY: "true"
     volumes:
       - uploads:/data/uploads
 

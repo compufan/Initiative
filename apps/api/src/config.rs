@@ -71,6 +71,20 @@ pub struct Config {
     pub public_app_url: String,
     pub public_api_url: String,
     pub cors_origins: Vec<String>,
+    /**
+     * Ob `X-Forwarded-For` geglaubt werden darf.
+     *
+     * Nur einschalten, wenn wirklich ein Proxy davorsteht und die API sonst
+     * von aussen nicht erreichbar ist. Sonst schreibt sich jeder Angreifer
+     * seine eigene Adresse in die Kopfzeile und läuft an jeder Bremse vorbei –
+     * schlimmer noch: er kann die Adresse eines anderen eintragen und den
+     * aussperren.
+     *
+     * Genommen wird der **letzte** Eintrag der Kette. Caddy hängt die Adresse
+     * an, die es selbst gesehen hat; alles davor kann der Absender frei
+     * erfinden.
+     */
+    pub trust_proxy: bool,
 
     pub registration_mode: RegistrationMode,
     pub invite_codes: Vec<String>,
@@ -240,6 +254,8 @@ impl Config {
             public_app_url: trim_slash(var_or("PUBLIC_APP_URL", "http://localhost:5173")),
             public_api_url: trim_slash(var_or("PUBLIC_API_URL", "http://localhost:8080")),
             cors_origins: list("CORS_ORIGINS").into_iter().map(trim_slash).collect(),
+
+            trust_proxy: flag("TRUST_PROXY", false),
 
             registration_mode: match var_or("REGISTRATION_MODE", "open").as_str() {
                 "invite" => RegistrationMode::Invite,
