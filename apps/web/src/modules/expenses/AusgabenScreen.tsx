@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  EXPENSE_STATUS_LABEL,
+  EXPENSE_STATUS_ORDER,
   formatCents,
   type BalanceDto,
+  type ConversationDto,
   type ExpenseDto,
   type UserDto,
 } from '@initiative/shared';
 import { EmptyState, Spinner } from '../../components/Feedback.js';
 import { Screen } from '../../components/Screen.js';
+import { useListenfilter, type Facette } from '../../components/Listenfilter.js';
 import { api } from '../../lib/api.js';
 import { useChat } from '../../state/chat.js';
 import { useMyId } from '../../state/session.js';
@@ -33,11 +37,22 @@ export function AusgabenScreen() {
   const [neu, setNeu] = useState(false);
   const [zahlen, setZahlen] = useState<BalanceDto | null>(null);
 
+  /**
+   * Suche und Filter für die Ausgabenliste.
+   *
+   * Die Werte stehen bewusst nirgends aufgezählt: Kommt ein Chat dazu, eine
+   * weitere Person oder später ein neuer Zustand, taucht er von selbst als
+   * Filter auf. Siehe components/Listenfilter.tsx.
+   */
   const laden = useCallback(async () => {
     setLaedt(true);
     try {
       const [liste, salden] = await Promise.all([
-        api.expenses.list({ conversationId: chatId || undefined }),
+        // `includeSettled`: Eine bezahlte Ausgabe verschwand bisher aus der
+        // Liste. Damit war sie auch nicht mehr nachzulesen – und wer sich
+        // fragte, ob er schon gezahlt hat, fand nichts mehr vor. Sie bleibt
+        // jetzt stehen und traegt ihren Zustand.
+        api.expenses.list({ conversationId: chatId || undefined, includeSettled: true }),
         api.expenses.balances(chatId || undefined),
       ]);
       setExpenses(liste.items);
@@ -75,6 +90,52 @@ export function AusgabenScreen() {
       id == null ? 'Unbekannt' : id === myId ? 'Du' : (leute[id]?.displayName ?? 'Unbekannt'),
     [leute, myId],
   );
+
+  const facetten: Facette<ExpenseDto>[] = useMemo(
+    () => [
+      {
+        key: 'status',
+        label: 'Zustand',
+        reihenfolge: EXPENSE_STATUS_ORDER,
+        werte: (expense) => [
+          { id: expense.status, label: EXPENSE_STATUS_LABEL[expense.status] },
+        ],
+      },
+      {
+        key: 'chat',
+        label: 'Chat',
+        werte: (expense) =>
+          expense.conversationId
+            ? [
+                {
+                  id: expense.conversationId,
+                  label: chatName(conversations, expense.conversationId),
+                },
+              ]
+            : [{ id: 'ohne', label: 'Nur für mich' }],
+      },
+      {
+        key: 'ausgelegt',
+        label: 'Ausgelegt von',
+        werte: (expense) =>
+          expense.paidBy ? [{ id: expense.paidBy, label: name(expense.paidBy) }] : [],
+      },
+      {
+        key: 'beteiligt',
+        label: 'Beteiligt',
+        werte: (expense) =>
+          expense.shares.map((share) => ({ id: share.userId, label: name(share.userId) })),
+      },
+    ],
+    [conversations, name],
+  );
+
+  const filter = useListenfilter(expenses, {
+    suchePlatzhalter: 'Ausgabe suchen …',
+    suchtext: (expense) => `${expense.title} ${expense.note ?? ''}`,
+    facetten,
+  });
+
 
   const summe = useMemo(
     () => balances.reduce((wert, eintrag) => wert + eintrag.netCents, 0),
@@ -164,7 +225,20 @@ export function AusgabenScreen() {
         />
       ) : (
         <section className="stack" aria-label="Ausgaben">
-          {expenses.map((expense) => (
+          {filter.steuerung}
+          {filter.gefiltert.length === 0 ? (
+            <EmptyState
+              emoji="🔍"
+              title="Nichts gefunden"
+              description="Zu dieser Suche passt gerade keine Ausgabe."
+              action={
+                <button type="button" className="btn" onClick={filter.zuruecksetzen}>
+                  Filter zurücksetzen
+                </button>
+              }
+            />
+          ) : null}
+          {filter.gefiltert.map((expense) => (
             <ExpenseCard
               key={expense.id}
               expense={expense}
@@ -256,7 +330,11 @@ function ExpenseCard({
         <span className="exp-amount">{formatCents(expense.amountCents, expense.currency)}</span>
       </div>
       <p className="exp-meta">
-        {name(expense.paidBy)} hat ausgelegt · {new Date(expense.spentAt).toLocaleDateString('de-DE')}
+        <span className={`exp-status exp-status-${expense.status}`}>
+          {EXPENSE_STATUS_LABEL[expense.status]}
+        </span>{' '}
+        · {name(expense.paidBy)} hat ausgelegt ·{' '}
+        {new Date(expense.spentAt).toLocaleDateString('de-DE')}
         {expense.hiddenFromIds.length > 0 && (
           <span className="exp-tag" title="Diese Ausgabe ist vor jemandem verborgen">
             verborgen
@@ -325,8 +403,14 @@ function ExpenseCard({
             Löschen
           </button>
         )}
-        {offen === 0 && <span className="exp-tag">abgerechnet</span>}
       </div>
     </article>
   );
+}
+
+/** Der Name eines Chats, wie er im Filter stehen soll. */
+function chatName(conversations: ConversationDto[], id: string): string {
+  const chat = conversations.find((eintrag) => eintrag.id === id);
+  if (!chat) return 'Chat';
+  return chat.title ?? (chat.type === 'group' ? 'Gruppe' : 'Direktchat');
 }

@@ -633,3 +633,15 @@
     padding-inline: var(--space-5);
   }
 }
+
+/* Zweizeiliger Menueeintrag: oben die Handlung, darunter ihre Folge. Beim
+   Loeschen ist genau die Folge der Unterschied – „nur fuer mich“ und „fuer
+   alle“ klingen aehnlich und bedeuten Gegensaetzliches. */
+.msg-action-hint {
+  display: block;
+  margin-top: 1px;
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  line-height: 1.25;
+}

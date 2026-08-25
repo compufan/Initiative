@@ -58,22 +58,37 @@ async fn list_messages(
     // `after` walks forward (catching up), everything else walks backwards.
     let rows = if let Some(after) = query.after {
         sqlx::query_as::<_, MessageRow>(
-            "select * from messages where conversation_id = $1 and id > $2 order by id asc limit $3",
+            // `not exists` statt `left join ... is null`: Es geht nur um die
+            // Frage, OB eine Zeile da ist, und Postgres kann den Test an der
+            // Sperre abbrechen, statt zu verknuepfen.
+            "select * from messages m
+              where m.conversation_id = $1 and m.id > $2
+                and not exists (
+                  select 1 from message_hidden h
+                   where h.message_id = m.id and h.user_id = $4
+                )
+              order by m.id asc limit $3",
         )
         .bind(id)
         .bind(after)
         .bind(limit)
+        .bind(user.id())
         .fetch_all(&state.pool)
         .await?
     } else {
         let mut rows = sqlx::query_as::<_, MessageRow>(
-            "select * from messages
-             where conversation_id = $1 and ($2::uuid is null or id < $2)
-             order by id desc limit $3",
+            "select * from messages m
+              where m.conversation_id = $1 and ($2::uuid is null or m.id < $2)
+                and not exists (
+                  select 1 from message_hidden h
+                   where h.message_id = m.id and h.user_id = $4
+                )
+              order by m.id desc limit $3",
         )
         .bind(id)
         .bind(query.before)
         .bind(limit)
+        .bind(user.id())
         .fetch_all(&state.pool)
         .await?;
         rows.reverse();
@@ -234,16 +249,70 @@ async fn edit(
     Ok(Json(message))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteQuery {
+    /// `me` nimmt sie nur aus meinem Verlauf, `all` bei allen.
+    ///
+    /// Vorgabe ist `all`, weil das die bisherige Bedeutung war – ein alter
+    /// Client, der den Parameter nicht kennt, verhaelt sich damit weiter so
+    /// wie zuvor und loescht nicht versehentlich nur bei sich.
+    #[serde(default)]
+    scope: Option<String>,
+}
+
 async fn remove(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<Uuid>,
+    Query(query): Query<DeleteQuery>,
 ) -> AppResult<StatusCode> {
     let row = require_message(&state.pool, id).await?;
     let membership = assert_membership(&state.pool, row.conversation_id, user.id()).await?;
-    if row.sender_id != Some(user.id()) && membership.role == "member" {
+
+    // „Nur für mich“: eine Zeile für mich, sonst aendert sich nichts. Das darf
+    // jeder mit jeder Nachricht tun, die er sehen kann – es betrifft ja nur
+    // seinen eigenen Verlauf.
+    if query.scope.as_deref() == Some("me") {
+        sqlx::query(
+            "insert into message_hidden (message_id, user_id) values ($1, $2)
+             on conflict do nothing",
+        )
+        .bind(id)
+        .bind(user.id())
+        .execute(&state.pool)
+        .await?;
+        // Nur an mich – und nur an meine anderen Geraete. Fuer die uebrigen
+        // Mitglieder ist nichts geschehen.
+        state
+            .hub
+            .publish(
+                vec![user.id()],
+                Event::message_deleted(row.conversation_id, id),
+            )
+            .await;
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
+    // Fremde Nachrichten bei allen zu loeschen ist Moderation, und Moderation
+    // gibt es nur in einer Gruppe.
+    //
+    // Vorher hing das allein an der Rolle - und wer einen Zweierchat anlegt,
+    // bekommt darin die Rolle "owner". Damit konnte man im Direktchat die
+    // Nachrichten des Gegenuebers ueberall loeschen. In einem Gespraech unter
+    // zwei Leuten gibt es aber keinen Aufseher; wer zufaellig auf "Neuer Chat"
+    // getippt hat, ist keiner. Der Test hat genau das gefunden.
+    let ist_gruppe =
+        sqlx::query_scalar::<_, String>("select type from conversations where id = $1")
+            .bind(row.conversation_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .is_some_and(|art| art == "group");
+
+    let darf_moderieren = ist_gruppe && membership.role != "member";
+    if row.sender_id != Some(user.id()) && !darf_moderieren {
         return Err(AppError::forbidden(
-            "Nur eigene Nachrichten können gelöscht werden",
+            "Für alle löschen kann man nur eigene Nachrichten",
         ));
     }
 

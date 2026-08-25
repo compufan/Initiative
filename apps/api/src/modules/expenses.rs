@@ -389,6 +389,55 @@ fn default_true() -> bool {
 ///
 /// Den eigenen darf jeder abhaken; fremde nur, wer die Ausgabe eingetragen
 /// hat oder ausgelegt hat – das Geld ist ja bei ihm angekommen.
+/// Einen einzelnen Anteil markieren – oder die Markierung zurücknehmen.
+///
+/// Die eigentliche Feinheit steckt in der Frage, ob dies die ERSTE Äußerung zu
+/// dem Anteil ist oder die Gegenzeichnung der anderen Seite. Beides in dasselbe
+/// Feld zu schreiben hieße, die erste Meldung zu löschen – und damit den
+/// Normalfall unsichtbar zu machen: Einer überweist und meldet es, der andere
+/// sieht das Geld und bestätigt.
+async fn abhaken(
+    state: &AppState,
+    expense_id: Uuid,
+    ziel: Uuid,
+    wer: Uuid,
+    gesetzt: bool,
+) -> AppResult<()> {
+    sqlx::query(
+        "update expense_shares
+            set settled_at = case
+                  when not $4 then null
+                  when settled_at is null then now()
+                  else settled_at
+                end,
+                settled_by = case
+                  when not $4 then null
+                  when settled_at is null then $3::uuid
+                  else settled_by
+                end,
+                confirmed_at = case
+                  when not $4 then null
+                  when settled_at is not null and settled_by is distinct from $3::uuid
+                    then coalesce(confirmed_at, now())
+                  else confirmed_at
+                end,
+                confirmed_by = case
+                  when not $4 then null
+                  when settled_at is not null and settled_by is distinct from $3::uuid
+                    then coalesce(confirmed_by, $3::uuid)
+                  else confirmed_by
+                end
+          where expense_id = $1 and user_id = $2",
+    )
+    .bind(expense_id)
+    .bind(ziel)
+    .bind(wer)
+    .bind(gesetzt)
+    .execute(&state.pool)
+    .await?;
+    Ok(())
+}
+
 async fn settle(
     State(state): State<AppState>,
     user: AuthUser,
@@ -403,18 +452,7 @@ async fn settle(
         ));
     }
 
-    sqlx::query(
-        "update expense_shares
-            set settled_at = case when $3 then now() else null end,
-                settled_by = case when $3 then $4::uuid else null end
-          where expense_id = $1 and user_id = $2",
-    )
-    .bind(id)
-    .bind(ziel)
-    .bind(input.settled)
-    .bind(user.id())
-    .execute(&state.pool)
-    .await?;
+    abhaken(&state, id, ziel, user.id(), input.settled).await?;
 
     // Ist alles abgehakt, gilt die ganze Ausgabe als erledigt.
     sqlx::query(
@@ -488,9 +526,32 @@ async fn settle_up(
     // Nur Anteile, die ich auch einzeln abhaken dürfte – dieselbe Regel wie in
     // `settle`, nur als Mengenoperation.
     let rows = sqlx::query_as::<_, (Uuid, i64)>(
+        // Dieselbe Regel wie in `abhaken`, nur als Mengenoperation: Hat die
+        // ANDERE Seite bereits markiert, ist dies die Gegenzeichnung – sonst
+        // die erste Meldung.
         "update expense_shares s
-            set settled_at = case when $3 then now() else null end,
-                settled_by = case when $3 then $1::uuid else null end
+            set settled_at = case
+                  when not $3 then null
+                  when s.settled_at is null then now()
+                  else s.settled_at
+                end,
+                settled_by = case
+                  when not $3 then null
+                  when s.settled_at is null then $1::uuid
+                  else s.settled_by
+                end,
+                confirmed_at = case
+                  when not $3 then null
+                  when s.settled_at is not null and s.settled_by is distinct from $1::uuid
+                    then coalesce(s.confirmed_at, now())
+                  else s.confirmed_at
+                end,
+                confirmed_by = case
+                  when not $3 then null
+                  when s.settled_at is not null and s.settled_by is distinct from $1::uuid
+                    then coalesce(s.confirmed_by, $1::uuid)
+                  else s.confirmed_by
+                end
            from expenses e
           where s.expense_id = e.id
             and (

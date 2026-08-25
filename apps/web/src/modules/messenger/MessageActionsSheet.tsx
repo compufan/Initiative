@@ -59,6 +59,12 @@ function Actions({
   // Lokale Nachrichten haben den Server nie erreicht; sie werden nicht
   // geloescht, sondern aus der Outbox verworfen. Ohne das blieb ein
   // haengender Bild-Upload dauerhaft im Chat stehen.
+  //
+  // Die beiden Arten zu loeschen haben verschiedene Voraussetzungen, und das
+  // ist der ganze Punkt: Den eigenen Verlauf darf jeder raeumen, auch von
+  // fremden Nachrichten. Bei ANDEREN etwas verschwinden zu lassen, steht nur
+  // dem zu, der es geschrieben hat.
+  const kannFuerMich = !isLocal && !message.deletedAt;
   const canDelete = isMine;
   const canCopy = Boolean(message.body?.trim());
 
@@ -114,13 +120,13 @@ function Actions({
     }
   }
 
-  async function remove() {
+  async function remove(scope: 'me' | 'all') {
     setBusy(true);
     try {
       if (isLocal && message.clientId) {
         await useChat.getState().discardFailed(message.conversationId, message.clientId);
       } else {
-        await useChat.getState().deleteMessage(message);
+        await useChat.getState().deleteMessage(message, scope);
       }
       onClose();
     } catch {
@@ -221,16 +227,59 @@ function Actions({
             <span>{action.label}</span>
           </button>
         ))}
+        {/*
+          Zwei Arten zu löschen, und sie bedeuten etwas ganz Verschiedenes.
+
+          „Nur für mich“ räumt den eigenen Verlauf – ein Foto, das man nicht
+          ständig sehen will. Bei allen anderen bleibt alles, wie es war, und
+          deshalb geht das auch mit fremden Nachrichten.
+
+          „Für alle“ nimmt sie überall zurück und ist deshalb auf eigene
+          Nachrichten beschränkt (Gruppenverwalter dürfen mehr). Fremde Worte
+          aus einem fremden Verlauf zu entfernen, steht niemandem zu.
+
+          Der Sicherheitsschritt hängt nur an „für alle“: Nur dort ist das
+          Löschen nicht mehr rückgängig zu machen.
+        */}
+        {kannFuerMich && (
+          <button
+            type="button"
+            className="list-row"
+            disabled={busy}
+            onClick={() => void remove('me')}
+          >
+            <span aria-hidden="true">🙈</span>
+            <span>
+              Nur für mich löschen
+              <small className="msg-action-hint">Die anderen sehen sie weiterhin</small>
+            </span>
+          </button>
+        )}
         {canDelete && (
           <button
             type="button"
             className="list-row msg-action-danger"
             disabled={busy}
-            onClick={() => (confirmDelete ? void remove() : setConfirmDelete(true))}
+            onClick={() =>
+              isLocal
+                ? void remove('all')
+                : confirmDelete
+                  ? void remove('all')
+                  : setConfirmDelete(true)
+            }
           >
             <span aria-hidden="true">🗑️</span>
             <span>
-              {confirmDelete ? 'Wirklich?' : isLocal ? 'Verwerfen' : 'Löschen'}
+              {isLocal ? (
+                'Verwerfen'
+              ) : confirmDelete ? (
+                'Wirklich für alle löschen?'
+              ) : (
+                <>
+                  Für alle löschen
+                  <small className="msg-action-hint">Verschwindet bei allen im Chat</small>
+                </>
+              )}
             </span>
           </button>
         )}

@@ -72,7 +72,7 @@ interface ChatState {
   retryFailed: (conversationId: string, clientId: string) => Promise<void>;
   discardFailed: (conversationId: string, clientId: string) => Promise<void>;
   flushOutbox: () => Promise<void>;
-  deleteMessage: (message: MessageDto) => Promise<void>;
+  deleteMessage: (message: MessageDto, scope?: 'me' | 'all') => Promise<void>;
   toggleReaction: (message: MessageDto, emoji: string, mine: boolean) => Promise<void>;
   markRead: (conversationId: string) => void;
   setTyping: (conversationId: string, typing: boolean) => void;
@@ -306,8 +306,8 @@ export const useChat = create<ChatState>((set, get) => ({
     }
   },
 
-  async deleteMessage(message) {
-    await api.messages.remove(message.id);
+  async deleteMessage(message, scope = 'all') {
+    await api.messages.remove(message.id, scope);
     void dropCachedMessage(message.id);
     set((state) => ({
       messages: {

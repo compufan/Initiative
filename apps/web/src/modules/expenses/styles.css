@@ -155,3 +155,34 @@
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85rem;
 }
+
+/* Der Zustand einer Ausgabe – vier Stufen, an der Farbe zu erkennen, aber
+   nicht NUR an ihr: Der Text steht daneben, denn Farbe allein ist fuer
+   Farbenblinde keine Auskunft. */
+.exp-status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: var(--radius-full);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.exp-status-open {
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
+.exp-status-reported {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.exp-status-confirmed {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.exp-status-closed {
+  background: color-mix(in srgb, var(--success, #16a34a) 16%, transparent);
+  color: var(--success, #16a34a);
+}

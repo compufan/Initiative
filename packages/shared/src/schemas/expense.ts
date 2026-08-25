@@ -25,7 +25,31 @@ export interface ExpenseShareDto {
    * uneinig werden, deshalb steht er dabei.
    */
   settledBy: string | null;
+  /** Gegenzeichnung der anderen Seite. Erst damit ist ein Anteil erledigt. */
+  confirmedAt: string | null;
+  confirmedBy: string | null;
+  status: ExpenseStatus;
 }
+
+/**
+ * Vier Stufen, und der Unterschied zwischen den mittleren beiden ist der Punkt:
+ *
+ * - `open` – niemand hat sich geäußert.
+ * - `reported` – der Schuldner sagt, er habe gezahlt.
+ * - `confirmed` – der Empfänger sagt, es sei angekommen.
+ * - `closed` – beide sagen es. Erst dann muss sich niemand mehr erinnern.
+ */
+export type ExpenseStatus = 'open' | 'reported' | 'confirmed' | 'closed';
+
+export const EXPENSE_STATUS_LABEL: Record<ExpenseStatus, string> = {
+  open: 'Offen',
+  reported: 'Bezahlt',
+  confirmed: 'Bezahlung bestätigt',
+  closed: 'Abgeschlossen',
+};
+
+/** Von „nichts passiert“ bis „erledigt“ – die Reihenfolge in jeder Anzeige. */
+export const EXPENSE_STATUS_ORDER: ExpenseStatus[] = ['open', 'reported', 'confirmed', 'closed'];
 
 export interface ExpenseDto {
   id: string;
@@ -47,6 +71,9 @@ export interface ExpenseDto {
   hiddenFromIds: string[];
   shares: ExpenseShareDto[];
   settledAt: string | null;
+  /** Der schwächste Zustand aller Anteile – eine Ausgabe ist erst
+   *  abgeschlossen, wenn es jeder Anteil ist. */
+  status: ExpenseStatus;
   canEdit: boolean;
   createdAt: string;
   updatedAt: string;

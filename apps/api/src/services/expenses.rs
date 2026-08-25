@@ -121,6 +121,52 @@ pub fn may_edit(expense: &ExpenseRow, user_id: Uuid) -> bool {
     expense.created_by == Some(user_id)
 }
 
+/// Der Zustand eines Anteils in einem Wort.
+///
+/// Vier Stufen, und der Unterschied zwischen den mittleren beiden ist der
+/// Punkt: „gemeldet“ heißt, der Schuldner sagt, er habe gezahlt. „bestätigt“
+/// heißt, der Empfänger sagt, es sei angekommen. Beides ist eine einseitige
+/// Aussage; erst wenn beide sie treffen, ist der Vorgang abgeschlossen und
+/// niemand muss sich später erinnern.
+///
+/// Wer den EIGENEN Anteil traegt, also der Auslegende selbst, schuldet
+/// naturgemaess nichts – sein Anteil gilt sofort als abgeschlossen.
+pub fn share_status(share: &ExpenseShareRow, paid_by: Option<Uuid>) -> &'static str {
+    if paid_by == Some(share.user_id) {
+        return "closed";
+    }
+    match (share.settled_at.is_some(), share.confirmed_at.is_some()) {
+        (false, _) => "open",
+        (true, true) => "closed",
+        // Nur eine Seite hat sich geäußert – welche, sagt `settled_by`.
+        (true, false) if share.settled_by == paid_by => "confirmed",
+        (true, false) => "reported",
+    }
+}
+
+/// Der Zustand einer ganzen Ausgabe: der schwaechste ihrer Anteile.
+///
+/// Eine Ausgabe, bei der einer gezahlt hat und zwei nicht, ist nicht
+/// „bezahlt“ – sie ist offen. Alles andere waere geschoente Buchhaltung.
+pub fn expense_status(shares: &[ExpenseShareRow], paid_by: Option<Uuid>) -> &'static str {
+    let mut schlechtester = 3;
+    for share in shares {
+        let rang = match share_status(share, paid_by) {
+            "open" => 0,
+            "reported" => 1,
+            "confirmed" => 2,
+            _ => 3,
+        };
+        schlechtester = schlechtester.min(rang);
+    }
+    match schlechtester {
+        0 => "open",
+        1 => "reported",
+        2 => "confirmed",
+        _ => "closed",
+    }
+}
+
 pub async fn to_expense_dto(
     pool: &PgPool,
     expense: ExpenseRow,
@@ -157,6 +203,7 @@ pub async fn to_expense_dto(
         visibility: expense.visibility,
         viewer_ids,
         hidden_from_ids,
+        status: expense_status(&shares, expense.paid_by),
         shares: shares
             .into_iter()
             .map(|share| ExpenseShareDto {
@@ -164,6 +211,9 @@ pub async fn to_expense_dto(
                 amount_cents: share.amount_cents,
                 settled_at: share.settled_at,
                 settled_by: share.settled_by,
+                confirmed_at: share.confirmed_at,
+                confirmed_by: share.confirmed_by,
+                status: share_status(&share, expense.paid_by),
             })
             .collect(),
         settled_at: expense.settled_at,

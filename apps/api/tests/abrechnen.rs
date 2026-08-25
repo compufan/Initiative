@@ -264,3 +264,186 @@ async fn mit_sich_selbst_rechnet_man_nicht_ab() {
         .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
+
+/// Vier Zustände, und der wichtigste ist der letzte.
+///
+/// Der Anwender beschreibt den Ablauf so: Einer meldet „bezahlt“, der andere
+/// bestätigt den Eingang, und **erst beides zusammen** heißt abgeschlossen.
+/// Genau das ging vorher nicht: Die zweite Markierung überschrieb die erste,
+/// und der Vorgang sah aus, als hätte nur einer sich geäußert.
+#[tokio::test(flavor = "multi_thread")]
+async fn gemeldet_bestaetigt_abgeschlossen() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let simple = Uuid::now_v7().simple().to_string();
+    let suffix = simple[simple.len() - 8..].to_string();
+
+    let (lea_token, lea_id) = probe.anmelden(&suffix, "lea").await;
+    let (max_token, max_id) = probe.anmelden(&suffix, "max").await;
+
+    let (_, chat) = probe
+        .call(
+            "POST",
+            "/api/v1/conversations",
+            Some(&lea_token),
+            Some(json!({ "type": "direct", "memberIds": [max_id] })),
+        )
+        .await;
+    let chat_id = chat["id"].as_str().unwrap().to_string();
+
+    let (_, ausgabe) = probe
+        .call(
+            "POST",
+            "/api/v1/expenses",
+            Some(&lea_token),
+            Some(json!({
+                "conversationId": chat_id,
+                "title": "Bahnfahrt",
+                "amountCents": 4000,
+                "paidBy": lea_id,
+                "shares": [{ "userId": lea_id }, { "userId": max_id }],
+            })),
+        )
+        .await;
+    let id = ausgabe["id"].as_str().unwrap().to_string();
+    assert_eq!(ausgabe["status"], "open", "frisch: offen");
+
+    /// Den Zustand einer Ausgabe abfragen.
+    async fn zustand(probe: &Probe, token: &str, id: &str) -> String {
+        let (_, body) = probe
+            .call("GET", &format!("/api/v1/expenses/{id}"), Some(token), None)
+            .await;
+        body["status"].as_str().unwrap_or("?").to_string()
+    }
+
+    // 1. Max meldet: „habe überwiesen“.
+    let (status, _) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/expenses/{id}/settle"),
+            Some(&max_token),
+            Some(json!({ "settled": true })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(zustand(&probe, &max_token, &id).await, "reported");
+
+    // 2. Lea bestätigt den Eingang. Das darf die Meldung NICHT loeschen.
+    let (status, _) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/expenses/{id}/settle"),
+            Some(&lea_token),
+            Some(json!({ "userId": max_id, "settled": true })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (_, body) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/expenses/{id}"),
+            Some(&lea_token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        body["status"], "closed",
+        "beide haben sich geaeussert: {body}"
+    );
+
+    let anteil = body["shares"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|share| share["userId"] == json!(max_id))
+        .unwrap();
+    assert_eq!(anteil["settledBy"], json!(max_id), "die Meldung steht noch");
+    assert_eq!(
+        anteil["confirmedBy"],
+        json!(lea_id),
+        "und die Bestaetigung daneben"
+    );
+    assert_eq!(anteil["status"], "closed");
+
+    // 3. Und die Ausgabe ist weiterhin auffindbar – sie verschwindet nicht.
+    let (_, liste) = probe
+        .call(
+            "GET",
+            "/api/v1/expenses?includeSettled=true",
+            Some(&lea_token),
+            None,
+        )
+        .await;
+    assert!(
+        liste["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|eintrag| eintrag["id"] == json!(id)),
+        "eine bezahlte Ausgabe bleibt nachlesbar: {liste}"
+    );
+}
+
+/// Die Gegenprobe zu 2.: Bestaetigt der Empfaenger als ERSTER, ist das noch
+/// keine Abschlussmeldung – der Schuldner hat sich nie geaeussert.
+#[tokio::test(flavor = "multi_thread")]
+async fn nur_der_empfaenger_reicht_nicht_zum_abschluss() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let simple = Uuid::now_v7().simple().to_string();
+    let suffix = simple[simple.len() - 8..].to_string();
+
+    let (nia_token, nia_id) = probe.anmelden(&suffix, "nia").await;
+    let (ole_token, ole_id) = probe.anmelden(&suffix, "ole").await;
+    let _ = ole_token;
+
+    let (_, chat) = probe
+        .call(
+            "POST",
+            "/api/v1/conversations",
+            Some(&nia_token),
+            Some(json!({ "type": "direct", "memberIds": [ole_id] })),
+        )
+        .await;
+
+    let (_, ausgabe) = probe
+        .call(
+            "POST",
+            "/api/v1/expenses",
+            Some(&nia_token),
+            Some(json!({
+                "conversationId": chat["id"],
+                "title": "Kino",
+                "amountCents": 2400,
+                "paidBy": nia_id,
+                "shares": [{ "userId": nia_id }, { "userId": ole_id }],
+            })),
+        )
+        .await;
+    let id = ausgabe["id"].as_str().unwrap().to_string();
+
+    probe
+        .call(
+            "POST",
+            &format!("/api/v1/expenses/{id}/settle"),
+            Some(&nia_token),
+            Some(json!({ "userId": ole_id, "settled": true })),
+        )
+        .await;
+
+    let (_, body) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/expenses/{id}"),
+            Some(&nia_token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        body["status"], "confirmed",
+        "eine Seite allein schliesst nicht ab: {body}"
+    );
+}

@@ -410,6 +410,11 @@ pub struct ExpenseShareDto {
     /// Wer den Haken gesetzt hat - der Schuldner (Meldung) oder der
     /// Auslegende (Bestaetigung).
     pub settled_by: Option<Uuid>,
+    pub confirmed_at: Option<DateTime<Utc>>,
+    pub confirmed_by: Option<Uuid>,
+    /// Der Zustand in einem Wort, damit die Oberflaeche ihn nicht selbst
+    /// zusammenreimen muss: `open`, `reported`, `confirmed` oder `closed`.
+    pub status: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -434,6 +439,9 @@ pub struct ExpenseDto {
     pub hidden_from_ids: Vec<Uuid>,
     pub shares: Vec<ExpenseShareDto>,
     pub settled_at: Option<DateTime<Utc>>,
+    /// Der schwaechste Zustand aller Anteile - eine Ausgabe ist erst
+    /// abgeschlossen, wenn es jeder Anteil ist.
+    pub status: &'static str,
     /// Ob **ich** sie ändern darf.
     pub can_edit: bool,
     pub created_at: DateTime<Utc>,

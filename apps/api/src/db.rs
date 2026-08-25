@@ -369,6 +369,10 @@ pub struct ExpenseShareRow {
     /// Wer abgehakt hat. Der Schuldner selbst meldet, der Auslegende
     /// bestaetigt - das ist nicht dasselbe und soll unterscheidbar bleiben.
     pub settled_by: Option<Uuid>,
+    /// Gegenzeichnung der anderen Seite. Erst damit ist der Anteil
+    /// abgeschlossen.
+    pub confirmed_at: Option<DateTime<Utc>>,
+    pub confirmed_by: Option<Uuid>,
 }
 
 /// Wie jemandem Geld zurueckgegeben werden kann.

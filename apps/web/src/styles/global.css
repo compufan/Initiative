@@ -595,3 +595,61 @@ canvas {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- Listenfilter (components/Listenfilter.tsx) ---------- */
+
+.lf {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.lf-zeile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.lf-label {
+  flex: none;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+/* Auf einem Handy passen nicht alle Werte nebeneinander. Seitlich schieben
+   ist dort die richtige Antwort – umbrechen wuerde die Liste nach unten
+   wegdruecken, und die will man ja sehen. */
+.lf-chips {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-bottom: 2px;
+}
+
+.lf-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.lf-chip {
+  flex: none;
+  padding: 5px 11px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.82rem;
+  min-height: 32px;
+}
+
+.lf-chip.is-an {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast, #fff);
+  font-weight: 600;
+}
+
+.lf-reset {
+  align-self: flex-start;
+}

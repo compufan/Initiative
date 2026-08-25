@@ -372,7 +372,12 @@ export const api = {
       post<MessageDto>(`/conversations/${conversationId}/messages`, body),
     byId: (id: string) => get<MessageDto>(`/messages/${id}`),
     edit: (id: string, body: string) => patch<MessageDto>(`/messages/${id}`, { body }),
-    remove: (id: string) => del<void>(`/messages/${id}`),
+    /**
+     * `me` nimmt die Nachricht nur aus dem eigenen Verlauf, `all` bei allen.
+     * Fuer alle loeschen geht nur bei eigenen Nachrichten (oder als Verwalter).
+     */
+    remove: (id: string, scope: 'me' | 'all' = 'all') =>
+      del<void>(`/messages/${id}`, { query: { scope } }),
     react: (id: string, emoji: string) =>
       put<{ reactions: MessageDto['reactions'] }>(`/messages/${id}/reactions`, { emoji }),
     unreact: (id: string, emoji: string) =>
