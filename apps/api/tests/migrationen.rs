@@ -135,16 +135,20 @@ async fn eine_veraenderte_migration_blockiert_alles_danach() {
         .ok();
 }
 
-/// `/healthz` muss ein Startproblem melden – sonst wiederholt sich der Ausfall
-/// nur leiser.
+/// `/healthz` bleibt erreichbar, `/readyz` sagt die Wahrheit.
 ///
-/// Vorher galt: Datenbank erreichbar ⇒ `{"status":"ok"}`. Genau das wäre jetzt
-/// die falsche Antwort. Der Server läuft ja, die Datenbank antwortet auch –
-/// nur sind die Migrationen nicht durchgelaufen, und die halbe App wüsste
-/// nichts davon. „ok“ zu melden hiesse, den nächsten Ausfall wieder unsichtbar
-/// zu machen.
+/// Der Unterschied ist teuer erkauft. Erst hat `/healthz` bei einem
+/// Startproblem 503 geantwortet – fachlich richtig, betrieblich fatal: Fly
+/// fragt genau diesen Endpunkt ab, um zu entscheiden, ob eine Maschine
+/// Anfragen bekommt. Die Maschine flog aus dem Verkehr, der Vermittler nahm
+/// Anfragen an, fand niemanden, der sie beantwortet, und der Browser wartete
+/// wieder ohne Fehlermeldung. Aus blockierten Migrationen – bei denen Chats
+/// tadellos funktionieren – wurde so erneut ein Totalausfall.
+///
+/// Also: `/healthz` ist das Lebenszeichen und antwortet, solange der Prozess
+/// steht. Die strenge Antwort steht in `/readyz` und im Rumpf.
 #[tokio::test]
-async fn healthz_verschweigt_ein_startproblem_nicht() {
+async fn healthz_bleibt_erreichbar_readyz_sagt_die_wahrheit() {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
@@ -170,12 +174,7 @@ async fn healthz_verschweigt_ein_startproblem_nicht() {
         .await
         .expect("state");
 
-    let frage = || {
-        Request::builder()
-            .uri("/healthz")
-            .body(Body::empty())
-            .unwrap()
-    };
+    let frage = |pfad: &str| Request::builder().uri(pfad).body(Body::empty()).unwrap();
     let lies = |antwort: axum::response::Response| async move {
         let status = antwort.status();
         let bytes = antwort.into_body().collect().await.unwrap().to_bytes();
@@ -185,20 +184,33 @@ async fn healthz_verschweigt_ein_startproblem_nicht() {
         )
     };
 
-    // Ohne Problem: gesund.
+    // --- Ohne Problem: beide gruen -------------------------------------
     let router = initiative_api::app::build(state.clone());
-    let (status, koerper) = lies(router.oneshot(frage()).await.unwrap()).await;
+    let (status, koerper) = lies(router.oneshot(frage("/healthz")).await.unwrap()).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(koerper["status"], "ok");
 
-    // Mit Problem: 503 und der Klartext, an dem man sieht, was zu tun ist.
+    let router = initiative_api::app::build(state.clone());
+    let (status, koerper) = lies(router.oneshot(frage("/readyz")).await.unwrap()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(koerper["status"], "ok");
+
+    // --- Mit Startproblem ----------------------------------------------
     state.set_startup_problem(
         "Migration 1 (0001_init.sql) wurde nach dem Ausführen verändert. \
          Aufgabe „migration-reparieren“ starten.",
     );
+
+    // Das Lebenszeichen bleibt 200 – sonst nimmt Fly die Maschine aus dem
+    // Verkehr, und aus einem Teilproblem wird wieder ein Totalausfall.
     let router = initiative_api::app::build(state.clone());
-    let (status, koerper) = lies(router.oneshot(frage()).await.unwrap()).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let (status, koerper) = lies(router.oneshot(frage("/healthz")).await.unwrap()).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Fly prueft /healthz und entscheidet danach ueber die Zustellung: {koerper}"
+    );
+    // Verschwiegen wird trotzdem nichts.
     assert_eq!(koerper["status"], "degraded");
     assert!(
         koerper["error"]
@@ -207,4 +219,10 @@ async fn healthz_verschweigt_ein_startproblem_nicht() {
             .contains("migration-reparieren"),
         "die Antwort muss sagen, was zu tun ist: {koerper}"
     );
+
+    // Die strenge Antwort steht in /readyz – daran haengt der Deploy.
+    let router = initiative_api::app::build(state.clone());
+    let (status, koerper) = lies(router.oneshot(frage("/readyz")).await.unwrap()).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(koerper["status"], "degraded");
 }

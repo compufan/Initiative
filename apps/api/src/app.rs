@@ -18,6 +18,7 @@ pub fn build(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/healthz", get(health))
+        .route("/readyz", get(ready))
         .nest(API_PREFIX, crate::modules::router())
         .merge(crate::realtime::ws::router())
         .fallback(not_found)
@@ -80,62 +81,82 @@ async fn index() -> Json<serde_json::Value> {
     }))
 }
 
+/// Lebenszeichen – **das**, was Fly abfragt (`[[http_service.checks]]`).
+///
+/// Antwortet immer mit 200, solange dieser Prozess überhaupt antworten kann.
+/// Was im Argen liegt, steht im Rumpf unter `status` und `error`.
+///
+/// Das ist keine Nachlässigkeit, sondern die Lehre aus einem selbst gebauten
+/// Rückfall: Flys Prüfung entscheidet über die **Zustellung**. Meldet sie
+/// „ungesund“, nimmt der Vermittler die Maschine aus dem Verkehr – und dann
+/// passiert genau das, was diesen Ausfall so teuer gemacht hat: Die Anfrage
+/// wird angenommen, keine Maschine übernimmt sie, der Browser wartet ohne
+/// Fehlermeldung. Eine App mit blockierten Migrationen kann Chats aber
+/// tadellos ausliefern. Sie deswegen unerreichbar zu machen, verwandelt ein
+/// kleines Problem in einen Totalausfall.
+///
+/// Die strenge Antwort gibt es unter `/readyz` – für Deploy-Abläufe und zum
+/// Nachsehen, nicht für die Zustellung.
 async fn health(State(state): State<AppState>) -> impl IntoResponse {
-    // Fly prüft über diesen Endpunkt, ob die Maschine noch lebt. Er darf
-    // deshalb nie unbegrenzt blockieren, egal wie träge die Datenbank ist.
+    (StatusCode::OK, Json(zustand(&state).await.0))
+}
+
+/// Betriebsbereit? – die strenge Fassung.
+///
+/// 503, sobald irgendetwas nicht stimmt: Datenbank nicht erreichbar, oder ein
+/// Problem beim Hochfahren. Danach richten sich die Deploy-Abläufe; ein Deploy,
+/// nach dem etwas fehlt, darf nicht grün sein. Fly fragt das bewusst **nicht**
+/// ab – siehe `health`.
+async fn ready(State(state): State<AppState>) -> impl IntoResponse {
+    let (bericht, gesund) = zustand(&state).await;
+    let code = if gesund {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (code, Json(bericht))
+}
+
+/// Der gemeinsame Befund beider Endpunkte: einmal erhoben, zweimal verwendet.
+/// Nur die Schlussfolgerung unterscheidet sich.
+async fn zustand(state: &AppState) -> (serde_json::Value, bool) {
+    // Fly prüft hierüber, ob die Maschine noch lebt. Das darf nie unbegrenzt
+    // blockieren, egal wie träge die Datenbank ist.
     let ping = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         sqlx::query_scalar::<_, i32>("select 1").fetch_one(&state.pool),
     )
     .await;
 
-    // Ein Problem beim Hochfahren – etwa eine blockierte Migration – macht
-    // die App nicht tot, aber auch nicht gesund. `degraded` mit Klartext ist
-    // die einzige Antwort, mit der man ohne Fly-Protokoll weiterkommt.
-    let startup = state.startup_problem();
+    let datenbank = match ping {
+        Ok(Ok(_)) => None,
+        Ok(Err(error)) => Some(error.to_string()),
+        Err(_) => Some("database timeout".to_string()),
+    };
+    let startproblem = state.startup_problem();
 
-    match ping {
-        Ok(Ok(_)) if startup.is_some() => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "status": "degraded",
-                "error": startup,
-                "storage": state.storage.kind(),
-                "bus": state.bus.kind(),
-                "version": state.config.git_sha,
-            })),
-        ),
-        Ok(Ok(_)) => (
-            StatusCode::OK,
-            Json(json!({
-                "status": "ok",
-                "storage": state.storage.kind(),
-                "bus": state.bus.kind(),
-                // Steht der LISTEN-Kanal wirklich? Ohne ihn kommen Nachrichten
-                // nur beim Neuladen an, obwohl sonst alles „ok“ meldet.
-                "busConnected": state.bus.listening(),
-                "version": state.config.git_sha,
-                "push": state.push.enabled(),
-                "connections": state.hub.connection_count(),
-            })),
-        ),
-        Ok(Err(error)) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "status": "degraded",
-                "error": error.to_string(),
-                "startupProblem": startup,
-            })),
-        ),
-        Err(_) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({
-                "status": "degraded",
-                "error": "database timeout",
-                "startupProblem": startup,
-            })),
-        ),
-    }
+    // Reihenfolge mit Absicht: Ist die Datenbank weg, ist alles andere
+    // Folgeerscheinung. Der obenauf liegende Grund gehört nach `error`.
+    let grund = datenbank.clone().or_else(|| startproblem.clone());
+    let gesund = grund.is_none();
+
+    (
+        json!({
+            "status": if gesund { "ok" } else { "degraded" },
+            "error": grund,
+            "database": if datenbank.is_none() { "ok" } else { "nicht erreichbar" },
+            "startupProblem": startproblem,
+            "storage": state.storage.kind(),
+            "bus": state.bus.kind(),
+            // Steht der LISTEN-Kanal wirklich? Ohne ihn kommen Nachrichten
+            // nur beim Neuladen an, obwohl sonst alles „ok“ meldet.
+            "busConnected": state.bus.listening(),
+            "version": state.config.git_sha,
+            "push": state.push.enabled(),
+            "connections": state.hub.connection_count(),
+        }),
+        gesund,
+    )
 }
 
 async fn not_found(uri: Uri) -> impl IntoResponse {

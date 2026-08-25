@@ -656,8 +656,25 @@ Kurz gelesen: `storage` sollte `r2` sein (nicht `local`), `bus` bei mehreren
 Instanzen `postgres`, `push` `true`, sobald VAPID gesetzt ist. Bei
 `"status": "degraded"` steht der Grund im Feld `error` – entweder ist die
 Datenbank nicht erreichbar, oder der Start hat ein Problem gemeldet (etwa
-blockierte Migrationen, siehe unten). Die API läuft in beiden Fällen und
-antwortet; sie sagt nur, dass etwas fehlt.
+blockierte Migrationen, siehe unten).
+
+**`/healthz` und `/readyz` – der Unterschied ist wichtig.**
+
+`/healthz` ist das **Lebenszeichen** und antwortet immer mit 200, solange der
+Prozess überhaupt antworten kann. Genau diesen Endpunkt fragt Fly ab
+(`[[http_service.checks]]` in `fly.toml`), und Flys Antwort darauf entscheidet,
+ob die Maschine überhaupt Anfragen zugestellt bekommt. Meldet sie „ungesund“,
+nimmt der Vermittler sie aus dem Verkehr – Anfragen werden dann angenommen,
+niemand beantwortet sie, und der Browser wartet **ohne Fehlermeldung**. Eine
+App mit blockierten Migrationen liefert Chats aber tadellos aus. Sie deswegen
+unerreichbar zu machen, verwandelt ein Teilproblem in einen Totalausfall.
+
+`/readyz` ist die **strenge** Fassung: 200 nur, wenn wirklich alles stimmt,
+sonst 503 mit dem Grund. Daran hängen die Deploy-Abläufe – ein Deploy, nach dem
+etwas fehlt, darf nicht grün sein. Fly fragt es bewusst nicht ab.
+
+Zum Nachsehen also `/healthz` (sagt alles und ist immer erreichbar), zum
+Prüfen in Skripten `/readyz`.
 
 Ein Blick auf die Wurzel zeigt die geladenen Module – auch das reicht als
 Adresse im Browser, oder im Terminal (Windows: `curl.exe`):
@@ -681,8 +698,9 @@ Das ist im Kern richtig: Eine Migration, die auf einer echten Datenbank lief,
 ist Geschichte und kein Entwurf mehr. Neue Änderungen gehören in eine neue
 Datei.
 
-Die API beendet sich deswegen **nicht**. Sie läuft weiter und meldet über
-`/healthz`:
+Die API beendet sich deswegen **nicht**. Sie läuft weiter, bleibt erreichbar
+und meldet über `/healthz` (mit 200, damit Fly sie nicht aus dem Verkehr nimmt
+– `/readyz` antwortet währenddessen mit 503):
 
 ```json
 {
