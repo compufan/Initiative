@@ -29,6 +29,9 @@ pub fn to_event_dto(row: &CalendarEventRow, attendees: &[EventAttendeeRow]) -> C
         rrule: row.rrule.clone(),
         color: row.color.clone(),
         source_poll_id: row.source_poll_id,
+        status: row.status.clone(),
+        poll_id: row.poll_id,
+        collection_id: row.collection_id,
         attendees: attendees
             .iter()
             .map(|attendee| EventAttendeeDto {
@@ -178,6 +181,9 @@ pub struct NewEvent {
     pub color: Option<String>,
     pub reminder_minutes: Vec<i32>,
     pub source_poll_id: Option<Uuid>,
+    /// `confirmed`, oder `planning`, solange der Zeitpunkt abgestimmt wird.
+    pub status: String,
+    pub poll_id: Option<Uuid>,
     pub attendee_ids: Vec<Uuid>,
     /// Pre-set RSVP answers, e.g. taken over from a date poll.
     pub attendee_statuses: HashMap<Uuid, String>,
@@ -199,8 +205,8 @@ pub async fn create_event(state: &AppState, input: NewEvent) -> AppResult<Calend
     sqlx::query(
         "insert into calendar_events
            (id, conversation_id, created_by, title, description, location, starts_at, ends_at,
-            all_day, rrule, color, reminder_minutes, source_poll_id)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+            all_day, rrule, color, reminder_minutes, source_poll_id, status, poll_id)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
     )
     .bind(event_id)
     .bind(input.conversation_id)
@@ -215,6 +221,8 @@ pub async fn create_event(state: &AppState, input: NewEvent) -> AppResult<Calend
     .bind(&input.color)
     .bind(serde_json::json!(input.reminder_minutes))
     .bind(input.source_poll_id)
+    .bind(&input.status)
+    .bind(input.poll_id)
     .execute(&state.pool)
     .await?;
 

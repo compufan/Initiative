@@ -183,6 +183,12 @@ pub struct CalendarEventRow {
     pub color: Option<String>,
     pub reminder_minutes: Value,
     pub source_poll_id: Option<Uuid>,
+    /// `planning`, `confirmed` oder `cancelled` (`migrations/0005_events.sql`).
+    pub status: String,
+    /// Die Umfrage, mit der der Zeitpunkt gefunden wird.
+    pub poll_id: Option<Uuid>,
+    /// Die Sammlung mit den Dateien zu diesem Termin.
+    pub collection_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
@@ -294,5 +300,42 @@ pub struct CollectionGrantRow {
     pub conversation_id: Option<Uuid>,
     pub level: String,
     pub granted_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Wo eine Umfrage überall auftaucht (`migrations/0005_events.sql`).
+#[derive(Debug, Clone, FromRow)]
+pub struct PollPlacementRow {
+    pub id: Uuid,
+    pub poll_id: Uuid,
+    pub conversation_id: Uuid,
+    pub message_id: Option<Uuid>,
+    pub created_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Eine Notiz an einem Termin, mit eigenen Änderungsrechten.
+#[derive(Debug, Clone, FromRow)]
+pub struct EventNoteRow {
+    pub id: Uuid,
+    pub event_id: Uuid,
+    pub author_id: Option<Uuid>,
+    pub title: Option<String>,
+    pub body: String,
+    pub edit_scope: String,
+    pub position: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// Ein Dokument an einem Termin.
+#[derive(Debug, Clone, FromRow)]
+pub struct EventAttachmentRow {
+    pub id: Uuid,
+    pub event_id: Uuid,
+    pub attachment_id: Uuid,
+    pub added_by: Option<Uuid>,
+    pub title: Option<String>,
     pub created_at: DateTime<Utc>,
 }

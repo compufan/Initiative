@@ -132,7 +132,12 @@ async fn full_api_scenario() {
         return;
     };
 
-    let suffix = Uuid::now_v7().simple().to_string()[..8].to_string();
+    // Die LETZTEN Stellen, nicht die ersten: eine v7-UUID beginnt mit dem
+    // Zeitstempel, und die ersten acht Zeichen bleiben ueber eine Minute lang
+    // gleich. Zwei Laeufe kurz hintereinander bekamen so denselben Namen und
+    // scheiterten an "Benutzername vergeben".
+    let simple = Uuid::now_v7().simple().to_string();
+    let suffix = simple[simple.len() - 8..].to_string();
     let alice_name = format!("alice{suffix}");
     let bob_name = format!("bob{suffix}");
 
@@ -1113,6 +1118,326 @@ async fn full_api_scenario() {
         )
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // ---- Ereignisse: Abstimmung ueber mehrere Chats -----------------------
+    // Der Kern: eine Umfrage, ein Ergebnis. Wer im Einzelchat antwortet, hat
+    // damit auch fuer die Gruppe geantwortet.
+    let (status, gruppe) = app
+        .call(
+            "POST",
+            "/api/v1/conversations",
+            Some(&alice_token),
+            Some(json!({
+                "type": "group",
+                "title": "Planungsrunde",
+                "memberIds": [bob_id, carol_id]
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let gruppe_id = gruppe["id"].as_str().unwrap().to_string();
+
+    // Dora ist NICHT in der Gruppe, nur in einem Einzelchat mit Alice. An ihr
+    // haengt der eigentliche Beweis: Ohne die Spiegelung koennte sie die Frage
+    // gar nicht sehen, und ihre Antwort erreichte die Gruppe nicht.
+    let (status, dora_session) = app
+        .call(
+            "POST",
+            "/api/v1/auth/register",
+            None,
+            Some(json!({
+                "username": format!("dora{suffix}"),
+                "password": "passwort123",
+                "displayName": "Dora"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let dora_token = dora_session["accessToken"].as_str().unwrap().to_string();
+    let dora_id = dora_session["user"]["id"].as_str().unwrap().to_string();
+
+    let (status, einzeln) = app
+        .call(
+            "POST",
+            "/api/v1/conversations",
+            Some(&alice_token),
+            Some(json!({ "type": "direct", "memberIds": [dora_id] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let einzeln_id = einzeln["id"].as_str().unwrap().to_string();
+
+    let (status, termin) = app
+        .call(
+            "POST",
+            "/api/v1/calendar/planning",
+            Some(&alice_token),
+            Some(json!({
+                "conversationId": gruppe_id,
+                "title": "Grillabend",
+                "slots": [
+                    { "startsAt": "2026-09-05T16:00:00Z", "endsAt": "2026-09-05T20:00:00Z" },
+                    { "startsAt": "2026-09-12T16:00:00Z", "endsAt": "2026-09-12T20:00:00Z" }
+                ],
+                "alsoIn": [einzeln_id]
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{termin:?}");
+    let termin_id = termin["id"].as_str().unwrap().to_string();
+    let poll_id = termin["pollId"].as_str().unwrap().to_string();
+    assert_eq!(termin["status"], "planning");
+    // Der frueheste Vorschlag ist der vorlaeufige Zeitpunkt - damit der Termin
+    // ueberhaupt im Kalender steht, statt ein Sonderfall zu sein.
+    assert_eq!(termin["startsAt"], "2026-09-05T16:00:00Z");
+
+    let (status, auftritte) = app
+        .call(
+            "GET",
+            &format!("/api/v1/polls/{poll_id}/placements"),
+            Some(&alice_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(auftritte["items"].as_array().unwrap().len(), 1);
+    assert_eq!(auftritte["conversationIds"].as_array().unwrap().len(), 2);
+
+    // Dora sieht die Frage in ihrem Einzelchat, obwohl sie nicht in der Gruppe
+    // ist - genau das leistet die Spiegelung.
+    let (status, optionen) = app
+        .call(
+            "GET",
+            &format!("/api/v1/polls/{poll_id}"),
+            Some(&dora_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{optionen:?}");
+    let zweiter = optionen["options"][1]["id"].as_str().unwrap().to_string();
+
+    let (status, _) = app
+        .call(
+            "POST",
+            &format!("/api/v1/polls/{poll_id}/vote"),
+            Some(&dora_token),
+            Some(json!({ "votes": [{ "optionId": zweiter, "value": "yes" }] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Und Bob, der NUR in der Gruppe ist, sieht Doras Stimme. Ein Ergebnis,
+    // nicht zwei.
+    let (status, aus_gruppe) = app
+        .call(
+            "GET",
+            &format!("/api/v1/polls/{poll_id}"),
+            Some(&bob_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(aus_gruppe["tally"][&zweiter]["yes"], 1);
+
+    // Wer in KEINEM der beteiligten Chats ist, sieht sie auch nicht. Die
+    // Spiegelung oeffnet die Umfrage fuer die genannten Chats - nicht fuer alle.
+    let (status, erik_session) = app
+        .call(
+            "POST",
+            "/api/v1/auth/register",
+            None,
+            Some(json!({
+                "username": format!("erik{suffix}"),
+                "password": "passwort123",
+                "displayName": "Erik"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let erik_token = erik_session["accessToken"].as_str().unwrap().to_string();
+    let (status, _) = app
+        .call(
+            "GET",
+            &format!("/api/v1/polls/{poll_id}"),
+            Some(&erik_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // ---- Zeitpunkt festlegen ---------------------------------------------
+    let (status, bestaetigt) = app
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{termin_id}/confirm"),
+            Some(&alice_token),
+            Some(json!({ "optionId": zweiter })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{bestaetigt:?}");
+    assert_eq!(bestaetigt["status"], "confirmed");
+    assert_eq!(bestaetigt["startsAt"], "2026-09-12T16:00:00Z");
+    // Kein zweiter Termin: der bestehende ist geblieben.
+    assert_eq!(bestaetigt["id"], termin_id.as_str());
+    // Carols Zusage aus der Abstimmung ist zur Zusage am Termin geworden.
+    // Dora ist ueber die Abstimmung zur Teilnehmerin geworden - sie war in der
+    // Gruppe nie Mitglied, hat aber zugesagt.
+    let doras_antwort = bestaetigt["attendees"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["userId"] == dora_id.as_str());
+    assert_eq!(
+        doras_antwort.map(|a| a["status"].clone()),
+        Some(json!("yes")),
+        "Doras Zusage fehlt: {bestaetigt:?}"
+    );
+
+    // ---- Notizen mit eigenen Rechten -------------------------------------
+    // Voreinstellung: nur der Verfasser darf aendern.
+    let (status, notiz) = app
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{termin_id}/notes"),
+            Some(&alice_token),
+            Some(json!({ "title": "Ansprache", "body": "Erst Rede, dann Essen." })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{notiz:?}");
+    let notiz_id = notiz["id"].as_str().unwrap().to_string();
+    assert_eq!(notiz["editScope"], "author");
+    assert_eq!(notiz["canEdit"], true);
+
+    // Bob sieht sie, darf sie aber nicht anfassen.
+    let (status, bobs_notizen) = app
+        .call(
+            "GET",
+            &format!("/api/v1/calendar/events/{termin_id}/notes"),
+            Some(&bob_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bobs_notizen["items"][0]["canEdit"], false);
+
+    let (status, _) = app
+        .call(
+            "PATCH",
+            &format!("/api/v1/calendar/events/{termin_id}/notes/{notiz_id}"),
+            Some(&bob_token),
+            Some(json!({ "body": "Keine Rede." })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Eine Notiz, an der alle mitschreiben duerfen.
+    let (status, liste) = app
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{termin_id}/notes"),
+            Some(&alice_token),
+            Some(json!({
+                "title": "Einkaufsliste",
+                "body": "Kohle",
+                "editScope": "members"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let liste_id = liste["id"].as_str().unwrap().to_string();
+
+    let (status, ergaenzt) = app
+        .call(
+            "PATCH",
+            &format!("/api/v1/calendar/events/{termin_id}/notes/{liste_id}"),
+            Some(&bob_token),
+            Some(json!({ "body": "Kohle, Anzuender" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{ergaenzt:?}");
+    assert_eq!(ergaenzt["body"], "Kohle, Anzuender");
+
+    // Aber wer aendern darf, bestimmt weiterhin der Verfasser.
+    let (status, _) = app
+        .call(
+            "PATCH",
+            &format!("/api/v1/calendar/events/{termin_id}/notes/{liste_id}"),
+            Some(&bob_token),
+            Some(json!({ "editScope": "author" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Namentlich Genannte: Carol darf, Bob nicht.
+    let (status, benannt) = app
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{termin_id}/notes"),
+            Some(&alice_token),
+            Some(json!({
+                "title": "Geschenk",
+                "body": "Buch",
+                "editScope": "listed",
+                "editorIds": [carol_id]
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let benannt_id = benannt["id"].as_str().unwrap().to_string();
+
+    let (status, _) = app
+        .call(
+            "PATCH",
+            &format!("/api/v1/calendar/events/{termin_id}/notes/{benannt_id}"),
+            Some(&carol_token),
+            Some(json!({ "body": "Buch und Karte" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = app
+        .call(
+            "PATCH",
+            &format!("/api/v1/calendar/events/{termin_id}/notes/{benannt_id}"),
+            Some(&bob_token),
+            Some(json!({ "body": "Nichts" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // ---- Dokumente am Termin ---------------------------------------------
+    let (status, dokument) = app
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{termin_id}/documents"),
+            Some(&alice_token),
+            Some(json!({ "attachmentId": attachment_id, "title": "Einladung" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{dokument:?}");
+    let dokument_id = dokument["id"].as_str().unwrap().to_string();
+    assert_eq!(dokument["attachment"]["id"], attachment_id.as_str());
+
+    let (status, dokumente) = app
+        .call(
+            "GET",
+            &format!("/api/v1/calendar/events/{termin_id}/documents"),
+            Some(&bob_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(dokumente["items"].as_array().unwrap().len(), 1);
+
+    // Bob hat es nicht angehaengt und verwaltet den Termin nicht.
+    let (status, _) = app
+        .call(
+            "DELETE",
+            &format!("/api/v1/calendar/events/{termin_id}/documents/{dokument_id}"),
+            Some(&bob_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 
     // ---- profile update broadcasts ---------------------------------------
     let (status, profile) = app

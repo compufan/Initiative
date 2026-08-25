@@ -256,6 +256,12 @@ pub struct CalendarEventDto {
     pub rrule: Option<String>,
     pub color: Option<String>,
     pub source_poll_id: Option<Uuid>,
+    /// `planning` (Zeitpunkt wird noch abgestimmt), `confirmed` oder `cancelled`.
+    pub status: String,
+    /// Die laufende Terminfindung, solange `status` = `planning`.
+    pub poll_id: Option<Uuid>,
+    /// Die Sammlung mit den Dateien zu diesem Termin.
+    pub collection_id: Option<Uuid>,
     pub attendees: Vec<EventAttendeeDto>,
     pub reminder_minutes: Vec<i32>,
     pub created_at: DateTime<Utc>,
@@ -362,5 +368,35 @@ pub struct CollectionGrantDto {
     pub conversation_id: Option<Uuid>,
     pub level: String,
     pub granted_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventNoteDto {
+    pub id: Uuid,
+    pub event_id: Uuid,
+    pub author_id: Option<Uuid>,
+    pub title: Option<String>,
+    pub body: String,
+    /// `author`, `members` oder `listed` – wer sie ändern darf.
+    pub edit_scope: String,
+    /// Bei `listed`: wer namentlich darf.
+    pub editor_ids: Vec<Uuid>,
+    /// Ob **ich** sie ändern darf – die App richtet sich danach.
+    pub can_edit: bool,
+    pub position: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventAttachmentDto {
+    pub id: Uuid,
+    pub event_id: Uuid,
+    pub added_by: Option<Uuid>,
+    pub title: Option<String>,
+    pub attachment: AttachmentDto,
     pub created_at: DateTime<Utc>,
 }

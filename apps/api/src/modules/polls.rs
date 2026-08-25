@@ -2,7 +2,7 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
@@ -14,14 +14,15 @@ use crate::auth::AuthUser;
 use crate::constants::{
     POLL_KINDS, POLL_OPTIONS_MAX, POLL_OPTION_MAX, POLL_QUESTION_MAX, VOTE_VALUES,
 };
-use crate::db::{PollOptionRow, PollRow, PollVoteRow};
+use crate::db::{PollOptionRow, PollPlacementRow, PollRow, PollVoteRow};
 use crate::dto::{CalendarEventDto, PollDto};
 use crate::error::{AppError, AppResult};
 use crate::services::calendar::{create_event, NewEvent};
 use crate::services::conversations::{assert_membership, get_membership};
 use crate::services::polls::{
-    best_option, broadcast_poll, create_poll, is_closed, load_poll_dto, require_poll, set_votes,
-    NewPoll, NewPollOption,
+    assert_poll_access, best_option, broadcast_poll, create_poll, is_closed, load_poll_dto,
+    place_poll, poll_conversation_ids, require_poll, set_votes, unplace_poll, NewPoll,
+    NewPollOption,
 };
 use crate::state::AppState;
 use crate::validate::Validator;
@@ -36,6 +37,14 @@ pub fn router() -> Router<AppState> {
         .route("/polls/{id}/reopen", post(reopen))
         .route("/polls/{id}/event", post(create_event_from_poll))
         .route("/polls/{id}/best-option", get(best))
+        .route(
+            "/polls/{id}/placements",
+            get(placements).post(add_placement),
+        )
+        .route(
+            "/polls/{id}/placements/{placement_id}",
+            delete(remove_placement),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -148,16 +157,23 @@ async fn create(
 
 async fn readable_poll(state: &AppState, id: Uuid, viewer: Uuid) -> AppResult<PollRow> {
     let poll = require_poll(state, id).await?;
-    assert_membership(&state.pool, poll.conversation_id, viewer).await?;
+    // Es genuegt, in einem der beteiligten Chats zu sein: Wer die Frage im
+    // Einzelchat bekommen hat, muss nicht auch in der Gruppe sein.
+    assert_poll_access(&state.pool, &poll, viewer).await?;
     Ok(poll)
 }
 
 async fn owned_poll(state: &AppState, id: Uuid, viewer: Uuid) -> AppResult<PollRow> {
     let poll = require_poll(state, id).await?;
+    if poll.created_by == Some(viewer) {
+        return Ok(poll);
+    }
+    // Verwalten darf sonst nur, wer im **Ursprungschat** etwas zu sagen hat.
+    // Ein Auftritt in einem Einzelchat gibt Stimmrecht, nicht Hausrecht.
     let membership = get_membership(&state.pool, poll.conversation_id, viewer)
         .await?
         .ok_or_else(|| AppError::forbidden("Du bist kein Mitglied dieses Chats"))?;
-    if poll.created_by != Some(viewer) && membership.role == "member" {
+    if membership.role == "member" {
         return Err(AppError::forbidden(
             "Nur der Ersteller darf die Umfrage verwalten",
         ));
@@ -384,6 +400,8 @@ async fn create_event_from_poll(
             color: None,
             reminder_minutes: Vec::new(),
             source_poll_id: Some(poll.id),
+            status: "confirmed".to_string(),
+            poll_id: None,
             attendee_ids: attendee_statuses.keys().copied().collect(),
             attendee_statuses,
             announce: Some(true),
@@ -417,4 +435,84 @@ async fn best(
     Ok(Json(
         json!({ "option": best_option(&dto.options, &dto.tally) }),
     ))
+}
+
+/* ---------- Auftritte: dieselbe Umfrage in mehreren Chats ---------- */
+
+/// In welchen Chats diese Umfrage steht.
+async fn placements(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<serde_json::Value>> {
+    let poll = readable_poll(&state, id, user.id()).await?;
+    let ids = poll_conversation_ids(&state.pool, &poll).await?;
+    let rows = sqlx::query_as::<_, PollPlacementRow>(
+        "select * from poll_placements where poll_id = $1 order by created_at asc",
+    )
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(json!({
+        "originConversationId": poll.conversation_id,
+        "conversationIds": ids,
+        "items": rows
+            .into_iter()
+            .map(|row| json!({
+                "id": row.id,
+                "conversationId": row.conversation_id,
+                "messageId": row.message_id,
+                "createdBy": row.created_by,
+                "createdAt": row.created_at,
+            }))
+            .collect::<Vec<_>>(),
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlacementInput {
+    conversation_id: Uuid,
+}
+
+/// Stellt die Umfrage zusaetzlich in einen anderen Chat.
+///
+/// Das Ergebnis bleibt eines: Wer im Einzelchat abstimmt, hat damit auch fuer
+/// die Gruppe abgestimmt. Deshalb darf das nur, wer die Umfrage verwaltet -
+/// sonst koennte jeder die Frage in beliebige Chats tragen.
+async fn add_placement(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<PlacementInput>,
+) -> AppResult<(StatusCode, Json<serde_json::Value>)> {
+    let poll = owned_poll(&state, id, user.id()).await?;
+    // Und nur in einen Chat, in dem man selbst ist.
+    assert_membership(&state.pool, input.conversation_id, user.id()).await?;
+
+    let row = place_poll(&state, &poll, input.conversation_id, user.id()).await?;
+    let dto = load_poll_dto(&state, id, user.id()).await?;
+    broadcast_poll(&state, &dto).await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(match row {
+            Some(row) => {
+                json!({ "id": row.id, "conversationId": row.conversation_id, "messageId": row.message_id })
+            }
+            None => json!({ "alreadyThere": true }),
+        }),
+    ))
+}
+
+async fn remove_placement(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((id, placement_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<StatusCode> {
+    let poll = owned_poll(&state, id, user.id()).await?;
+    unplace_poll(&state, &poll, placement_id).await?;
+    let dto = load_poll_dto(&state, id, user.id()).await?;
+    broadcast_poll(&state, &dto).await?;
+    Ok(StatusCode::NO_CONTENT)
 }

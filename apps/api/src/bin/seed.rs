@@ -133,6 +133,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             color: Some("#6d7cff".into()),
             reminder_minutes: vec![60],
             source_poll_id: None,
+            status: "confirmed".to_string(),
+            poll_id: None,
             attendee_ids: vec![ben, clara],
             attendee_statuses: HashMap::new(),
             announce: Some(true),

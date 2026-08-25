@@ -1,6 +1,7 @@
 pub mod attachments;
 pub mod calendar;
 pub mod conversations;
+pub mod events;
 pub mod expanders;
 pub mod games;
 pub mod messages;

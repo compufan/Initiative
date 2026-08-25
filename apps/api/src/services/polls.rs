@@ -3,9 +3,10 @@
 use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
+use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::db::{MessageRow, PollOptionRow, PollRow, PollVoteRow};
+use crate::db::{MessageRow, PollOptionRow, PollPlacementRow, PollRow, PollVoteRow};
 use crate::dto::{OptionTally, PollDto, PollOptionDto, PollVoteDto};
 use crate::error::{AppError, AppResult};
 use crate::realtime::Event;
@@ -329,7 +330,11 @@ pub async fn set_votes(
 
 /// Pushes the updated poll to everyone and refreshes its chat card.
 pub async fn broadcast_poll(state: &AppState, poll: &PollDto) -> AppResult<()> {
-    let members = super::conversations::member_ids(&state.pool, poll.conversation_id).await?;
+    // An **alle** beteiligten Chats. Eine gespiegelte Umfrage hat ein
+    // gemeinsames Ergebnis; wer nur den Ursprung benachrichtigt, laesst die
+    // Einzelchats mit einem veralteten Stand stehen.
+    let row = require_poll(state, poll.id).await?;
+    let members = poll_audience(&state.pool, &row).await?;
     for user_id in &members {
         if let Ok(view) = load_poll_dto(state, poll.id, *user_id).await {
             state
@@ -338,12 +343,19 @@ pub async fn broadcast_poll(state: &AppState, poll: &PollDto) -> AppResult<()> {
                 .await;
         }
     }
-    super::messages::republish_message(
-        state,
-        poll.message_id,
-        poll.created_by.unwrap_or_else(Uuid::nil),
-    )
-    .await
+    // Jede Nachricht, in der die Umfrage steckt, neu ausspielen - die
+    // urspruengliche und jeden Auftritt.
+    let absender = poll.created_by.unwrap_or_else(Uuid::nil);
+    super::messages::republish_message(state, poll.message_id, absender).await?;
+    let weitere: Vec<Option<Uuid>> =
+        sqlx::query_scalar("select message_id from poll_placements where poll_id = $1")
+            .bind(poll.id)
+            .fetch_all(&state.pool)
+            .await?;
+    for message_id in weitere.into_iter().flatten() {
+        super::messages::republish_message(state, Some(message_id), absender).await?;
+    }
+    Ok(())
 }
 
 /// Embeds the referenced poll into every `poll` message.
@@ -382,6 +394,136 @@ impl MessageExpander for PollExpander {
         }
         Ok(result)
     }
+}
+
+/* ---------- Eine Umfrage, mehrere Auftritte ---------- */
+
+/// Alle Chats, in denen diese Umfrage steht: der Ursprung plus jeder Auftritt.
+///
+/// Damit hat die Terminfindung **einen** Satz Vorschläge und **einen** Satz
+/// Antworten, egal ob jemand im Gruppenchat, in einem Einzelchat oder am
+/// Termin selbst abstimmt.
+pub async fn poll_conversation_ids(pool: &PgPool, poll: &PollRow) -> AppResult<Vec<Uuid>> {
+    let mut ids: Vec<Uuid> =
+        sqlx::query_scalar("select conversation_id from poll_placements where poll_id = $1")
+            .bind(poll.id)
+            .fetch_all(pool)
+            .await?;
+    if !ids.contains(&poll.conversation_id) {
+        ids.push(poll.conversation_id);
+    }
+    Ok(ids)
+}
+
+/// Darf diese Person die Umfrage sehen und mitmachen?
+///
+/// Es genügt, in **einem** der beteiligten Chats zu sein. Wer die Frage in
+/// seinem Einzelchat bekommen hat, muss nicht auch noch in der Gruppe sein.
+pub async fn assert_poll_access(pool: &PgPool, poll: &PollRow, user_id: Uuid) -> AppResult<()> {
+    let erlaubt: bool = sqlx::query_scalar(
+        "select exists (
+           select 1 from conversation_members m
+            where m.user_id = $2
+              and (
+                m.conversation_id = $1
+                or m.conversation_id in (
+                  select conversation_id from poll_placements where poll_id = $3
+                )
+              )
+         )",
+    )
+    .bind(poll.conversation_id)
+    .bind(user_id)
+    .bind(poll.id)
+    .fetch_one(pool)
+    .await?;
+    if erlaubt {
+        return Ok(());
+    }
+    Err(AppError::forbidden("Diese Umfrage gehört nicht zu dir"))
+}
+
+/// Jede Person, die die Umfrage sieht – für den Rundruf.
+pub async fn poll_audience(pool: &PgPool, poll: &PollRow) -> AppResult<Vec<Uuid>> {
+    let ids = poll_conversation_ids(pool, poll).await?;
+    let mut mitglieder: Vec<Uuid> = sqlx::query_scalar(
+        "select distinct user_id from conversation_members where conversation_id = any($1)",
+    )
+    .bind(&ids)
+    .fetch_all(pool)
+    .await?;
+    mitglieder.sort();
+    mitglieder.dedup();
+    Ok(mitglieder)
+}
+
+/// Stellt die Umfrage in einen weiteren Chat.
+///
+/// Legt dort eine Nachricht an, damit sie im Verlauf auftaucht. Steht sie dort
+/// schon, passiert nichts – zweimal dieselbe Frage im selben Chat wäre nur
+/// verwirrend.
+pub async fn place_poll(
+    state: &AppState,
+    poll: &PollRow,
+    conversation_id: Uuid,
+    by: Uuid,
+) -> AppResult<Option<PollPlacementRow>> {
+    if conversation_id == poll.conversation_id {
+        return Ok(None);
+    }
+    let vorhanden: Option<PollPlacementRow> =
+        sqlx::query_as("select * from poll_placements where poll_id = $1 and conversation_id = $2")
+            .bind(poll.id)
+            .bind(conversation_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    if vorhanden.is_some() {
+        return Ok(vorhanden);
+    }
+
+    let message = super::messages::create_message(
+        state,
+        super::messages::NewMessage::entity(conversation_id, by, "poll", "pollId", poll.id),
+    )
+    .await?;
+
+    let row = sqlx::query_as::<_, PollPlacementRow>(
+        "insert into poll_placements (id, poll_id, conversation_id, message_id, created_by)
+         values ($1, $2, $3, $4, $5)
+         on conflict (poll_id, conversation_id) do update set message_id = excluded.message_id
+         returning *",
+    )
+    .bind(Uuid::now_v7())
+    .bind(poll.id)
+    .bind(conversation_id)
+    .bind(message.id)
+    .bind(by)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Some(row))
+}
+
+/// Nimmt einen Auftritt zurück und löscht die zugehörige Nachricht.
+pub async fn unplace_poll(state: &AppState, poll: &PollRow, placement_id: Uuid) -> AppResult<()> {
+    let row: Option<PollPlacementRow> =
+        sqlx::query_as("select * from poll_placements where id = $1 and poll_id = $2")
+            .bind(placement_id)
+            .bind(poll.id)
+            .fetch_optional(&state.pool)
+            .await?;
+    let Some(row) = row else { return Ok(()) };
+
+    if let Some(message_id) = row.message_id {
+        sqlx::query("update messages set deleted_at = now() where id = $1")
+            .bind(message_id)
+            .execute(&state.pool)
+            .await?;
+    }
+    sqlx::query("delete from poll_placements where id = $1")
+        .bind(placement_id)
+        .execute(&state.pool)
+        .await?;
+    Ok(())
 }
 
 #[cfg(test)]
