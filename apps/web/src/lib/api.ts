@@ -198,20 +198,30 @@ export async function forceRefresh(): Promise<StoredTokens | null> {
  */
 const REQUEST_TIMEOUT_MS = 20_000;
 
+/**
+ * Wie lange ein Upload ueber die API dauern darf.
+ *
+ * Zwanzig Sekunden reichen fuer eine Antwort, nicht fuer 200 MB Video auf
+ * einer Mobilverbindung. Derselbe Wert wie beim Weg ueber den Objektspeicher
+ * (lib/upload.ts) – der Unterschied lag nur daran, dass dieser Weg bisher nie
+ * benutzt wurde.
+ */
+export const UPLOAD_TIMEOUT_MS = 120_000;
+
 /** Verbindet das eigene Zeitlimit mit einem ggf. uebergebenen Abbruchsignal. */
-function withTimeout(signal?: AbortSignal): AbortSignal {
-  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+function withTimeout(signal?: AbortSignal, timeoutMs = REQUEST_TIMEOUT_MS): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
   if (!signal) return timeout;
   // `any` gibt es noch nicht ueberall; dann gilt das Zeitlimit allein.
-  return typeof AbortSignal.any === 'function'
-    ? AbortSignal.any([signal, timeout])
-    : timeout;
+  return typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
 export interface RequestOptions {
   query?: Record<string, string | number | boolean | undefined | null>;
   body?: unknown;
   signal?: AbortSignal;
+  /** Eigenes Zeitlimit, wenn die Vorgabe zu knapp ist (Uploads). */
+  timeoutMs?: number;
   /** Skip the Authorization header (login, register, public key …). */
   anonymous?: boolean;
   raw?: boolean;
@@ -244,7 +254,7 @@ export async function request<T>(
     return fetch(buildUrl(path, options.query, options.root), {
       method,
       headers,
-      signal: withTimeout(options.signal),
+      signal: withTimeout(options.signal, options.timeoutMs),
       body:
         options.body === undefined
           ? undefined
@@ -405,7 +415,12 @@ export const api = {
     uploadData: (id: string, file: Blob, fileName?: string) => {
       const form = new FormData();
       form.append('file', file, fileName ?? 'upload');
-      return post<AttachmentDto>(`/media/uploads/${id}/data`, form);
+      // Ohne eigenes Zeitlimit braecht der Upload nach zwanzig Sekunden ab –
+      // auf einem eigenen Server, wo dieser Weg der einzige ist, also bei
+      // jedem groesseren Video.
+      return post<AttachmentDto>(`/media/uploads/${id}/data`, form, {
+        timeoutMs: UPLOAD_TIMEOUT_MS,
+      });
     },
     url: (attachmentId: string) => `${API_BASE}${API_PREFIX}/media/${attachmentId}`,
   },
@@ -484,10 +499,12 @@ export const api = {
     notes: (id: string) => get<ListResult<EventNoteDto>>(`/calendar/events/${id}/notes`),
     addNote: (id: string, body: EventNoteInput) =>
       post<EventNoteDto>(`/calendar/events/${id}/notes`, body),
-    updateNote: (id: string, noteId: string, body: Partial<EventNoteInput> & { position?: number }) =>
-      patch<EventNoteDto>(`/calendar/events/${id}/notes/${noteId}`, body),
-    removeNote: (id: string, noteId: string) =>
-      del<void>(`/calendar/events/${id}/notes/${noteId}`),
+    updateNote: (
+      id: string,
+      noteId: string,
+      body: Partial<EventNoteInput> & { position?: number },
+    ) => patch<EventNoteDto>(`/calendar/events/${id}/notes/${noteId}`, body),
+    removeNote: (id: string, noteId: string) => del<void>(`/calendar/events/${id}/notes/${noteId}`),
 
     documents: (id: string) =>
       get<ListResult<EventAttachmentDto>>(`/calendar/events/${id}/documents`),
@@ -526,10 +543,9 @@ export const api = {
       del<EventNoteDto>(`/calendar/events/${eventId}/notes/${noteId}/items/${itemId}`),
     /** Abhaken oder den Haken wegnehmen. Ohne `checked` wird umgeschaltet. */
     checkNoteItem: (eventId: string, noteId: string, itemId: string, checked?: boolean) =>
-      post<EventNoteDto>(
-        `/calendar/events/${eventId}/notes/${noteId}/items/${itemId}/check`,
-        { checked },
-      ),
+      post<EventNoteDto>(`/calendar/events/${eventId}/notes/${noteId}/items/${itemId}/check`, {
+        checked,
+      }),
 
     linkCollection: (id: string, collectionId: string | null) =>
       patch<CalendarEventDto>(`/calendar/events/${id}/collection`, { collectionId }),
@@ -572,7 +588,8 @@ export const api = {
       get<ListResult<ExpenseDto>>('/expenses', { query }),
     byId: (id: string) => get<ExpenseDto>(`/expenses/${id}`),
     create: (body: CreateExpenseInput) => post<ExpenseDto>('/expenses', body),
-    update: (id: string, body: Record<string, unknown>) => patch<ExpenseDto>(`/expenses/${id}`, body),
+    update: (id: string, body: Record<string, unknown>) =>
+      patch<ExpenseDto>(`/expenses/${id}`, body),
     remove: (id: string) => del<void>(`/expenses/${id}`),
     /** Einen Anteil abhaken. Ohne `userId`: den eigenen. */
     settle: (id: string, body: { userId?: string; settled?: boolean } = {}) =>

@@ -1,6 +1,7 @@
 //! Uploads, Auslieferung und Streaming von Medien.
 
 use axum::body::Body;
+use axum::extract::DefaultBodyLimit;
 use axum::extract::{Multipart, Path, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
@@ -25,12 +26,31 @@ use crate::validate::Validator;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/media/uploads", post(create_upload))
-        .route("/media/uploads/{id}/data", post(upload_data))
+        .route(
+            "/media/uploads/{id}/data",
+            post(upload_data).layer(DefaultBodyLimit::max(UPLOAD_BODY_LIMIT)),
+        )
         .route("/media/uploads/{id}/complete", post(complete_upload))
         .route("/media/{id}", get(deliver).delete(remove))
         .route("/media/{id}/download", get(download))
         .route("/media/{id}/bytes", get(bytes_through_api))
 }
+
+/**
+ * Wie gross ein Upload über die API höchstens sein darf.
+ *
+ * Axum lässt ohne diese Angabe 2 MiB durch – und keinen Bildpunkt mehr. Mit
+ * einem Objektspeicher fiel das nie auf: Dort lädt der Browser mit einer
+ * signierten Adresse direkt in den Bucket, und diese Route wird gar nicht
+ * benutzt. Auf einem eigenen Server ist sie der einzige Weg, und jedes Foto
+ * über 2 MB scheiterte mit einer Meldung, die nichts erklärt.
+ *
+ * Der Wert ist die grösste Obergrenze aus `max_upload_bytes` (Video, 200 MB)
+ * plus etwas Luft für den Rahmen der mehrteiligen Übertragung. Die eigentliche
+ * Grenze je Art prüft `upload_data` weiterhin selbst – und sagt dann auch,
+ * welche es war.
+ */
+const UPLOAD_BODY_LIMIT: usize = 210 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
