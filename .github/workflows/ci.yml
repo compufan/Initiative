@@ -55,6 +55,13 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # Die Freistell-Modelle werden vor dem Bauen geladen. Zwischenspeichern,
+      # damit nicht jeder Lauf 5 MB von fremden Servern zieht - und ein
+      # Aussetzer dort nicht den Build umwirft.
+      - uses: actions/cache@v4
+        with:
+          path: apps/web/public/models
+          key: freistell-modelle-${{ hashFiles('apps/web/scripts/prepare-models.mjs') }}
       - run: pnpm -r typecheck
       - run: pnpm -r test
       - run: pnpm --filter @initiative/web build
