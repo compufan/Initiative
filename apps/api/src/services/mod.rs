@@ -5,6 +5,7 @@ pub mod expanders;
 pub mod games;
 pub mod messages;
 pub mod notify;
+pub mod permissions;
 pub mod polls;
 pub mod stickers;
 pub mod users;

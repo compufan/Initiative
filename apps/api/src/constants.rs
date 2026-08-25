@@ -31,6 +31,19 @@ pub const EVENT_TITLE_MAX: usize = 160;
 pub const EVENT_DESCRIPTION_MAX: usize = 4000;
 pub const STICKER_PACK_NAME_MAX: usize = 60;
 pub const STICKERS_PER_PACK_MAX: i64 = 120;
+
+pub const COLLECTION_NAME_MAX: usize = 120;
+pub const COLLECTION_DESCRIPTION_MAX: usize = 2000;
+pub const COLLECTION_ITEM_TITLE_MAX: usize = 200;
+pub const COLLECTION_ITEM_NOTE_MAX: usize = 2000;
+/// Wie tief Ordner ineinander liegen dürfen.
+///
+/// Nicht aus Prinzip begrenzt, sondern weil jede Ebene die Rechte-Abfrage
+/// länger macht – und weil eine Sammlung sonst über einen Umweg ihr eigener
+/// Elternordner werden könnte.
+pub const COLLECTION_DEPTH_MAX: i32 = 8;
+pub const COLLECTION_LEVELS: &[&str] = &["view", "edit", "own"];
+pub const COLLECTION_MEMBER_LEVELS: &[&str] = &["none", "view", "edit"];
 pub const ATTACHMENTS_PER_MESSAGE: usize = 10;
 pub const MESSAGE_PAGE_SIZE: i64 = 50;
 pub const MESSAGE_PAGE_SIZE_MAX: i64 = 100;

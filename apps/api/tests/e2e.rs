@@ -817,6 +817,303 @@ async fn full_api_scenario() {
     assert_eq!(status, StatusCode::OK);
     assert!(!results["items"].as_array().unwrap().is_empty());
 
+    // ---- Dateien & Sammlungen --------------------------------------------
+    // Der Kern ist das Rechtesystem: Ausgaben und Ereignisse bauen darauf auf.
+    // Deshalb wird hier nicht nur der Erfolgsfall geprüft, sondern vor allem,
+    // was jemand *nicht* darf.
+    let (status, carol_session) = app
+        .call(
+            "POST",
+            "/api/v1/auth/register",
+            None,
+            Some(json!({
+                "username": format!("carol{suffix}"),
+                "password": "passwort123",
+                "displayName": "Carol"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let carol_token = carol_session["accessToken"].as_str().unwrap().to_string();
+    let carol_id = carol_session["user"]["id"].as_str().unwrap().to_string();
+
+    let (status, sammlung) = app
+        .call(
+            "POST",
+            "/api/v1/collections",
+            Some(&alice_token),
+            Some(json!({
+                "name": "Urlaubsbilder",
+                "conversationId": conversation_id,
+                "description": "Was wir unterwegs geknipst haben"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let sammlung_id = sammlung["id"].as_str().unwrap().to_string();
+    // Wer sie anlegt, besitzt sie.
+    assert_eq!(sammlung["myLevel"], "own");
+    // Vorgabe: alle im Chat dürfen etwas hinzufügen.
+    assert_eq!(sammlung["memberLevel"], "edit");
+    assert_eq!(sammlung["itemCount"], 0);
+
+    // Bob ist im Chat, also darf er hinzufügen – ohne dass ihm jemand
+    // ausdrücklich etwas gegeben hätte. Genau das ist "Zur Sammlung
+    // hinzufügen für alle im Chat".
+    let (status, bobs_sicht) = app
+        .call(
+            "GET",
+            &format!("/api/v1/collections/{sammlung_id}"),
+            Some(&bob_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bobs_sicht["myLevel"], "edit");
+
+    let (status, eintrag) = app
+        .call(
+            "POST",
+            &format!("/api/v1/collections/{sammlung_id}/items"),
+            Some(&bob_token),
+            Some(json!({ "attachmentId": attachment_id, "title": "Der Pixel" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let eintrag_id = eintrag["id"].as_str().unwrap().to_string();
+    assert_eq!(eintrag["attachment"]["id"], attachment_id.as_str());
+
+    // Dieselbe Datei ein zweites Mal ist kein Fehler und keine Dublette.
+    let (status, _) = app
+        .call(
+            "POST",
+            &format!("/api/v1/collections/{sammlung_id}/items"),
+            Some(&bob_token),
+            Some(json!({ "attachmentId": attachment_id })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, inhalt) = app
+        .call(
+            "GET",
+            &format!("/api/v1/collections/{sammlung_id}/items"),
+            Some(&alice_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(inhalt["items"].as_array().unwrap().len(), 1);
+
+    // Bob darf ändern, aber nicht löschen – dafür müsste sie ihm gehören.
+    let (status, _) = app
+        .call(
+            "DELETE",
+            &format!("/api/v1/collections/{sammlung_id}"),
+            Some(&bob_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Und er darf die Grundregel für alle im Chat nicht kippen.
+    let (status, _) = app
+        .call(
+            "PATCH",
+            &format!("/api/v1/collections/{sammlung_id}"),
+            Some(&bob_token),
+            Some(json!({ "memberLevel": "none" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // Carol ist nicht im Chat. Für sie existiert die Sammlung nicht – 404,
+    // nicht 403: Sie soll nicht einmal erfahren, dass es sie gibt.
+    let (status, _) = app
+        .call(
+            "GET",
+            &format!("/api/v1/collections/{sammlung_id}"),
+            Some(&carol_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, carols_liste) = app
+        .call("GET", "/api/v1/collections", Some(&carol_token), None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(carols_liste["items"].as_array().unwrap().is_empty());
+
+    // Alice gibt Carol Lese-Recht.
+    let (status, _) = app
+        .call(
+            "POST",
+            &format!("/api/v1/collections/{sammlung_id}/grants"),
+            Some(&alice_token),
+            Some(json!({ "userId": carol_id, "level": "view" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, carols_sicht) = app
+        .call(
+            "GET",
+            &format!("/api/v1/collections/{sammlung_id}"),
+            Some(&carol_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(carols_sicht["myLevel"], "view");
+
+    // Ansehen ja, hinzufügen nein.
+    let (status, _) = app
+        .call(
+            "POST",
+            &format!("/api/v1/collections/{sammlung_id}/items"),
+            Some(&carol_token),
+            Some(json!({ "attachmentId": attachment_id })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // ---- Vererbung an Unterordner ----------------------------------------
+    let (status, unterordner) = app
+        .call(
+            "POST",
+            "/api/v1/collections",
+            Some(&alice_token),
+            Some(json!({ "name": "Tag 1", "parentId": sammlung_id })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let unterordner_id = unterordner["id"].as_str().unwrap().to_string();
+
+    // Carols Lese-Recht am Elternordner wirkt nach unten – ohne dass jemand
+    // es dort noch einmal vergeben hätte.
+    let (status, carols_unterordner) = app
+        .call(
+            "GET",
+            &format!("/api/v1/collections/{unterordner_id}"),
+            Some(&carol_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(carols_unterordner["myLevel"], "view");
+
+    // Bobs Recht aus dem Chat ebenso.
+    let (status, bobs_unterordner) = app
+        .call(
+            "GET",
+            &format!("/api/v1/collections/{unterordner_id}"),
+            Some(&bob_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bobs_unterordner["myLevel"], "edit");
+
+    // Einen Ordner in seinen eigenen Unterordner zu schieben würde den Zweig
+    // unerreichbar machen und die Rechte-Abfrage im Kreis laufen lassen.
+    let (status, _) = app
+        .call(
+            "PATCH",
+            &format!("/api/v1/collections/{sammlung_id}"),
+            Some(&alice_token),
+            Some(json!({ "parentId": unterordner_id })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    // In sich selbst erst recht nicht.
+    let (status, _) = app
+        .call(
+            "PATCH",
+            &format!("/api/v1/collections/{sammlung_id}"),
+            Some(&alice_token),
+            Some(json!({ "parentId": sammlung_id })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // ---- Recht an einer einzelnen Datei ----------------------------------
+    // Bob hat die Datei hinzugefügt, also gehört sie ihm – auch wenn ihm der
+    // Ordner nicht gehört. Sonst könnte er das eigene Hochgeladene nicht mehr
+    // entfernen.
+    let (status, inhalt) = app
+        .call(
+            "GET",
+            &format!("/api/v1/collections/{sammlung_id}/items"),
+            Some(&bob_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(inhalt["items"][0]["myLevel"], "own");
+
+    // Carol darf die Datei nur ansehen …
+    let (status, carols_inhalt) = app
+        .call(
+            "GET",
+            &format!("/api/v1/collections/{sammlung_id}/items"),
+            Some(&carol_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(carols_inhalt["items"][0]["myLevel"], "view");
+    let (status, _) = app
+        .call(
+            "DELETE",
+            &format!("/api/v1/collections/{sammlung_id}/items/{eintrag_id}"),
+            Some(&carol_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // … bis Bob ihr genau diese eine Datei zum Ändern freigibt.
+    let (status, _) = app
+        .call(
+            "POST",
+            &format!("/api/v1/collections/items/{eintrag_id}/grants"),
+            Some(&bob_token),
+            Some(json!({ "userId": carol_id, "level": "edit" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, carols_inhalt) = app
+        .call(
+            "GET",
+            &format!("/api/v1/collections/{sammlung_id}/items"),
+            Some(&carol_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    // Das Recht an der Datei hebt das schwächere am Ordner an, nicht umgekehrt.
+    assert_eq!(carols_inhalt["items"][0]["myLevel"], "edit");
+
+    // ---- Löschen wirkt nach unten ----------------------------------------
+    let (status, _) = app
+        .call(
+            "DELETE",
+            &format!("/api/v1/collections/{sammlung_id}"),
+            Some(&alice_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    // Der Unterordner hing daran und ist damit ebenfalls weg.
+    let (status, _) = app
+        .call(
+            "GET",
+            &format!("/api/v1/collections/{unterordner_id}"),
+            Some(&bob_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
     // ---- profile update broadcasts ---------------------------------------
     let (status, profile) = app
         .call(

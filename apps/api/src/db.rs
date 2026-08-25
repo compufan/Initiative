@@ -251,3 +251,48 @@ pub fn json_to_uuid_vec(value: &Value) -> Vec<Uuid> {
         })
         .unwrap_or_default()
 }
+
+/// Ein Ordner in „Dateien & Sammlungen“ (`migrations/0004_collections.sql`).
+#[derive(Debug, Clone, FromRow)]
+pub struct CollectionRow {
+    pub id: Uuid,
+    pub parent_id: Option<Uuid>,
+    pub conversation_id: Option<Uuid>,
+    pub name: String,
+    pub description: Option<String>,
+    pub color: Option<String>,
+    pub member_level: String,
+    pub created_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// Eine Datei in einer Sammlung.
+#[derive(Debug, Clone, FromRow)]
+pub struct CollectionItemRow {
+    pub id: Uuid,
+    pub collection_id: Uuid,
+    pub attachment_id: Uuid,
+    pub added_by: Option<Uuid>,
+    pub title: Option<String>,
+    pub note: Option<String>,
+    pub message_id: Option<Uuid>,
+    pub sort_key: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// Ein ausdrücklich vergebenes Recht an einer Sammlung oder einer Datei.
+#[derive(Debug, Clone, FromRow)]
+pub struct CollectionGrantRow {
+    pub id: Uuid,
+    pub collection_id: Option<Uuid>,
+    pub item_id: Option<Uuid>,
+    pub user_id: Option<Uuid>,
+    pub conversation_id: Option<Uuid>,
+    pub level: String,
+    pub granted_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}

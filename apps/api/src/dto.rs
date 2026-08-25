@@ -314,3 +314,53 @@ pub struct PushPayload {
     pub message_id: Option<Uuid>,
     pub kind: String,
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionDto {
+    pub id: Uuid,
+    pub parent_id: Option<Uuid>,
+    pub conversation_id: Option<Uuid>,
+    pub name: String,
+    pub description: Option<String>,
+    pub color: Option<String>,
+    /// Was jemand darf, der im zugehörigen Chat ist: `none`, `view` oder `edit`.
+    pub member_level: String,
+    pub created_by: Option<Uuid>,
+    /// Was **die abfragende Person** hier darf – die App richtet sich danach.
+    pub my_level: String,
+    /// Wie viele Dateien direkt darin liegen (ohne Unterordner).
+    pub item_count: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionItemDto {
+    pub id: Uuid,
+    pub collection_id: Uuid,
+    pub added_by: Option<Uuid>,
+    pub title: Option<String>,
+    pub note: Option<String>,
+    /// Aus welcher Nachricht die Datei kam – für den Sprung zurück in den Chat.
+    pub message_id: Option<Uuid>,
+    pub sort_key: i32,
+    pub my_level: String,
+    pub attachment: AttachmentDto,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionGrantDto {
+    pub id: Uuid,
+    pub collection_id: Option<Uuid>,
+    pub item_id: Option<Uuid>,
+    pub user_id: Option<Uuid>,
+    pub conversation_id: Option<Uuid>,
+    pub level: String,
+    pub granted_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+}
