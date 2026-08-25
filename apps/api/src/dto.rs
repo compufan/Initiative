@@ -371,6 +371,27 @@ pub struct CollectionGrantDto {
     pub created_at: DateTime<Utc>,
 }
 
+/// Ein Punkt in einer Notizliste.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventNoteItemDto {
+    pub id: Uuid,
+    pub text: String,
+    pub position: i32,
+    /// Wie viele müssen abhaken. 0 heisst: niemand muss.
+    pub required_checks: i32,
+    /// Wenn wahr, schlägt das die Zahl: alle Eingeladenen.
+    pub required_all: bool,
+    /// Wie viele es tatsächlich getan haben, und wer.
+    pub checked_by: Vec<Uuid>,
+    /// Ob **ich** abgehakt habe.
+    pub checked_by_me: bool,
+    /// Wie viele es sein müssten – „alle“ ist hier schon aufgelöst.
+    pub needed: i32,
+    /// Ob dieser Punkt erledigt ist.
+    pub done: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EventNoteDto {
@@ -381,10 +402,22 @@ pub struct EventNoteDto {
     pub body: String,
     /// `author`, `members` oder `listed` – wer sie ändern darf.
     pub edit_scope: String,
-    /// Bei `listed`: wer namentlich darf.
+    /// Wer Punkte hinzufügen darf (`author`, `members`, `listed`).
+    pub add_scope: String,
+    /// Wer abhaken darf – zusätzlich `nobody` für eine Liste zum Nachlesen.
+    pub check_scope: String,
+    /// Bei `listed`: wer namentlich darf. Je Recht eine eigene Liste.
     pub editor_ids: Vec<Uuid>,
-    /// Ob **ich** sie ändern darf – die App richtet sich danach.
+    pub adder_ids: Vec<Uuid>,
+    pub checker_ids: Vec<Uuid>,
+    /// Ob **ich** darf – die App richtet sich danach, statt die Regeln
+    /// nachzubauen. Zwei Auslegungen derselben Regel wären zwei
+    /// Gelegenheiten, sie unterschiedlich falsch zu treffen.
     pub can_edit: bool,
+    pub can_add: bool,
+    pub can_check: bool,
+    /// Die Punkte der Liste. Leer heisst: eine gewöhnliche Textnotiz.
+    pub items: Vec<EventNoteItemDto>,
     pub position: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

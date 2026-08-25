@@ -118,6 +118,26 @@ export const eventFromPollSchema = z.object({
  * mitschreiben“ und „Ansprache, an der niemand herumbessert“ sind beides
  * Notizen und sollen sich trotzdem verschieden verhalten.
  */
+/** Wer abhaken darf. Eine Stufe mehr als beim Ändern. */
+export type CheckScope = 'nobody' | NoteScope;
+
+export const CHECK_SCOPES: CheckScope[] = ['nobody', 'author', 'members', 'listed'];
+
+export interface EventNoteItemDto {
+  id: string;
+  text: string;
+  position: number;
+  /** Wie viele müssen abhaken. 0 heisst: niemand muss. */
+  requiredChecks: number;
+  /** Schlägt die Zahl: alle Eingeladenen, auch die von morgen. */
+  requiredAll: boolean;
+  checkedBy: string[];
+  checkedByMe: boolean;
+  /** Wie viele es sein müssten – „alle“ ist hier schon aufgelöst. */
+  needed: number;
+  done: boolean;
+}
+
 export interface EventNoteDto {
   id: string;
   eventId: string;
@@ -126,7 +146,24 @@ export interface EventNoteDto {
   body: string;
   editScope: NoteScope;
   /** Bei `listed`: wer namentlich ändern darf. */
+  /** Wer Punkte hinzufügen darf. */
+  addScope: NoteScope;
+  /** Wer abhaken darf – `nobody` für eine Liste zum Nachlesen. */
+  checkScope: CheckScope;
+  /** Bei `listed`: wer namentlich darf. Je Recht eine eigene Liste. */
   editorIds: string[];
+  adderIds: string[];
+  checkerIds: string[];
+  canAdd: boolean;
+  canCheck: boolean;
+  /**
+   * Die Punkte der Liste. Leer heisst: eine gewöhnliche Textnotiz.
+   *
+   * Die Soll-Zahl steht am einzelnen Punkt und nicht an der Liste, weil in
+   * derselben Liste Verschiedenes stehen kann: „Zahnbürste“ muss jeder für
+   * sich abhaken, „Kuchen backen“ nur einer.
+   */
+  items: EventNoteItemDto[];
   /** Ob **ich** sie ändern darf. Entschieden wird es auf dem Server. */
   canEdit: boolean;
   position: number;

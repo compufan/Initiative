@@ -1,7 +1,15 @@
 import { useEffect, useState } from 'react';
-import { LIMITS, NOTE_SCOPES, type EventNoteDto, type NoteScope } from '@initiative/shared';
+import {
+  CHECK_SCOPES,
+  LIMITS,
+  NOTE_SCOPES,
+  type CheckScope,
+  type EventNoteDto,
+  type NoteScope,
+} from '@initiative/shared';
 import { Spinner } from '../../components/Feedback.js';
 import { PersonenWahl } from '../../components/PersonenWahl.js';
+import { NoteListe } from './NoteListe.js';
 import { api } from '../../lib/api.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
@@ -151,7 +159,18 @@ function NoteCard({
           {SCOPE_TEXT[note.editScope]}
         </span>
       </div>
-      <p className="cal-note-body">{note.body}</p>
+      {note.body.trim().length > 0 && <p className="cal-note-body">{note.body}</p>}
+
+      {/* Die Liste. Steht sie leer und darf niemand ergaenzen, zeigt sie
+          nichts – eine Notiz ohne Liste soll aussehen wie vorher. */}
+      <NoteListe
+        eventId={eventId}
+        note={note}
+        onChanged={onChanged}
+        eingeladene={people.length}
+        name={(id) => people.find((person) => person.id === id)?.displayName ?? 'Unbekannt'}
+      />
+
       {note.canEdit && (
         <div className="row">
           <button type="button" className="btn btn-sm" onClick={() => setBearbeiten(true)}>
@@ -189,6 +208,11 @@ function NoteEditor({
   const [body, setBody] = useState(note?.body ?? '');
   const [scope, setScope] = useState<NoteScope>(note?.editScope ?? 'author');
   const [editorIds, setEditorIds] = useState<string[]>(note?.editorIds ?? []);
+  // Drei Rechte statt einem. Bei einer Liste fallen sie auseinander: An einer
+  // Packliste duerfen alle abhaken, aber nur der Verfasser Punkte ergaenzen –
+  // sonst steht am Abreisetag eine Liste da, die niemand mehr ueberblickt.
+  const [addScope, setAddScope] = useState<NoteScope>(note?.addScope ?? 'author');
+  const [checkScope, setCheckScope] = useState<CheckScope>(note?.checkScope ?? 'members');
   const [busy, setBusy] = useState(false);
 
   /*
@@ -213,6 +237,8 @@ function NoteEditor({
         title?: string;
         editScope?: NoteScope;
         editorIds?: string[];
+        addScope?: NoteScope;
+        checkScope?: CheckScope;
       } = {
         title: title.trim() || undefined,
         body,
@@ -223,6 +249,8 @@ function NoteEditor({
       if (binVerfasser) {
         daten.editScope = scope;
         daten.editorIds = scope === 'listed' ? editorIds : [];
+        daten.addScope = addScope;
+        daten.checkScope = checkScope;
       }
       const ergebnis = note
         ? await api.calendar.updateNote(eventId, note.id, daten)
@@ -285,6 +313,43 @@ function NoteEditor({
           />
         </fieldset>
       )}
+
+      {/* Die beiden Rechte, die nur eine Liste braucht. Bei einer reinen
+          Textnotiz sind sie ohne Wirkung und stehen deshalb hinter einer
+          Klappe – sichtbar für den, der sie sucht, im Weg für niemanden. */}
+      <details className="field" open={(note?.items.length ?? 0) > 0}>
+        <summary>Für eine Liste: wer darf was?</summary>
+
+        <fieldset className="field" disabled={!binVerfasser}>
+          <legend>Punkte hinzufügen darf</legend>
+          {NOTE_SCOPES.map((wert) => (
+            <label key={wert} className="cal-check">
+              <input
+                type="radio"
+                name={`add-${note?.id ?? 'neu'}`}
+                checked={addScope === wert}
+                onChange={() => setAddScope(wert)}
+              />
+              <span>{SCOPE_TEXT[wert]}</span>
+            </label>
+          ))}
+        </fieldset>
+
+        <fieldset className="field" disabled={!binVerfasser}>
+          <legend>Abhaken darf</legend>
+          {CHECK_SCOPES.map((wert) => (
+            <label key={wert} className="cal-check">
+              <input
+                type="radio"
+                name={`check-${note?.id ?? 'neu'}`}
+                checked={checkScope === wert}
+                onChange={() => setCheckScope(wert)}
+              />
+              <span>{wert === 'nobody' ? 'Niemand (nur zum Nachlesen)' : SCOPE_TEXT[wert]}</span>
+            </label>
+          ))}
+        </fieldset>
+      </details>
 
       <div className="row">
         <button

@@ -25,7 +25,7 @@ use crate::services::calendar::{
 };
 use crate::services::conversations::{assert_membership, member_ids};
 use crate::services::events::{
-    assert_attendee, may_edit_note, require_note, to_note_dto, NOTE_SCOPES,
+    assert_attendee, may_edit_note, require_note, to_note_dto, CHECK_SCOPES, NOTE_SCOPES,
 };
 use crate::services::permissions::{require_collection, Level};
 use crate::services::polls::{
@@ -56,6 +56,18 @@ pub fn router() -> Router<AppState> {
         .route(
             "/calendar/events/{id}/notes/{note_id}",
             patch(update_note).delete(remove_note),
+        )
+        .route(
+            "/calendar/events/{id}/notes/{note_id}/items",
+            post(add_item),
+        )
+        .route(
+            "/calendar/events/{id}/notes/{note_id}/items/{item_id}",
+            patch(update_item).delete(remove_item),
+        )
+        .route(
+            "/calendar/events/{id}/notes/{note_id}/items/{item_id}/check",
+            post(toggle_check),
         )
         .route(
             "/calendar/events/{id}/documents",
@@ -701,9 +713,38 @@ struct NoteInput {
     body: String,
     #[serde(default = "default_scope")]
     edit_scope: String,
-    /// Bei `listed`: wer sie ändern darf.
+    /// Wer Punkte hinzufügen darf. Ohne Angabe wie `edit_scope`.
+    add_scope: Option<String>,
+    /// Wer abhaken darf. Ohne Angabe: alle Eingeladenen – das ist der Sinn
+    /// einer Liste, und wer es enger will, sagt es ausdrücklich.
+    #[serde(default = "default_check_scope")]
+    check_scope: String,
+    /// Bei `listed`: wer darf. Je Recht eine eigene Liste.
     #[serde(default)]
     editor_ids: Vec<Uuid>,
+    #[serde(default)]
+    adder_ids: Vec<Uuid>,
+    #[serde(default)]
+    checker_ids: Vec<Uuid>,
+    /// Punkte, die gleich mit angelegt werden.
+    #[serde(default)]
+    items: Vec<ItemInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ItemInput {
+    text: String,
+    /// Wie viele müssen abhaken. 0 heisst: niemand muss.
+    #[serde(default)]
+    required_checks: i32,
+    /// Schlägt die Zahl: alle Eingeladenen, auch die von morgen.
+    #[serde(default)]
+    required_all: bool,
+}
+
+fn default_check_scope() -> String {
+    "members".to_string()
 }
 
 fn default_scope() -> String {
@@ -720,6 +761,12 @@ async fn create_note(
     assert_attendee(&state.pool, &event, user.id()).await?;
     Validator::new()
         .one_of("editScope", &input.edit_scope, NOTE_SCOPES)
+        .one_of(
+            "addScope",
+            input.add_scope.as_deref().unwrap_or(&input.edit_scope),
+            NOTE_SCOPES,
+        )
+        .one_of("checkScope", &input.check_scope, CHECK_SCOPES)
         .length("body", &input.body, 0, EVENT_DESCRIPTION_MAX)
         .finish()?;
 
@@ -730,9 +777,17 @@ async fn create_note(
     .fetch_one(&state.pool)
     .await?;
 
+    // Ohne eigene Angabe gilt fuers Hinzufuegen dasselbe wie fuers Aendern –
+    // das ist die Erwartung, und es erspart beim haeufigen Fall eine Frage.
+    let add_scope = input
+        .add_scope
+        .clone()
+        .unwrap_or_else(|| input.edit_scope.clone());
+
     let note = sqlx::query_as::<_, EventNoteRow>(
-        "insert into event_notes (id, event_id, author_id, title, body, edit_scope, position)
-         values ($1, $2, $3, $4, $5, $6, $7)
+        "insert into event_notes
+           (id, event_id, author_id, title, body, edit_scope, add_scope, check_scope, position)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          returning *",
     )
     .bind(Uuid::now_v7())
@@ -741,11 +796,39 @@ async fn create_note(
     .bind(clean(input.title))
     .bind(&input.body)
     .bind(&input.edit_scope)
+    .bind(&add_scope)
+    .bind(&input.check_scope)
     .bind(next)
     .fetch_one(&state.pool)
     .await?;
 
-    set_note_editors(&state, &note, &input.editor_ids).await?;
+    set_note_editors(&state, &note, "edit", &input.editor_ids).await?;
+    set_note_editors(&state, &note, "add", &input.adder_ids).await?;
+    set_note_editors(&state, &note, "check", &input.checker_ids).await?;
+
+    // Punkte, die gleich mitkamen. Eine Packliste legt man in einem Zug an,
+    // nicht Zeile fuer Zeile ueber einzelne Anfragen.
+    for (nummer, punkt) in input.items.iter().enumerate() {
+        let text = punkt.text.trim();
+        if text.is_empty() {
+            continue;
+        }
+        sqlx::query(
+            "insert into event_note_items
+               (id, note_id, text, position, required_checks, required_all, created_by)
+             values ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(note.id)
+        .bind(text)
+        .bind(nummer as i32)
+        .bind(punkt.required_checks.max(0))
+        .bind(punkt.required_all)
+        .bind(user.id())
+        .execute(&state.pool)
+        .await?;
+    }
+
     let dto = to_note_dto(&state.pool, &event, note, user.id()).await?;
     broadcast_event(&state, &load_event_dto(&state, id).await?).await?;
     Ok((StatusCode::CREATED, Json(dto)))
@@ -816,7 +899,7 @@ async fn update_note(
     .ok_or_else(|| AppError::not_found("Notiz nicht gefunden"))?;
 
     if let Some(editor_ids) = input.editor_ids {
-        set_note_editors(&state, &updated, &editor_ids).await?;
+        set_note_editors(&state, &updated, "edit", &editor_ids).await?;
     }
     let dto = to_note_dto(&state.pool, &event, updated, user.id()).await?;
     broadcast_event(&state, &load_event_dto(&state, id).await?).await?;
@@ -845,22 +928,229 @@ async fn remove_note(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn set_note_editors(state: &AppState, note: &EventNoteRow, ids: &[Uuid]) -> AppResult<()> {
-    sqlx::query("delete from event_note_editors where note_id = $1")
+/// Die namentlich Benannten fuer EIN Recht setzen (`edit`, `add`, `check`).
+async fn set_note_editors(
+    state: &AppState,
+    note: &EventNoteRow,
+    rolle: &str,
+    ids: &[Uuid],
+) -> AppResult<()> {
+    sqlx::query("delete from event_note_editors where note_id = $1 and role = $2")
         .bind(note.id)
+        .bind(rolle)
         .execute(&state.pool)
         .await?;
     for user_id in ids {
         sqlx::query(
-            "insert into event_note_editors (note_id, user_id) values ($1, $2)
+            "insert into event_note_editors (note_id, user_id, role) values ($1, $2, $3)
              on conflict do nothing",
         )
         .bind(note.id)
         .bind(user_id)
+        .bind(rolle)
         .execute(&state.pool)
         .await?;
     }
     Ok(())
+}
+
+/// Eine Notiz samt Punkten neu laden und als DTO ausliefern.
+async fn note_antwort(
+    state: &AppState,
+    event: &CalendarEventRow,
+    note_id: Uuid,
+    viewer: Uuid,
+) -> AppResult<Json<EventNoteDto>> {
+    let note = require_note(&state.pool, event.id, note_id).await?;
+    Ok(Json(to_note_dto(&state.pool, event, note, viewer).await?))
+}
+
+/// Einen Punkt zur Liste hinzufuegen.
+async fn add_item(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((id, note_id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<ItemInput>,
+) -> AppResult<(StatusCode, Json<EventNoteDto>)> {
+    let event = require_event(&state, id).await?;
+    assert_attendee(&state.pool, &event, user.id()).await?;
+    let note = require_note(&state.pool, id, note_id).await?;
+
+    if !crate::services::events::may_add_item(&state.pool, &event, &note, user.id()).await? {
+        return Err(AppError::forbidden(
+            "Zu dieser Liste darfst du nichts hinzufügen",
+        ));
+    }
+    let text = input.text.trim();
+    Validator::new().length("text", text, 1, 500).finish()?;
+
+    let next: i32 = sqlx::query_scalar(
+        "select coalesce(max(position), 0) + 1 from event_note_items where note_id = $1",
+    )
+    .bind(note_id)
+    .fetch_one(&state.pool)
+    .await?;
+
+    sqlx::query(
+        "insert into event_note_items
+           (id, note_id, text, position, required_checks, required_all, created_by)
+         values ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(note_id)
+    .bind(text)
+    .bind(next)
+    .bind(input.required_checks.max(0))
+    .bind(input.required_all)
+    .bind(user.id())
+    .execute(&state.pool)
+    .await?;
+
+    broadcast_event(&state, &load_event_dto(&state, id).await?).await?;
+    let antwort = note_antwort(&state, &event, note_id, user.id()).await?;
+    Ok((StatusCode::CREATED, antwort))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateItemInput {
+    text: Option<String>,
+    required_checks: Option<i32>,
+    required_all: Option<bool>,
+    position: Option<i32>,
+}
+
+/// Einen Punkt aendern. Text aendern darf, wer die NOTIZ aendern darf –
+/// das ist etwas anderes als Hinzufuegen und etwas anderes als Abhaken.
+async fn update_item(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((id, note_id, item_id)): Path<(Uuid, Uuid, Uuid)>,
+    Json(input): Json<UpdateItemInput>,
+) -> AppResult<Json<EventNoteDto>> {
+    let event = require_event(&state, id).await?;
+    assert_attendee(&state.pool, &event, user.id()).await?;
+    let note = require_note(&state.pool, id, note_id).await?;
+
+    if !may_edit_note(&state.pool, &event, &note, user.id()).await? {
+        return Err(AppError::forbidden("Diese Liste darfst du nicht ändern"));
+    }
+    if let Some(text) = input.text.as_deref() {
+        Validator::new()
+            .length("text", text.trim(), 1, 500)
+            .finish()?;
+    }
+
+    sqlx::query(
+        "update event_note_items set
+           text            = coalesce($3, text),
+           required_checks = coalesce($4, required_checks),
+           required_all    = coalesce($5, required_all),
+           position        = coalesce($6, position),
+           updated_at      = now()
+         where id = $1 and note_id = $2",
+    )
+    .bind(item_id)
+    .bind(note_id)
+    .bind(input.text.as_deref().map(str::trim))
+    .bind(input.required_checks.map(|wert| wert.max(0)))
+    .bind(input.required_all)
+    .bind(input.position)
+    .execute(&state.pool)
+    .await?;
+
+    broadcast_event(&state, &load_event_dto(&state, id).await?).await?;
+    note_antwort(&state, &event, note_id, user.id()).await
+}
+
+async fn remove_item(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((id, note_id, item_id)): Path<(Uuid, Uuid, Uuid)>,
+) -> AppResult<Json<EventNoteDto>> {
+    let event = require_event(&state, id).await?;
+    assert_attendee(&state.pool, &event, user.id()).await?;
+    let note = require_note(&state.pool, id, note_id).await?;
+
+    if !may_edit_note(&state.pool, &event, &note, user.id()).await? {
+        return Err(AppError::forbidden("Diese Liste darfst du nicht ändern"));
+    }
+    sqlx::query("delete from event_note_items where id = $1 and note_id = $2")
+        .bind(item_id)
+        .bind(note_id)
+        .execute(&state.pool)
+        .await?;
+
+    broadcast_event(&state, &load_event_dto(&state, id).await?).await?;
+    note_antwort(&state, &event, note_id, user.id()).await
+}
+
+#[derive(Debug, Deserialize)]
+struct CheckInput {
+    /// Ohne Angabe wird umgeschaltet.
+    checked: Option<bool>,
+}
+
+/// Einen Punkt abhaken – oder den Haken wieder wegnehmen.
+///
+/// Jeder hakt fuer sich ab; deshalb eine Zeile je Person und nicht ein Feld
+/// am Punkt. Nur so laesst sich „diesen muessen alle abhaken“ ueberhaupt
+/// abbilden, und nur so sieht man, wer noch fehlt.
+async fn toggle_check(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((id, note_id, item_id)): Path<(Uuid, Uuid, Uuid)>,
+    Json(input): Json<CheckInput>,
+) -> AppResult<Json<EventNoteDto>> {
+    let event = require_event(&state, id).await?;
+    assert_attendee(&state.pool, &event, user.id()).await?;
+    let note = require_note(&state.pool, id, note_id).await?;
+
+    if !crate::services::events::may_check_item(&state.pool, &event, &note, user.id()).await? {
+        return Err(AppError::forbidden("Hier darfst du nichts abhaken"));
+    }
+
+    // Gehoert der Punkt ueberhaupt zu dieser Liste? Ohne diese Pruefung liesse
+    // sich mit einer geratenen Kennung ein fremder Punkt abhaken.
+    let gehoert: bool = sqlx::query_scalar(
+        "select exists (select 1 from event_note_items where id = $1 and note_id = $2)",
+    )
+    .bind(item_id)
+    .bind(note_id)
+    .fetch_one(&state.pool)
+    .await?;
+    if !gehoert {
+        return Err(AppError::not_found("Punkt nicht gefunden"));
+    }
+
+    let bisher: bool = sqlx::query_scalar(
+        "select exists (select 1 from event_note_checks where item_id = $1 and user_id = $2)",
+    )
+    .bind(item_id)
+    .bind(user.id())
+    .fetch_one(&state.pool)
+    .await?;
+
+    let soll = input.checked.unwrap_or(!bisher);
+    if soll {
+        sqlx::query(
+            "insert into event_note_checks (item_id, user_id) values ($1, $2)
+             on conflict do nothing",
+        )
+        .bind(item_id)
+        .bind(user.id())
+        .execute(&state.pool)
+        .await?;
+    } else {
+        sqlx::query("delete from event_note_checks where item_id = $1 and user_id = $2")
+            .bind(item_id)
+            .bind(user.id())
+            .execute(&state.pool)
+            .await?;
+    }
+
+    broadcast_event(&state, &load_event_dto(&state, id).await?).await?;
+    note_antwort(&state, &event, note_id, user.id()).await
 }
 
 /* ---------- Dokumente ---------- */

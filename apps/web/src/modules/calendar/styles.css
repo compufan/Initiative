@@ -997,3 +997,89 @@
   display: flex;
   align-items: center;
 }
+
+/* ---------- Liste in einer Notiz ---------- */
+
+.nl {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.nl-liste {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.nl-punkt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-height: 40px;
+  padding: 2px 0;
+  min-width: 0;
+}
+
+.nl-haken {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+  /* Die ganze Zeile ist die Trefferflaeche, nicht nur das Kaestchen. Auf
+     einem Handy ist ein 16-Pixel-Kaestchen kein Ziel. */
+  min-height: 40px;
+}
+
+.nl-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Erledigt heisst durchgestrichen UND blasser – Farbe allein ist fuer
+   Farbenblinde keine Auskunft. */
+.nl-punkt.is-fertig .nl-text {
+  text-decoration: line-through;
+  opacity: 0.62;
+}
+
+.nl-stand {
+  flex: none;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.nl-punkt.is-fertig .nl-stand {
+  color: var(--success, #16a34a);
+}
+
+.nl-mehr {
+  flex: none;
+  width: 32px;
+  height: 32px;
+}
+
+.nl-einstellung {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  padding: var(--space-2) 0 var(--space-2) 28px;
+  font-size: 0.86rem;
+}
+
+.nl-neu {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.nl-neu .input {
+  flex: 1;
+  min-width: 0;
+}

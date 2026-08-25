@@ -497,6 +497,28 @@ export const api = {
       del<void>(`/calendar/events/${id}/documents/${documentId}`),
 
     /** Hängt eine Sammlung an den Termin – `null` löst die Verknüpfung. */
+    /* --- Listen in Notizen ------------------------------------------- */
+    /** Einen Punkt zur Liste hinzufügen. */
+    addNoteItem: (
+      eventId: string,
+      noteId: string,
+      body: { text: string; requiredChecks?: number; requiredAll?: boolean },
+    ) => post<EventNoteDto>(`/calendar/events/${eventId}/notes/${noteId}/items`, body),
+    updateNoteItem: (
+      eventId: string,
+      noteId: string,
+      itemId: string,
+      body: { text?: string; requiredChecks?: number; requiredAll?: boolean; position?: number },
+    ) => patch<EventNoteDto>(`/calendar/events/${eventId}/notes/${noteId}/items/${itemId}`, body),
+    removeNoteItem: (eventId: string, noteId: string, itemId: string) =>
+      del<EventNoteDto>(`/calendar/events/${eventId}/notes/${noteId}/items/${itemId}`),
+    /** Abhaken oder den Haken wegnehmen. Ohne `checked` wird umgeschaltet. */
+    checkNoteItem: (eventId: string, noteId: string, itemId: string, checked?: boolean) =>
+      post<EventNoteDto>(
+        `/calendar/events/${eventId}/notes/${noteId}/items/${itemId}/check`,
+        { checked },
+      ),
+
     linkCollection: (id: string, collectionId: string | null) =>
       patch<CalendarEventDto>(`/calendar/events/${id}/collection`, { collectionId }),
   },

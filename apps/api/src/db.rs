@@ -323,10 +323,30 @@ pub struct EventNoteRow {
     pub title: Option<String>,
     pub body: String,
     pub edit_scope: String,
+    /// Wer Punkte hinzufuegen darf, und wer abhaken darf. Bei einer Liste
+    /// sind das drei verschiedene Fragen – siehe Migration 0010.
+    pub add_scope: String,
+    pub check_scope: String,
     pub position: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
+}
+
+/// Ein Punkt in einer Notizliste.
+#[derive(Debug, Clone, FromRow)]
+pub struct EventNoteItemRow {
+    pub id: Uuid,
+    pub note_id: Uuid,
+    pub text: String,
+    pub position: i32,
+    /// Wie viele muessen abhaken. 0 heisst: niemand muss.
+    pub required_checks: i32,
+    /// Schlaegt die Zahl: alle Eingeladenen, auch die von morgen.
+    pub required_all: bool,
+    pub created_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// Ein Dokument an einem Termin.

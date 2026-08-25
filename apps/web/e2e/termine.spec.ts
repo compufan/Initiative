@@ -95,7 +95,13 @@ test('eine Notiz für „Alle Eingeladenen“ lässt sich auch von anderen speic
   await annaPage.getByRole('button', { name: 'Notiz hinzufügen' }).click();
   await annaPage.locator('#note-title-neu').fill('Packliste');
   await annaPage.locator('#note-body-neu').fill('Schlafsack');
-  await annaPage.getByText('Alle Eingeladenen', { exact: true }).click();
+  // Ausdruecklich im Feld „Aendern darf“: Seit es auch „Hinzufuegen darf“
+  // und „Abhaken darf“ gibt, steht die Beschriftung dreimal auf der Seite.
+  await annaPage
+    .locator('fieldset')
+    .filter({ hasText: 'Ändern darf' })
+    .getByText('Alle Eingeladenen', { exact: true })
+    .click();
   await annaPage.getByRole('button', { name: 'Speichern' }).click();
   await expect(annaPage.getByText('Schlafsack')).toBeVisible({ timeout: 15_000 });
 
@@ -114,6 +120,100 @@ test('eine Notiz für „Alle Eingeladenen“ lässt sich auch von anderen speic
   // Und Anna sieht die Änderung.
   await annaPage.reload();
   await expect(annaPage.getByText('Stirnlampe')).toBeVisible({ timeout: 15_000 });
+
+  await http.dispose();
+  await annaPage.context().close();
+  await bodoPage.context().close();
+});
+
+test('eine Packliste: jeder hakt für sich ab', async ({ browser, baseURL }) => {
+  /*
+   * Der Fall, den der Anwender beschrieben hat: „Kleidung, Rucksack,
+   * Zahnbürste“, und jeder Eingeladene muss jeden Punkt einzeln abhaken.
+   *
+   * Geprüft wird das, was eine Liste von einem Text unterscheidet: dass zwei
+   * Leute unabhängig voneinander abhaken, dass beide den Stand des anderen
+   * sehen, und dass ein Punkt erst mit dem letzten Haken erledigt ist.
+   */
+  const http = await request.newContext();
+  const anna = await registrieren(http, 'pla');
+  const bodo = await registrieren(http, 'plb');
+  const alsAnna = { authorization: `Bearer ${anna.accessToken}` };
+
+  const gruppe = await (
+    await http.post(`${API}/conversations`, {
+      headers: alsAnna,
+      data: { type: 'group', title: `Packen ${Date.now()}`, memberIds: [bodo.user.id] },
+    })
+  ).json();
+
+  const beginn = new Date();
+  beginn.setDate(beginn.getDate() + 5);
+  const titel = `Zeltlager ${Date.now()}`;
+  const termin = await (
+    await http.post(`${API}/calendar/events`, {
+      headers: alsAnna,
+      data: {
+        conversationId: gruppe.id,
+        title: titel,
+        startsAt: beginn.toISOString(),
+        endsAt: new Date(beginn.getTime() + 7_200_000).toISOString(),
+        attendeeIds: [anna.user.id, bodo.user.id],
+      },
+    })
+  ).json();
+
+  await http.post(`${API}/calendar/events/${termin.id}/notes`, {
+    headers: alsAnna,
+    data: {
+      title: 'Packliste',
+      body: '',
+      editScope: 'author',
+      checkScope: 'members',
+      items: [
+        { text: 'Schlafsack', requiredAll: true },
+        { text: 'Zahnbürste', requiredAll: true },
+      ],
+    },
+  });
+
+  const wurzel = baseURL ?? 'http://localhost:5173';
+  const annaPage = await seiteFuer(browser, anna, wurzel);
+  const bodoPage = await seiteFuer(browser, bodo, wurzel);
+
+  for (const page of [annaPage, bodoPage]) {
+    await page.goto(`${wurzel}/kalender`);
+    await page.getByRole('tab', { name: 'Agenda' }).click();
+    await page.getByText(titel).first().click();
+    await expect(page.getByText('Packliste')).toBeVisible({ timeout: 15_000 });
+  }
+
+  const zeile = (page: Page, text: string) =>
+    page.locator('.nl-punkt').filter({ hasText: text });
+
+  // Anna hakt „Schlafsack“ ab – zwei müssen, also noch nicht fertig.
+  await zeile(annaPage, 'Schlafsack').getByRole('checkbox').click();
+  await expect(zeile(annaPage, 'Schlafsack').getByText('1 von 2')).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(zeile(annaPage, 'Schlafsack')).not.toHaveClass(/is-fertig/);
+
+  // Bodo sieht Annas Haken, hat aber selbst noch keinen.
+  await bodoPage.reload();
+  await expect(zeile(bodoPage, 'Schlafsack').getByText('1 von 2')).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(zeile(bodoPage, 'Schlafsack').getByRole('checkbox')).not.toBeChecked();
+
+  // Und mit seinem Haken ist der Punkt erledigt.
+  await zeile(bodoPage, 'Schlafsack').getByRole('checkbox').click();
+  await expect(zeile(bodoPage, 'Schlafsack').getByText('2 von 2')).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(zeile(bodoPage, 'Schlafsack')).toHaveClass(/is-fertig/);
+
+  // Die Zahnbürste bleibt davon unberührt – jeder Punkt zählt für sich.
+  await expect(zeile(bodoPage, 'Zahnbürste')).not.toHaveClass(/is-fertig/);
 
   await http.dispose();
   await annaPage.context().close();
