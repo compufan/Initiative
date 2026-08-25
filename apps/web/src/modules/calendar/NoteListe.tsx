@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { EventNoteDto, EventNoteItemDto } from '@initiative/shared';
 import { api } from '../../lib/api.js';
+import { PersonenWahl, type Person } from '../../components/PersonenWahl.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 
@@ -8,9 +9,8 @@ interface Props {
   eventId: string;
   note: EventNoteDto;
   onChanged: (note: EventNoteDto) => void;
-  /** Wie viele eingeladen sind – für die Auswahl „wie viele müssen“. */
-  eingeladene: number;
-  name: (id: string) => string;
+  /** Wer eingeladen ist – für die Auswahl „wie viele“ und „wer namentlich“. */
+  leute: Person[];
 }
 
 /**
@@ -24,7 +24,9 @@ interface Props {
  * „Alle“ ist keine Zahl, sondern die Einladungsliste. Wer später dazukommt,
  * muss ebenfalls abhaken; deshalb rechnet der Server das aus und nicht die App.
  */
-export function NoteListe({ eventId, note, onChanged, eingeladene, name }: Props) {
+export function NoteListe({ eventId, note, onChanged, leute }: Props) {
+  const eingeladene = leute.length;
+  const name = (id: string) => leute.find((person) => person.id === id)?.displayName ?? 'Unbekannt';
   const [neuerText, setNeuerText] = useState('');
   const [busy, setBusy] = useState(false);
   const myId = useMyId();
@@ -80,6 +82,7 @@ export function NoteListe({ eventId, note, onChanged, eingeladene, name }: Props
             eventId={eventId}
             eingeladene={eingeladene}
             busy={busy}
+            leute={leute}
             name={name}
             ruf={ruf}
             onCheck={abhaken}
@@ -123,6 +126,7 @@ function NotePunkt({
   eventId,
   eingeladene,
   busy,
+  leute,
   name,
   ruf,
   onCheck,
@@ -132,6 +136,7 @@ function NotePunkt({
   eventId: string;
   eingeladene: number;
   busy: boolean;
+  leute: Person[];
   name: (id: string) => string;
   ruf: (aufgabe: () => Promise<EventNoteDto>) => Promise<void>;
   onCheck: (punkt: EventNoteItemDto, an: boolean) => void | Promise<void>;
@@ -155,14 +160,21 @@ function NotePunkt({
 
       {/* Wie weit ist der Punkt? Nur zeigen, wenn ueberhaupt jemand muss –
           sonst steht an einer schlichten Zeile eine sinnlose 0 von 0. */}
-      {punkt.needed > 0 && (
-        <span
-          className="nl-stand"
-          title={wer ? `Abgehakt von ${wer}` : 'Noch niemand'}
-        >
-          {punkt.checkedBy.length} von {punkt.needed}
-          {punkt.requiredAll ? ' (alle)' : ''}
+      {/* Sind Leute namentlich zustaendig, sind SIE die Auskunft – nicht eine
+          Zahl. „2 von 3“ sagt einem nicht, ob der Kuchen gebacken wird. */}
+      {punkt.assigneeIds.length > 0 ? (
+        <span className="nl-stand" title={wer ? `Abgehakt von ${wer}` : 'Noch niemand'}>
+          {punkt.assigneeIds
+            .map((id) => `${id === myId ? 'Du' : name(id)}${punkt.checkedBy.includes(id) ? ' ✓' : ''}`)
+            .join(', ')}
         </span>
+      ) : (
+        punkt.needed > 0 && (
+          <span className="nl-stand" title={wer ? `Abgehakt von ${wer}` : 'Noch niemand'}>
+            {punkt.checkedBy.length} von {punkt.needed}
+            {punkt.requiredAll ? ' (alle)' : ''}
+          </span>
+        )
       )}
 
       {note.canEdit && (
@@ -179,11 +191,14 @@ function NotePunkt({
 
       {offen && note.canEdit && (
         <div className="nl-einstellung">
+          {/* Wer namentlich zustaendig ist, schlaegt die Zahl – deshalb ist
+              die Zahl dann ausgegraut statt versteckt: Man soll sehen, dass
+              es sie gibt und warum sie gerade nichts tut. */}
           <label htmlFor={`soll-${punkt.id}`}>Abhaken müssen</label>
           <select
             id={`soll-${punkt.id}`}
             className="select"
-            disabled={busy}
+            disabled={busy || punkt.assigneeIds.length > 0}
             value={punkt.requiredAll ? 'alle' : String(punkt.requiredChecks)}
             onChange={(änderung) => {
               const wert = änderung.target.value;
@@ -210,6 +225,21 @@ function NotePunkt({
             ))}
             <option value="alle">alle Eingeladenen</option>
           </select>
+
+          <div className="nl-zustaendig">
+            <span className="nl-zustaendig-titel">Oder namentlich:</span>
+            <PersonenWahl
+              label={`Wer „${punkt.text}“ übernimmt`}
+              vorschlaege={leute}
+              gewaehlt={punkt.assigneeIds}
+              suchbar={false}
+              onChange={(ids) =>
+                void ruf(() =>
+                  api.calendar.updateNoteItem(eventId, note.id, punkt.id, { assigneeIds: ids }),
+                )
+              }
+            />
+          </div>
 
           <button
             type="button"

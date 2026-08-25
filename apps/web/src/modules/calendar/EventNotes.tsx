@@ -167,8 +167,7 @@ function NoteCard({
         eventId={eventId}
         note={note}
         onChanged={onChanged}
-        eingeladene={people.length}
-        name={(id) => people.find((person) => person.id === id)?.displayName ?? 'Unbekannt'}
+        leute={people}
       />
 
       {note.canEdit && (

@@ -105,6 +105,20 @@ fn punkt<'a>(note: &'a Value, text: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("Punkt „{text}“ fehlt in {note}"))
 }
 
+/// Einen Punkt abhaken und die neue Notiz zurueckgeben.
+async fn haken(probe: &Probe, event_id: &str, note_id: &str, token: &str, item: &str) -> Value {
+    let (status, body) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{event_id}/notes/{note_id}/items/{item}/check"),
+            Some(token),
+            Some(json!({ "checked": true })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "abhaken: {body}");
+    body
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_von_allen_b_von_drei_c_gar_nicht_d_von_einer_person() {
     let Some(probe) = aufbauen().await else {
@@ -181,19 +195,6 @@ async fn a_von_allen_b_von_drei_c_gar_nicht_d_von_einer_person() {
 
     // Ein Punkt ohne Soll ist nie „erledigt“ – er ist nur eine Zeile.
     assert_eq!(punkt(&notiz, "C")["done"], json!(false));
-
-    async fn haken(probe: &Probe, event_id: &str, note_id: &str, token: &str, item: &str) -> Value {
-        let (status, body) = probe
-            .call(
-                "POST",
-                &format!("/api/v1/calendar/events/{event_id}/notes/{note_id}/items/{item}/check"),
-                Some(token),
-                Some(json!({ "checked": true })),
-            )
-            .await;
-        assert_eq!(status, StatusCode::OK, "abhaken: {body}");
-        body
-    }
 
     let a_item = punkt(&notiz, "A")["id"].as_str().unwrap().to_string();
     let b_item = punkt(&notiz, "B")["id"].as_str().unwrap().to_string();
@@ -354,4 +355,109 @@ async fn wer_nicht_darf_hakt_nicht_ab() {
         )
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// „Das übernimmt Nora“ – namentlich statt einer Zahl.
+///
+/// Oft weiss man schon, wer. Dann ist „einer muss“ die schlechtere Angabe: Es
+/// hakt irgendwer ab, und niemand weiss hinterher, ob der Kuchen jetzt
+/// gebacken wird. Sind Personen benannt, schlagen sie die Zahl.
+#[tokio::test(flavor = "multi_thread")]
+async fn namentlich_zugewiesen_schlaegt_die_zahl() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let simple = Uuid::now_v7().simple().to_string();
+    let suffix = simple[simple.len() - 8..].to_string();
+
+    let (a_token, a_id) = probe.anmelden(&suffix, "sven").await;
+    let (b_token, b_id) = probe.anmelden(&suffix, "tina").await;
+    let (c_token, c_id) = probe.anmelden(&suffix, "udo").await;
+
+    let (_, chat) = probe
+        .call(
+            "POST",
+            "/api/v1/conversations",
+            Some(&a_token),
+            Some(json!({ "type": "group", "title": "Fest", "memberIds": [b_id, c_id] })),
+        )
+        .await;
+    let beginn = chrono::Utc::now() + chrono::Duration::days(4);
+    let (_, termin) = probe
+        .call(
+            "POST",
+            "/api/v1/calendar/events",
+            Some(&a_token),
+            Some(json!({
+                "conversationId": chat["id"],
+                "title": "Sommerfest",
+                "startsAt": beginn.to_rfc3339(),
+                "endsAt": (beginn + chrono::Duration::hours(5)).to_rfc3339(),
+                "attendeeIds": [a_id, b_id, c_id],
+            })),
+        )
+        .await;
+    let event_id = termin["id"].as_str().unwrap().to_string();
+
+    // „Kuchen backen“ übernimmt Tina. Ausdrücklich MIT einer Zahl daneben,
+    // damit sich zeigt, dass der Name sie schlägt.
+    let (status, notiz) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{event_id}/notes"),
+            Some(&a_token),
+            Some(json!({
+                "title": "Aufgaben",
+                "body": "",
+                "checkScope": "members",
+                "items": [{
+                    "text": "Kuchen backen",
+                    "requiredChecks": 3,
+                    "assigneeIds": [b_id],
+                }],
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{notiz}");
+    let note_id = notiz["id"].as_str().unwrap().to_string();
+    let kuchen = punkt(&notiz, "Kuchen backen");
+    let item_id = kuchen["id"].as_str().unwrap().to_string();
+
+    assert_eq!(kuchen["assigneeIds"], json!([b_id]));
+    assert_eq!(kuchen["needed"], json!(1), "der Name schlaegt die 3");
+    assert_eq!(kuchen["done"], json!(false));
+
+    // Udo hakt ab – er ist nicht zustaendig, der Punkt wird davon nicht fertig.
+    let nach = haken(&probe, &event_id, &note_id, &c_token, &item_id).await;
+    let kuchen = punkt(&nach, "Kuchen backen");
+    assert_eq!(
+        kuchen["done"],
+        json!(false),
+        "ein fremder Haken macht den Punkt nicht fertig: {kuchen}"
+    );
+    assert!(
+        kuchen["checkedBy"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(c_id)),
+        "sein Haken zaehlt aber sichtbar mit – mitgeholfen ist keine Falschangabe"
+    );
+
+    // Erst Tina schliesst ihn ab.
+    let nach = haken(&probe, &event_id, &note_id, &b_token, &item_id).await;
+    assert_eq!(punkt(&nach, "Kuchen backen")["done"], json!(true));
+
+    // Und die Zuweisung laesst sich zuruecknehmen – dann gilt wieder die Zahl.
+    let (status, nach) = probe
+        .call(
+            "PATCH",
+            &format!("/api/v1/calendar/events/{event_id}/notes/{note_id}/items/{item_id}"),
+            Some(&a_token),
+            Some(json!({ "assigneeIds": [] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{nach}");
+    let kuchen = punkt(&nach, "Kuchen backen");
+    assert_eq!(kuchen["needed"], json!(3), "wieder die Zahl");
+    assert_eq!(kuchen["done"], json!(false), "zwei von drei");
 }

@@ -131,6 +131,15 @@ export interface EventNoteItemDto {
   requiredChecks: number;
   /** Schlägt die Zahl: alle Eingeladenen, auch die von morgen. */
   requiredAll: boolean;
+  /**
+   * Namentlich Zugewiesene – „das übernimmt Nora“.
+   *
+   * Sind welche eingetragen, schlagen sie beides: Der Punkt ist erledigt, wenn
+   * genau diese abgehakt haben. Oft weiss man schon, WER, und dann ist „einer
+   * muss“ die schlechtere Angabe: Es hakt irgendwer ab, und niemand weiss
+   * hinterher, ob der Kuchen jetzt gebacken wird.
+   */
+  assigneeIds: string[];
   checkedBy: string[];
   checkedByMe: boolean;
   /** Wie viele es sein müssten – „alle“ ist hier schon aufgelöst. */

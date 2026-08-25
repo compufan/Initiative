@@ -502,13 +502,25 @@ export const api = {
     addNoteItem: (
       eventId: string,
       noteId: string,
-      body: { text: string; requiredChecks?: number; requiredAll?: boolean },
+      body: {
+        text: string;
+        requiredChecks?: number;
+        requiredAll?: boolean;
+        assigneeIds?: string[];
+      },
     ) => post<EventNoteDto>(`/calendar/events/${eventId}/notes/${noteId}/items`, body),
     updateNoteItem: (
       eventId: string,
       noteId: string,
       itemId: string,
-      body: { text?: string; requiredChecks?: number; requiredAll?: boolean; position?: number },
+      body: {
+        text?: string;
+        requiredChecks?: number;
+        requiredAll?: boolean;
+        position?: number;
+        /** Leere Liste nimmt die Zuweisung zurück – dann gilt wieder die Zahl. */
+        assigneeIds?: string[];
+      },
     ) => patch<EventNoteDto>(`/calendar/events/${eventId}/notes/${noteId}/items/${itemId}`, body),
     removeNoteItem: (eventId: string, noteId: string, itemId: string) =>
       del<EventNoteDto>(`/calendar/events/${eventId}/notes/${noteId}/items/${itemId}`),

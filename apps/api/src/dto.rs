@@ -382,6 +382,9 @@ pub struct EventNoteItemDto {
     pub required_checks: i32,
     /// Wenn wahr, schlägt das die Zahl: alle Eingeladenen.
     pub required_all: bool,
+    /// Namentlich Zugewiesene. Sind welche eingetragen, schlagen sie beides:
+    /// Der Punkt ist erledigt, wenn genau diese abgehakt haben.
+    pub assignee_ids: Vec<Uuid>,
     /// Wie viele es tatsächlich getan haben, und wer.
     pub checked_by: Vec<Uuid>,
     /// Ob **ich** abgehakt habe.

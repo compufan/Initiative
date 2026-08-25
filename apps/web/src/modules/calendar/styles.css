@@ -1083,3 +1083,15 @@
   flex: 1;
   min-width: 0;
 }
+
+.nl-zustaendig {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nl-zustaendig-titel {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}

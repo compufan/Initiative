@@ -225,21 +225,41 @@ pub async fn note_items(
         .fetch_all(pool)
         .await?;
 
-        // „Alle“ wird hier aufgelöst, nicht in der Oberfläche: Die Zahl hängt
-        // an der Einladungsliste, und die kennt nur der Server verlässlich.
-        let needed = if row.required_all {
-            eingeladene.max(0) as i32
+        let assignee_ids: Vec<Uuid> =
+            sqlx::query_scalar("select user_id from event_note_item_assignees where item_id = $1")
+                .bind(row.id)
+                .fetch_all(pool)
+                .await?;
+
+        // Drei Fälle, in dieser Reihenfolge – die genaueste Angabe gewinnt.
+        //
+        // Sind Personen benannt, ist das die schärfste Aussage: Dieser Punkt
+        // gehört ihnen. „Alle“ wird hier aufgelöst und nicht in der
+        // Oberfläche, weil die Zahl an der Einladungsliste hängt und die nur
+        // der Server verlässlich kennt.
+        let (needed, done) = if !assignee_ids.is_empty() {
+            (
+                assignee_ids.len() as i32,
+                assignee_ids.iter().all(|id| checked_by.contains(id)),
+            )
         } else {
-            row.required_checks
+            let needed = if row.required_all {
+                eingeladene.max(0) as i32
+            } else {
+                row.required_checks
+            };
+            (needed, needed > 0 && checked_by.len() as i32 >= needed)
         };
+
         punkte.push(crate::dto::EventNoteItemDto {
             id: row.id,
             text: row.text,
             position: row.position,
             required_checks: row.required_checks,
             required_all: row.required_all,
+            assignee_ids,
             checked_by_me: checked_by.contains(&viewer),
-            done: needed > 0 && checked_by.len() as i32 >= needed,
+            done,
             checked_by,
             needed,
         });

@@ -741,6 +741,9 @@ struct ItemInput {
     /// Schlägt die Zahl: alle Eingeladenen, auch die von morgen.
     #[serde(default)]
     required_all: bool,
+    /// Namentlich Zugewiesene. Sind welche genannt, schlagen sie beides.
+    #[serde(default)]
+    assignee_ids: Vec<Uuid>,
 }
 
 fn default_check_scope() -> String {
@@ -813,12 +816,13 @@ async fn create_note(
         if text.is_empty() {
             continue;
         }
+        let punkt_id = Uuid::now_v7();
         sqlx::query(
             "insert into event_note_items
                (id, note_id, text, position, required_checks, required_all, created_by)
              values ($1, $2, $3, $4, $5, $6, $7)",
         )
-        .bind(Uuid::now_v7())
+        .bind(punkt_id)
         .bind(note.id)
         .bind(text)
         .bind(nummer as i32)
@@ -827,6 +831,7 @@ async fn create_note(
         .bind(user.id())
         .execute(&state.pool)
         .await?;
+        set_item_assignees(&state, punkt_id, &punkt.assignee_ids).await?;
     }
 
     let dto = to_note_dto(&state.pool, &event, note, user.id()).await?;
@@ -954,6 +959,25 @@ async fn set_note_editors(
     Ok(())
 }
 
+/// Die namentlich Zugewiesenen eines Punktes setzen.
+async fn set_item_assignees(state: &AppState, item_id: Uuid, ids: &[Uuid]) -> AppResult<()> {
+    sqlx::query("delete from event_note_item_assignees where item_id = $1")
+        .bind(item_id)
+        .execute(&state.pool)
+        .await?;
+    for user_id in ids {
+        sqlx::query(
+            "insert into event_note_item_assignees (item_id, user_id) values ($1, $2)
+             on conflict do nothing",
+        )
+        .bind(item_id)
+        .bind(user_id)
+        .execute(&state.pool)
+        .await?;
+    }
+    Ok(())
+}
+
 /// Eine Notiz samt Punkten neu laden und als DTO ausliefern.
 async fn note_antwort(
     state: &AppState,
@@ -991,12 +1015,13 @@ async fn add_item(
     .fetch_one(&state.pool)
     .await?;
 
+    let item_id = Uuid::now_v7();
     sqlx::query(
         "insert into event_note_items
            (id, note_id, text, position, required_checks, required_all, created_by)
          values ($1, $2, $3, $4, $5, $6, $7)",
     )
-    .bind(Uuid::now_v7())
+    .bind(item_id)
     .bind(note_id)
     .bind(text)
     .bind(next)
@@ -1005,6 +1030,7 @@ async fn add_item(
     .bind(user.id())
     .execute(&state.pool)
     .await?;
+    set_item_assignees(&state, item_id, &input.assignee_ids).await?;
 
     broadcast_event(&state, &load_event_dto(&state, id).await?).await?;
     let antwort = note_antwort(&state, &event, note_id, user.id()).await?;
@@ -1018,6 +1044,9 @@ struct UpdateItemInput {
     required_checks: Option<i32>,
     required_all: Option<bool>,
     position: Option<i32>,
+    /// Eine leere Liste nimmt die Zuweisung zurueck – dann gilt wieder die
+    /// Zahl. `null` bzw. Weglassen laesst sie unangetastet.
+    assignee_ids: Option<Vec<Uuid>>,
 }
 
 /// Einen Punkt aendern. Text aendern darf, wer die NOTIZ aendern darf –
@@ -1058,6 +1087,10 @@ async fn update_item(
     .bind(input.position)
     .execute(&state.pool)
     .await?;
+
+    if let Some(ids) = input.assignee_ids.as_deref() {
+        set_item_assignees(&state, item_id, ids).await?;
+    }
 
     broadcast_event(&state, &load_event_dto(&state, id).await?).await?;
     note_antwort(&state, &event, note_id, user.id()).await
