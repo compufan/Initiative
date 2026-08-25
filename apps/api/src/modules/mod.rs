@@ -15,6 +15,7 @@ pub mod messages;
 pub mod polls;
 pub mod push;
 pub mod stickers;
+pub mod storage_check;
 pub mod users;
 
 use axum::Router;
@@ -26,6 +27,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .merge(auth::router())
         .merge(admin::router())
+        .merge(storage_check::router())
         .merge(users::router())
         .merge(conversations::router())
         .merge(messages::router())

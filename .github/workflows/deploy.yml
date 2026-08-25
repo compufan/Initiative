@@ -1,0 +1,57 @@
+# Deployt die API automatisch nach jedem Push.
+#
+# Das Frontend übernimmt Vercel von selbst – es hängt am Repository und baut
+# bei jedem Push neu. Fly.io tut das nicht: `fly deploy` läuft sonst immer von
+# Hand auf dem eigenen Rechner. Dieser Ablauf nimmt einem das ab.
+#
+# Einmalige Einrichtung:
+#   1. Token erzeugen (im Terminal, im Ordner Initiative):
+#        fly tokens create deploy --app initiative-api
+#   2. Den ausgegebenen Wert auf GitHub hinterlegen:
+#        Repository → Settings → Secrets and variables → Actions →
+#        New repository secret → Name: FLY_API_TOKEN
+#
+# Ohne hinterlegtes Token überspringt sich der Ablauf stillschweigend, statt
+# bei jedem Push rot zu werden.
+
+name: Deploy API
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+    paths:
+      - "apps/api/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-api
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Fly.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Auf hinterlegtes Token prüfen
+        id: guard
+        run: |
+          if [ -n "${{ secrets.FLY_API_TOKEN }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "FLY_API_TOKEN ist nicht hinterlegt – Deploy wird übersprungen." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        if: steps.guard.outputs.ready == 'true'
+
+      # apps/api als erstes Argument: Das setzt Build-Context und fly.toml
+      # gemeinsam auf denselben Ordner.
+      - name: Deploy
+        if: steps.guard.outputs.ready == 'true'
+        run: flyctl deploy apps/api --app initiative-api --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

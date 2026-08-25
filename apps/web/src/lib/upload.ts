@@ -8,6 +8,9 @@ import type { OutboxAttachment } from './db.js';
  *    server stores files locally),
  * 2. report the metadata so the attachment becomes usable in a message.
  */
+/** Nach dieser Zeit gilt ein Upload als gescheitert statt weiter zu hängen. */
+const UPLOAD_TIMEOUT_MS = 120_000;
+
 export async function uploadBlob(attachment: OutboxAttachment): Promise<AttachmentDto> {
   const target = await api.media.createUpload({
     kind: attachment.kind,
@@ -23,8 +26,17 @@ export async function uploadBlob(attachment: OutboxAttachment): Promise<Attachme
         method: 'PUT',
         headers: target.headers,
         body: attachment.blob,
+        // Ohne Zeitlimit bleibt ein hängender Upload für immer „wird
+        // gesendet“ – die Nachricht liess sich dann weder senden noch
+        // loswerden.
+        signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
       });
     } catch (error) {
+      if (error instanceof DOMException && error.name === 'TimeoutError') {
+        throw new Error(
+          `Upload abgebrochen: Der Speicher hat innerhalb von ${Math.round(UPLOAD_TIMEOUT_MS / 1000)} Sekunden nicht geantwortet.`,
+        );
+      }
       // Der Browser lädt hier direkt in den Bucket. Fehlt dort die CORS-Regel
       // für diese Domain, bricht er ohne Statuscode ab – die blanke
       // fetch-Meldung ("Failed to fetch") sagt niemandem, was zu tun ist.

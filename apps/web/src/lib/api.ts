@@ -424,8 +424,19 @@ export const api = {
       del<{ revoked: boolean }>(`/admin/invites/${encodeURIComponent(code)}`),
     members: () => get<AdminMemberDto[]>('/admin/members'),
     removeMember: (id: string) => del<{ removed: boolean }>(`/admin/members/${id}`),
+    storageCheck: () => get<StorageCheck>('/admin/storage-check'),
   },
 };
+
+export interface StorageCheck {
+  driver: string;
+  endpoint: string | null;
+  bucket: string | null;
+  pathStyle: boolean | null;
+  browserOrigin: string;
+  verdict: string;
+  steps: { name: string; ok: boolean; detail: string; hint: string | null }[];
+}
 
 export interface AdminStatus {
   /** Ob auf dem Server überhaupt ein Admin-Passwort hinterlegt ist. */

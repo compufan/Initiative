@@ -54,7 +54,10 @@ function Actions({
   const isLocal = Boolean(message.pending || message.failed);
   const canReply = !isLocal && !message.deletedAt;
   const canEdit = isMine && !isLocal && message.type === 'text' && !message.deletedAt;
-  const canDelete = isMine && !isLocal;
+  // Lokale Nachrichten haben den Server nie erreicht; sie werden nicht
+  // geloescht, sondern aus der Outbox verworfen. Ohne das blieb ein
+  // haengender Bild-Upload dauerhaft im Chat stehen.
+  const canDelete = isMine;
   const canCopy = Boolean(message.body?.trim());
 
   async function react(emoji: string) {
@@ -102,7 +105,11 @@ function Actions({
   async function remove() {
     setBusy(true);
     try {
-      await useChat.getState().deleteMessage(message);
+      if (isLocal && message.clientId) {
+        await useChat.getState().discardFailed(message.conversationId, message.clientId);
+      } else {
+        await useChat.getState().deleteMessage(message);
+      }
       onClose();
     } catch {
       toast('Nachricht konnte nicht gelöscht werden', 'error');
@@ -199,7 +206,9 @@ function Actions({
             onClick={() => (confirmDelete ? void remove() : setConfirmDelete(true))}
           >
             <span aria-hidden="true">🗑️</span>
-            <span>{confirmDelete ? 'Wirklich löschen?' : 'Löschen'}</span>
+            <span>
+              {confirmDelete ? 'Wirklich?' : isLocal ? 'Verwerfen' : 'Löschen'}
+            </span>
           </button>
         )}
       </div>

@@ -50,6 +50,16 @@ interface ChatState {
   messages: Record<string, ChatMessage[]>;
   hasMore: Record<string, boolean>;
   loading: Record<string, boolean>;
+  /**
+   * Ob die erste Seite dieses Chats wirklich schon vom Server geholt wurde.
+   *
+   * Vorher wurde dafür geprüft, ob im Zustand irgendeine Nachricht liegt. Das
+   * war falsch: Realtime-Ereignisse tragen für JEDE Konversation Nachrichten
+   * ein, auch für nie geöffnete, und die Outbox tut es ebenfalls. Dadurch
+   * wurden Cache und erste Seite übersprungen und `hasMore` nie gesetzt – der
+   * Verlauf war weg und liess sich nicht einmal hochscrollen.
+   */
+  loaded: Record<string, boolean>;
   typing: Record<string, TypingEntry[]>;
   presence: Record<string, { online: boolean; lastSeenAt: string | null }>;
   initialised: boolean;
@@ -93,6 +103,7 @@ export const useChat = create<ChatState>((set, get) => ({
   messages: {},
   hasMore: {},
   loading: {},
+  loaded: {},
   typing: {},
   presence: {},
   initialised: false,
@@ -145,7 +156,7 @@ export const useChat = create<ChatState>((set, get) => ({
 
   async loadMessages(conversationId, options) {
     if (get().loading[conversationId]) return;
-    if (!options?.force && (get().messages[conversationId]?.length ?? 0) > 0) {
+    if (!options?.force && get().loaded[conversationId]) {
       void refreshMessages(conversationId, set, get);
       return;
     }
@@ -168,6 +179,7 @@ export const useChat = create<ChatState>((set, get) => ({
           [conversationId]: mergeList(state.messages[conversationId], items),
         },
         hasMore: { ...state.hasMore, [conversationId]: Boolean(nextCursor) },
+        loaded: { ...state.loaded, [conversationId]: true },
       }));
       void cacheMessages(items);
       void trimMessageCache(conversationId);

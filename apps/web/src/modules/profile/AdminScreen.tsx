@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Screen } from '../../components/Screen.js';
 import { EmptyState, Spinner } from '../../components/Feedback.js';
-import { api, type AdminMemberDto, type InviteDto } from '../../lib/api.js';
+import { api, type AdminMemberDto, type InviteDto, type StorageCheck } from '../../lib/api.js';
 import { useSession } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
@@ -32,6 +32,8 @@ export function AdminScreen() {
   const [maxUses, setMaxUses] = useState('1');
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<AdminMemberDto | null>(null);
+  const [storage, setStorage] = useState<StorageCheck | null>(null);
+  const [checking, setChecking] = useState(false);
 
   async function load() {
     try {
@@ -109,8 +111,65 @@ export function AdminScreen() {
     }
   }
 
+  async function runStorageCheck() {
+    setChecking(true);
+    try {
+      setStorage(await api.admin.storageCheck());
+    } catch (error) {
+      toast(errorMessage(error, 'Prüfung fehlgeschlagen'), 'error');
+    } finally {
+      setChecking(false);
+    }
+  }
+
   return (
     <Screen title="Verwaltung" subtitle="Einladungen und Mitglieder" back="/profil/einstellungen">
+      <section className="card stack" aria-labelledby="adm-storage-title">
+        <h2 className="prf-block-title" id="adm-storage-title">
+          Speicher prüfen
+        </h2>
+        <p className="prf-hint">
+          Testet vom Server aus, ob Fotos, Sprachnachrichten und Sticker im Objektspeicher landen
+          können – Zugangsdaten, Bucket und die CORS-Regel, die der Browser zum Hochladen braucht.
+        </p>
+        <button type="button" className="btn" disabled={checking} onClick={() => void runStorageCheck()}>
+          {checking ? 'Wird geprüft …' : 'Jetzt prüfen'}
+        </button>
+
+        {storage && (
+          <div className="stack" style={{ gap: 10 }}>
+            <div className={storage.steps.every((s) => s.ok) ? 'prf-note is-ok' : 'prf-note'}>
+              <strong>{storage.verdict}</strong>
+            </div>
+            <p className="prf-hint" style={{ margin: 0 }}>
+              Treiber: <code>{storage.driver}</code>
+              {storage.bucket && (
+                <>
+                  {' · '}Bucket: <code>{storage.bucket}</code>
+                </>
+              )}
+              <br />
+              Erwarteter Browser-Origin: <code>{storage.browserOrigin}</code>
+            </p>
+            <ul className="stack" style={{ margin: 0, padding: 0, listStyle: 'none', gap: 10 }}>
+              {storage.steps.map((step) => (
+                <li key={step.name} className="stack" style={{ gap: 2 }}>
+                  <strong>
+                    {step.ok ? '✓' : '✗'} {step.name}
+                  </strong>
+                  <span className="prf-hint">{step.detail}</span>
+                  {step.hint && (
+                    <span className="prf-hint" style={{ fontWeight: 600 }}>
+                      → {step.hint}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </section>
+
       <section className="card stack" aria-labelledby="adm-invite-title">
         <h2 className="prf-block-title" id="adm-invite-title">
           Einladungscode erstellen
