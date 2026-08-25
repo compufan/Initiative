@@ -39,7 +39,6 @@ jobs:
       - name: Tests
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/initiative_test
-          DATABASE_SSL: "false"
         run: cargo test --manifest-path apps/api/Cargo.toml
 
   web:

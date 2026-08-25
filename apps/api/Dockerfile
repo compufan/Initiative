@@ -50,6 +50,12 @@ RUN apt-get update \
 COPY --from=builder /build/target/release/initiative-api /usr/local/bin/initiative-api
 COPY --from=builder /build/target/release/seed /usr/local/bin/initiative-seed
 
+# Das Ablageverzeichnis muss dem Dienstbenutzer gehoeren, BEVOR auf ihn
+# umgeschaltet wird. Ein leeres Docker-Volume auf einem Pfad, den es im Image
+# nicht gibt, gehoert sonst root – und der Dienst scheitert beim ersten
+# Upload mit "Permission denied", also erst im Betrieb.
+RUN mkdir -p /data/uploads && chown -R initiative:initiative /data
+
 USER initiative
 WORKDIR /home/initiative
 ENV HOST=0.0.0.0 PORT=8080 NODE_ENV=production RUST_LOG=initiative_api=info

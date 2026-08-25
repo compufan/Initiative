@@ -15,7 +15,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let keys = vapid::generate_keys();
         println!("VAPID_PUBLIC_KEY={}", keys.public_key);
         println!("VAPID_PRIVATE_KEY={}", keys.private_key);
-        println!("\nDen Public Key zusätzlich als VITE_VAPID_PUBLIC_KEY in der PWA setzen.");
+        // Frueher stand hier, man muesse den Public Key zusaetzlich als
+        // VITE_VAPID_PUBLIC_KEY in der PWA setzen. Das stimmt seit laengerem
+        // nicht mehr: Die App holt ihn zur Laufzeit von
+        // /api/v1/push/public-key (modules/push.rs).
+        println!("\nBeides in die Umgebung der API legen – die PWA holt den öffentlichen Schlüssel von selbst.");
         return Ok(());
     }
 

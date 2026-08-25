@@ -60,13 +60,18 @@ async fn storage_check(
             browser_origin: origin,
             steps: vec![Step {
                 name: "Treiber".into(),
-                ok: false,
-                detail: "STORAGE_DRIVER steht auf local".into(),
+                // Kein Fehler: Auf einem eigenen Server ist das der Normalfall
+                // und die richtige Wahl. Der Text sagte frueher, die Dateien
+                // gingen "beim naechsten Deploy verloren" – das stimmt nur
+                // dort, wo das Dateisystem fluechtig ist (Fly.io), und stiftet
+                // auf einer Maschine mit dauerhaftem Datentraeger Verwirrung.
+                ok: true,
+                detail: "STORAGE_DRIVER steht auf local – die Dateien liegen im Dateisystem des Servers".into(),
                 hint: Some(
-                    "Für R2 muss STORAGE_DRIVER=r2 gesetzt sein, sonst liegen alle Dateien im Container und gehen beim nächsten Deploy verloren.".into(),
+                    "Richtig, solange dieses Verzeichnis dauerhaft ist (eigener Server, eingehängter Datenträger) UND im Backup steht – Bilder liegen nicht in der Datenbank. Auf einer Plattform mit flüchtigem Container-Dateisystem gehen sie beim nächsten Deploy verloren; dort gehört STORAGE_DRIVER auf r2.".into(),
                 ),
             }],
-            verdict: "Objektspeicher ist nicht eingerichtet".into(),
+            verdict: "Dateien liegen lokal – Backup nicht vergessen".into(),
         }));
     }
 

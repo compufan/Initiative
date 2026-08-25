@@ -96,7 +96,6 @@ async fn setup() -> Option<TestApp> {
 
     std::env::set_var("DATABASE_URL", &database_url);
     std::env::set_var("NODE_ENV", "test");
-    std::env::set_var("DATABASE_SSL", "false");
     std::env::set_var("JWT_SECRET", "test-secret-value-at-least-16-characters");
     std::env::set_var("REALTIME_BUS", "memory");
     std::env::set_var("STORAGE_DRIVER", "local");

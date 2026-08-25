@@ -1,4 +1,8 @@
 # Eine Domain für PWA und API – kein CORS, keine Sonderfälle.
+#
+# Die Kopfzeilen hier sind kein Beiwerk: Auf Vercel stehen sie in
+# `vercel.json`, und wer von dort wegzieht, verliert sie sonst lautlos. Die
+# App liefe weiter, nur die zweite Verteidigungslinie wäre weg.
 :8080 {
 	encode zstd gzip
 
@@ -10,6 +14,23 @@
 		reverse_proxy api:8080
 	}
 
+	# Vier Routen liegen bewusst NICHT unter /api/v1 und gehören trotzdem der
+	# API. Ohne diesen Block bekommt man bei allen dreien die App-Hülle mit
+	# HTTP 200 zurück:
+	#   /datenschutz – die Datenschutzerklärung wäre schlicht nicht erreichbar
+	#   /healthz     – jede Überwachung wäre falsch-grün
+	#   /readyz      – dasselbe
+	#   /             – bleibt richtigerweise die PWA, deshalb nicht dabei
+	handle /datenschutz {
+		reverse_proxy api:8080
+	}
+	handle /healthz {
+		reverse_proxy api:8080
+	}
+	handle /readyz {
+		reverse_proxy api:8080
+	}
+
 	handle {
 		root * /srv
 
@@ -17,13 +38,39 @@
 		@sw path /sw.js /manifest.webmanifest /index.html
 		header @sw Cache-Control "no-cache"
 
+		# Ohne den richtigen Typ verweigern manche Browser das Installieren.
+		@manifest path /manifest.webmanifest
+		header @manifest Content-Type "application/manifest+json; charset=utf-8"
+
 		@assets path /assets/*
 		header @assets Cache-Control "public, max-age=31536000, immutable"
+
+		@icons path /icons/*
+		header @icons Cache-Control "public, max-age=604800"
+
+		# Die Freistell-Bausteine sind zusammen über 120 MB und ändern sich
+		# nie. Der Service Worker legt sie ohnehin dauerhaft ab – aber beim
+		# allerersten Besuch und in jedem Browser ohne Service Worker zahlt
+		# man sonst doppelt.
+		@modelle path /models/* /mediapipe/*
+		header @modelle Cache-Control "public, max-age=31536000, immutable"
 
 		header Service-Worker-Allowed "/"
 		header X-Content-Type-Options "nosniff"
 		header Referrer-Policy "strict-origin-when-cross-origin"
-		header Permissions-Policy "camera=(self), microphone=(self), geolocation=()"
+		header Permissions-Policy "camera=(self), microphone=(self), geolocation=(), interest-cohort=()"
+		header X-Frame-Options "DENY"
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+		# Dieselbe Regel wie in vercel.json, an drei Stellen enger:
+		# `https:` darf bei img/media/connect entfallen, weil auf einem
+		# eigenen Server alles von derselben Herkunft kommt – keine Umleitung
+		# in einen fremden Objektspeicher mehr. Siehe apps/web/CSP.md.
+		#
+		# `'wasm-unsafe-eval'` bleibt zwingend (MediaPipe und ONNX für das
+		# Freistellen), `style-src 'unsafe-inline'` ebenso (React setzt
+		# style-Eigenschaften direkt am Element).
+		header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self' wss:; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
 
 		try_files {path} /index.html
 		file_server

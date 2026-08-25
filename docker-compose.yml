@@ -4,8 +4,12 @@
 #   docker compose up -d --build
 #
 # Die PWA wird im Build-Schritt erzeugt und von Caddy statisch ausgeliefert;
-# /api und /ws gehen an die API. Damit läuft alles unter einer Domain und es
-# gibt weder CORS- noch Cookie-Sonderfälle.
+# /api, /ws, /healthz, /readyz und /datenschutz gehen an die API. Damit läuft
+# alles unter einer Domain und es gibt weder CORS- noch Cookie-Sonderfälle.
+#
+# Für TLS gehört ein Caddy (oder nginx) des Hosts davor, der auf ${WEB_PORT}
+# weiterleitet – oder man setzt WEB_PORT=443 und lässt diesen Caddy selbst ein
+# Zertifikat holen.
 
 services:
   postgres:
@@ -27,6 +31,9 @@ services:
     build:
       context: ./apps/api
       dockerfile: Dockerfile
+      args:
+        # Zeigt in den Einstellungen, welcher Stand läuft.
+        GIT_SHA: ${GIT_SHA:-unbekannt}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -35,24 +42,44 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 8080
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       DATABASE_URL: postgres://${POSTGRES_USER:-initiative}:${POSTGRES_PASSWORD:-initiative}@postgres:5432/${POSTGRES_DB:-initiative}
-      DATABASE_SSL: "false"
+      DATABASE_POOL_MAX: ${DATABASE_POOL_MAX:-10}
+      # Ohne den bisherigen Wert sind nach dem Umzug alle abgemeldet.
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET fehlt – openssl rand -base64 48}
+      ACCESS_TOKEN_TTL: ${ACCESS_TOKEN_TTL:-900}
+      REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-60}
       PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:8080}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8080}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
-      REGISTRATION_MODE: ${REGISTRATION_MODE:-open}
+      # Bei einer gemeinsamen Domain gibt es keine Cross-Origin-Anfragen –
+      # dann bleibt das leer. Niemals `*`: das schaltet allow_credentials ab.
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      REGISTRATION_MODE: ${REGISTRATION_MODE:-invite}
       INVITE_CODES: ${INVITE_CODES:-}
+      # Unter 8 Zeichen wird es stillschweigend verworfen und der
+      # Verwaltungsbereich bleibt aus.
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
       LOCAL_STORAGE_DIR: /data/uploads
       S3_ENDPOINT: ${S3_ENDPOINT:-}
       S3_BUCKET: ${S3_BUCKET:-}
       S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
       S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      # Die bisherigen Schlüssel übernehmen, sonst sind alle Push-Abos tot.
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}
-      REALTIME_BUS: postgres
+      # Bei genau einem API-Prozess ist `memory` die robustere Wahl: Der
+      # Postgres-Bus schickt JEDES Ereignis über die Datenbank, auch wenn
+      # Sender und Empfänger derselbe Prozess sind – fällt der LISTEN-Kanal
+      # aus, steht der Echtzeitbetrieb still. `postgres` erst, wenn zwei
+      # Instanzen nebeneinander laufen sollen. Schreibweise beachten: die
+      # Prüfung ist genau, `Memory` landet bei Postgres.
+      REALTIME_BUS: ${REALTIME_BUS:-memory}
+      # Ohne diese drei meldet sich /datenschutz als unvollständig.
+      OPERATOR_NAME: ${OPERATOR_NAME:-}
+      OPERATOR_ADDRESS: ${OPERATOR_ADDRESS:-}
+      OPERATOR_EMAIL: ${OPERATOR_EMAIL:-}
     volumes:
       - uploads:/data/uploads
 
@@ -62,6 +89,8 @@ services:
       dockerfile: apps/web/Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL:-}
+        GITHUB_SHA: ${GIT_SHA:-}
+        VITE_REPO_URL: ${VITE_REPO_URL:-}
     restart: unless-stopped
     depends_on:
       - api
