@@ -151,8 +151,12 @@ jobs:
         if: inputs.aufgabe != 'protokoll' && inputs.aufgabe != 'zustand'
         run: |
           set -uo pipefail
-          for versuch in $(seq 1 30); do
-            code=$(curl -s -o antwort.json -w '%{http_code}' -m 10 "$API_URL/healthz" || echo 000)
+          # Bewusst kurz und wenige Versuche. Eine haengende Fly-App bringt
+          # den Vermittler dazu, bei JEDER Anfrage einen Maschinenstart zu
+          # versuchen; zu langes Anklopfen treibt ihn in die Drosselung der
+          # Machines-API und macht die Lage schlimmer statt besser.
+          for versuch in $(seq 1 12); do
+            code=$(curl -s -o antwort.json -w '%{http_code}' -m 6 "$API_URL/healthz" || echo 000)
             if [ "$code" = "200" ]; then
               echo "Die App antwortet:"
               cat antwort.json
@@ -168,7 +172,7 @@ jobs:
             echo "Versuch $versuch: HTTP $code – warte 5 s"
             sleep 5
           done
-          echo "::error::Die API antwortet nach 150 Sekunden nicht."
+          echo "::error::Die API antwortet nicht (12 Versuche, rund zwei Minuten)."
           exit 1
 
       - name: Protokoll
