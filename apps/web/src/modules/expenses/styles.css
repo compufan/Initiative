@@ -186,3 +186,16 @@
   background: color-mix(in srgb, var(--success, #16a34a) 16%, transparent);
   color: var(--success, #16a34a);
 }
+
+/* „Gehoert zu: …“ – der Vermerk auf einen Termin. Zurueckhaltend, aber
+   anklickbar: Wer eine Ausgabe einem Termin zuordnet, will von dort auch
+   wieder hin. */
+.exp-event {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+}
+
+.exp-event a {
+  color: var(--accent);
+}

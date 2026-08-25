@@ -1,5 +1,6 @@
 import type { ConversationDto } from '../schemas/conversation.js';
 import type { MessageDto, ReactionDto } from '../schemas/message.js';
+import type { ExpenseDto } from '../schemas/expense.js';
 import type { PollDto } from '../schemas/poll.js';
 import type { CalendarEventDto } from '../schemas/calendar.js';
 import type { GameSessionDto } from '../schemas/game.js';
@@ -43,6 +44,26 @@ export type ServerEvent =
   | { type: 'event.updated'; payload: { event: CalendarEventDto } }
   | { type: 'event.deleted'; payload: { eventId: string; conversationId: string | null } }
   | { type: 'game.updated'; payload: { session: GameSessionDto } }
+  /**
+   * Eine Ausgabe hat sich geändert.
+   *
+   * Jeder bekommt seine **eigene** Fassung: Der Zustand einer Ausgabe hängt am
+   * Betrachter (wer schuldet, sieht etwas anderes als wer ausgelegt hat), und
+   * wer sie nicht sehen soll, bekommt gar nichts – sonst hätte die
+   * Verbergen-Regel für Geschenke ein Loch, das niemand vermutet.
+   */
+  | { type: 'expense.updated'; payload: { expense: ExpenseDto } }
+  | { type: 'expense.deleted'; payload: { expenseId: string } }
+  /** Zwischen zwei Personen wurde abgerechnet. */
+  | {
+      type: 'expense.settled';
+      payload: {
+        byUserId: string;
+        withUserId: string;
+        amountCents: number;
+        settled: boolean;
+      };
+    }
   | { type: 'user.updated'; payload: { user: UserDto } }
   /** Payload too large for the broadcast bus – clients should refetch. */
   | { type: 'sync.hint'; payload: { conversationId?: string; scope: string } }

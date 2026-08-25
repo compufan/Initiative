@@ -980,3 +980,20 @@
   display: flex;
   align-items: center;
 }
+
+/* „Jemanden einladen“ – zusammengeklappt. Der haeufige Fall ist, dass die
+   Runde steht; wer sie aendern will, findet es. */
+.cal-invite {
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+}
+
+.cal-invite > summary {
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 600;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+}

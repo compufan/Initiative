@@ -21,6 +21,7 @@ use crate::validate::{clean, Validator};
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/users", get(search))
+        .route("/users/batch", get(batch))
         .route("/users/me", patch(update_me))
         .route("/users/{id}", get(by_id))
 }
@@ -53,6 +54,50 @@ async fn search(
     .bind(query.limit.unwrap_or(20).clamp(1, 50))
     .fetch_all(&state.pool)
     .await?;
+
+    Ok(Json(ListResult::new(
+        rows.iter()
+            .map(|row| to_user_dto(row, &state.config))
+            .collect(),
+    )))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchQuery {
+    /// Kennungen, durch Komma getrennt.
+    ids: String,
+}
+
+/// Mehrere Personen auf einmal nachschlagen.
+///
+/// Vorher holte die Oberflaeche jeden Namen einzeln: Eine Ausgabenliste mit
+/// acht Beteiligten waren acht Anfragen, und weil sie nacheinander durch
+/// dieselbe Verbindung mussten, war die Liste spuerbar lange ohne Namen. Die
+/// Antwort ist immer dieselbe Handvoll Leute – das ist eine Anfrage wert,
+/// nicht acht.
+///
+/// Gedeckelt, damit eine geratene Adresse nicht die ganze Benutzertabelle
+/// ausliest.
+async fn batch(
+    State(state): State<AppState>,
+    _user: AuthUser,
+    Query(query): Query<BatchQuery>,
+) -> AppResult<Json<ListResult<UserDto>>> {
+    let ids: Vec<Uuid> = query
+        .ids
+        .split(',')
+        .filter_map(|teil| Uuid::parse_str(teil.trim()).ok())
+        .take(200)
+        .collect();
+    if ids.is_empty() {
+        return Ok(Json(ListResult::new(Vec::new())));
+    }
+
+    let rows = sqlx::query_as::<_, UserRow>("select * from users where id = any($1)")
+        .bind(&ids)
+        .fetch_all(&state.pool)
+        .await?;
 
     Ok(Json(ListResult::new(
         rows.iter()

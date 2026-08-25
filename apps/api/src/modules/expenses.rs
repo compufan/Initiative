@@ -247,6 +247,7 @@ async fn create(
     tx.commit().await?;
 
     let expense = require_expense(&state.pool, id).await?;
+    crate::services::expenses::melde_ausgabe(&state, &expense).await;
     Ok((
         StatusCode::CREATED,
         Json(to_expense_dto(&state.pool, expense, user.id()).await?),
@@ -351,6 +352,8 @@ async fn update(
     .await?;
 
     let expense = require_expense(&state.pool, id).await?;
+    // Allen Beteiligten Bescheid sagen – jedem seine eigene Fassung.
+    crate::services::expenses::melde_ausgabe(&state, &expense).await;
     Ok(Json(to_expense_dto(&state.pool, expense, user.id()).await?))
 }
 
@@ -369,6 +372,8 @@ async fn remove(
         .bind(id)
         .execute(&state.pool)
         .await?;
+    // Vor dem Loeschen gelesen, deshalb sind die Empfaenger noch bekannt.
+    crate::services::expenses::melde_ausgabe_geloescht(&state, &expense).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -472,6 +477,8 @@ async fn settle(
     .await?;
 
     let expense = require_expense(&state.pool, id).await?;
+    // Allen Beteiligten Bescheid sagen – jedem seine eigene Fassung.
+    crate::services::expenses::melde_ausgabe(&state, &expense).await;
     Ok(Json(to_expense_dto(&state.pool, expense, user.id()).await?))
 }
 
@@ -611,6 +618,14 @@ async fn settle_up(
         .await;
     }
 
+    // Jede angefasste Ausgabe einzeln melden – der Zustand haengt am
+    // Betrachter, eine Sammelmeldung koennte ihn nicht tragen.
+    for expense_id in &betroffene {
+        if let Ok(expense) = require_expense(&state.pool, *expense_id).await {
+            crate::services::expenses::melde_ausgabe(&state, &expense).await;
+        }
+    }
+
     Ok(Json(SettleUpResult {
         count: rows.len() as i64,
         amount_cents: summe,
@@ -674,6 +689,8 @@ async fn hide(
     .await?;
 
     let expense = require_expense(&state.pool, id).await?;
+    // Allen Beteiligten Bescheid sagen – jedem seine eigene Fassung.
+    crate::services::expenses::melde_ausgabe(&state, &expense).await;
     Ok(Json(to_expense_dto(&state.pool, expense, user.id()).await?))
 }
 
@@ -696,6 +713,8 @@ async fn unhide(
         .await?;
 
     let expense = require_expense(&state.pool, id).await?;
+    // Allen Beteiligten Bescheid sagen – jedem seine eigene Fassung.
+    crate::services::expenses::melde_ausgabe(&state, &expense).await;
     Ok(Json(to_expense_dto(&state.pool, expense, user.id()).await?))
 }
 

@@ -344,6 +344,12 @@ export const api = {
   users: {
     search: (q: string, limit = 20) => get<ListResult<UserDto>>('/users', { query: { q, limit } }),
     byId: (id: string) => get<UserDto>(`/users/${id}`),
+    /**
+     * Mehrere auf einmal. Eine Liste mit acht Beteiligten war vorher acht
+     * Anfragen – siehe state/leute.ts.
+     */
+    batch: (ids: string[]) =>
+      get<ListResult<UserDto>>('/users/batch', { query: { ids: ids.join(',') } }),
     updateMe: (body: Record<string, unknown>) => patch<SelfUserDto>('/users/me', body),
   },
   conversations: {
@@ -451,6 +457,12 @@ export const api = {
     remove: (id: string) => del<void>(`/calendar/events/${id}`),
     rsvp: (id: string, status: 'yes' | 'no' | 'maybe' | 'pending') =>
       post<CalendarEventDto>(`/calendar/events/${id}/rsvp`, { status }),
+    /** Nachtraeglich einladen – die Liste wird ergaenzt, nicht ersetzt. */
+    invite: (id: string, attendeeIds: string[]) =>
+      patch<CalendarEventDto>(`/calendar/events/${id}`, { attendeeIds }),
+    /** Und wieder ausladen. Nur wer den Termin verwaltet. */
+    uninvite: (id: string, userId: string) =>
+      del<CalendarEventDto>(`/calendar/events/${id}/attendees/${userId}`),
     byId: (id: string) => get<CalendarEventDto>(`/calendar/events/${id}`),
     icsUrl: (calendarToken: string) =>
       `${API_BASE}${API_PREFIX}/calendar/${calendarToken}/feed.ics`,

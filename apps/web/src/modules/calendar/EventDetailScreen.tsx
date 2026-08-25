@@ -14,6 +14,8 @@ import { EventEditor } from './EventEditor.js';
 import { EventNotes } from './EventNotes.js';
 import { EventPollCard } from './EventPollCard.js';
 import { EventExpenses } from './EventExpenses.js';
+import { EventCollection } from './EventCollection.js';
+import { PersonenWahl, type Person } from '../../components/PersonenWahl.js';
 import { RsvpButtons } from './RsvpButtons.js';
 import { useLiveEvent } from './useCalendarEvents.js';
 import {
@@ -53,6 +55,33 @@ export function EventDetailScreen() {
   const conversation = useChat(
     (state) => state.conversations.find((item) => item.id === event?.conversationId) ?? null,
   );
+
+  /** Wer noch nicht dabei ist – aus dem Chat des Termins. */
+  const einladbar = useMemo<Person[]>(() => {
+    const dabei = new Set(event?.attendees.map((teilnehmer) => teilnehmer.userId) ?? []);
+    return (conversation?.members ?? [])
+      .filter((member) => !dabei.has(member.userId))
+      .map((member) => ({ id: member.userId, displayName: member.user.displayName }));
+  }, [conversation, event]);
+
+  async function einladen(ids: string[]) {
+    if (!event || ids.length === 0) return;
+    try {
+      setEvent(await api.calendar.invite(event.id, ids));
+      toast(ids.length === 1 ? 'Eingeladen.' : `${ids.length} eingeladen.`, 'success');
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Einladen fehlgeschlagen', 'error');
+    }
+  }
+
+  async function ausladen(userId: string) {
+    if (!event) return;
+    try {
+      setEvent(await api.calendar.uninvite(event.id, userId));
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Ausladen fehlgeschlagen', 'error');
+    }
+  }
 
   const attendees = useMemo(() => {
     if (!event) return [];
@@ -234,10 +263,37 @@ export function EventDetailScreen() {
                   <span className="cal-attendee-status" style={{ color: status.color }}>
                     <span aria-hidden="true">{status.symbol}</span> {status.label}
                   </span>
+                  {/* Ausladen. Eine Einladung, die sich nicht zuruecknehmen
+                      laesst, ist keine Einladung, sondern eine Falle. */}
+                  {isCreator && attendee.userId !== event.createdBy && (
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      aria-label={`${name} ausladen`}
+                      title="Ausladen"
+                      onClick={() => void ausladen(attendee.userId)}
+                    >
+                      ✕
+                    </button>
+                  )}
                 </li>
               );
             })}
           </ul>
+        )}
+
+        {/* Nachtraeglich einladen. Ging vorher gar nicht – die Runde stand mit
+            dem Anlegen fest. */}
+        {isCreator && (
+          <details className="cal-invite">
+            <summary>Jemanden einladen</summary>
+            <PersonenWahl
+              label="Nachträglich einladen"
+              vorschlaege={einladbar}
+              gewaehlt={[]}
+              onChange={(ids) => void einladen(ids)}
+            />
+          </details>
         )}
       </section>
 
@@ -253,6 +309,8 @@ export function EventDetailScreen() {
       <EventDocuments eventId={event.id} />
 
       <EventExpenses eventId={event.id} conversationId={event.conversationId} />
+
+      <EventCollection event={event} canManage={isCreator} onChanged={setEvent} />
 
       <section className="card cal-block" aria-label="Zum Kalender hinzufügen">
         <h2 className="cal-block-title">Zum Kalender hinzufügen</h2>

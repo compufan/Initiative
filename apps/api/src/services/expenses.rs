@@ -427,6 +427,111 @@ pub fn format_cents(cents: i64) -> String {
     format!("{},{:02} €", betrag / 100, betrag % 100)
 }
 
+/// Wer diese Ausgabe sehen darf – als Liste, für Benachrichtigungen.
+///
+/// `may_see` beantwortet die Frage für eine Person; hier wird sie umgedreht.
+/// Bewusst dieselben Regeln, nur einmal in die andere Richtung gelesen –
+/// zwei getrennte Fassungen derselben Regel wären zwei Gelegenheiten, sie
+/// unterschiedlich falsch zu beantworten.
+///
+/// Die Ausgenommenen fallen zuletzt heraus. Das Geschenk darf auch in einer
+/// Echtzeitmeldung nicht beim Beschenkten auftauchen – sonst hätte die ganze
+/// Verbergen-Regel ein Loch, das niemand vermutet.
+pub async fn empfaenger(pool: &PgPool, expense: &ExpenseRow) -> AppResult<Vec<Uuid>> {
+    let mut ids: Vec<Uuid> = Vec::new();
+    if let Some(id) = expense.created_by {
+        ids.push(id);
+    }
+    if let Some(id) = expense.paid_by {
+        ids.push(id);
+    }
+
+    let anteile: Vec<Uuid> =
+        sqlx::query_scalar("select user_id from expense_shares where expense_id = $1")
+            .bind(expense.id)
+            .fetch_all(pool)
+            .await?;
+    ids.extend(anteile);
+
+    match expense.visibility.as_str() {
+        "conversation" => {
+            if let Some(conversation_id) = expense.conversation_id {
+                let mitglieder: Vec<Uuid> = sqlx::query_scalar(
+                    "select user_id from conversation_members where conversation_id = $1",
+                )
+                .bind(conversation_id)
+                .fetch_all(pool)
+                .await?;
+                ids.extend(mitglieder);
+            }
+        }
+        "listed" => {
+            let benannte: Vec<Uuid> =
+                sqlx::query_scalar("select user_id from expense_viewers where expense_id = $1")
+                    .bind(expense.id)
+                    .fetch_all(pool)
+                    .await?;
+            ids.extend(benannte);
+        }
+        _ => {}
+    }
+
+    let verborgen: Vec<Uuid> =
+        sqlx::query_scalar("select user_id from expense_hidden_from where expense_id = $1")
+            .bind(expense.id)
+            .fetch_all(pool)
+            .await?;
+
+    ids.sort();
+    ids.dedup();
+    ids.retain(|id| !verborgen.contains(id));
+    Ok(ids)
+}
+
+/// Sagt allen Beteiligten, dass sich an einer Ausgabe etwas getan hat.
+///
+/// Jeder bekommt seine EIGENE Fassung: Der Zustand einer Ausgabe hängt am
+/// Betrachter (siehe `expense_status_for`), und wer sie verbergen soll,
+/// bekommt gar nichts. Eine gemeinsame Nachricht an alle wäre hier schlicht
+/// falsch.
+pub async fn melde_ausgabe(state: &AppState, expense: &ExpenseRow) {
+    let Ok(ids) = empfaenger(&state.pool, expense).await else {
+        return;
+    };
+    for id in ids {
+        let Ok(dto) = to_expense_dto(&state.pool, expense.clone(), id).await else {
+            continue;
+        };
+        state
+            .hub
+            .publish(
+                vec![id],
+                crate::realtime::Event::new(
+                    "expense.updated",
+                    serde_json::json!({ "expense": dto }),
+                ),
+            )
+            .await;
+    }
+}
+
+/// Und dass eine fort ist.
+pub async fn melde_ausgabe_geloescht(state: &AppState, expense: &ExpenseRow) {
+    let Ok(ids) = empfaenger(&state.pool, expense).await else {
+        return;
+    };
+    state
+        .hub
+        .publish(
+            ids,
+            crate::realtime::Event::new(
+                "expense.deleted",
+                serde_json::json!({ "expenseId": expense.id }),
+            ),
+        )
+        .await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

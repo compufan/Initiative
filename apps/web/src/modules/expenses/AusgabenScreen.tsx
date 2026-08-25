@@ -12,7 +12,9 @@ import { EmptyState, Spinner } from '../../components/Feedback.js';
 import { Screen } from '../../components/Screen.js';
 import { useListenfilter, type Facette } from '../../components/Listenfilter.js';
 import { api } from '../../lib/api.js';
+import { realtime } from '../../lib/realtime.js';
 import { useChat } from '../../state/chat.js';
+import { useNamen } from '../../state/leute.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 import { ExpenseSheet } from './ExpenseSheet.js';
@@ -68,28 +70,56 @@ export function AusgabenScreen() {
     void laden();
   }, [laden]);
 
-  // Namen zu allen Kennungen, die irgendwo auftauchen.
+  /*
+   * Echtzeit: Die Liste holt sich Änderungen selbst.
+   *
+   * Vorher musste man aktiv aktualisieren, um eine neue Ausgabe oder einen
+   * gesetzten Haken zu sehen – und das ist bei etwas, das zu zweit gepflegt
+   * wird, genau die falsche Voreinstellung. Der Server schickt jedem seine
+   * eigene Fassung, weil der Zustand am Betrachter hängt.
+   */
   useEffect(() => {
+    const abAusgabe = realtime.on('expense.updated', ({ expense }) => {
+      setExpenses((liste) => {
+        const index = liste.findIndex((eintrag) => eintrag.id === expense.id);
+        if (index < 0) return [expense, ...liste];
+        const naechste = liste.slice();
+        naechste[index] = expense;
+        return naechste;
+      });
+      // Die Salden rechnet der Server; sie lassen sich nicht aus einer
+      // einzelnen Ausgabe ableiten.
+      void api.expenses
+        .balances(chatId || undefined)
+        .then(({ items }) => setBalances(items))
+        .catch(() => {});
+    });
+    const abGeloescht = realtime.on('expense.deleted', ({ expenseId }) => {
+      setExpenses((liste) => liste.filter((eintrag) => eintrag.id !== expenseId));
+      void api.expenses
+        .balances(chatId || undefined)
+        .then(({ items }) => setBalances(items))
+        .catch(() => {});
+    });
+    return () => {
+      abAusgabe();
+      abGeloescht();
+    };
+  }, [chatId]);
+
+  // Namen zu allen Kennungen, die irgendwo auftauchen – gebuendelt geholt und
+  // gemerkt, siehe state/leute.ts.
+  const namensIds = useMemo(() => {
     const ids = new Set<string>();
     for (const eintrag of balances) ids.add(eintrag.userId);
     for (const expense of expenses) {
       if (expense.paidBy) ids.add(expense.paidBy);
       for (const share of expense.shares) ids.add(share.userId);
     }
-    const fehlend = [...ids].filter((id) => id !== myId && !leute[id]);
-    if (fehlend.length === 0) return;
-    void Promise.all(fehlend.map((id) => api.users.byId(id).catch(() => null))).then((ergebnis) => {
-      const neueLeute: Record<string, UserDto> = {};
-      for (const person of ergebnis) if (person) neueLeute[person.id] = person;
-      if (Object.keys(neueLeute).length > 0) setLeute((alt) => ({ ...alt, ...neueLeute }));
-    });
-  }, [balances, expenses, leute, myId]);
+    return [...ids];
+  }, [balances, expenses]);
+  const name = useNamen(namensIds, myId);
 
-  const name = useCallback(
-    (id: string | null) =>
-      id == null ? 'Unbekannt' : id === myId ? 'Du' : (leute[id]?.displayName ?? 'Unbekannt'),
-    [leute, myId],
-  );
 
   const facetten: Facette<ExpenseDto>[] = useMemo(
     () => [
@@ -345,6 +375,10 @@ function ExpenseCard({
           </span>
         )}
       </p>
+      {/* Gehoert sie zu einem Termin? Das stand bisher nirgends – man konnte
+          eine Ausgabe zuordnen und sah es hinterher nicht wieder. */}
+      {expense.eventId && <TerminVermerk eventId={expense.eventId} />}
+
       {expense.note && <p className="exp-note">{expense.note}</p>}
 
       <ul className="exp-shares">
@@ -445,4 +479,44 @@ function anteilHinweis(
     default:
       return 'Noch offen';
   }
+}
+
+/**
+ * „Gehört zu: Hüttenwochenende“ – mit Weg dorthin.
+ *
+ * Der Titel wird nachgeladen und gemerkt, statt ihn in jede Ausgabe zu
+ * schreiben: Ein Termin kann umbenannt werden, und eine mitgeschriebene Kopie
+ * wäre danach falsch.
+ */
+function TerminVermerk({ eventId }: { eventId: string }) {
+  const [titel, setTitel] = useState<string | null>(null);
+
+  useEffect(() => {
+    let abgebrochen = false;
+    void api.calendar
+      .byId(eventId)
+      .then((termin) => {
+        if (!abgebrochen) setTitel(termin.title);
+      })
+      .catch(() => {
+        // Der Termin ist fort oder nicht für mich sichtbar. Dann eben ohne
+        // Namen – der Vermerk selbst stimmt ja trotzdem.
+        if (!abgebrochen) setTitel('');
+      });
+    return () => {
+      abgebrochen = true;
+    };
+  }, [eventId]);
+
+  if (titel === null) return null;
+  return (
+    <p className="exp-event">
+      <span aria-hidden="true">📅</span>{' '}
+      {titel ? (
+        <a href={`/kalender/${eventId}`}>Gehört zu „{titel}“</a>
+      ) : (
+        'Gehört zu einem Termin'
+      )}
+    </p>
+  );
 }

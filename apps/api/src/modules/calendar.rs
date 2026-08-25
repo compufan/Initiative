@@ -43,6 +43,10 @@ pub fn router() -> Router<AppState> {
             get(by_id).patch(update).delete(remove),
         )
         .route("/calendar/events/{id}/rsvp", post(rsvp))
+        .route(
+            "/calendar/events/{id}/attendees/{user_id}",
+            delete(ausladen),
+        )
         .route("/calendar/events/{id}/occurrences", get(occurrences))
         .route("/calendar/events/{id}/event.ics", get(event_ics))
         .route("/calendar/{token}/feed.ics", get(feed_ics))
@@ -343,6 +347,41 @@ async fn remove(
 #[derive(Debug, Deserialize)]
 struct RsvpInput {
     status: String,
+}
+
+/// Jemanden wieder ausladen.
+///
+/// Das Einladen ging über `attendeeIds` beim Ändern – aber nur hinzufügend
+/// (`on conflict do nothing`). Wer versehentlich den Falschen eingeladen hatte,
+/// wurde ihn nicht mehr los. Eine Einladung, die sich nicht zurücknehmen lässt,
+/// ist keine Einladung, sondern eine Falle.
+///
+/// Wer ausgeladen wird, verliert damit auch den Zugang zu Notizen, Unterlagen
+/// und Abstimmung des Termins – `assert_attendee` prüft dieselbe Tabelle. Das
+/// ist gewollt.
+async fn ausladen(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((id, user_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<Json<CalendarEventDto>> {
+    let event = require_event(&state, id).await?;
+    assert_editable(&state, &event, user.id()).await?;
+
+    if event.created_by == Some(user_id) {
+        return Err(AppError::bad_request(
+            "Wer den Termin angelegt hat, kann sich nicht selbst ausladen",
+        ));
+    }
+
+    sqlx::query("delete from event_attendees where event_id = $1 and user_id = $2")
+        .bind(id)
+        .bind(user_id)
+        .execute(&state.pool)
+        .await?;
+
+    let dto = load_event_dto(&state, id).await?;
+    broadcast_event(&state, &dto).await?;
+    Ok(Json(dto))
 }
 
 async fn rsvp(
