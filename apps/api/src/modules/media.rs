@@ -52,6 +52,26 @@ pub fn router() -> Router<AppState> {
  */
 const UPLOAD_BODY_LIMIT: usize = 210 * 1024 * 1024;
 
+/**
+ * Wie viele Uploads gleichzeitig durch die API dürfen.
+ *
+ * `field.bytes()` liest die ganze Datei in den Arbeitsspeicher, bevor sie
+ * abgelegt wird. Solange der Deckel bei 2 MiB lag, war das harmlos; mit 210 MB
+ * kann eine einzige Anfrage so viel belegen, und ein paar gleichzeitige Videos
+ * reichen auf einer 8-GB-Maschine mit laufendem Postgres für den
+ * Speicherfresser des Systems.
+ *
+ * Zwei Plätze heisst: höchstens gut 400 MB Spitze. Wer als Dritter kommt,
+ * wartet – und das ist deutlich besser, als wenn der Dienst stirbt und
+ * ausgerechnet die Datenbank mitreisst.
+ *
+ * Die saubere Lösung wäre, im Strom auf die Platte zu schreiben, statt zu
+ * puffern. Das braucht einen zweiten Weg im Speicher-Trait und ist hier
+ * bewusst nicht getan – die Grenze wirkt sofort und kostet nichts.
+ */
+static UPLOAD_PLAETZE: std::sync::LazyLock<tokio::sync::Semaphore> =
+    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(2));
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateUploadInput {
@@ -176,6 +196,12 @@ async fn upload_data(
     let limit = max_upload_bytes(&attachment.kind);
     let mut stored = false;
     let mut original_name: Option<String> = None;
+
+    // Ab hier wird gepuffert – erst der Platz, dann die Bytes.
+    let _platz = UPLOAD_PLAETZE
+        .acquire()
+        .await
+        .map_err(|_| AppError::internal("Upload-Warteschlange nicht verfügbar"))?;
 
     while let Some(field) = multipart
         .next_field()
@@ -338,12 +364,13 @@ async fn serve(
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
 
-    let total = if range_header.is_some() {
-        state
-            .storage
-            .read(&attachment.storage_key, None)
-            .await?
-            .and_then(|object| object.total_size)
+    // Die Gesamtgrösse steht in der Datenbank. Früher wurde dafür das Objekt
+    // ein zweites Mal gelesen und der Strom weggeworfen – bei einem lokalen
+    // Dateisystem ist das billig, seit der S3-Treiber wirklich liest aber eine
+    // vollständige Anfrage an den Speicher, deren Antwort niemand ansieht.
+    // Bei jedem Vorspulen in einem Video.
+    let total = if range_header.is_some() && attachment.size > 0 {
+        Some(attachment.size as u64)
     } else {
         None
     };

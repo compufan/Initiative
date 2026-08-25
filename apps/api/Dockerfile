@@ -58,7 +58,11 @@ RUN mkdir -p /data/uploads && chown -R initiative:initiative /data
 
 USER initiative
 WORKDIR /home/initiative
-ENV HOST=0.0.0.0 PORT=8080 NODE_ENV=production RUST_LOG=initiative_api=info
+# RUST_LOG steht hier bewusst NICHT: Es haette Vorrang vor LOG_LEVEL
+# (main.rs), und dann waere der Schalter, den die Compose-Datei durchreicht,
+# wirkungslos – eine Falle, die man erst bemerkt, wenn man im Fehlerfall
+# vergeblich mehr Protokoll einschaltet. Ohne beides gilt derselbe Vorgabewert.
+ENV HOST=0.0.0.0 PORT=8080 NODE_ENV=production
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

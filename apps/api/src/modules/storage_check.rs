@@ -97,9 +97,10 @@ async fn storage_check(
     }
 
     if write.is_ok() {
-        // `read` reicht bei S3 bewusst nie Objekte durch (immer None), deshalb
-        // wird hier über eine signierte Download-URL geprüft – genau der Weg,
-        // den auch die App für Bilder benutzt.
+        // Geprüft wird über eine signierte Download-Adresse – genau der Weg, den
+        // auch die App zum Anzeigen von Bildern benutzt. (Der Treiber kann
+        // seit Kurzem auch selbst lesen, aber das ist der Weg für
+        // `/media/{id}/bytes`, nicht der für die Anzeige.)
         let url = state
             .storage
             .download_url(&key, &crate::storage::DownloadOptions::default());

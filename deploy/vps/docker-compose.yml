@@ -55,6 +55,13 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 8080
+      # Beide ausdrücklich hier und nicht nur in der .env: Ohne sie fällt die
+      # API still auf localhost zurück und startet fehlerfrei – danach sind
+      # alle Bilder unsichtbar (jede Medienadresse wird daraus gebaut), die
+      # Passkeys unbrauchbar (die Kennung kommt aus dem Hostnamen) und der
+      # Kalenderfeed falsch. Ein Fehlstart ist besser als das.
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:?fehlt}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:?fehlt}
       DATABASE_URL: postgres://${POSTGRES_USER:-initiative}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-initiative}
       LOCAL_STORAGE_DIR: /data/uploads
       STORAGE_DRIVER: local

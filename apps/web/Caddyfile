@@ -14,13 +14,13 @@
 		reverse_proxy api:8080
 	}
 
-	# Vier Routen liegen bewusst NICHT unter /api/v1 und gehören trotzdem der
+	# Drei Routen liegen bewusst NICHT unter /api/v1 und gehören trotzdem der
 	# API. Ohne diesen Block bekommt man bei allen dreien die App-Hülle mit
 	# HTTP 200 zurück:
 	#   /datenschutz – die Datenschutzerklärung wäre schlicht nicht erreichbar
 	#   /healthz     – jede Überwachung wäre falsch-grün
 	#   /readyz      – dasselbe
-	#   /             – bleibt richtigerweise die PWA, deshalb nicht dabei
+	# (`/` gehört der PWA und steht deshalb nicht in dieser Liste.)
 	handle /datenschutz {
 		reverse_proxy api:8080
 	}

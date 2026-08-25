@@ -71,7 +71,7 @@ export default defineConfig(({ mode }) => {
         injectRegister: null,
         injectManifest: {
           globPatterns: ['**/*.{js,css,html,svg,png,webp,woff2}'],
-          // Die Freistell-Bausteine sind zusammen ueber 22 MB. Sie duerfen
+          // Die Freistell-Bausteine sind zusammen ueber 120 MB. Sie duerfen
           // NICHT beim Installieren mitgeladen werden – sonst zahlt jeder
           // den Preis, auch wer nie einen Sticker baut. Der Service Worker
           // legt sie stattdessen beim ersten Benutzen dauerhaft ab.
