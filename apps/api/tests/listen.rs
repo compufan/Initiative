@@ -585,7 +585,11 @@ async fn geaenderte_rechte_einer_liste_bleiben_geaendert() {
             Some(json!({ "text": "Brot" })),
         )
         .await;
-    assert_eq!(status, StatusCode::CREATED, "Mark darf jetzt ergänzen: {punkt}");
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "Mark darf jetzt ergänzen: {punkt}"
+    );
 
     let milch = punkt_von(&probe, &event_id, &note_id, &a_token, "Milch").await;
     let (status, body) = probe
@@ -710,7 +714,11 @@ async fn notiz_und_liste_sind_unterscheidbar() {
     assert_eq!(umgewandelt["kind"], json!("list"), "{umgewandelt}");
 
     let frisch = notiz_laden(&probe, &event_id, &note_id, &token).await;
-    assert_eq!(frisch["kind"], json!("list"), "nach dem Neuladen wieder Notiz");
+    assert_eq!(
+        frisch["kind"],
+        json!("list"),
+        "nach dem Neuladen wieder Notiz"
+    );
 
     // Unsinn wird abgewiesen, nicht stillschweigend uebernommen.
     let (status, _) = probe
@@ -722,4 +730,76 @@ async fn notiz_und_liste_sind_unterscheidbar() {
         )
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "ungültige Art");
+
+    // Wer Punkte mitschickt, meint eine Liste – auch ohne das Feld zu kennen.
+    //
+    // Ohne diese Regel nahm der Server die Punkte an, legte sie ab und die App
+    // zeigte sie nie: Punkte werden nur an einer Liste dargestellt. Genau
+    // dieser stille Verlust ist einem Browser-Test aufgefallen, der eine
+    // Packliste ueber die Schnittstelle anlegte und danach vor einer leeren
+    // Notiz stand.
+    let (status, geerbt) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{event_id}/notes"),
+            Some(&token),
+            Some(json!({
+                "title": "Packliste",
+                "body": "",
+                "items": [{ "text": "Schlafsack" }],
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{geerbt}");
+    assert_eq!(geerbt["kind"], json!("list"), "Punkte machen eine Liste");
+    assert_eq!(
+        geerbt["items"].as_array().map(Vec::len),
+        Some(1),
+        "{geerbt}"
+    );
+
+    // Eine ausdrueckliche Angabe schlaegt die Regel: Wer `note` sagt und
+    // Punkte mitschickt, bekommt, was er gesagt hat.
+    let (status, gesagt) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{event_id}/notes"),
+            Some(&token),
+            Some(json!({
+                "body": "",
+                "kind": "note",
+                "items": [{ "text": "Zange" }],
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{gesagt}");
+    assert_eq!(gesagt["kind"], json!("note"), "ausdrueckliche Angabe gilt");
+
+    // Und ein nachtraeglich hinzugefuegter Punkt macht ebenfalls eine Liste –
+    // sonst laege er unsichtbar in der Datenbank.
+    let (status, notiz) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{event_id}/notes"),
+            Some(&token),
+            Some(json!({ "body": "Erst Rede, dann Essen." })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{notiz}");
+    assert_eq!(notiz["kind"], json!("note"));
+    let spaeter_id = notiz["id"].as_str().unwrap().to_string();
+
+    let (status, danach) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{event_id}/notes/{spaeter_id}/items"),
+            Some(&token),
+            Some(json!({ "text": "Mikrofon" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{danach}");
+    assert_eq!(danach["kind"], json!("list"), "ein Punkt macht eine Liste");
+
+    let frisch = notiz_laden(&probe, &event_id, &spaeter_id, &token).await;
+    assert_eq!(frisch["kind"], json!("list"), "auch nach dem Neuladen");
 }

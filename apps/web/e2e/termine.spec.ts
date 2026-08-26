@@ -92,7 +92,10 @@ test('eine Notiz für „Alle Eingeladenen“ lässt sich auch von anderen speic
   await annaPage.getByRole('tab', { name: 'Agenda' }).click();
   await annaPage.getByText(titel).first().click();
 
-  await annaPage.getByRole('button', { name: 'Notiz hinzufügen' }).click();
+  // „Liste“, nicht „Notiz“: Seit beide getrennt sind, oeffnen zwei Knoepfe
+  // dasselbe Formular mit verschiedener Art – und nur bei einer Liste stehen
+  // die drei Rechte darin.
+  await annaPage.getByRole('button', { name: 'Liste', exact: true }).click();
   await annaPage.locator('#note-title-neu').fill('Packliste');
   await annaPage.locator('#note-body-neu').fill('Schlafsack');
   // Ausdruecklich im Feld „Aendern darf“: Seit es auch „Hinzufuegen darf“

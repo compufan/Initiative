@@ -8,8 +8,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
 use crate::auth::password::verify_password_async;
+use crate::auth::AuthUser;
 use crate::db::UserRow;
 use crate::drossel::regeln;
 use crate::dto::{ListResult, SelfUserDto, UserDto};

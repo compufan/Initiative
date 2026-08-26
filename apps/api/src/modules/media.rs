@@ -218,9 +218,7 @@ async fn upload_data(
     // hält die Leitung mit ein paar Bytes je Minute offen. Untergrenze eine
     // Minute, Obergrenze eine Viertelstunde, damit weder ein winziger Upload
     // sofort abbricht noch ein Platz unbegrenzt belegt bleibt.
-    let frist = Duration::from_secs(
-        (attachment.size.max(0) as u64 / (25 * 1024)).clamp(60, 900),
-    );
+    let frist = Duration::from_secs((attachment.size.max(0) as u64 / (25 * 1024)).clamp(60, 900));
 
     timeout(frist, async {
         while let Some(field) = multipart
@@ -232,10 +230,9 @@ async fn upload_data(
                 continue;
             }
             original_name = field.file_name().map(sanitise_file_name);
-            let bytes = field
-                .bytes()
-                .await
-                .map_err(|error| AppError::bad_request(format!("Upload fehlgeschlagen: {error}")))?;
+            let bytes = field.bytes().await.map_err(|error| {
+                AppError::bad_request(format!("Upload fehlgeschlagen: {error}"))
+            })?;
             if bytes.len() as i64 > limit {
                 state.storage.delete(&attachment.storage_key).await.ok();
                 sqlx::query("delete from attachments where id = $1")

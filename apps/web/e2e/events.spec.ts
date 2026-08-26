@@ -118,7 +118,9 @@ test('Termin abstimmen, Zeitpunkt festlegen, Notiz mit eigenen Rechten', async (
 
   // ---- Notiz mit eigenen Rechten -----------------------------------------
   await annaPage.getByText(titel).click();
-  await annaPage.getByRole('button', { name: 'Notiz hinzufügen' }).click();
+  // Seit Notizen und Listen getrennt sind, gibt es zwei Knoepfe statt einem.
+  // Hier ist ein Text gemeint, also „Notiz“.
+  await annaPage.getByRole('button', { name: 'Notiz', exact: true }).click();
   await annaPage.locator('#note-title-neu').fill('Ansprache');
   await annaPage.locator('#note-body-neu').fill('Erst Rede, dann Essen.');
   // Voreinstellung ist „Nur ich“.

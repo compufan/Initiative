@@ -8,7 +8,9 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::auth::password::{hash_password, hash_password_async, random_token, sha256_hex, verify_password_async};
+use crate::auth::password::{
+    hash_password, hash_password_async, random_token, sha256_hex, verify_password_async,
+};
 use crate::auth::{jwt, AuthUser};
 use crate::config::RegistrationMode;
 use crate::db::UserRow;
@@ -265,7 +267,9 @@ async fn login(
     // Auch ohne Konto einmal richtig rechnen, damit die Antwortzeit nicht
     // verraet, ob es den Namen gibt.
     let valid = match &user {
-        Some(user) => verify_password_async(input.password.clone(), user.password_hash.clone()).await,
+        Some(user) => {
+            verify_password_async(input.password.clone(), user.password_hash.clone()).await
+        }
         None => {
             let _ = verify_password_async(input.password, DUMMY_HASH.clone()).await;
             false

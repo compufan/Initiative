@@ -711,11 +711,10 @@ async fn notes(
 struct NoteInput {
     title: Option<String>,
     body: String,
-    /// `note` oder `list`. Ohne Angabe eine Notiz – wer eine Liste will,
-    /// sagt es. Alte Fassungen der App, die das Feld nicht kennen, legen
-    /// damit weiter Notizen an.
-    #[serde(default = "default_kind")]
-    kind: String,
+    /// `note` oder `list`. Ohne Angabe entscheidet, ob Punkte mitkommen –
+    /// siehe `kind_bestimmen`. Alte Fassungen der App, die das Feld nicht
+    /// kennen, legen damit weiter das an, was sie meinen.
+    kind: Option<String>,
     #[serde(default = "default_scope")]
     edit_scope: String,
     /// Wer Punkte hinzufügen darf. Ohne Angabe wie `edit_scope`.
@@ -759,12 +758,28 @@ fn default_scope() -> String {
     "author".to_string()
 }
 
-fn default_kind() -> String {
-    "note".to_string()
-}
-
 /// Die beiden Arten einer Notiz.
 const NOTE_KINDS: &[&str] = &["note", "list"];
+
+/// Was es wird, wenn es niemand sagt.
+///
+/// Wer Punkte mitschickt, meint eine Liste – auch wenn er das Feld nicht
+/// kennt. Das ist dieselbe Regel, nach der die Wanderung 0012 die
+/// bestehenden Notizen eingeordnet hat („Alles, was heute schon Punkte
+/// trägt, war immer als Liste gemeint“), und ohne sie nimmt der Server die
+/// Punkte an, speichert sie – und die App zeigt sie nie, weil sie Punkte nur
+/// an einer Liste darstellt. Ein stiller Verlust, wie er hier schon einmal
+/// vorkam.
+fn kind_bestimmen(gesagt: Option<&str>, punkte: &[ItemInput]) -> String {
+    if let Some(wert) = gesagt {
+        return wert.to_string();
+    }
+    if punkte.iter().any(|punkt| !punkt.text.trim().is_empty()) {
+        "list".to_string()
+    } else {
+        "note".to_string()
+    }
+}
 
 async fn create_note(
     State(state): State<AppState>,
@@ -774,6 +789,7 @@ async fn create_note(
 ) -> AppResult<(StatusCode, Json<EventNoteDto>)> {
     let event = require_event(&state, id).await?;
     assert_attendee(&state.pool, &event, user.id()).await?;
+    let kind = kind_bestimmen(input.kind.as_deref(), &input.items);
     Validator::new()
         .one_of("editScope", &input.edit_scope, NOTE_SCOPES)
         .one_of(
@@ -782,7 +798,7 @@ async fn create_note(
             NOTE_SCOPES,
         )
         .one_of("checkScope", &input.check_scope, CHECK_SCOPES)
-        .one_of("kind", &input.kind, NOTE_KINDS)
+        .one_of("kind", &kind, NOTE_KINDS)
         .length("body", &input.body, 0, EVENT_DESCRIPTION_MAX)
         .finish()?;
 
@@ -811,7 +827,7 @@ async fn create_note(
     .bind(user.id())
     .bind(clean(input.title))
     .bind(&input.body)
-    .bind(&input.kind)
+    .bind(&kind)
     .bind(&input.edit_scope)
     .bind(&add_scope)
     .bind(&input.check_scope)
@@ -1093,6 +1109,14 @@ async fn add_item(
     .execute(&state.pool)
     .await?;
     set_item_assignees(&state, item_id, &input.assignee_ids).await?;
+
+    // Ein Punkt macht daraus eine Liste. Sonst laege er in der Datenbank und
+    // waere in der App nicht zu sehen – Punkte werden nur an einer Liste
+    // dargestellt. Dieselbe Regel wie beim Anlegen, siehe `kind_bestimmen`.
+    sqlx::query("update event_notes set kind = 'list' where id = $1 and kind <> 'list'")
+        .bind(note_id)
+        .execute(&state.pool)
+        .await?;
 
     broadcast_event(&state, &load_event_dto(&state, id).await?).await?;
     let antwort = note_antwort(&state, &event, note_id, user.id()).await?;
