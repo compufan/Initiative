@@ -81,6 +81,12 @@ async function laden(melden?: Fortschritt): Promise<void> {
       ort.env.wasm.wasmPaths = { wasm: ortWasmUrl, mjs: ortMjsUrl };
       ort.env.wasm.numThreads = 1;
       // In den Arbeiter, damit die Oberfläche während des Rechnens lebt.
+      //
+      // Bewusst nicht über `ort-laufzeit.ts`: Jenes entscheidet für
+      // `onnxruntime-web/webgpu`, eine andere, in sich geschlossene Fassung
+      // der Laufzeit mit eigener Umgebung. Hier gibt es nichts zu entscheiden
+      // – dieses Verfahren rechnet immer auf dem Prozessor, und `proxy` darf
+      // deshalb nie auf `false` fallen.
       ort.env.wasm.proxy = true;
 
       melden?.(0.2, 'Modell wird geladen …');

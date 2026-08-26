@@ -60,6 +60,14 @@ async function loadSession(melden?: Fortschritt): Promise<InferenceSession> {
       // hier ein paar Sekunden – im Hauptfaden sind das ein paar Sekunden, in
       // denen sich nichts mehr bewegt, kein Text wechselt und kein Abbrechen
       // möglich ist. Das ist der Unterschied zwischen „dauert“ und „hängt“.
+      //
+      // Das bleibt hier stehen und geht **nicht** über `ort-laufzeit.ts`.
+      // Jenes entscheidet für `onnxruntime-web/webgpu`, und das ist eine
+      // andere, in sich geschlossene Fassung der Laufzeit mit eigener
+      // Umgebung (nachgeprüft: die beiden Dateien teilen sich keinen Import).
+      // Hier gibt es nichts zu entscheiden – dieses Verfahren rechnet immer
+      // auf dem Prozessor. Wer es dort anschlösse, holte es bei jedem Gerät
+      // mit Grafikeinheit in den Hauptfaden zurück.
       ort.env.wasm.proxy = true;
       const created = await ort.InferenceSession.create(MODEL_URL, {
         executionProviders: ['wasm'],
