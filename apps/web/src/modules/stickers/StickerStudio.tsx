@@ -338,7 +338,13 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
           seed,
           fortschritt: (_anteil, text) => setModellStand(text),
         });
-        const alpha = kanteWeichzeichnen(roh, image.width, image.height, 1);
+        // Der Weichzeichner glättet die harte Treppe, die die kleineren Netze
+        // an der Kante hinterlassen. Bei „Hohe Qualität“ ist er schädlich:
+        // Dessen Maske kommt schon weich und aufgelöst heraus, und gemessen
+        // frisst der 3×3-Kern dort rund ein Zehntel der Struktur – also einen
+        // guten Teil dessen, wofür man die 110 MB überhaupt geladen hat.
+        // `kanteWeichzeichnen` gibt bei Radius unter 1 unverändert zurück.
+        const alpha = kanteWeichzeichnen(roh, image.width, image.height, key === 'birefnet' ? 0 : 1);
         if (!maskeTraegt(alpha)) {
           throw new EngineError(
             `„${engineInfo(key).label}“ hat nichts gefunden, was sich freistellen lässt. Versuche ein anderes Verfahren oder tippe das Motiv an.`,

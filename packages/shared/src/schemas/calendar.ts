@@ -8,6 +8,10 @@ export type EventStatus = (typeof EVENT_STATUSES)[number];
 
 /** Wer eine Notiz am Termin ändern darf. */
 export const NOTE_SCOPES = ['author', 'members', 'listed'] as const;
+
+/** Eine Notiz ist entweder ein Text oder eine Liste mit Punkten. */
+export const NOTE_KINDS = ['note', 'list'] as const;
+export type NoteKind = (typeof NOTE_KINDS)[number];
 export type NoteScope = (typeof NOTE_SCOPES)[number];
 
 export interface EventAttendeeDto {
@@ -155,6 +159,14 @@ export interface EventNoteDto {
   authorId: string | null;
   title: string | null;
   body: string;
+  /**
+   * `note` oder `list`.
+   *
+   * Frueher wurde das an der Punktzahl abgelesen – eine noch leere Liste war
+   * damit nicht von einer Textnotiz zu unterscheiden, und jede Textnotiz trug
+   * Listen-Bedienelemente.
+   */
+  kind: NoteKind;
   editScope: NoteScope;
   /** Bei `listed`: wer namentlich ändern darf. */
   /** Wer Punkte hinzufügen darf. */
@@ -222,6 +234,7 @@ export type CreatePlanningInput = z.infer<typeof createPlanningSchema>;
 export const eventNoteSchema = z.object({
   title: z.string().max(200).optional(),
   body: z.string().max(LIMITS.eventDescriptionMax),
+  kind: z.enum(NOTE_KINDS).optional(),
   editScope: z.enum(NOTE_SCOPES).optional(),
   editorIds: z.array(z.string().uuid()).max(100).optional(),
   addScope: z.enum(NOTE_SCOPES).optional(),

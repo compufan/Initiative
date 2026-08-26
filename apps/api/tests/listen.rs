@@ -631,3 +631,95 @@ async fn punkt_von(
     let notiz = notiz_laden(probe, event_id, note_id, token).await;
     punkt(&notiz, text)["id"].as_str().unwrap().to_string()
 }
+
+/// Notiz und Liste sind zwei Dinge, nicht eines mit und eines ohne Punkte.
+///
+/// Vorher entschied allein die Punktzahl, was etwas war. Das hatte zwei
+/// Folgen: Eine noch leere Liste war von einer Textnotiz nicht zu
+/// unterscheiden, und jede Textnotiz trug Listen-Bedienelemente, weil der
+/// Verfasser ja immer ergaenzen darf.
+#[tokio::test(flavor = "multi_thread")]
+async fn notiz_und_liste_sind_unterscheidbar() {
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL nicht gesetzt – übersprungen");
+        return;
+    };
+    let simple = Uuid::now_v7().simple().to_string();
+    let suffix = simple[simple.len() - 8..].to_string();
+
+    let (token, id) = probe.anmelden(&suffix, "artena").await;
+
+    let beginn = chrono::Utc::now() + chrono::Duration::days(5);
+    let (_, termin) = probe
+        .call(
+            "POST",
+            "/api/v1/calendar/events",
+            Some(&token),
+            Some(json!({
+                "title": "Grillen",
+                "startsAt": beginn.to_rfc3339(),
+                "endsAt": (beginn + chrono::Duration::hours(3)).to_rfc3339(),
+                "attendeeIds": [id],
+            })),
+        )
+        .await;
+    let event_id = termin["id"].as_str().unwrap().to_string();
+
+    // Ohne Angabe bleibt es eine Notiz – alte Fassungen der App, die das Feld
+    // nicht kennen, legen damit weiter Notizen an.
+    let (status, ohne) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{event_id}/notes"),
+            Some(&token),
+            Some(json!({ "body": "Zange nicht vergessen" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{ohne}");
+    assert_eq!(ohne["kind"], json!("note"), "ohne Angabe eine Notiz");
+
+    // Eine LEERE Liste ist eine Liste – das war vorher nicht ausdrückbar.
+    let (status, leer) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{event_id}/notes"),
+            Some(&token),
+            Some(json!({ "title": "Einkauf", "body": "", "kind": "list" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{leer}");
+    assert_eq!(leer["kind"], json!("list"));
+    assert_eq!(
+        leer["items"].as_array().map(Vec::len),
+        Some(0),
+        "leer, aber trotzdem eine Liste"
+    );
+
+    // Und die Art laesst sich nachtraeglich aendern – dieselbe Falle wie bei
+    // den Rechten, deshalb ausdruecklich geprueft.
+    let note_id = ohne["id"].as_str().unwrap().to_string();
+    let (status, umgewandelt) = probe
+        .call(
+            "PATCH",
+            &format!("/api/v1/calendar/events/{event_id}/notes/{note_id}"),
+            Some(&token),
+            Some(json!({ "kind": "list" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{umgewandelt}");
+    assert_eq!(umgewandelt["kind"], json!("list"), "{umgewandelt}");
+
+    let frisch = notiz_laden(&probe, &event_id, &note_id, &token).await;
+    assert_eq!(frisch["kind"], json!("list"), "nach dem Neuladen wieder Notiz");
+
+    // Unsinn wird abgewiesen, nicht stillschweigend uebernommen.
+    let (status, _) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{event_id}/notes"),
+            Some(&token),
+            Some(json!({ "body": "x", "kind": "einkaufszettel" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "ungültige Art");
+}

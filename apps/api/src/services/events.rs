@@ -300,6 +300,7 @@ pub async fn to_note_dto(
         author_id: note.author_id,
         title: note.title,
         body: note.body,
+        kind: note.kind,
         edit_scope: note.edit_scope,
         add_scope: note.add_scope,
         check_scope: note.check_scope,

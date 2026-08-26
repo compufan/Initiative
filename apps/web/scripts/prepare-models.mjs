@@ -67,10 +67,22 @@ const MODELLE = [
     //
     // Feste Fassung ueber den Commit statt `main`: Ein Build von heute soll
     // dieselbe Datei bekommen wie einer von naechster Woche.
-    name: 'birefnet-lite-512.onnx',
-    url: 'https://huggingface.co/studioludens/birefnet-lite-512/resolve/4a3c40c36c94093cc1e724d9ea428b8fa4b57dc7/onnx/model_fp16.onnx',
-    mindestGroesse: 90_000_000,
-    sha256: 'eff9216bb2f9d3f023d9c2b7196845a7485739ab1f231593633e4d2344ffc516',
+    // # Warum die 1024er Fassung
+    //
+    // Dasselbe Netz mit doppelter Kantenlänge, also vierfacher Fläche.
+    // Gemessen an einem Haarausschnitt trägt die 1024er Maske 30 % mehr
+    // Struktur; einzelne Strähnen stehen dort als dünne Linien, wo die 512er
+    // einen weichen Wulst zeigt. Die waren nicht schlecht hochgerechnet –
+    // sie sind nie berechnet worden.
+    //
+    // Der Preis: rund 15 MB mehr Download und etwa die dreieinhalbfache
+    // Rechenzeit. Wem das zu lang dauert, stellt hier wieder auf
+    // `studioludens/birefnet-lite-512` um und setzt EINGABE in
+    // engines/birefnet.ts zurück auf 512 – mehr ist es nicht.
+    name: 'birefnet-lite-1024.onnx',
+    url: 'https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/resolve/de15b22ba131738a16dff04aab8bdf8dc32e3ac1/onnx/model_fp16.onnx',
+    mindestGroesse: 110_000_000,
+    sha256: 'd39b897ceb16ae654c1731f3dba0cf9b368d9cae74b5a57459b455cc8bfec402',
     // Ein fremder Server, der gerade nicht erreichbar ist, darf keine
     // Veroeffentlichung verhindern. Fehlt die Datei, meldet die App das
     // Verfahren schlicht als nicht verfuegbar.

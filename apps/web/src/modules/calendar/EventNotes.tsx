@@ -5,6 +5,7 @@ import {
   NOTE_SCOPES,
   type CheckScope,
   type EventNoteDto,
+  type NoteKind,
   type NoteScope,
 } from '@initiative/shared';
 import { Spinner } from '../../components/Feedback.js';
@@ -36,7 +37,8 @@ const SCOPE_TEXT: Record<NoteScope, string> = {
 export function EventNotes({ eventId, people }: EventNotesProps) {
   const [notes, setNotes] = useState<EventNoteDto[]>([]);
   const [laedt, setLaedt] = useState(true);
-  const [neu, setNeu] = useState(false);
+  // Welche Art gerade angelegt wird – oder `null`, wenn nichts offen ist.
+  const [neu, setNeu] = useState<NoteKind | null>(null);
 
   useEffect(() => {
     let abgebrochen = false;
@@ -57,16 +59,31 @@ export function EventNotes({ eventId, people }: EventNotesProps) {
     };
   }, [eventId]);
 
+  // Getrennt anzeigen. Eine Einkaufsliste und eine Ansprache standen bisher
+  // als gleich aussehende Karten untereinander.
+  const listen = notes.filter((note) => note.kind === 'list');
+  const texte = notes.filter((note) => note.kind !== 'list');
+  const beides = listen.length > 0 && texte.length > 0;
+  const gruppen = [
+    { art: 'list' as const, ueberschrift: 'Listen', eintraege: listen },
+    { art: 'note' as const, ueberschrift: 'Notizen', eintraege: texte },
+  ];
+
   return (
     <section className="card stack" aria-labelledby="cal-notes-title">
       <div className="row row-between">
         <h2 id="cal-notes-title" className="cal-block-title">
-          Notizen
+          Notizen und Listen
         </h2>
         {!neu && (
-          <button type="button" className="btn btn-sm" onClick={() => setNeu(true)}>
-            Notiz hinzufügen
-          </button>
+          <div className="row">
+            <button type="button" className="btn btn-sm" onClick={() => setNeu('note')}>
+              Notiz
+            </button>
+            <button type="button" className="btn btn-sm" onClick={() => setNeu('list')}>
+              Liste
+            </button>
+          </div>
         )}
       </div>
 
@@ -74,10 +91,11 @@ export function EventNotes({ eventId, people }: EventNotesProps) {
         <NoteEditor
           eventId={eventId}
           people={people}
-          onCancel={() => setNeu(false)}
+          kind={neu}
+          onCancel={() => setNeu(null)}
           onSaved={(note) => {
             setNotes((liste) => [...liste, note]);
-            setNeu(false);
+            setNeu(null);
           }}
         />
       )}
@@ -86,24 +104,38 @@ export function EventNotes({ eventId, people }: EventNotesProps) {
         <Spinner label="Notizen werden geladen …" />
       ) : notes.length === 0 && !neu ? (
         <p className="cal-hint">
-          Noch keine Notizen. Bei jeder legst du fest, wer sie ändern darf – eine Einkaufsliste
-          für alle, eine Erinnerung nur für dich.
+          Noch nichts da. Eine <b>Notiz</b> ist ein Text – die Adresse, eine Erinnerung. Eine{' '}
+          <b>Liste</b> hat Punkte zum Abhaken, und du legst fest, wer ergänzen und wer abhaken
+          darf.
         </p>
       ) : (
-        notes.map((note) => (
-          <NoteCard
-            key={note.id}
-            note={note}
-            eventId={eventId}
-            people={people}
-            onChanged={(neue) =>
-              setNotes((liste) => liste.map((eintrag) => (eintrag.id === neue.id ? neue : eintrag)))
-            }
-            onRemoved={() =>
-              setNotes((liste) => liste.filter((eintrag) => eintrag.id !== note.id))
-            }
-          />
-        ))
+        <>
+          {gruppen.map(({ art, ueberschrift, eintraege }) =>
+            eintraege.length === 0 ? null : (
+              <div key={art} className="stack">
+                {/* Die Überschrift nur, wenn wirklich beides da ist – bei einer
+                    einzigen Notiz wäre sie Beiwerk. */}
+                {beides && <h3 className="cal-block-title">{ueberschrift}</h3>}
+                {eintraege.map((note) => (
+                  <NoteCard
+                    key={note.id}
+                    note={note}
+                    eventId={eventId}
+                    people={people}
+                    onChanged={(neue) =>
+                      setNotes((liste) =>
+                        liste.map((eintrag) => (eintrag.id === neue.id ? neue : eintrag)),
+                      )
+                    }
+                    onRemoved={() =>
+                      setNotes((liste) => liste.filter((eintrag) => eintrag.id !== note.id))
+                    }
+                  />
+                ))}
+              </div>
+            ),
+          )}
+        </>
       )}
     </section>
   );
@@ -193,12 +225,15 @@ function NoteEditor({
   eventId,
   people,
   note,
+  kind,
   onCancel,
   onSaved,
 }: {
   eventId: string;
   people: EventNotesProps['people'];
   note?: EventNoteDto;
+  /** Beim Anlegen: was es werden soll. Beim Bearbeiten steht es an der Notiz. */
+  kind?: NoteKind;
   onCancel: () => void;
   onSaved: (note: EventNoteDto) => void;
 }) {
@@ -217,6 +252,9 @@ function NoteEditor({
   const [adderIds, setAdderIds] = useState<string[]>(note?.adderIds ?? []);
   const [checkerIds, setCheckerIds] = useState<string[]>(note?.checkerIds ?? []);
   const [busy, setBusy] = useState(false);
+  // Beim Bearbeiten steht die Art an der Notiz, beim Anlegen kommt sie vom
+  // Knopf, der das Formular geoeffnet hat.
+  const art: NoteKind = note?.kind ?? kind ?? 'note';
 
   /*
    * Wer ändern darf, bestimmt der VERFASSER – nicht jeder, der ändern darf.
@@ -244,9 +282,11 @@ function NoteEditor({
         checkScope?: CheckScope;
         adderIds?: string[];
         checkerIds?: string[];
+        kind?: NoteKind;
       } = {
         title: title.trim() || undefined,
         body,
+        kind: art,
       };
       // Die Rechte nur mitschicken, wenn ich sie auch bestimmen darf. Ein
       // unveraendert mitgesendeter Wert ist fuer den Server nicht von einer
@@ -254,10 +294,15 @@ function NoteEditor({
       if (binVerfasser) {
         daten.editScope = scope;
         daten.editorIds = scope === 'listed' ? editorIds : [];
-        daten.addScope = addScope;
-        daten.checkScope = checkScope;
-        daten.adderIds = addScope === 'listed' ? adderIds : [];
-        daten.checkerIds = checkScope === 'listed' ? checkerIds : [];
+        // Die beiden Listen-Rechte nur bei einer Liste. Bei einer Textnotiz
+        // haetten sie ohnehin keine Wirkung – und was ohne Wirkung ist,
+        // gehoert nicht ins Formular.
+        if (art === 'list') {
+          daten.addScope = addScope;
+          daten.checkScope = checkScope;
+          daten.adderIds = addScope === 'listed' ? adderIds : [];
+          daten.checkerIds = checkScope === 'listed' ? checkerIds : [];
+        }
       }
       const ergebnis = note
         ? await api.calendar.updateNote(eventId, note.id, daten)
@@ -321,11 +366,12 @@ function NoteEditor({
         </fieldset>
       )}
 
-      {/* Die beiden Rechte, die nur eine Liste braucht. Bei einer reinen
-          Textnotiz sind sie ohne Wirkung und stehen deshalb hinter einer
-          Klappe – sichtbar für den, der sie sucht, im Weg für niemanden. */}
-      <details className="field" open={(note?.items.length ?? 0) > 0}>
-        <summary>Für eine Liste: wer darf was?</summary>
+      {/* Nur bei einer Liste. Bei einer Textnotiz sind beide Einstellungen
+          ohne Wirkung – sie standen hier frueher trotzdem, hinter einer
+          Klappe. Jetzt entscheidet die Art, und bei einer Liste ist das die
+          Hauptsache und gehoert nicht versteckt. */}
+      {art === 'list' && (
+        <>
 
         <fieldset className="field" disabled={!binVerfasser}>
           <legend>Punkte hinzufügen darf</legend>
@@ -380,7 +426,8 @@ function NoteEditor({
             />
           </fieldset>
         )}
-      </details>
+        </>
+      )}
 
       <div className="row">
         <button

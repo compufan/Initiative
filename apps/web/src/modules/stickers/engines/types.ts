@@ -105,7 +105,7 @@ export const ENGINE_INFO: EngineInfo[] = [
     label: 'Hohe Qualität',
     description:
       'Dasselbe wie „Beliebiges Objekt“, nur deutlich genauer an Haaren, Zäunen und Brillenbügeln. Dafür der mit Abstand größte Download. Braucht eine Grafikeinheit – ohne sie dauert ein Bild mehrere Minuten.',
-    modelMb: 93.9,
+    modelMb: 109.2,
     runtime: 'onnx-gpu',
     defaultEnabled: false,
   },

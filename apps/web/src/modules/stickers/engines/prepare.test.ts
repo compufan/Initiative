@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { flaechenMittel, kanteWeichzeichnen, maskeTraegt } from './prepare.js';
+import { flaechenMittel, kanteWeichzeichnen, maskeSkalieren, maskeTraegt } from './prepare.js';
 import { STICKER_SIZE, createDoc, sourceRect, toSourcePoint } from '../render.js';
 
 describe('Geometrie zwischen Bild und Sticker-Flaeche', () => {
@@ -161,5 +161,58 @@ describe('Verkleinern als Flaechenmittel', () => {
     expect(gross.width).toBe(8);
     expect(gross.data[0]).toBe(200);
     expect(gross.data[gross.data.length - 2]).toBe(50);
+  });
+});
+
+describe('maskeSkalieren', () => {
+  it('gibt ein Gitter unveraendert zurueck, wenn nichts zu skalieren ist', () => {
+    const werte = new Float32Array([0, 0.5, 1, 0.25]);
+    const alpha = maskeSkalieren(werte, 2, 2, 2);
+    expect(Array.from(alpha)).toEqual([0, 128, 255, 64]);
+  });
+
+  it('legt einen Verlauf zwischen die Stuetzstellen, statt zu springen', () => {
+    // Links 0, rechts 1. Bei Blockkopie waere die linke Haelfte 0 und die
+    // rechte 255 – eine Stufe. Bilinear muss es dazwischen Werte geben.
+    const werte = new Float32Array([0, 1, 0, 1]);
+    const alpha = maskeSkalieren(werte, 2, 8, 1);
+    const zeile = Array.from(alpha);
+    expect(zeile[0]).toBe(0);
+    expect(zeile[7]).toBe(255);
+    // Streng monoton steigend – kein Sprung, keine Delle.
+    for (let i = 1; i < zeile.length; i += 1) {
+      expect(zeile[i]).toBeGreaterThanOrEqual(zeile[i - 1]);
+    }
+    // Und in der Mitte wirklich Zwischenwerte, nicht nur 0 und 255.
+    expect(zeile.filter((w) => w > 10 && w < 245).length).toBeGreaterThan(2);
+  });
+
+  it('verschiebt die Maske nicht gegen das Bild', () => {
+    // Ein symmetrisches Gitter muss symmetrisch bleiben. Rechnet man auf
+    // Punktkanten statt Punktmitten, wandert alles um einen halben Punkt.
+    const kante = 4;
+    const werte = new Float32Array(kante * kante);
+    for (let y = 0; y < kante; y += 1) {
+      for (let x = 0; x < kante; x += 1) {
+        werte[y * kante + x] = x === 1 || x === 2 ? 1 : 0;
+      }
+    }
+    const breite = 16;
+    const alpha = maskeSkalieren(werte, kante, breite, 1);
+    for (let x = 0; x < breite / 2; x += 1) {
+      expect(alpha[x]).toBe(alpha[breite - 1 - x]);
+    }
+  });
+
+  it('haelt sich an die Raender, ohne daneben zu greifen', () => {
+    const werte = new Float32Array([1, 1, 1, 1]);
+    const alpha = maskeSkalieren(werte, 2, 5, 5);
+    expect(Array.from(alpha).every((w) => w === 255)).toBe(true);
+  });
+
+  it('bleibt in 0…255, auch bei Werten ausserhalb von 0…1', () => {
+    const werte = new Float32Array([-0.4, 1.7, -2, 3]);
+    const alpha = maskeSkalieren(werte, 2, 6, 6);
+    expect(Array.from(alpha).every((w) => w >= 0 && w <= 255)).toBe(true);
   });
 });

@@ -69,7 +69,14 @@ export function NoteListe({ eventId, note, onChanged, leute }: Props) {
     await ruf(() => api.calendar.addNoteItem(eventId, note.id, { text }));
   }
 
-  if (note.items.length === 0 && !note.canAdd) return null;
+  // Eine Textnotiz bekommt hier gar nichts.
+  //
+  // Vorher stand hier `items.length === 0 && !canAdd`. Der Verfasser darf aber
+  // immer ergänzen – also hing an jeder eigenen Textnotiz ein Feld „Punkt
+  // hinzufügen …“ samt Knopf, und eine Erinnerung an sich selbst sah aus wie
+  // eine halbfertige Liste. Seit es `kind` gibt, ist die Frage entschieden,
+  // statt aus der Punktzahl erraten zu werden.
+  if (note.kind !== 'list') return null;
 
   return (
     <div className="nl">

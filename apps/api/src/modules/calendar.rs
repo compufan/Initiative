@@ -711,6 +711,11 @@ async fn notes(
 struct NoteInput {
     title: Option<String>,
     body: String,
+    /// `note` oder `list`. Ohne Angabe eine Notiz – wer eine Liste will,
+    /// sagt es. Alte Fassungen der App, die das Feld nicht kennen, legen
+    /// damit weiter Notizen an.
+    #[serde(default = "default_kind")]
+    kind: String,
     #[serde(default = "default_scope")]
     edit_scope: String,
     /// Wer Punkte hinzufügen darf. Ohne Angabe wie `edit_scope`.
@@ -754,6 +759,13 @@ fn default_scope() -> String {
     "author".to_string()
 }
 
+fn default_kind() -> String {
+    "note".to_string()
+}
+
+/// Die beiden Arten einer Notiz.
+const NOTE_KINDS: &[&str] = &["note", "list"];
+
 async fn create_note(
     State(state): State<AppState>,
     user: AuthUser,
@@ -770,6 +782,7 @@ async fn create_note(
             NOTE_SCOPES,
         )
         .one_of("checkScope", &input.check_scope, CHECK_SCOPES)
+        .one_of("kind", &input.kind, NOTE_KINDS)
         .length("body", &input.body, 0, EVENT_DESCRIPTION_MAX)
         .finish()?;
 
@@ -789,8 +802,8 @@ async fn create_note(
 
     let note = sqlx::query_as::<_, EventNoteRow>(
         "insert into event_notes
-           (id, event_id, author_id, title, body, edit_scope, add_scope, check_scope, position)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           (id, event_id, author_id, title, body, kind, edit_scope, add_scope, check_scope, position)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          returning *",
     )
     .bind(Uuid::now_v7())
@@ -798,6 +811,7 @@ async fn create_note(
     .bind(user.id())
     .bind(clean(input.title))
     .bind(&input.body)
+    .bind(&input.kind)
     .bind(&input.edit_scope)
     .bind(&add_scope)
     .bind(&input.check_scope)
@@ -856,6 +870,8 @@ struct UpdateNoteInput {
     //
     // Beim Anlegen ging es immer, weil `NoteInput` die Felder kennt. Genau das
     // machte es so schwer zu glauben.
+    /// Aus einer Notiz eine Liste machen und zurueck.
+    kind: Option<String>,
     edit_scope: Option<String>,
     add_scope: Option<String>,
     check_scope: Option<String>,
@@ -907,6 +923,9 @@ async fn update_note(
             .one_of("checkScope", scope, CHECK_SCOPES)
             .finish()?;
     }
+    if let Some(art) = input.kind.as_deref() {
+        Validator::new().one_of("kind", art, NOTE_KINDS).finish()?;
+    }
     if let Some(body) = input.body.as_deref() {
         Validator::new()
             .length("body", body, 0, EVENT_DESCRIPTION_MAX)
@@ -917,10 +936,11 @@ async fn update_note(
         "update event_notes set
            title       = case when $3 then $4 else title end,
            body        = coalesce($5, body),
-           edit_scope  = coalesce($6, edit_scope),
-           add_scope   = coalesce($7, add_scope),
-           check_scope = coalesce($8, check_scope),
-           position    = coalesce($9, position),
+           kind        = coalesce($6, kind),
+           edit_scope  = coalesce($7, edit_scope),
+           add_scope   = coalesce($8, add_scope),
+           check_scope = coalesce($9, check_scope),
+           position    = coalesce($10, position),
            updated_at  = now()
          where id = $1 and event_id = $2 and deleted_at is null
          returning *",
@@ -930,6 +950,7 @@ async fn update_note(
     .bind(input.title.is_some())
     .bind(input.title.flatten())
     .bind(input.body)
+    .bind(input.kind)
     .bind(input.edit_scope)
     .bind(input.add_scope)
     .bind(input.check_scope)

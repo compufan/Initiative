@@ -403,6 +403,10 @@ pub struct EventNoteDto {
     pub author_id: Option<Uuid>,
     pub title: Option<String>,
     pub body: String,
+    /// `note` oder `list`. Bestimmt, was die App anbietet: Eine Textnotiz
+    /// bekommt kein „Punkt hinzufügen“ und keine Regler für Rechte, die bei
+    /// ihr ohnehin ohne Wirkung wären.
+    pub kind: String,
     /// `author`, `members` oder `listed` – wer sie ändern darf.
     pub edit_scope: String,
     /// Wer Punkte hinzufügen darf (`author`, `members`, `listed`).

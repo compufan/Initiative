@@ -31,11 +31,16 @@ import type { InferenceSession } from 'onnxruntime-web';
 // und rechnete auf der CPU weiter. Auf jedem Gerät, seit dem ersten Tag.
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url';
 import ortMjsUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url';
-import { flaechenMittel } from './prepare.js';
+import { flaechenMittel, maskeSkalieren } from './prepare.js';
 
-/** Kantenlänge, auf die diese Fassung festgelegt ist. */
-const EINGABE = 512;
-const MODEL_URL = '/models/birefnet-lite-512.onnx';
+/**
+ * Kantenlänge, auf die diese Fassung festgelegt ist.
+ *
+ * Muss zum Modell in `scripts/prepare-models.mjs` passen – das Netz hat die
+ * Grösse fest im Graphen stehen ([1,3,1024,1024]) und lehnt jede andere ab.
+ */
+const EINGABE = 1024;
+const MODEL_URL = '/models/birefnet-lite-1024.onnx';
 
 /** Normalisierung wie bei BiRefNet: erst auf 0…1, dann ImageNet-Werte. */
 const MITTEL = [0.485, 0.456, 0.406];
@@ -231,34 +236,17 @@ export async function birefnetMask(image: ImageData, melden?: Fortschritt): Prom
   // Ein Strecken auf min/max waere hier falsch: Die Sigmoid-Kurve ist
   // geeicht, 0 heisst „gehoert nicht dazu“. Strecken machte aus einem Bild
   // ohne Motiv erst recht eines.
-  // Erst die Kurve über die 512×512 Modellwerte, dann daraus abtasten. Vorher
-  // lief `Math.exp` je AUSGABEpunkt – bei einer Vorlage von 1024×1024 also
-  // eine Million Mal für 262144 verschiedene Werte. Dasselbe Ergebnis,
-  // byteweise, nur ohne die vierfache Arbeit.
+  // Erst die Kurve über die Modellwerte, dann daraus abtasten. Vorher lief
+  // `Math.exp` je AUSGABEpunkt statt je Modellpunkt – dasselbe Ergebnis, nur
+  // ein Vielfaches der Arbeit.
   const flaeche = EINGABE * EINGABE;
-  const tabelle = new Uint8Array(flaeche);
+  const tabelle = new Float32Array(flaeche);
   for (let i = 0; i < flaeche; i += 1) {
-    const wert = 1 / (1 + Math.exp(-roh[i]));
-    tabelle[i] = Math.max(0, Math.min(255, Math.round(wert * 255)));
+    tabelle[i] = 1 / (1 + Math.exp(-roh[i]));
   }
 
-  const { width, height } = image;
-  // Die Spaltenzuordnung hängt nicht von der Zeile ab – einmal reicht.
-  const spalte = new Int32Array(width);
-  for (let x = 0; x < width; x += 1) {
-    spalte[x] = Math.min(EINGABE - 1, Math.floor((x * EINGABE) / width));
-  }
-
-  const alpha = new Uint8Array(width * height);
-  for (let y = 0; y < height; y += 1) {
-    const sy = Math.min(EINGABE - 1, Math.floor((y * EINGABE) / height));
-    const zeile = sy * EINGABE;
-    const ziel = y * width;
-    for (let x = 0; x < width; x += 1) {
-      alpha[ziel + x] = tabelle[zeile + spalte[x]];
-    }
-  }
-  return alpha;
+  // Bilinear statt Blockkopie – warum, steht bei `maskeSkalieren`.
+  return maskeSkalieren(tabelle, EINGABE, image.width, image.height);
 }
 
 /** Gibt die Modelldaten wieder frei – hier besonders wichtig, es sind 94 MB. */

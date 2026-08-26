@@ -322,6 +322,9 @@ pub struct EventNoteRow {
     pub author_id: Option<Uuid>,
     pub title: Option<String>,
     pub body: String,
+    /// `note` oder `list`. Frueher wurde das an der Punktzahl abgelesen –
+    /// eine leere Liste war damit nicht von einer Textnotiz zu unterscheiden.
+    pub kind: String,
     pub edit_scope: String,
     /// Wer Punkte hinzufuegen darf, und wer abhaken darf. Bei einer Liste
     /// sind das drei verschiedene Fragen – siehe Migration 0010.
