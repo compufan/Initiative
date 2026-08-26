@@ -212,6 +212,10 @@ function NoteEditor({
   // sonst steht am Abreisetag eine Liste da, die niemand mehr ueberblickt.
   const [addScope, setAddScope] = useState<NoteScope>(note?.addScope ?? 'author');
   const [checkScope, setCheckScope] = useState<CheckScope>(note?.checkScope ?? 'members');
+  // Beide Stufen bieten „Nur ausgewählte Personen“ an – dann braucht es auch
+  // eine Liste. Ohne sie wählt man eine Stufe, bei der niemand mehr darf.
+  const [adderIds, setAdderIds] = useState<string[]>(note?.adderIds ?? []);
+  const [checkerIds, setCheckerIds] = useState<string[]>(note?.checkerIds ?? []);
   const [busy, setBusy] = useState(false);
 
   /*
@@ -238,6 +242,8 @@ function NoteEditor({
         editorIds?: string[];
         addScope?: NoteScope;
         checkScope?: CheckScope;
+        adderIds?: string[];
+        checkerIds?: string[];
       } = {
         title: title.trim() || undefined,
         body,
@@ -250,6 +256,8 @@ function NoteEditor({
         daten.editorIds = scope === 'listed' ? editorIds : [];
         daten.addScope = addScope;
         daten.checkScope = checkScope;
+        daten.adderIds = addScope === 'listed' ? adderIds : [];
+        daten.checkerIds = checkScope === 'listed' ? checkerIds : [];
       }
       const ergebnis = note
         ? await api.calendar.updateNote(eventId, note.id, daten)
@@ -334,6 +342,18 @@ function NoteEditor({
           ))}
         </fieldset>
 
+        {addScope === 'listed' && (
+          <fieldset className="field" disabled={!binVerfasser}>
+            <legend>Diese Personen</legend>
+            <PersonenWahl
+              label="Wer Punkte hinzufügen darf"
+              vorschlaege={people}
+              gewaehlt={adderIds}
+              onChange={setAdderIds}
+            />
+          </fieldset>
+        )}
+
         <fieldset className="field" disabled={!binVerfasser}>
           <legend>Abhaken darf</legend>
           {CHECK_SCOPES.map((wert) => (
@@ -348,6 +368,18 @@ function NoteEditor({
             </label>
           ))}
         </fieldset>
+
+        {checkScope === 'listed' && (
+          <fieldset className="field" disabled={!binVerfasser}>
+            <legend>Diese Personen</legend>
+            <PersonenWahl
+              label="Wer abhaken darf"
+              vorschlaege={people}
+              gewaehlt={checkerIds}
+              onChange={setCheckerIds}
+            />
+          </fieldset>
+        )}
       </details>
 
       <div className="row">

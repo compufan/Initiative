@@ -121,7 +121,9 @@ export const eventFromPollSchema = z.object({
 /** Wer abhaken darf. Eine Stufe mehr als beim Ändern. */
 export type CheckScope = 'nobody' | NoteScope;
 
-export const CHECK_SCOPES: CheckScope[] = ['nobody', 'author', 'members', 'listed'];
+// `as const` wie bei NOTE_SCOPES: Ein blosses `CheckScope[]` ist für zod kein
+// Tupel, und `z.enum()` verlangt eines.
+export const CHECK_SCOPES = ['nobody', 'author', 'members', 'listed'] as const satisfies readonly CheckScope[];
 
 export interface EventNoteItemDto {
   id: string;
@@ -207,11 +209,25 @@ export const createPlanningSchema = z.object({
 });
 export type CreatePlanningInput = z.infer<typeof createPlanningSchema>;
 
+/**
+ * Was beim Anlegen und Ändern einer Notiz hinausgeht.
+ *
+ * Hier standen nur `editScope` und `editorIds`, obwohl die Oberfläche längst
+ * alle drei Rechte schickt. Das fiel nicht auf, weil das Blatt sein eigenes
+ * Objekt baut und TypeScript die Überschussprüfung nur bei direkt notierten
+ * Objekten anwendet – die Felder gingen also raus, standen aber im Vertrag
+ * nicht. Auf der Gegenseite fehlten sie dann im `PATCH` wirklich, und serde
+ * verwarf sie stumm.
+ */
 export const eventNoteSchema = z.object({
   title: z.string().max(200).optional(),
   body: z.string().max(LIMITS.eventDescriptionMax),
   editScope: z.enum(NOTE_SCOPES).optional(),
   editorIds: z.array(z.string().uuid()).max(100).optional(),
+  addScope: z.enum(NOTE_SCOPES).optional(),
+  adderIds: z.array(z.string().uuid()).max(100).optional(),
+  checkScope: z.enum(CHECK_SCOPES).optional(),
+  checkerIds: z.array(z.string().uuid()).max(100).optional(),
 });
 export type EventNoteInput = z.infer<typeof eventNoteSchema>;
 

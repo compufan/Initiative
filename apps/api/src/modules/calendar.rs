@@ -845,8 +845,23 @@ struct UpdateNoteInput {
     #[serde(default, deserialize_with = "double_option")]
     title: Option<Option<String>>,
     body: Option<String>,
+    // Alle drei Rechte, nicht nur das Ändern.
+    //
+    // Hier standen bisher nur `edit_scope` und `editor_ids`. Die Oberfläche
+    // schickt aber seit jeher alle drei mit (EventNotes.tsx) – und serde wirft
+    // unbekannte Felder kommentarlos weg. Die Folge war der denkbar
+    // unangenehmste Fehler: Die Route antwortete 200 mit dem **alten** Wert,
+    // die Oberfläche schrieb ihn zurück in ihren Zustand, und der Regler
+    // sprang zurück. Kein Fehler, keine Meldung, nichts im Protokoll.
+    //
+    // Beim Anlegen ging es immer, weil `NoteInput` die Felder kennt. Genau das
+    // machte es so schwer zu glauben.
     edit_scope: Option<String>,
+    add_scope: Option<String>,
+    check_scope: Option<String>,
     editor_ids: Option<Vec<Uuid>>,
+    adder_ids: Option<Vec<Uuid>>,
+    checker_ids: Option<Vec<Uuid>>,
     position: Option<i32>,
 }
 
@@ -864,9 +879,13 @@ async fn update_note(
     }
     // Wer sie ändern darf, bestimmt der Verfasser – sonst könnte jemand mit
     // Schreibrecht sich selbst zum alleinigen Bearbeiter machen.
-    if (input.edit_scope.is_some() || input.editor_ids.is_some())
-        && note.author_id != Some(user.id())
-    {
+    let rechte_beruehrt = input.edit_scope.is_some()
+        || input.editor_ids.is_some()
+        || input.add_scope.is_some()
+        || input.adder_ids.is_some()
+        || input.check_scope.is_some()
+        || input.checker_ids.is_some();
+    if rechte_beruehrt && note.author_id != Some(user.id()) {
         return Err(AppError::forbidden(
             "Wer die Notiz ändern darf, bestimmt ihr Verfasser",
         ));
@@ -874,6 +893,18 @@ async fn update_note(
     if let Some(scope) = input.edit_scope.as_deref() {
         Validator::new()
             .one_of("editScope", scope, NOTE_SCOPES)
+            .finish()?;
+    }
+    if let Some(scope) = input.add_scope.as_deref() {
+        Validator::new()
+            .one_of("addScope", scope, NOTE_SCOPES)
+            .finish()?;
+    }
+    // Abhaken kennt eine Stufe mehr als die anderen beiden – deshalb eine
+    // eigene Liste und nicht NOTE_SCOPES.
+    if let Some(scope) = input.check_scope.as_deref() {
+        Validator::new()
+            .one_of("checkScope", scope, CHECK_SCOPES)
             .finish()?;
     }
     if let Some(body) = input.body.as_deref() {
@@ -884,11 +915,13 @@ async fn update_note(
 
     let updated = sqlx::query_as::<_, EventNoteRow>(
         "update event_notes set
-           title      = case when $3 then $4 else title end,
-           body       = coalesce($5, body),
-           edit_scope = coalesce($6, edit_scope),
-           position   = coalesce($7, position),
-           updated_at = now()
+           title       = case when $3 then $4 else title end,
+           body        = coalesce($5, body),
+           edit_scope  = coalesce($6, edit_scope),
+           add_scope   = coalesce($7, add_scope),
+           check_scope = coalesce($8, check_scope),
+           position    = coalesce($9, position),
+           updated_at  = now()
          where id = $1 and event_id = $2 and deleted_at is null
          returning *",
     )
@@ -898,6 +931,8 @@ async fn update_note(
     .bind(input.title.flatten())
     .bind(input.body)
     .bind(input.edit_scope)
+    .bind(input.add_scope)
+    .bind(input.check_scope)
     .bind(input.position)
     .fetch_optional(&state.pool)
     .await?
@@ -905,6 +940,12 @@ async fn update_note(
 
     if let Some(editor_ids) = input.editor_ids {
         set_note_editors(&state, &updated, "edit", &editor_ids).await?;
+    }
+    if let Some(adder_ids) = input.adder_ids {
+        set_note_editors(&state, &updated, "add", &adder_ids).await?;
+    }
+    if let Some(checker_ids) = input.checker_ids {
+        set_note_editors(&state, &updated, "check", &checker_ids).await?;
     }
     let dto = to_note_dto(&state.pool, &event, updated, user.id()).await?;
     broadcast_event(&state, &load_event_dto(&state, id).await?).await?;

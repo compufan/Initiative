@@ -460,3 +460,174 @@ async fn namentlich_zugewiesen_schlaegt_die_zahl() {
     assert_eq!(kuchen["needed"], json!(3), "wieder die Zahl");
     assert_eq!(kuchen["done"], json!(false), "zwei von drei");
 }
+
+/// Rechte einer Liste **nachträglich** ändern.
+///
+/// Der Fehler, den das hier festhält, war unangenehm still: Die Oberfläche
+/// schickte `addScope` und `checkScope` bei jedem Speichern mit, aber
+/// `UpdateNoteInput` kannte die beiden Felder nicht – und serde wirft
+/// unbekannte Felder kommentarlos weg. Die Route antwortete daraufhin 200 mit
+/// dem **alten** Wert, die Oberfläche schrieb ihn zurück in ihren Zustand, und
+/// der Regler sprang zurück. Kein Fehler, keine Meldung, nichts im Protokoll.
+///
+/// Beim Anlegen ging es immer, weil `NoteInput` die Felder kennt. Genau das
+/// machte es so schwer zu glauben – man ändert etwas, es springt zurück, und
+/// eine neue Liste mit demselben Wert funktioniert.
+///
+/// Der Test prüft deshalb nicht nur die Antwort, sondern die **Wirkung**: ob
+/// jemand danach wirklich darf, was die neue Stufe erlaubt.
+#[tokio::test(flavor = "multi_thread")]
+async fn geaenderte_rechte_einer_liste_bleiben_geaendert() {
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL nicht gesetzt – übersprungen");
+        return;
+    };
+    let simple = Uuid::now_v7().simple().to_string();
+    let suffix = simple[simple.len() - 8..].to_string();
+
+    let (a_token, a_id) = probe.anmelden(&suffix, "rechtea").await;
+    let (b_token, b_id) = probe.anmelden(&suffix, "rechteb").await;
+
+    let (_, chat) = probe
+        .call(
+            "POST",
+            "/api/v1/conversations",
+            Some(&a_token),
+            Some(json!({ "type": "group", "title": "Rechte", "memberIds": [b_id] })),
+        )
+        .await;
+
+    let beginn = chrono::Utc::now() + chrono::Duration::days(3);
+    let (_, termin) = probe
+        .call(
+            "POST",
+            "/api/v1/calendar/events",
+            Some(&a_token),
+            Some(json!({
+                "conversationId": chat["id"],
+                "title": "Einkauf",
+                "startsAt": beginn.to_rfc3339(),
+                "endsAt": (beginn + chrono::Duration::hours(2)).to_rfc3339(),
+                "attendeeIds": [a_id, b_id],
+            })),
+        )
+        .await;
+    let event_id = termin["id"].as_str().unwrap().to_string();
+
+    // Eng angelegt: nur der Verfasser darf ergänzen und abhaken.
+    let (status, notiz) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{event_id}/notes"),
+            Some(&a_token),
+            Some(json!({
+                "title": "Einkaufsliste",
+                "body": "",
+                "editScope": "author",
+                "addScope": "author",
+                "checkScope": "author",
+                "items": [{ "text": "Milch" }],
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{notiz}");
+    let note_id = notiz["id"].as_str().unwrap().to_string();
+
+    // Mark darf jetzt noch nicht ergänzen.
+    let (status, _) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{event_id}/notes/{note_id}/items"),
+            Some(&b_token),
+            Some(json!({ "text": "Brot" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "vorher darf Mark nicht");
+
+    // --- Die Änderung, um die es geht -----------------------------------
+    // `editScope` bleibt bewusst unerwähnt: Genau so schickt die Oberfläche
+    // eine reine Änderung der beiden anderen Rechte.
+    let (status, geaendert) = probe
+        .call(
+            "PATCH",
+            &format!("/api/v1/calendar/events/{event_id}/notes/{note_id}"),
+            Some(&a_token),
+            Some(json!({ "addScope": "members", "checkScope": "members" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{geaendert}");
+
+    // Die Antwort muss den NEUEN Wert tragen. Stand hier der alte, schrieb die
+    // Oberfläche ihn zurück – das war der sichtbare Teil des Fehlers.
+    assert_eq!(
+        geaendert["addScope"],
+        json!("members"),
+        "die Antwort trägt den alten Wert zurück: {geaendert}"
+    );
+    assert_eq!(geaendert["checkScope"], json!("members"), "{geaendert}");
+
+    // Und noch einmal frisch geladen – nicht nur die Antwort, auch die Ablage.
+    let gespeichert = &notiz_laden(&probe, &event_id, &note_id, &a_token).await;
+    assert_eq!(
+        gespeichert["addScope"],
+        json!("members"),
+        "nach dem Neuladen wieder der alte Wert"
+    );
+    assert_eq!(gespeichert["checkScope"], json!("members"));
+
+    // --- Die Wirkung ----------------------------------------------------
+    // Ein gespeicherter Wert, der nichts erlaubt, wäre nur die halbe Miete.
+    let (status, punkt) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{event_id}/notes/{note_id}/items"),
+            Some(&b_token),
+            Some(json!({ "text": "Brot" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "Mark darf jetzt ergänzen: {punkt}");
+
+    let milch = punkt_von(&probe, &event_id, &note_id, &a_token, "Milch").await;
+    let (status, body) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{event_id}/notes/{note_id}/items/{milch}/check"),
+            Some(&b_token),
+            Some(json!({ "checked": true })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "Mark darf jetzt abhaken: {body}");
+}
+
+/// Eine Notiz frisch vom Server holen – nicht die Antwort von vorhin.
+///
+/// Der Termin selbst traegt die Notizen nicht; dafuer gibt es eine eigene
+/// Route.
+async fn notiz_laden(probe: &Probe, event_id: &str, note_id: &str, token: &str) -> Value {
+    let (status, geladen) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/calendar/events/{event_id}/notes"),
+            Some(token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{geladen}");
+    geladen["items"]
+        .as_array()
+        .and_then(|liste| liste.iter().find(|n| n["id"] == json!(note_id)))
+        .unwrap_or_else(|| panic!("Notiz fehlt in {geladen}"))
+        .clone()
+}
+
+/// Die Kennung eines Punktes holen.
+async fn punkt_von(
+    probe: &Probe,
+    event_id: &str,
+    note_id: &str,
+    token: &str,
+    text: &str,
+) -> String {
+    let notiz = notiz_laden(probe, event_id, note_id, token).await;
+    punkt(&notiz, text)["id"].as_str().unwrap().to_string()
+}
