@@ -20,6 +20,14 @@ export interface MaskRequest {
   /** Der angetippte Punkt in Bildkoordinaten, falls es einen gibt. */
   seed?: { x: number; y: number };
   /**
+   * Alle angetippten Punkte mit Vorzeichen, in Bildkoordinaten.
+   *
+   * Nur „Antippen (genau)“ wertet das aus – dessen Netz nimmt beliebig viele
+   * Punkte entgegen, und ein Minus-Tipp ist die einzige Art, „das nicht“ zu
+   * sagen. Die anderen Verfahren brauchen hoechstens `seed`.
+   */
+  seeds?: { x: number; y: number; dazu: boolean }[];
+  /**
    * Wird waehrend eines laengeren Ladens gerufen: Anteil 0…1 und ein Satz,
    * den man zeigen kann. Bei knapp 94 MB ist das kein Schmuck – ohne
    * Rueckmeldung steht der Anwender vor einem Knopf, der nichts tut.
@@ -84,7 +92,7 @@ export async function runEngine(key: EngineKey, request: MaskRequest): Promise<U
       }
       case 'tippen': {
         const { tippenMask } = await import('./tippen.js');
-        return await tippenMask(request.image, request.seed, request.fortschritt);
+        return await tippenMask(request.image, request.seeds ?? [], request.fortschritt);
       }
       case 'object': {
         const { objectMask } = await import('./object.js');

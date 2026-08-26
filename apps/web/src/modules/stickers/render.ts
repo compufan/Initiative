@@ -44,6 +44,17 @@ export interface KeepSeed {
   /** Position auf der Sticker-Fläche, 0 … STICKER_SIZE. */
   x: number;
   y: number;
+  /**
+   * Ob dieser Tipp etwas hinzunimmt oder wegnimmt.
+   *
+   * Fehlt der Wert, gilt „dazu“ – so bleiben Sticker gültig, die vor dieser
+   * Unterscheidung entstanden sind, und die Farbflutung (`keepAtSeeds`)
+   * verhält sich unverändert.
+   *
+   * `weg` kann nur „Antippen (genau)“: Das Netz nimmt Punkte mit Vorzeichen
+   * entgegen, die Flutung kennt nur Hinzunehmen.
+   */
+  mode?: 'dazu' | 'weg';
 }
 
 /**
@@ -178,6 +189,9 @@ export function keepAtSeeds(image: ImageData, seeds: KeepSeed[], tolerance: numb
   const stack = new Int32Array(total);
 
   for (const seed of seeds) {
+    // Die Flutung kann kein Wegnehmen – ein Minus-Tipp waere hier ein
+    // zusaetzlicher Saatpunkt, also das genaue Gegenteil des Gemeinten.
+    if (seed.mode === 'weg') continue;
     const sx = Math.round(seed.x);
     const sy = Math.round(seed.y);
     if (sx < 0 || sy < 0 || sx >= width || sy >= height) continue;

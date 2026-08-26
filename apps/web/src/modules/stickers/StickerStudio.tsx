@@ -112,6 +112,14 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   /** Ob der Pinsel wegnimmt oder das Original zurückholt. */
   const [pinsel, setPinsel] = useState<'weg' | 'zurueck'>('weg');
   /**
+   * Ob ein Tipp hinzunimmt oder wegnimmt.
+   *
+   * Nur „Antippen (genau)“ kann wegnehmen – das Netz nimmt Punkte mit
+   * Vorzeichen entgegen. Die Farbflutung kennt nur Hinzunehmen und
+   * überspringt Minus-Tipps.
+   */
+  const [tippModus, setTippModus] = useState<'dazu' | 'weg'>('dazu');
+  /**
    * Die Lupe: reine Ansicht, nicht Teil des Stickers.
    *
    * Sie steht bewusst nicht im `doc` – sonst landete jedes Heranzoomen im
@@ -134,6 +142,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   const toolRef = useRef(tool);
   const brushRef = useRef(brush);
   const pinselRef = useRef(pinsel);
+  const tippModusRef = useRef(tippModus);
   const lupeRef = useRef(lupe);
   const history = useRef<StickerDoc[]>([]);
   const lastCommit = useRef<{ label: string; at: number }>({ label: '', at: 0 });
@@ -167,6 +176,16 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   const busyGesture = useRef(false);
   const frame = useRef<number | null>(null);
 
+  /**
+   * Ob „Antippen (genau)“ bereitsteht.
+   *
+   * Nur dann gibt es Minus-Tipps: Die Farbflutung kann kein Wegnehmen, und
+   * ein Knopf, der nichts tut, ist schlimmer als keiner.
+   */
+  const genauVerfuegbar = engineAvailable('tippen');
+  const dazuZahl = doc.keep.filter((punkt) => punkt.mode !== 'weg').length;
+  const wegZahl = doc.keep.length - dazuZahl;
+
   const render = useCallback((fast: boolean) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -198,6 +217,10 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   useEffect(() => {
     pinselRef.current = pinsel;
   }, [pinsel]);
+
+  useEffect(() => {
+    tippModusRef.current = tippModus;
+  }, [tippModus]);
 
   useEffect(() => {
     lupeRef.current = lupe;
@@ -323,19 +346,24 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       try {
         const { image, faktor } = vorlageAus(quelle.image, quelle.width, quelle.height);
 
-        // Ein zuvor angetippter Punkt sagt dem Modell, welches Gesicht gemeint
-        // ist. Er liegt auf der Sticker-Fläche und muss zurück ins Bild.
-        const getippt = docRef.current.keep.at(-1);
-        const seed = getippt
-          ? (() => {
-              const p = toSourcePoint(getippt, quelle, docRef.current);
-              return { x: p.x * faktor, y: p.y * faktor };
-            })()
-          : undefined;
+        // Angetippte Punkte liegen auf der Sticker-Fläche und müssen zurück
+        // ins Bild. „Gesicht“ braucht nur den letzten – „Antippen (genau)“
+        // bekommt alle, mit Vorzeichen.
+        const insBild = (punkt: { x: number; y: number }) => {
+          const p = toSourcePoint(punkt, quelle, docRef.current);
+          return { x: p.x * faktor, y: p.y * faktor };
+        };
+        const seeds = docRef.current.keep.map((punkt) => ({
+          ...insBild(punkt),
+          dazu: punkt.mode !== 'weg',
+        }));
+        const letzter = docRef.current.keep.at(-1);
+        const seed = letzter ? insBild(letzter) : undefined;
 
         const roh = await runEngine(key, {
           image,
           seed,
+          seeds,
           fortschritt: (_anteil, text) => setModellStand(text),
         });
         // Der Weichzeichner glättet die harte Treppe, die die kleineren Netze
@@ -570,7 +598,10 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       commitArmedGesture();
       // Kein Ziehen: Ein Antippen ist ein Punkt, aus dem der Bereich waechst.
       gesture.current = { ...gesture.current, mode: 'none' };
-      setDoc((value) => ({ ...value, keep: [...value.keep, { x: point.x, y: point.y }] }));
+      setDoc((value) => ({
+        ...value,
+        keep: [...value.keep, { x: point.x, y: point.y, mode: tippModusRef.current }],
+      }));
       return;
     }
     if (toolRef.current === 'erase') {
@@ -1213,6 +1244,27 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
               >
                 👆 Antippen zum Behalten {tool === 'keep' ? 'an' : 'aus'}
               </button>
+              {tool === 'keep' && genauVerfuegbar && (
+                <button
+                  type="button"
+                  className={`btn btn-sm ${tippModus === 'weg' ? 'stk-chip-active' : ''}`}
+                  onClick={() => setTippModus(tippModus === 'weg' ? 'dazu' : 'weg')}
+                  disabled={!hasImage}
+                >
+                  {tippModus === 'weg' ? '➖ Wegnehmen' : '➕ Dazunehmen'}
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => {
+                  commit();
+                  setDoc((value) => ({ ...value, keep: value.keep.slice(0, -1) }));
+                }}
+                disabled={!hasImage || doc.keep.length === 0}
+              >
+                Letzten Tipp zurück
+              </button>
               <button
                 type="button"
                 className="btn btn-sm"
@@ -1227,10 +1279,11 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
             </div>
             {doc.keep.length > 0 && (
               <p className="stk-hint">
-                {doc.keep.length === 1
-                  ? '1 Stelle ausgewählt.'
-                  : `${doc.keep.length} Stellen ausgewählt.`}{' '}
-                Tippe weitere Bereiche an, die dazugehören – etwa Haare oder Pullover.
+                {dazuZahl === 1 ? '1 Stelle' : `${dazuZahl} Stellen`} dazu
+                {wegZahl > 0 && `, ${wegZahl} weggenommen`}.{' '}
+                {genauVerfuegbar
+                  ? 'Sitzt etwas nicht, tippe mit „Wegnehmen“ darauf – der Rest bleibt.'
+                  : 'Tippe weitere Bereiche an, die dazugehören – etwa Haare oder Pullover.'}
               </p>
             )}
             <div className="stk-btn-row">

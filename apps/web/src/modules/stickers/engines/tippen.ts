@@ -105,18 +105,27 @@ async function laden(melden?: Fortschritt): Promise<void> {
 }
 
 /**
- * Die Maske zu einem angetippten Punkt.
+ * Die Maske zu den angetippten Punkten.
  *
- * `seed` liegt in Bildpunkten des übergebenen Bildes – nicht in Koordinaten
- * der Sticker-Fläche. Das Umrechnen erledigt der Aufrufer.
+ * Die Punkte liegen in Bildpunkten des übergebenen Bildes – nicht in
+ * Koordinaten der Sticker-Fläche. Das Umrechnen erledigt der Aufrufer.
+ *
+ * `dazu: false` heisst „das ausdrücklich nicht“. Das ist der Unterschied zur
+ * Farbflutung: Wer bei einer Flasche das Etikett nicht mitnehmen will, tippt
+ * es weg, statt an der Toleranz zu drehen und zu hoffen.
  */
 export async function tippenMask(
   image: ImageData,
-  seed: { x: number; y: number } | undefined,
+  punkte: { x: number; y: number; dazu: boolean }[],
   melden?: Fortschritt,
 ): Promise<Uint8Array> {
-  if (!seed) {
+  if (punkte.length === 0) {
     throw new Error('Tippe auf das, was bleiben soll.');
+  }
+  if (!punkte.some((p) => p.dazu)) {
+    // Nur Minus-Tipps ergeben nichts: Das Netz braucht mindestens einen Punkt,
+    // von dem aus es wachsen kann.
+    throw new Error('Tippe zuerst auf das, was bleiben soll – dann kannst du wegnehmen.');
   }
   await laden(melden);
   const ort = await import('onnxruntime-web/wasm');
@@ -135,20 +144,30 @@ export async function tippenMask(
   }
 
   // --- Der billige Teil, je Tipp -------------------------------------------
+  // Genau hier liegt der Gewinn: Der zweite und jeder weitere Tipp kostet nur
+  // noch diesen Aufruf. Deshalb werden IMMER alle Punkte frisch geschickt,
+  // statt auf der vorigen Antwort aufzubauen – das ist billig, und es macht
+  // Rückgängig trivial: Punkt aus der Liste nehmen, neu rechnen. Ein
+  // mitgeführtes `mask_input` müsste bei jedem Rückgängig verworfen werden,
+  // weil es dann nicht mehr zur Punktliste passt.
   melden?.(0.9, 'Wird freigestellt …');
+
   // Punkte im 1024er Maßstab – der Decoder stammt aus MobileSAM und rechnet
   // in dessen Koordinaten, nicht in denen des Encoders.
   const massstab = PUNKT / Math.max(width, height);
+  const koordinaten = new Float32Array(punkte.length * 2);
+  const marken = new Float32Array(punkte.length);
+  punkte.forEach((punkt, i) => {
+    koordinaten[i * 2] = punkt.x * massstab;
+    koordinaten[i * 2 + 1] = punkt.y * massstab;
+    // 1 = gehört dazu, 0 = gehört ausdrücklich nicht dazu.
+    marken[i] = punkt.dazu ? 1 : 0;
+  });
+
   const ergebnis = await decoder.run({
     image_embeddings: letzteEinbettung,
-    point_coords: new ort.Tensor(
-      'float32',
-      Float32Array.from([seed.x * massstab, seed.y * massstab]),
-      [1, 1, 2],
-    ),
-    // 1 = „gehört dazu“. 0 wäre „gehört nicht dazu“ – dafür braucht es eine
-    // Oberfläche, die Minus-Tipps kennt; die kommt später.
-    point_labels: new ort.Tensor('float32', Float32Array.from([1]), [1, 1]),
+    point_coords: new ort.Tensor('float32', koordinaten, [1, punkte.length, 2]),
+    point_labels: new ort.Tensor('float32', marken, [1, punkte.length]),
     mask_input: new ort.Tensor('float32', new Float32Array(MASKE * MASKE), [1, 1, MASKE, MASKE]),
     has_mask_input: new ort.Tensor('float32', Float32Array.from([0]), [1]),
   });
@@ -158,8 +177,15 @@ export async function tippenMask(
 
   // Das Netz schlägt vier Masken vor – „nur das Glas“, „Glas mit Inhalt“,
   // „der ganze Tisch“. Der iou-Kopf sagt, welche es für die beste hält.
+  //
+  // Aber nur beim ERSTEN Punkt: Sobald jemand nachgebessert hat, ist die
+  // Mehrdeutigkeit ja gerade aufgelöst – dann würde ein Wechsel des Kopfes
+  // die Auswahl bei jedem Tipp umspringen lassen, statt sie zu verfeinern.
+  // Die Referenzimplementierungen von SAM machen es genauso.
   let beste = 0;
-  for (let i = 1; i < iou.length; i += 1) if (iou[i] > iou[beste]) beste = i;
+  if (punkte.length === 1) {
+    for (let i = 1; i < iou.length; i += 1) if (iou[i] > iou[beste]) beste = i;
+  }
 
   return maskeAusLogits(roh, beste, width, height);
 }
