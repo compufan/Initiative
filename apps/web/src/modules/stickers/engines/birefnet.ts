@@ -48,6 +48,28 @@ const ABWEICHUNG = [0.229, 0.224, 0.225];
 
 export type Fortschritt = (anteil: number, text: string) => void;
 
+/**
+ * Gerade so viel WebGPU, wie hier gebraucht wird.
+ *
+ * Statt `@webgpu/types` als Abhängigkeit aufzunehmen: Wir benutzen drei
+ * Namen, und die vollständigen Typen sind einige tausend Zeilen. Was hier
+ * steht, ist absichtlich unvollständig – aber genau das, worauf der Code
+ * zugreift, und damit fällt eine falsche Annahme beim Übersetzen auf.
+ */
+interface GpuGrenzen {
+  readonly [name: string]: number | undefined;
+}
+interface GpuAdapter {
+  readonly limits: GpuGrenzen;
+  requestDevice(optionen?: { requiredLimits?: Record<string, number> }): Promise<GpuGeraet>;
+}
+interface GpuGeraet {
+  destroy(): void;
+}
+interface GpuZugang {
+  requestAdapter(): Promise<GpuAdapter | null>;
+}
+
 let session: InferenceSession | null = null;
 let ladend: Promise<InferenceSession> | null = null;
 
@@ -65,6 +87,24 @@ let ladend: Promise<InferenceSession> | null = null;
  */
 let rechenweg: { laufwerk: 'webgpu' | 'wasm'; grund?: string } = { laufwerk: 'wasm' };
 
+/**
+ * Ob die Grafikeinheit für dieses Netz aufgegeben wurde.
+ *
+ * Der entscheidende Punkt: Ein WebGPU-Rechenweg kann beim **Erzeugen** der
+ * Sitzung tadellos durchlaufen und erst beim **Rechnen** abbrechen – die
+ * Shader werden erst dann übersetzt. Auf dem Z Flip 6 sah das so aus:
+ *
+ *   Too many storage buffers in shader. Current: 11, Max is 10
+ *
+ * Vorher fing dieser Code nur Fehler beim Erzeugen ab. Die kaputte Sitzung
+ * blieb danach liegen und wurde beim nächsten Tippen wiederverwendet – jeder
+ * weitere Versuch scheiterte an derselben Stelle, und die App wirkte
+ * eingefroren. Jetzt merkt sie sich den Fehlschlag und baut beim nächsten Mal
+ * gleich auf der CPU auf.
+ */
+let nurCpu = false;
+let zuletztGescheitert: string | null = null;
+
 export function birefnetRechenweg(): { laufwerk: 'webgpu' | 'wasm'; grund?: string } {
   return rechenweg;
 }
@@ -76,13 +116,50 @@ export function birefnetRechenweg(): { laufwerk: 'webgpu' | 'wasm'; grund?: stri
  * die dann beim ersten Zugriff aussteigen. Erst ein tatsächlich zugeteilter
  * Adapter ist eine Zusage.
  */
-async function grafikVorhanden(): Promise<boolean> {
-  const gpu = (navigator as Navigator & { gpu?: { requestAdapter: () => Promise<unknown> } }).gpu;
-  if (!gpu) return false;
+async function grafikGeraet(): Promise<GpuGeraet | null> {
+  const gpu = (navigator as Navigator & { gpu?: GpuZugang }).gpu;
+  if (!gpu) return null;
   try {
-    return Boolean(await gpu.requestAdapter());
+    const adapter = await gpu.requestAdapter();
+    if (!adapter) return null;
+
+    // # Warum ein eigenes Gerät und nicht das der Laufzeit
+    //
+    // Auf dem Z Flip 6 (Adreno 750) brach der Lauf ab mit:
+    //
+    //   Too many storage buffers in shader. Current: 11, Max is 10
+    //
+    // Die 10 ist keine Eigenschaft der Grafikeinheit, sondern das, womit das
+    // Gerät angefordert wurde: `requestDevice()` ohne `requiredLimits` gibt
+    // die **Mindestwerte** der Spezifikation, nicht das, was der Adapter
+    // kann. Ein einzelner verschmolzener Rechenschritt in BiRefNet braucht
+    // elf Puffer – einen mehr.
+    //
+    // Also fragen wir ausdrücklich nach dem, was der Adapter meldet. Zwei
+    // weitere Grenzen kommen mit, weil sie beim nächsten Schritt gerissen
+    // würden: ein einzelner Gewichtsblock dieses Netzes ist grösser als die
+    // 128 MiB, die die Spezifikation mindestens zusichert.
+    const wunsch: Record<string, number> = {};
+    for (const name of [
+      'maxStorageBuffersPerShaderStage',
+      'maxStorageBufferBindingSize',
+      'maxBufferSize',
+      'maxComputeInvocationsPerWorkgroup',
+      'maxComputeWorkgroupStorageSize',
+    ] as const) {
+      const wert = adapter.limits[name];
+      if (typeof wert === 'number') wunsch[name] = wert;
+    }
+
+    try {
+      return await adapter.requestDevice({ requiredLimits: wunsch });
+    } catch {
+      // Ein Adapter darf ablehnen, was er selbst gemeldet hat. Dann eben mit
+      // den Vorgabewerten – vielleicht reicht es für dieses Bild.
+      return await adapter.requestDevice();
+    }
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -139,48 +216,51 @@ async function loadSession(melden?: Fortschritt): Promise<InferenceSession> {
       ort.env.wasm.wasmPaths = { wasm: ortWasmUrl, mjs: ortMjsUrl };
       // Mehrere Threads brauchten COOP/COEP – die setzen wir nicht.
       ort.env.wasm.numThreads = 1;
-      // **Immer** in den Arbeiter, nicht nur ohne Grafikeinheit. Auch der
-      // schnelle Weg hat CPU-Anteile: die 94 MB einlesen, den Graphen
-      // optimieren, einzelne Rechenschritte ohne GPU-Kern. Läuft das im
-      // Hauptfaden, zeichnet die Oberfläche nicht mehr – und ein Handy, das
-      // minutenlang nicht auf Berührung reagiert, sieht abgestürzt aus.
-      ort.env.wasm.proxy = true;
 
-      /**
-       * Ein Versuch mit **genau einem** Rechenweg.
-       *
-       * Nicht `['webgpu', 'wasm']`: ORT verwirft einen unbrauchbaren Weg dann
-       * still und rechnet auf der CPU weiter. Genau dieses Schweigen hat den
-       * Fehler oben verdeckt. Ein Versuch, der scheitern darf, ist ehrlicher
-       * als eine Liste, die immer irgendwie gelingt.
-       */
       const bauen = async (weg: 'webgpu' | 'wasm', bytes: Uint8Array) =>
         ort.InferenceSession.create(bytes, {
+          // Absichtlich EIN Rechenweg je Versuch. Mit ['webgpu','wasm']
+          // verwirft ORT einen unbrauchbaren Weg still und rechnet auf der
+          // CPU weiter – genau dieses Schweigen hat den jsep-Fehler monatelang
+          // verdeckt.
           executionProviders: [weg],
           graphOptimizationLevel: 'all',
         });
 
       let daten = await modellHolen(melden);
-      let created: InferenceSession;
+      let created: InferenceSession | null = null;
 
-      if (await grafikVorhanden()) {
+      const geraet = nurCpu ? null : await grafikGeraet();
+      if (geraet) {
         try {
+          // Das eigene Gerät kann nur im Hauptfaden übergeben werden – ein
+          // GPUDevice lässt sich nicht in einen Arbeiter reichen. Für den
+          // schnellen Weg ist das vertretbar: Auf der Grafikeinheit dauert
+          // ein Bild Sekunden, nicht Minuten.
+          ort.env.wasm.proxy = false;
+          (ort.env.webgpu as { device?: unknown }).device = geraet;
           created = await bauen('webgpu', daten);
           rechenweg = { laufwerk: 'webgpu' };
         } catch (fehler) {
-          // Mit `proxy` wandert der Puffer beim ersten Versuch in den
-          // Arbeiter und ist hier danach leer. Die Bytes müssen also neu
-          // geholt werden – aus dem Zwischenspeicher, das kostet nichts.
-          daten = await modellHolen();
-          created = await bauen('wasm', daten);
-          rechenweg = {
-            laufwerk: 'wasm',
-            grund: fehler instanceof Error ? fehler.message : String(fehler),
-          };
+          created = null;
+          zuletztGescheitert = fehler instanceof Error ? fehler.message : String(fehler);
         }
-      } else {
+      }
+
+      if (!created) {
+        // Ohne Grafikeinheit rechnet dieses Netz minutenlang. Dann gehört es
+        // zwingend in einen Arbeiter, sonst steht die Oberfläche still und
+        // sieht abgestürzt aus.
+        ort.env.wasm.proxy = true;
+        // Mit Proxy wandert der Puffer beim ersten Versuch in den Arbeiter
+        // und ist hier danach leer. Die Bytes also neu holen – aus dem
+        // Zwischenspeicher, das kostet nichts.
+        daten = await modellHolen();
         created = await bauen('wasm', daten);
-        rechenweg = { laufwerk: 'wasm', grund: 'Dieses Gerät bietet kein WebGPU an.' };
+        rechenweg = {
+          laufwerk: 'wasm',
+          grund: zuletztGescheitert ?? 'Dieses Gerät bietet kein WebGPU an.',
+        };
       }
 
       session = created;
@@ -213,18 +293,44 @@ function vorbereiten(image: ImageData): Float32Array {
  * Rückgabe: ein Wert je Bildpunkt, 0 = weg, 255 = bleibt, in Bildgrösse.
  */
 export async function birefnetMask(image: ImageData, melden?: Fortschritt): Promise<Uint8Array> {
-  const runner = await loadSession(melden);
-  melden?.(
-    1,
-    rechenweg.laufwerk === 'webgpu'
-      ? 'Wird freigestellt …'
-      : 'Wird freigestellt – ohne Grafikeinheit dauert das mehrere Minuten.',
-  );
   const ort = await import('onnxruntime-web/webgpu');
 
-  const eingabe = new ort.Tensor('float32', vorbereiten(image), [1, 3, EINGABE, EINGABE]);
-  const ergebnis = await runner.run({ [runner.inputNames[0]]: eingabe });
-  const roh = ergebnis[runner.outputNames[0]].data as Float32Array;
+  /**
+   * Einmal rechnen – und beim Fehlschlag auf der Grafikeinheit **einmal**
+   * alles wegwerfen und auf der CPU neu aufbauen.
+   *
+   * Das ist der Kern: Die Shader eines WebGPU-Rechenwegs werden erst beim
+   * ersten Lauf übersetzt. Ein Gerät, dessen Grenzen nicht reichen, meldet
+   * sich also nicht beim Erzeugen der Sitzung, sondern hier. Wer nur das
+   * Erzeugen absichert, behält eine Sitzung, die bei jedem Tippen erneut an
+   * derselben Stelle abbricht.
+   */
+  const rechnen = async (): Promise<Float32Array> => {
+    const runner = await loadSession(melden);
+    melden?.(
+      1,
+      rechenweg.laufwerk === 'webgpu'
+        ? 'Wird freigestellt …'
+        : 'Wird freigestellt – ohne Grafikeinheit dauert das mehrere Minuten.',
+    );
+    const eingabe = new ort.Tensor('float32', vorbereiten(image), [1, 3, EINGABE, EINGABE]);
+    const ergebnis = await runner.run({ [runner.inputNames[0]]: eingabe });
+    return ergebnis[runner.outputNames[0]].data as Float32Array;
+  };
+
+  let roh: Float32Array;
+  try {
+    roh = await rechnen();
+  } catch (fehler) {
+    if (rechenweg.laufwerk !== 'webgpu' || nurCpu) throw fehler;
+    // Die Grafikeinheit hat abgelehnt. Ab jetzt gar nicht mehr fragen – sonst
+    // zahlt der Anwender den Fehlversuch bei jedem Bild noch einmal.
+    zuletztGescheitert = fehler instanceof Error ? fehler.message : String(fehler);
+    nurCpu = true;
+    await releaseBirefnet();
+    melden?.(0, 'Die Grafikeinheit kam nicht mit – wird auf dem Prozessor gerechnet.');
+    roh = await rechnen();
+  }
 
   // Das Netz endet auf einer Faltung, nicht auf einer Sigmoid-Schicht: Was
   // herauskommt, sind Logits, keine Wahrscheinlichkeiten. Die Referenz von
