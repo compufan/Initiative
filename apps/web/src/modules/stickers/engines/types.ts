@@ -15,17 +15,32 @@ export type EngineKey = 'tap' | 'person' | 'face' | 'object' | 'birefnet';
 /**
  * Welche Laufzeit ein Verfahren braucht.
  *
- * Wichtig für die Größenangabe: „Person“ und „Gesicht“ teilen sich dieselbe
- * Laufzeit. Wer eines von beiden schon benutzt hat, lädt beim anderen nur
+ * Wichtig für die Größenangabe: „Person“ und „Gesicht“ teilen sich wirklich
+ * dieselbe Laufzeit. Wer eines von beiden benutzt hat, lädt beim anderen nur
  * noch das Modell – ein Fünftel Megabyte statt dreieinhalb.
+ *
+ * `onnx` und `onnx-gpu` teilen sie **nicht**, auch wenn beide „ONNX Runtime“
+ * heissen: Der Einstiegspunkt `onnxruntime-web/wasm` lädt
+ * `ort-wasm-simd-threaded.wasm`, `onnxruntime-web/webgpu` dagegen die
+ * asyncify-Fassung. Zwei Dateien, zwei Downloads.
+ *
+ * Hier stand für beide `onnx`, und `downloadHint()` versprach deshalb, wer
+ * „Beliebiges Objekt“ schon habe, brauche für „Hohe Qualität“ nur noch das
+ * Modell. Das stimmte nie – vorher waren es die jsep- statt der
+ * asyncify-Fassung, also ebenfalls zwei verschiedene Dateien.
  */
-export type RuntimeKind = 'keine' | 'mediapipe' | 'onnx';
+export type RuntimeKind = 'keine' | 'mediapipe' | 'onnx' | 'onnx-gpu';
 
-/** Was die jeweilige Laufzeit einmalig kostet (komprimiert übertragen, MB). */
+/**
+ * Was die jeweilige Laufzeit einmalig kostet (komprimiert übertragen, MB).
+ *
+ * Nachgemessen am gebauten Stand mit `gzip -c dist/assets/*.wasm`.
+ */
 export const RUNTIME_MB: Record<RuntimeKind, number> = {
   keine: 0,
   mediapipe: 3.3,
   onnx: 3.4,
+  'onnx-gpu': 6.1,
 };
 
 export interface EngineInfo {
@@ -89,9 +104,9 @@ export const ENGINE_INFO: EngineInfo[] = [
     key: 'birefnet',
     label: 'Hohe Qualität',
     description:
-      'Dasselbe wie „Beliebiges Objekt“, nur deutlich genauer an Haaren, Zäunen und Brillenbügeln. Dafür der mit Abstand größte Download. Rechnet auf der Grafikeinheit in Sekunden – hat das Gerät keine, dauert ein Bild mehrere Minuten.',
+      'Dasselbe wie „Beliebiges Objekt“, nur deutlich genauer an Haaren, Zäunen und Brillenbügeln. Dafür der mit Abstand größte Download. Braucht eine Grafikeinheit – ohne sie dauert ein Bild mehrere Minuten.',
     modelMb: 93.9,
-    runtime: 'onnx',
+    runtime: 'onnx-gpu',
     defaultEnabled: false,
   },
 ];
