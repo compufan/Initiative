@@ -233,3 +233,66 @@ export function maskeSkalieren(
   }
   return alpha;
 }
+
+/** Ein auf 512 gebrachtes Bild samt der Masse, mit denen es entstanden ist. */
+export interface Briefkasten {
+  /** [1,3,kante,kante], Kanäle nacheinander, Werte 0…255. */
+  tensor: Float32Array;
+  /** Belegte Fläche in der Leinwand – der Rest ist Null. */
+  breite: number;
+  hoehe: number;
+}
+
+/**
+ * Ein Bild oben links in eine quadratische Leinwand legen – **ohne** es zu
+ * verzerren.
+ *
+ * Das ist der Unterschied zu `flaechenMittel`: Das quetscht auf ein Quadrat,
+ * was für U²-Net und BiRefNet richtig ist, weil die so trainiert wurden. SAM
+ * dagegen erwartet ein Bild, dessen **längere Kante** auf die Kantenlänge
+ * gebracht wurde, oben links eingesetzt, Rest null. Wer hier `flaechenMittel`
+ * nimmt, bekommt keine Fehlermeldung, sondern eine Maske, die um genau das
+ * Seitenverhältnis danebenliegt – und hält dann das Netz für schlecht.
+ *
+ * Belegt wird nur `breite × hoehe`; die Werte werden gebraucht, um die
+ * Antwort später wieder richtig zu beschneiden.
+ */
+export function briefkasten(image: Bildpunkte, kante: number): Briefkasten {
+  const { width, height, data } = image;
+  const faktor = kante / Math.max(width, height);
+  const nw = Math.round(width * faktor);
+  const nh = Math.round(height * faktor);
+
+  const flaeche = kante * kante;
+  const tensor = new Float32Array(3 * flaeche);
+
+  // Bilinear, wie die Referenzimplementierung. Nächster Nachbar würde bei
+  // einem Handyfoto vier Fünftel der Bildpunkte ungesehen wegwerfen.
+  for (let y = 0; y < nh; y += 1) {
+    const sy = Math.min(height - 1, Math.max(0, (y + 0.5) / faktor - 0.5));
+    const y0 = Math.floor(sy);
+    const y1 = Math.min(height - 1, y0 + 1);
+    const ay = sy - y0;
+
+    for (let x = 0; x < nw; x += 1) {
+      const sx = Math.min(width - 1, Math.max(0, (x + 0.5) / faktor - 0.5));
+      const x0 = Math.floor(sx);
+      const x1 = Math.min(width - 1, x0 + 1);
+      const ax = sx - x0;
+
+      const a = (y0 * width + x0) * 4;
+      const b = (y0 * width + x1) * 4;
+      const c = (y1 * width + x0) * 4;
+      const d = (y1 * width + x1) * 4;
+      const ziel = y * kante + x;
+
+      for (let k = 0; k < 3; k += 1) {
+        const oben = data[a + k] + (data[b + k] - data[a + k]) * ax;
+        const unten = data[c + k] + (data[d + k] - data[c + k]) * ax;
+        tensor[k * flaeche + ziel] = oben + (unten - oben) * ay;
+      }
+    }
+  }
+
+  return { tensor, breite: nw, hoehe: nh };
+}

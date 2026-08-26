@@ -10,7 +10,7 @@
  * es entstehen keine laufenden Kosten.
  */
 
-export type EngineKey = 'tap' | 'person' | 'face' | 'object' | 'birefnet';
+export type EngineKey = 'tap' | 'tippen' | 'person' | 'face' | 'object' | 'birefnet';
 
 /**
  * Welche Laufzeit ein Verfahren braucht.
@@ -87,6 +87,17 @@ export const ENGINE_INFO: EngineInfo[] = [
     modelMb: 0,
     runtime: 'keine',
     defaultEnabled: true,
+  },
+  {
+    key: 'tippen',
+    label: 'Antippen (genau)',
+    description:
+      'Wie „Antippen“, versteht aber, was ein Gegenstand ist: Flasche antippen, Flasche kommt – samt Glanzlicht. Der erste Tipp je Foto rechnet kurz, jeder weitere kommt sofort.',
+    // Encoder 12,7 MB + Decoder 16,5 MB, beide roh (Caddy komprimiert .onnx
+    // nur ueber die vorbereitete .gz, siehe prepare-models.mjs).
+    modelMb: 26.9,
+    runtime: 'onnx',
+    defaultEnabled: false,
   },
   {
     key: 'person',

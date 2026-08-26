@@ -82,6 +82,10 @@ export async function runEngine(key: EngineKey, request: MaskRequest): Promise<U
         const { faceMask } = await import('./face.js');
         return await faceMask(request.image, request.seed);
       }
+      case 'tippen': {
+        const { tippenMask } = await import('./tippen.js');
+        return await tippenMask(request.image, request.seed, request.fortschritt);
+      }
       case 'object': {
         const { objectMask } = await import('./object.js');
         return await objectMask(request.image, request.fortschritt);
@@ -112,6 +116,7 @@ export async function releaseEngines(): Promise<void> {
     import('./person.js').then((m) => m.releasePerson()).catch(() => {}),
     import('./face.js').then((m) => m.releaseFace()).catch(() => {}),
     import('./object.js').then((m) => m.releaseObject()).catch(() => {}),
+    import('./tippen.js').then((m) => m.releaseTippen()).catch(() => {}),
     import('./birefnet.js').then((m) => m.releaseBirefnet()).catch(() => {}),
   ]);
 }

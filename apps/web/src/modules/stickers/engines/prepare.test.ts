@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { flaechenMittel, kanteWeichzeichnen, maskeSkalieren, maskeTraegt } from './prepare.js';
+import {
+  briefkasten,
+  flaechenMittel,
+  kanteWeichzeichnen,
+  maskeSkalieren,
+  maskeTraegt,
+  type Bildpunkte,
+} from './prepare.js';
 import { STICKER_SIZE, createDoc, sourceRect, toSourcePoint } from '../render.js';
 
 describe('Geometrie zwischen Bild und Sticker-Flaeche', () => {
@@ -214,5 +221,51 @@ describe('maskeSkalieren', () => {
     const werte = new Float32Array([-0.4, 1.7, -2, 3]);
     const alpha = maskeSkalieren(werte, 2, 6, 6);
     expect(Array.from(alpha).every((w) => w >= 0 && w <= 255)).toBe(true);
+  });
+});
+
+describe('briefkasten – die Einbettung fuer SAM', () => {
+  function bild(w: number, h: number, farbe = 200): Bildpunkte {
+    const data = new Uint8ClampedArray(w * h * 4);
+    for (let i = 0; i < w * h; i += 1) {
+      data[i * 4] = farbe;
+      data[i * 4 + 1] = farbe;
+      data[i * 4 + 2] = farbe;
+      data[i * 4 + 3] = 255;
+    }
+    return { width: w, height: h, data };
+  }
+
+  it('bringt die LAENGERE Kante auf die Kantenlaenge, nicht beide', () => {
+    // Ein Querformat: die Breite fuellt aus, die Hoehe bleibt darunter.
+    const { breite, hoehe } = briefkasten(bild(900, 600), 512);
+    expect(breite).toBe(512);
+    expect(hoehe).toBe(341);
+  });
+
+  it('verzerrt das Seitenverhaeltnis nicht', () => {
+    const { breite, hoehe } = briefkasten(bild(600, 900), 512);
+    expect(hoehe).toBe(512);
+    expect(breite / hoehe).toBeCloseTo(600 / 900, 2);
+  });
+
+  it('legt das Bild oben links und laesst den Rest auf null', () => {
+    const kante = 64;
+    const { tensor, breite, hoehe } = briefkasten(bild(120, 60, 200), kante);
+    const flaeche = kante * kante;
+    // Innerhalb des belegten Bereichs steht die Farbe …
+    expect(tensor[0]).toBeCloseTo(200, 0);
+    expect(tensor[(hoehe - 1) * kante + (breite - 1)]).toBeCloseTo(200, 0);
+    // … und ausserhalb wirklich null, in allen drei Kanaelen.
+    for (let k = 0; k < 3; k += 1) {
+      expect(tensor[k * flaeche + hoehe * kante]).toBe(0);
+      expect(tensor[k * flaeche + flaeche - 1]).toBe(0);
+    }
+  });
+
+  it('liefert Werte in 0…255 – die Normalisierung steckt im Modell', () => {
+    const { tensor } = briefkasten(bild(80, 40, 255), 32);
+    expect(Math.max(...tensor)).toBeLessThanOrEqual(255);
+    expect(Math.min(...tensor)).toBeGreaterThanOrEqual(0);
   });
 });

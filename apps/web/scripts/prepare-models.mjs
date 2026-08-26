@@ -90,6 +90,28 @@ const MODELLE = [
     // Verfahren schlicht als nicht verfuegbar.
     optional: true,
   },
+  {
+    // NanoSAM: punktgefuehrtes Segmentieren. Apache-2.0 durchgehend – die
+    // ONNX-Fassung dragonSwing/nanosam, deren Vorlage binh234/nanosam und
+    // NVIDIA-AI-IOT/nanosam, der Decoder aus MobileSAM bzw. Segment Anything.
+    //
+    // ACHTUNG beim Nachziehen: Im selben Repo liegt unter `op11/` ein fast
+    // gleich benannter zweiter Satz OHNE `_ln_`, und die Download-Verweise im
+    // README zeigen fuer B2 und B4 beide auf die B1-Datei. Deshalb feste
+    // Namen und Pruefsummen statt irgendeinem Verweis zu folgen.
+    name: 'nanosam-encoder.onnx',
+    url: 'https://huggingface.co/dragonSwing/nanosam/resolve/e49afdaee2078a826f542929996a14fb0b69a2fa/sam_hgv2_b1_ln_nonorm_image_encoder.onnx',
+    mindestGroesse: 12_000_000,
+    sha256: '0001b3349220a86ff6a41819ebdfd9f2a8c0707a90ef3e4f9726d46db09a9a32',
+    optional: true,
+  },
+  {
+    name: 'nanosam-decoder.onnx',
+    url: 'https://huggingface.co/dragonSwing/nanosam/resolve/e49afdaee2078a826f542929996a14fb0b69a2fa/mobile_sam_mask_decoder.onnx',
+    mindestGroesse: 16_000_000,
+    sha256: '41e49a298099048186ce109a4518286b8972959898a02577414405efa5c3b247',
+    optional: true,
+  },
 ];
 
 async function vorhanden(pfad, mindestGroesse = 1) {
