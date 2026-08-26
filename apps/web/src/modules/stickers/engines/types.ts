@@ -32,9 +32,11 @@ export type EngineKey = 'tap' | 'person' | 'face' | 'object' | 'birefnet';
 export type RuntimeKind = 'keine' | 'mediapipe' | 'onnx' | 'onnx-gpu';
 
 /**
- * Was die jeweilige Laufzeit einmalig kostet (komprimiert übertragen, MB).
+ * Was die jeweilige Laufzeit einmalig kostet – komprimiert übertragen, MiB.
  *
- * Nachgemessen am gebauten Stand mit `gzip -c dist/assets/*.wasm`.
+ * Nachgemessen mit `gzip -c dist/assets/*.wasm`. Bei `.wasm` komprimiert
+ * Caddy von sich aus (am laufenden Server geprüft: `content-encoding: gzip`),
+ * hier ist also nichts vorzubereiten.
  */
 export const RUNTIME_MB: Record<RuntimeKind, number> = {
   keine: 0,
@@ -48,7 +50,18 @@ export interface EngineInfo {
   label: string;
   /** Ein Satz, der erklärt, wofür das Verfahren taugt. */
   description: string;
-  /** Das Modell selbst, komprimiert übertragen, in Megabyte. */
+  /**
+   * Das Modell selbst, **so wie es über die Leitung geht**, in MiB.
+   *
+   * Also die komprimierte Grösse: `scripts/prepare-models.mjs` legt zu jedem
+   * Modell über 1 MiB eine `.gz` daneben, und der Web-Caddy reicht sie mit
+   * `precompressed gzip` durch. Ohne das lieferte er `.onnx` roh aus – Caddy
+   * komprimiert unterwegs nur, was es nach dem Inhaltstyp dafür hält, und
+   * `.onnx` kennt es nicht.
+   *
+   * Diese Zahl wird mit `RUNTIME_MB` addiert (`firstUseMb`) – beide müssen
+   * deshalb dasselbe meinen.
+   */
   modelMb: number;
   runtime: RuntimeKind;
   /** Ob es standardmäßig zur Verfügung steht. */
@@ -105,7 +118,7 @@ export const ENGINE_INFO: EngineInfo[] = [
     label: 'Hohe Qualität',
     description:
       'Dasselbe wie „Beliebiges Objekt“, nur deutlich genauer an Haaren, Zäunen und Brillenbügeln. Dafür der mit Abstand größte Download. Braucht eine Grafikeinheit – ohne sie dauert ein Bild mehrere Minuten.',
-    modelMb: 109.2,
+    modelMb: 78.3,
     runtime: 'onnx-gpu',
     defaultEnabled: false,
   },

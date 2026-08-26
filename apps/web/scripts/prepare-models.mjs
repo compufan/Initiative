@@ -12,10 +12,11 @@
  */
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { createWriteStream } from 'node:fs';
+import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, copyFile, readFile, rm, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
+import { createGzip } from 'node:zlib';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
@@ -59,14 +60,15 @@ const MODELLE = [
     mindestGroesse: 4_000_000,
   },
   {
-    // BiRefNet-lite, 512er-Fassung, halbe Genauigkeit. MIT-Lizenz, wie das
+    // BiRefNet-lite, 1024er-Fassung, halbe Genauigkeit. MIT-Lizenz, wie das
     // Grundmodell ZhengPeng7/BiRefNet_lite. Deutlich sauberere Kanten als
-    // U^2-Net – Haare, Zaeune, Brillenbuegel –, dafuer knapp 94 MB und
-    // spuerbar mehr Rechenzeit. Deshalb ist es ein *zusaetzliches* Verfahren
-    // und kein Ersatz, und es ist von Haus aus abgeschaltet.
+    // U^2-Net – Haare, Zaeune, Brillenbuegel –, dafuer der groesste Download
+    // der App und spuerbar mehr Rechenzeit. Deshalb ein *zusaetzliches*
+    // Verfahren und kein Ersatz, von Haus aus abgeschaltet.
     //
     // Feste Fassung ueber den Commit statt `main`: Ein Build von heute soll
     // dieselbe Datei bekommen wie einer von naechster Woche.
+    //
     // # Warum die 1024er Fassung
     //
     // Dasselbe Netz mit doppelter Kantenlänge, also vierfacher Fläche.
@@ -135,6 +137,43 @@ async function pruefsummeVon(pfad) {
     .digest('hex');
 }
 
+/**
+ * Eine `.gz`-Fassung neben die Datei legen.
+ *
+ * # Warum das noetig ist
+ *
+ * Caddy komprimiert unterwegs, aber nur, was es fuer komprimierbar haelt –
+ * und die Liste geht nach dem Inhaltstyp. `.wasm` steht darauf (nachgemessen:
+ * `content-encoding: gzip`), `.onnx` kennt es nicht und liefert es als
+ * `application/octet-stream` roh aus.
+ *
+ * Bei einem 109-MiB-Modell sind das 31 MiB, die jeder ueber Mobilfunk
+ * umsonst zieht: gzip drueckt die Datei auf 78 MiB.
+ *
+ * Warum vorkomprimiert und nicht unterwegs: 109 MiB bei jedem ersten Abruf
+ * zu packen kostet den Server Sekunden an Rechenzeit. Einmal beim Bauen
+ * kostet es nichts, und `file_server { precompressed gzip }` reicht die
+ * fertige Datei einfach durch.
+ *
+ * Fehlschlagen darf das: Ohne `.gz` liefert Caddy die Rohfassung aus. Das ist
+ * langsamer, aber nicht kaputt.
+ */
+async function vorkomprimieren(pfad, groesse) {
+  // Unter einem Megabyte lohnt der Aufwand nicht – und die tflite-Dateien
+  // von MediaPipe sind ohnehin schon dicht gepackt.
+  if (groesse < 1024 * 1024) return;
+  try {
+    await pipeline(createReadStream(pfad), createGzip({ level: 9 }), createWriteStream(`${pfad}.gz`));
+    const klein = (await stat(`${pfad}.gz`)).size;
+    console.log(
+      `    vorkomprimiert: ${(klein / 1024 / 1024).toFixed(1)} MB` +
+        ` (${Math.round((1 - klein / groesse) * 100)} % weniger)`,
+    );
+  } catch (fehler) {
+    console.warn(`    nicht vorkomprimierbar (${fehler.message}) – wird roh ausgeliefert`);
+  }
+}
+
 async function modelleLaden() {
   const ziel = join(publicDir, 'models');
   await mkdir(ziel, { recursive: true });
@@ -150,6 +189,11 @@ async function modelleLaden() {
           await rm(pfad, { force: true });
         } else {
           console.log(`  ${modell.name}: schon da`);
+          // Die Datei liegt, die `.gz` vielleicht nicht – etwa nach einem
+          // Wechsel auf einen Stand, der sie noch nicht kannte.
+          if (!(await vorhanden(`${pfad}.gz`))) {
+            await vorkomprimieren(pfad, (await stat(pfad)).size);
+          }
           continue;
         }
       }
@@ -167,6 +211,7 @@ async function modelleLaden() {
         throw new Error(`Pruefsumme ${summe} statt ${modell.sha256}`);
       }
       console.log(`  ${modell.name}: ${(groesse / 1024 / 1024).toFixed(1)} MB geladen`);
+      await vorkomprimieren(pfad, groesse);
     } catch (fehler) {
       if (!modell.optional) throw new Error(`${modell.name}: ${fehler.message}`);
       uebersprungen.push(`${modell.name} (${fehler.message})`);

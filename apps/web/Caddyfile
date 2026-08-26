@@ -73,6 +73,20 @@
 		header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self' wss:; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
 
 		try_files {path} /index.html
-		file_server
+
+		# `precompressed gzip` sucht zu jeder Datei eine `.gz` daneben und
+		# reicht sie durch, wenn der Browser gzip akzeptiert.
+		#
+		# Das `encode` weiter oben komprimiert unterwegs – aber nur, was Caddy
+		# nach dem Inhaltstyp für komprimierbar hält. Nachgemessen am
+		# laufenden Server: `.wasm` ja, `.onnx` nein (das kennt Caddy nicht und
+		# liefert es als `application/octet-stream`). Beim grössten Modell sind
+		# das 31 von 109 MiB, die jeder über Mobilfunk umsonst zieht.
+		#
+		# Die `.gz` legt `scripts/prepare-models.mjs` beim Bauen an. Fehlt sie,
+		# liefert `file_server` die Rohfassung – langsamer, aber nicht kaputt.
+		file_server {
+			precompressed gzip
+		}
 	}
 }
