@@ -40,10 +40,15 @@ const ABWEICHUNG = [0.229, 0.224, 0.225];
 let session: InferenceSession | null = null;
 let ladend: Promise<InferenceSession> | null = null;
 
-async function loadSession(): Promise<InferenceSession> {
+export type Fortschritt = (anteil: number, text: string) => void;
+
+async function loadSession(melden?: Fortschritt): Promise<InferenceSession> {
   if (session) return session;
   if (!ladend) {
     ladend = (async () => {
+      // Vor dem Import melden, nicht danach: Die Laufzeit selbst sind rund
+      // 14 MB. Wer bis hierher nichts hört, sieht einen Knopf, der nichts tut.
+      melden?.(0, 'Rechenwerk wird geladen …');
       const ort = await import('onnxruntime-web/wasm');
       // Die Laufzeit liegt beim eigenen Server, nicht bei einem fremden CDN.
 
@@ -51,6 +56,11 @@ async function loadSession(): Promise<InferenceSession> {
       // Mehrere Threads brauchten die Kopfzeilen COOP/COEP. Die setzen wir
       // nicht – sie würden eingebettete Inhalte lahmlegen. Also einer.
       ort.env.wasm.numThreads = 1;
+      // In einen Arbeiter auslagern. Ein einzelner Faden auf der CPU rechnet
+      // hier ein paar Sekunden – im Hauptfaden sind das ein paar Sekunden, in
+      // denen sich nichts mehr bewegt, kein Text wechselt und kein Abbrechen
+      // möglich ist. Das ist der Unterschied zwischen „dauert“ und „hängt“.
+      ort.env.wasm.proxy = true;
       const created = await ort.InferenceSession.create(MODEL_URL, {
         executionProviders: ['wasm'],
         graphOptimizationLevel: 'all',
@@ -106,8 +116,9 @@ function vorbereiten(image: ImageData): Float32Array {
  *
  * Rückgabe: ein Wert je Bildpunkt, 0 = weg, 255 = bleibt, in Bildgrösse.
  */
-export async function objectMask(image: ImageData): Promise<Uint8Array> {
-  const runner = await loadSession();
+export async function objectMask(image: ImageData, melden?: Fortschritt): Promise<Uint8Array> {
+  const runner = await loadSession(melden);
+  melden?.(1, 'Wird freigestellt …');
   const ort = await import('onnxruntime-web/wasm');
 
   const eingabe = new ort.Tensor('float32', vorbereiten(image), [1, 3, EINGABE, EINGABE]);

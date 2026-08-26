@@ -84,7 +84,7 @@ export async function runEngine(key: EngineKey, request: MaskRequest): Promise<U
       }
       case 'object': {
         const { objectMask } = await import('./object.js');
-        return await objectMask(request.image);
+        return await objectMask(request.image, request.fortschritt);
       }
       case 'birefnet': {
         const { birefnetMask } = await import('./birefnet.js');

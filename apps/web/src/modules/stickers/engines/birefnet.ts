@@ -18,10 +18,19 @@
  */
 
 import type { InferenceSession } from 'onnxruntime-web';
-// Die JSEP-Fassung der Laufzeit: dieselben Rechenwerke, zusaetzlich der Weg
-// auf die Grafikeinheit. Ohne WebGPU verhaelt sie sich wie die normale.
-import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.wasm?url';
-import ortMjsUrl from 'onnxruntime-web/ort-wasm-simd-threaded.jsep.mjs?url';
+// **Diese beiden Zeilen müssen zum Einstiegspunkt unten passen.**
+//
+// Hier stand die JSEP-Fassung, mit dem Kommentar, sie sei „dieselben
+// Rechenwerke, zusätzlich der Weg auf die Grafikeinheit“. Für ältere
+// ONNX-Runtime-Fassungen stimmte das. Seit 1.29 sind es zwei getrennte
+// Laufzeiten: `onnxruntime-web/webgpu` ruft `webgpuInit` auf, und das gibt es
+// **nur** im asyncify-Kleber – der jsep-Kleber kennt bloss `jsepInit`.
+//
+// Die Folge war nicht etwa ein Fehler, sondern Schweigen: WebGPU liess sich
+// nie einrichten, ORT verwarf den Rechenweg mit einer blossen console-Warnung
+// und rechnete auf der CPU weiter. Auf jedem Gerät, seit dem ersten Tag.
+import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url';
+import ortMjsUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url';
 import { flaechenMittel } from './prepare.js';
 
 /** Kantenlänge, auf die diese Fassung festgelegt ist. */
@@ -36,11 +45,23 @@ export type Fortschritt = (anteil: number, text: string) => void;
 
 let session: InferenceSession | null = null;
 let ladend: Promise<InferenceSession> | null = null;
-/** Womit gerechnet wurde – für den Hinweis, warum es lange dauern kann. */
-let laufwerk: 'webgpu' | 'wasm' = 'wasm';
 
-export function birefnetLaufwerk(): 'webgpu' | 'wasm' {
-  return laufwerk;
+/**
+ * Womit **tatsächlich** gerechnet wurde – und warum, wenn es die CPU wurde.
+ *
+ * Der Wert hier stand früher fest, sobald `navigator.gpu.requestAdapter()`
+ * einen Adapter zurückgab: also bevor eine Sitzung existierte, bevor ein
+ * Rechenweg gestartet war. Genau das hat den Fehler oben so lange verdeckt –
+ * die Oberfläche meldete „webgpu“, während das Netz auf der CPU kroch, und
+ * unterdrückte dabei ausgerechnet den Satz, der gestimmt hätte.
+ *
+ * Jetzt wird er erst gesetzt, wenn `InferenceSession.create` zurückgekommen
+ * ist, und `grund` trägt den Originaltext des Fehlschlags.
+ */
+let rechenweg: { laufwerk: 'webgpu' | 'wasm'; grund?: string } = { laufwerk: 'wasm' };
+
+export function birefnetRechenweg(): { laufwerk: 'webgpu' | 'wasm'; grund?: string } {
+  return rechenweg;
 }
 
 /**
@@ -108,32 +129,55 @@ async function loadSession(melden?: Fortschritt): Promise<InferenceSession> {
   if (session) return session;
   if (!ladend) {
     ladend = (async () => {
-      const daten = await modellHolen(melden);
       melden?.(1, 'Modell wird vorbereitet …');
       const ort = await import('onnxruntime-web/webgpu');
       ort.env.wasm.wasmPaths = { wasm: ortWasmUrl, mjs: ortMjsUrl };
       // Mehrere Threads brauchten COOP/COEP – die setzen wir nicht.
       ort.env.wasm.numThreads = 1;
+      // **Immer** in den Arbeiter, nicht nur ohne Grafikeinheit. Auch der
+      // schnelle Weg hat CPU-Anteile: die 94 MB einlesen, den Graphen
+      // optimieren, einzelne Rechenschritte ohne GPU-Kern. Läuft das im
+      // Hauptfaden, zeichnet die Oberfläche nicht mehr – und ein Handy, das
+      // minutenlang nicht auf Berührung reagiert, sieht abgestürzt aus.
+      ort.env.wasm.proxy = true;
 
-      // Hier hängt alles dran. Auf der Grafikeinheit rechnet dieses Modell in
-      // Sekunden, auf WebAssembly in Minuten – dasselbe Netz, derselbe
-      // Rechner. Deshalb wird zuerst gefragt, ob es eine gibt.
-      const gpu = await grafikVorhanden();
-      laufwerk = gpu ? 'webgpu' : 'wasm';
-      if (!gpu) {
-        // Ohne Grafikeinheit läuft es im Hauptfaden – und dann steht die
-        // Oberfläche für die gesamte Rechenzeit still. In einen Arbeiter
-        // auslagern, sonst sieht es auf dem Handy nach Absturz aus.
-        ort.env.wasm.proxy = true;
+      /**
+       * Ein Versuch mit **genau einem** Rechenweg.
+       *
+       * Nicht `['webgpu', 'wasm']`: ORT verwirft einen unbrauchbaren Weg dann
+       * still und rechnet auf der CPU weiter. Genau dieses Schweigen hat den
+       * Fehler oben verdeckt. Ein Versuch, der scheitern darf, ist ehrlicher
+       * als eine Liste, die immer irgendwie gelingt.
+       */
+      const bauen = async (weg: 'webgpu' | 'wasm', bytes: Uint8Array) =>
+        ort.InferenceSession.create(bytes, {
+          executionProviders: [weg],
+          graphOptimizationLevel: 'all',
+        });
+
+      let daten = await modellHolen(melden);
+      let created: InferenceSession;
+
+      if (await grafikVorhanden()) {
+        try {
+          created = await bauen('webgpu', daten);
+          rechenweg = { laufwerk: 'webgpu' };
+        } catch (fehler) {
+          // Mit `proxy` wandert der Puffer beim ersten Versuch in den
+          // Arbeiter und ist hier danach leer. Die Bytes müssen also neu
+          // geholt werden – aus dem Zwischenspeicher, das kostet nichts.
+          daten = await modellHolen();
+          created = await bauen('wasm', daten);
+          rechenweg = {
+            laufwerk: 'wasm',
+            grund: fehler instanceof Error ? fehler.message : String(fehler),
+          };
+        }
+      } else {
+        created = await bauen('wasm', daten);
+        rechenweg = { laufwerk: 'wasm', grund: 'Dieses Gerät bietet kein WebGPU an.' };
       }
 
-      const created = await ort.InferenceSession.create(daten, {
-        // Die Reihenfolge ist die Rangfolge: WebAssembly bleibt als Rückfall
-        // stehen, falls ein einzelner Rechenschritt auf der Grafikeinheit
-        // fehlt.
-        executionProviders: gpu ? ['webgpu', 'wasm'] : ['wasm'],
-        graphOptimizationLevel: 'all',
-      });
       session = created;
       return created;
     })().catch((error: unknown) => {
@@ -167,7 +211,7 @@ export async function birefnetMask(image: ImageData, melden?: Fortschritt): Prom
   const runner = await loadSession(melden);
   melden?.(
     1,
-    laufwerk === 'webgpu'
+    rechenweg.laufwerk === 'webgpu'
       ? 'Wird freigestellt …'
       : 'Wird freigestellt – ohne Grafikeinheit dauert das mehrere Minuten.',
   );
@@ -187,14 +231,31 @@ export async function birefnetMask(image: ImageData, melden?: Fortschritt): Prom
   // Ein Strecken auf min/max waere hier falsch: Die Sigmoid-Kurve ist
   // geeicht, 0 heisst „gehoert nicht dazu“. Strecken machte aus einem Bild
   // ohne Motiv erst recht eines.
+  // Erst die Kurve über die 512×512 Modellwerte, dann daraus abtasten. Vorher
+  // lief `Math.exp` je AUSGABEpunkt – bei einer Vorlage von 1024×1024 also
+  // eine Million Mal für 262144 verschiedene Werte. Dasselbe Ergebnis,
+  // byteweise, nur ohne die vierfache Arbeit.
+  const flaeche = EINGABE * EINGABE;
+  const tabelle = new Uint8Array(flaeche);
+  for (let i = 0; i < flaeche; i += 1) {
+    const wert = 1 / (1 + Math.exp(-roh[i]));
+    tabelle[i] = Math.max(0, Math.min(255, Math.round(wert * 255)));
+  }
+
   const { width, height } = image;
+  // Die Spaltenzuordnung hängt nicht von der Zeile ab – einmal reicht.
+  const spalte = new Int32Array(width);
+  for (let x = 0; x < width; x += 1) {
+    spalte[x] = Math.min(EINGABE - 1, Math.floor((x * EINGABE) / width));
+  }
+
   const alpha = new Uint8Array(width * height);
   for (let y = 0; y < height; y += 1) {
     const sy = Math.min(EINGABE - 1, Math.floor((y * EINGABE) / height));
+    const zeile = sy * EINGABE;
+    const ziel = y * width;
     for (let x = 0; x < width; x += 1) {
-      const sx = Math.min(EINGABE - 1, Math.floor((x * EINGABE) / width));
-      const wert = 1 / (1 + Math.exp(-roh[sy * EINGABE + sx]));
-      alpha[y * width + x] = Math.max(0, Math.min(255, Math.round(wert * 255)));
+      alpha[ziel + x] = tabelle[zeile + spalte[x]];
     }
   }
   return alpha;
