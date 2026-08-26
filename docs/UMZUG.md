@@ -251,7 +251,7 @@ weitermachen.** Der nächste Schritt schaltet die Passwortanmeldung ab.
 
 ```bash
 cd /opt/initiative
-curl -fsSLO https://raw.githubusercontent.com/compufan/Initiative/main/deploy/vps/haerten.sh
+curl -fsSLO https://raw.githubusercontent.com/compufan/Initiative/HEAD/deploy/vps/haerten.sh
 chmod +x haerten.sh
 sudo ./haerten.sh initiative
 ```
@@ -293,9 +293,9 @@ darfst du das alte root-Fenster schliessen.
 ```bash
 cd /opt/initiative
 for datei in docker-compose.yml Caddyfile deploy.sh backup.sh; do
-  curl -fsSLO "https://raw.githubusercontent.com/compufan/Initiative/main/deploy/vps/$datei"
+  curl -fsSLO "https://raw.githubusercontent.com/compufan/Initiative/HEAD/deploy/vps/$datei"
 done
-curl -fsSL https://raw.githubusercontent.com/compufan/Initiative/main/deploy/vps/.env.beispiel -o .env
+curl -fsSL https://raw.githubusercontent.com/compufan/Initiative/HEAD/deploy/vps/.env.beispiel -o .env
 chmod +x deploy.sh backup.sh
 chmod 600 .env
 ```
@@ -567,7 +567,7 @@ cat ~/.ssh/initiative-deploy.pub   # dieser auf den Server
 
 ```bash
 cd /opt/initiative
-curl -fsSLO https://raw.githubusercontent.com/compufan/Initiative/main/deploy/vps/nur-deploy.sh
+curl -fsSLO https://raw.githubusercontent.com/compufan/Initiative/HEAD/deploy/vps/nur-deploy.sh
 chmod +x nur-deploy.sh
 nano /home/initiative/.ssh/authorized_keys
 ```

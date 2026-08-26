@@ -33,7 +33,16 @@
 	}
 
 	header {
-		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# HSTS ist eine Einbahnstrasse: Ein Browser, der die Zeile einmal
+		# gesehen hat, spricht mit diesem Namen für die Dauer von `max-age`
+		# ausschliesslich über HTTPS – und lässt sich nicht wegklicken.
+		#
+		# Solange die App unter dem netcup-Hostnamen läuft, gehört hier ein
+		# kleiner Wert hin (HSTS_MAX_AGE=300). Erstens ist der Name geliehen,
+		# zweitens würde `includeSubDomains` auf *.nicesrv.de fremde Server
+		# mit einschliessen. Nach dem Umzug auf die eigene Domain die Variable
+		# weglassen; dann greift das Jahr.
+		Strict-Transport-Security "max-age={$HSTS_MAX_AGE:31536000}; includeSubDomains"
 		-Server
 	}
 

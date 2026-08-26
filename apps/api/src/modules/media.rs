@@ -205,8 +205,24 @@ async fn upload_data(
         .await
         .map_err(|_| AppError::internal("Upload-Warteschlange nicht verfügbar"))?;
 
-    // Timeout um Slowloris-Angriffe zu verhindern.
-    timeout(Duration::from_secs(20), async {
+    // Ein Zeitlimit, das sich nach der angemeldeten Grösse richtet.
+    //
+    // Ein fester Deckel geht hier nicht: Bilder sind in Sekunden da, ein Video
+    // darf 200 MiB haben (`constants.rs`). Zwanzig Sekunden für beides hiesse,
+    // dass jedes Video über etwa 50 MB zuverlässig scheitert – und zwar mit
+    // einer Meldung, die nach schlechtem Netz aussieht, nicht nach einem
+    // falschen Grenzwert.
+    //
+    // Also: mindestens 25 KiB/s zugestehen. Das liegt weit unter jeder echten
+    // Verbindung und weit über dem, was ein Slowloris-Versuch schickt – der
+    // hält die Leitung mit ein paar Bytes je Minute offen. Untergrenze eine
+    // Minute, Obergrenze eine Viertelstunde, damit weder ein winziger Upload
+    // sofort abbricht noch ein Platz unbegrenzt belegt bleibt.
+    let frist = Duration::from_secs(
+        (attachment.size.max(0) as u64 / (25 * 1024)).clamp(60, 900),
+    );
+
+    timeout(frist, async {
         while let Some(field) = multipart
             .next_field()
             .await
@@ -216,9 +232,9 @@ async fn upload_data(
                 continue;
             }
             original_name = field.file_name().map(sanitise_file_name);
-            let bytes = timeout(Duration::from_secs(20), field.bytes())
+            let bytes = field
+                .bytes()
                 .await
-                .map_err(|_| AppError::bad_request("Upload-Timeout: Dateiübertragung zu langsam"))?
                 .map_err(|error| AppError::bad_request(format!("Upload fehlgeschlagen: {error}")))?;
             if bytes.len() as i64 > limit {
                 state.storage.delete(&attachment.storage_key).await.ok();
@@ -243,8 +259,7 @@ async fn upload_data(
         Ok::<(), AppError>(())
     })
     .await
-    .map_err(|_| AppError::bad_request("Upload-Timeout: Anfrage dauerte zu lange"))?
-    .map_err(|e| e)?;
+    .map_err(|_| AppError::bad_request("Upload-Timeout: Anfrage dauerte zu lange"))??;
 
     if !stored {
         return Err(AppError::bad_request("Es wurde keine Datei übertragen"));

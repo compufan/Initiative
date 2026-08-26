@@ -134,6 +134,9 @@ services:
     environment:
       DOMAIN: ${DOMAIN:?fehlt}
       ACME_EMAIL: ${ACME_EMAIL:?fehlt}
+      # Siehe Caddyfile. Auf einem geliehenen Hostnamen klein halten (300),
+      # auf der eigenen Domain weglassen.
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-31536000}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # Ohne dieses Volume holt Caddy nach jedem Neustart ein neues
