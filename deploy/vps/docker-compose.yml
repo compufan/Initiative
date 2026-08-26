@@ -112,9 +112,24 @@ services:
     image: ghcr.io/${GITHUB_REPOSITORY_OWNER:-compufan}/initiative-web:${IMAGE_TAG:-live}
     restart: unless-stopped
     <<: [*logs, *haerten]
-    # Liefert nur fertige Dateien auf Port 8080 aus.
+    # Liefert nur fertige Dateien auf Port 8080 aus – zum Binden braucht es
+    # also nichts. Trotzdem muss NET_BIND_SERVICE hier stehen, und der Grund
+    # hat mit dem Binden nichts zu tun:
+    #
+    # Das offizielle Caddy-Abbild setzt auf die Binärdatei ein Dateiattribut
+    # (`setcap cap_net_bind_service=+ep /usr/bin/caddy`). Trägt eine Datei
+    # solche Fähigkeiten mit gesetztem Effective-Bit und liegt auch nur eine
+    # davon nicht im Bounding Set des Containers, verweigert der Kernel schon
+    # das `execve` – mit `operation not permitted`, bevor Caddy startet.
+    # Der Container landet in einer Neustartschleife mit Exit 255.
+    #
+    # Die Alternative wäre, das Attribut beim Bauen zu entfernen
+    # (`setcap -r`). Das spart hier aber nichts: Der Container hat sein
+    # eigenes Netzwerk und veröffentlicht keinen einzigen Port nach aussen.
     cap_drop:
       - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     depends_on:
       - api
 
