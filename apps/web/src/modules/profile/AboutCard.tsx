@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { clearOfflineData } from '../../lib/db.js';
-import { toast } from '../../state/ui.js';
+import { nachUpdateSuchen } from '../../lib/aktualisieren.js';
+import { toast, useUi } from '../../state/ui.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
 import { api } from '../../lib/api.js';
 import { APP_COMMIT, APP_NAME, APP_VERSION, REPO_URL, errorMessage } from './helpers.js';
@@ -10,6 +11,9 @@ export function AboutCard() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [busy, setBusy] = useState(false);
   const [apiCommit, setApiCommit] = useState<string | null>(null);
+  const [sucht, setSucht] = useState(false);
+  // Liegt schon etwas bereit, ist der Knopf ein Aktualisieren-Knopf.
+  const bereit = useUi((state) => state.swUpdateReady);
 
   // Zeigt, welcher Stand wirklich laeuft – Frontend und API getrennt, weil sie
   // von verschiedenen Diensten gebaut werden und kurz auseinanderlaufen koennen.
@@ -26,6 +30,31 @@ export function AboutCard() {
       cancelled = true;
     };
   }, []);
+
+  /**
+   * Selbst nachsehen, statt auf das Band zu warten.
+   *
+   * Der Browser prueft von sich aus nur beim Laden der Seite, und eine
+   * installierte App laedt praktisch nie neu – sie liegt im App-Umschalter.
+   * Wer auf eine bestimmte Aenderung wartet, will einen Knopf.
+   */
+  async function updateSuchen() {
+    if (bereit) {
+      bereit();
+      return;
+    }
+    setSucht(true);
+    try {
+      const gefunden = await nachUpdateSuchen();
+      // Beim Fund setzt `onNeedRefresh` das Band – dann steht der Knopf ab
+      // jetzt auf „Jetzt aktualisieren“ und niemand muss zweimal tippen.
+      if (!gefunden) toast('Du hast schon den neuesten Stand', 'success');
+    } catch (error) {
+      toast(errorMessage(error, 'Nach Updates suchen ging gerade nicht'), 'error');
+    } finally {
+      setSucht(false);
+    }
+  }
 
   async function clearCache() {
     setBusy(true);
@@ -65,6 +94,20 @@ export function AboutCard() {
           hier im Chat steht.
         </span>
       </div>
+
+      <button
+        type="button"
+        className={bereit ? 'btn btn-primary btn-block' : 'btn btn-block'}
+        disabled={sucht}
+        onClick={() => void updateSuchen()}
+      >
+        {bereit ? '⬆️ Jetzt aktualisieren' : sucht ? 'Wird gesucht …' : '🔄 Nach Updates suchen'}
+      </button>
+      <p className="prf-hint">
+        {bereit
+          ? 'Eine neue Fassung liegt bereit. Die App lädt dabei einmal neu.'
+          : 'Die App sieht von allein nach, aber nur alle halbe Stunde. Wer auf etwas Bestimmtes wartet, drückt hier.'}
+      </p>
 
       <a className="btn btn-block" href={REPO_URL} target="_blank" rel="noreferrer noopener">
         ⌨️ Quellcode auf GitHub
