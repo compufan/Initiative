@@ -1,86 +1,89 @@
 /**
- * Die eine Stelle, an der über die ONNX-Laufzeit entschieden wird.
+ * Die eine Stelle, an der über die Grafikeinheit entschieden wird.
  *
- * # Warum das zentral gehören muss
+ * # Warum „Hohe Qualität“ ohne Grafikeinheit gar nicht erst anfängt
+ *
+ * Nicht aus Bequemlichkeit, sondern weil es nachgemessen ist. Beide Modelle
+ * einmal auf einem **Serverprozessor**, ein Faden, ONNX Runtime 1.29:
+ *
+ *     u2netp („Beliebiges Objekt“, 320, fp32)      1,7 s
+ *     BiRefNet-lite („Hohe Qualität“, 512, fp16) 290,4 s
+ *
+ * 170-mal langsamer. Das ist nicht die Grösse des Netzes – so viel mehr
+ * rechnet BiRefNet nicht. Es ist das Format. Beim Laden sagt die Laufzeit es
+ * selbst, hundertfach:
+ *
+ *     Could not find a CPU kernel and hence can't constant fold Div node …
+ *
+ * Die Gewichte sind halbe Genauigkeit (437 von 437 Tensoren), und dafür
+ * bringt der Prozessorpfad schlicht keine Rechenwerke mit. Jede Rechnung
+ * geht den Umweg über eine Ersatzdarstellung. Auf der Grafikeinheit ist
+ * halbe Genauigkeit dagegen der Normalfall und kostet nichts extra.
+ *
+ * Ein Ausweg wäre die Fassung mit voller Genauigkeit – die gibt es, aber sie
+ * wiegt rund 220 MB statt 78. Etwas Kleineres bietet die Quelle nicht an
+ * (nachgesehen: `onnx/model.onnx` und `onnx/model_fp16.onnx`, sonst nichts).
+ * Auf ein Telefon lädt man das nicht.
+ *
+ * Also: Mit Grafikeinheit Sekunden, ohne sie gar nicht. Ein Prozessorpfad
+ * stand hier vorher trotzdem – und hat genau das getan, was der Anwender
+ * gemeldet hat: „rechnet immer noch ewig“. Ein Verfahren, das eine
+ * Viertelstunde braucht, ist kein langsames Verfahren, sondern eine Falle.
+ * „Beliebiges Objekt“ rechnet dieselbe Art Aufgabe in Sekunden.
+ *
+ * # Warum die Entscheidung hierher gehört und nur einmal fällt
  *
  * `ort.env.wasm.proxy` sagt, ob gerechnet wird, wo die Oberfläche lebt, oder
- * in einem Arbeiter daneben. Der Haken steht im Quelltext der Laufzeit
- * (`dist/ort.webgpu.bundle.min.mjs`, hier lesbar geschrieben):
+ * in einem Arbeiter daneben. Der Haken steht im Quelltext der Laufzeit:
  *
  *     istArbeiter = () => !!env.wasm.proxy && typeof document !== "undefined";
- *
- *     arbeiterPruefen = () => {
- *       if (startet || !gestartet || abgebrochen || !arbeiter)
- *         throw new Error("worker not ready");
- *     };
- *
  *     laufzeitStarten = async () => {
  *       if (gestartet) return;
- *       …
  *       if (istArbeiter()) { …hier und NUR hier entsteht der Arbeiter… }
- *       …sonst im eigenen Faden…
  *     };
  *
- * `istArbeiter()` liest die Einstellung bei **jedem Aufruf** neu – der
- * Arbeiter entsteht aber nur **einmal**, beim Hochfahren. Wer sie nachträglich
- * auf `true` dreht, schickt die Laufzeit damit zu einem Arbeiter, den es nie
- * gegeben hat: `no available backend found. ERR: [wasm] Error: worker not
- * ready`.
- *
- * Genau das passierte, als „Hohe Qualität“ erst die Grafikeinheit ohne
- * Arbeiter versuchte und danach für den Rückfall auf den Prozessor den
- * Arbeiter einschalten wollte.
- *
- * Also: Die Entscheidung fällt **einmal je Seitenaufruf**, bevor die erste
- * Sitzung entsteht, und wird danach nicht mehr angefasst.
- *
- * # Die Zwickmühle, die dahintersteckt
- *
- * Zwei Wünsche, die sich ausschliessen:
- *
- * - Ein **eigenes GPU-Gerät** – nötig, um die Puffergrenze anzuheben, an der
- *   BiRefNet sonst abbricht – lässt sich nicht in einen Arbeiter reichen. Ein
- *   `GPUDevice` ist nicht kopierbar, und die Laufzeit schickt beim Hochfahren
- *   ihre ganze Umgebung per `postMessage` hinüber. Also braucht der schnelle
- *   Weg `proxy = false`.
- * - Ein **Lauf auf dem Prozessor** dauert bei diesem Netz Minuten. Im
- *   Hauptfaden hiesse das eine App, die minutenlang auf keine Berührung
- *   reagiert. Also braucht der langsame Weg `proxy = true`.
- *
- * Aufgelöst wird das, indem **vorher** geprüft wird, ob die Grafikeinheit
- * taugt – bevor die Laufzeit überhaupt hochfährt. Danach steht die
- * Entscheidung fest.
+ * Gelesen wird bei jedem Aufruf, erzeugt nur einmal. Wer die Einstellung
+ * nachträglich umlegt, schickt die Laufzeit zu einem Arbeiter, den es nie
+ * gegeben hat: `worker not ready`. Seit es keinen Prozessorpfad mehr gibt,
+ * gibt es auch nichts mehr umzulegen – die Zwickmühle ist damit weg, nicht
+ * bloss umschifft.
  *
  * # Wer hier hereingehört und wer nicht
  *
- * Nur die Verfahren aus dem Paket `onnxruntime-web/webgpu` – heute allein
- * „Hohe Qualität“. `onnxruntime-web/wasm` ist eine **eigene**, in sich
- * geschlossene Fassung der Laufzeit mit eigener Umgebung und eigenem
- * Arbeiter (nachgeprüft: die beiden Dateien teilen sich keinen einzigen
- * Import, und `webgpuInit` kommt nur in der einen vor). „Beliebiges Objekt“
- * und „Antippen (genau)“ rechnen dort, immer auf dem Prozessor, immer im
- * Arbeiter – für die gibt es nichts zu entscheiden, und sie dürfen hier
- * gerade **nicht** durch: ein `proxy = false` würde sie in den Hauptfaden
- * holen und die Oberfläche einfrieren.
+ * Nur `onnxruntime-web/webgpu`, heute allein „Hohe Qualität“.
+ * `onnxruntime-web/wasm` ist eine eigene, in sich geschlossene Fassung der
+ * Laufzeit mit eigener Umgebung und eigenem Arbeiter (nachgeprüft: die
+ * beiden Dateien teilen sich keinen einzigen Import). „Beliebiges Objekt“
+ * und „Antippen (genau)“ rechnen dort, mit vollen Genauigkeiten, immer auf
+ * dem Prozessor und immer im Arbeiter. Für die gibt es nichts zu
+ * entscheiden.
  */
 
 /**
  * Wieviele Speicherpuffer ein Shader von BiRefNet braucht.
  *
- * Elf sind es tatsächlich; die zwölf sind ein Puffer für den nächsten
- * verschmolzenen Rechenschritt, den eine neue Fassung der Laufzeit bauen mag.
+ * Elf. Nicht geschätzt – die Laufzeit hat es auf dem Gerät des Anwenders
+ * selbst gesagt:
+ *
+ *     Too many storage buffers in shader. Current: 11, Max is 10
+ *
+ * Hier stand vorübergehend eine 12, „als Puffer“. Das war ein Fehler: Ein
+ * erfundener Aufschlag weist Geräte ab, auf denen es liefe. Es steht die
+ * gemessene Zahl da, sonst nichts.
  */
-const NOETIGE_PUFFER = 12;
+const NOETIGE_PUFFER = 11;
 
 /**
  * Merkposten für „die Grafikeinheit hat mitten im Rechnen aufgegeben“.
  *
- * Das muss den Seitenaufruf überleben: Nach einem solchen Abbruch lässt sich
- * der Arbeiter nicht mehr nachträglich einschalten, die App muss also neu
- * geladen werden. Ohne Merkposten liefe sie danach in denselben Abbruch, und
- * der Satz „lade neu, dann rechnet der Prozessor“ wäre eine Lüge.
+ * Muss den Seitenaufruf überleben, sonst liefe die App beim nächsten Versuch
+ * in denselben Abbruch. Aber er darf nicht ewig gelten: Ein Treiber wird
+ * erneuert, ein anderes Bild ist kleiner, und ein einziger schlechter Tag
+ * soll das Verfahren nicht für immer abschalten. Deshalb mit Datum, und
+ * `vergessen()` räumt ihn auf Wunsch sofort weg.
  */
 const AUFGEGEBEN = 'initiative.webgpu.aufgegeben';
+const VERGESSEN_NACH = 7 * 24 * 60 * 60 * 1000;
 
 /** Gerade so viel WebGPU, wie hier gebraucht wird – statt einer Abhängigkeit. */
 interface GpuAdapter {
@@ -93,25 +96,48 @@ interface GpuZugang {
 
 export interface Laufzeit {
   /**
-   * Das eigene Gerät, falls die Grafikeinheit taugt – sonst `null`.
+   * Das eigene Gerät, oder `null`, wenn dieses Telefon nicht taugt.
    *
    * Wird als `executionProviders: [{ name: 'webgpu', device }]` übergeben,
-   * **nicht** über `env.webgpu.device`: dieses Feld ist eine Ausgabe, die
-   * Laufzeit überschreibt es beim Hochfahren mit dem Gerät, das sie sich
-   * selbst besorgt hat. Wer dort hineinschreibt, bekommt keinen Fehler,
-   * sondern schweigend wieder die Mindestgrenzen der Spezifikation.
+   * **nicht** über `env.webgpu.device`: Dieses Feld ist eine Ausgabe. Die
+   * Laufzeit schreibt dort beim Hochfahren das Gerät hinein, das sie sich
+   * selbst besorgt hat – mit den Mindestgrenzen der Spezifikation. Wer
+   * hineinschreibt, bekommt keinen Fehler, sondern schweigend die alten
+   * Grenzen zurück.
    */
   geraet: unknown | null;
-  /** Warum es der Prozessor wurde – für eine ehrliche Meldung. */
+  /**
+   * Warum nicht – ein Satz, der dem Anwender gezeigt werden kann und der die
+   * gemessenen Zahlen mitbringt. Ohne sie ist aus der Ferne nicht zu klären,
+   * woran es auf einem bestimmten Telefon liegt.
+   */
   grund?: string;
 }
 
 let entschieden: Promise<Laufzeit> | null = null;
+let befund: Laufzeit | null = null;
+
+/**
+ * Was die Prüfung ergeben hat – ohne zu warten.
+ *
+ * `null`, solange noch niemand gefragt hat. Damit lässt sich die Oberfläche
+ * einrichten, ohne auf die Grafikeinheit zu warten.
+ */
+export function grafikBefund(): Laufzeit | null {
+  return befund;
+}
 
 /** Liest den Merkposten, ohne an einem gesperrten Speicher zu zerbrechen. */
-function hatAufgegeben(): string | null {
+function abbruchMerken(): string | null {
   try {
-    return globalThis.localStorage?.getItem(AUFGEGEBEN) ?? null;
+    const roh = globalThis.localStorage?.getItem(AUFGEGEBEN);
+    if (!roh) return null;
+    const { grund, zeit } = JSON.parse(roh) as { grund: string; zeit: number };
+    if (Date.now() - zeit > VERGESSEN_NACH) {
+      globalThis.localStorage?.removeItem(AUFGEGEBEN);
+      return null;
+    }
+    return grund;
   } catch {
     return null;
   }
@@ -120,43 +146,59 @@ function hatAufgegeben(): string | null {
 /**
  * Hält fest, dass die Grafikeinheit mitten im Rechnen abgebrochen ist.
  *
- * Nach dem nächsten Laden der Seite wird dann von vornherein der Prozessor
- * genommen – mit Arbeiter, also ohne die Oberfläche stillzulegen.
+ * Beim nächsten Anlauf wird dann gar nicht erst angefangen – mit der
+ * Begründung von damals, statt mit demselben Abbruch von vorn.
  */
 export function grafikAufgeben(grund: string): void {
   try {
-    globalThis.localStorage?.setItem(AUFGEGEBEN, grund);
+    globalThis.localStorage?.setItem(AUFGEGEBEN, JSON.stringify({ grund, zeit: Date.now() }));
   } catch {
     // Privater Modus, gesperrter Speicher: dann eben ohne Gedächtnis.
   }
+  entschieden = null;
+  befund = null;
 }
 
+/** Den Merkposten wegräumen und es noch einmal versuchen lassen. */
+export function grafikVergessen(): void {
+  try {
+    globalThis.localStorage?.removeItem(AUFGEGEBEN);
+  } catch {
+    // Auch das darf scheitern, ohne dass hier etwas kaputtgeht.
+  }
+  entschieden = null;
+  befund = null;
+}
+
+/** Die Grenzen, die dieses Netz reisst, wenn man sie nicht anhebt. */
+const GRENZEN = [
+  'maxStorageBuffersPerShaderStage',
+  'maxStorageBufferBindingSize',
+  'maxBufferSize',
+  'maxComputeInvocationsPerWorkgroup',
+  'maxComputeWorkgroupStorageSize',
+];
+
 /**
- * Ob die Grafikeinheit für die schweren Netze taugt – **vor** dem Hochfahren
- * der Laufzeit geprüft.
+ * Ob die Grafikeinheit taugt – **vor** dem Hochfahren der Laufzeit geprüft.
  *
- * Die Puffergrenze ist der Punkt, an dem es auf einem Snapdragon 8 Gen 3
- * scheiterte:
- *
- *     Too many storage buffers in shader. Current: 11, Max is 10
- *
- * Die 10 ist keine Eigenschaft der Grafikeinheit, sondern das, womit das Gerät
- * angefordert wurde: `requestDevice()` ohne `requiredLimits` liefert die
- * **Mindestwerte** der Spezifikation. Hier wird deshalb ausdrücklich nach dem
- * gefragt, was der Adapter meldet – und geprüft, ob es reicht, statt es zu
- * hoffen.
+ * Die Puffergrenze ist der Punkt, an dem es auf dem Gerät des Anwenders
+ * scheiterte. Die dort gemeldete 10 ist keine Eigenschaft der Grafikeinheit,
+ * sondern das, womit das Gerät angefordert wurde: `requestDevice()` ohne
+ * `requiredLimits` liefert die **Mindestwerte** der Spezifikation. Hier wird
+ * deshalb ausdrücklich nach dem gefragt, was der Adapter meldet.
  */
 async function geraetPruefen(): Promise<Laufzeit> {
-  const alterAbbruch = hatAufgegeben();
+  const alterAbbruch = abbruchMerken();
   if (alterAbbruch) {
     return {
       geraet: null,
-      grund: `Die Grafikeinheit hat hier schon einmal abgebrochen (${alterAbbruch}).`,
+      grund: `Die Grafikeinheit hat hier zuletzt mitten im Rechnen abgebrochen (${alterAbbruch}).`,
     };
   }
 
   const gpu = (globalThis.navigator as (Navigator & { gpu?: GpuZugang }) | undefined)?.gpu;
-  if (!gpu) return { geraet: null, grund: 'Dieses Gerät bietet kein WebGPU an.' };
+  if (!gpu) return { geraet: null, grund: 'Dieser Browser bietet kein WebGPU an.' };
 
   try {
     const adapter = await gpu.requestAdapter();
@@ -164,40 +206,40 @@ async function geraetPruefen(): Promise<Laufzeit> {
 
     const kann = adapter.limits.maxStorageBuffersPerShaderStage ?? 0;
     if (kann < NOETIGE_PUFFER) {
-      // Lieber jetzt ehrlich sein als mitten im Rechnen abbrechen: Reicht die
-      // Grenze nicht, wird der Shader beim ersten Lauf verworfen – und dann
-      // liesse sich der Arbeiter nicht mehr nachträglich einschalten.
+      // Jetzt ehrlich sein statt mitten im Rechnen abbrechen: Reicht die
+      // Grenze nicht, verwirft die Grafikeinheit den Shader beim ersten Lauf.
       return {
         geraet: null,
         grund: `Die Grafikeinheit erlaubt nur ${kann} Speicherpuffer je Shader, gebraucht werden ${NOETIGE_PUFFER}.`,
       };
     }
 
-    // Die Grenzen, die als nächste reissen würden. Ein einzelner Gewichtsblock
-    // dieses Netzes ist grösser als die 128 MiB, die die Spezifikation
-    // mindestens zusichert.
     const wunsch: Record<string, number> = {};
-    for (const name of [
-      'maxStorageBuffersPerShaderStage',
-      'maxStorageBufferBindingSize',
-      'maxBufferSize',
-      'maxComputeInvocationsPerWorkgroup',
-      'maxComputeWorkgroupStorageSize',
-    ]) {
+    for (const name of GRENZEN) {
       const wert = adapter.limits[name];
       if (typeof wert === 'number') wunsch[name] = wert;
     }
 
     try {
       return { geraet: await adapter.requestDevice({ requiredLimits: wunsch }) };
-    } catch {
-      // Ein Adapter darf ablehnen, was er selbst gemeldet hat. Dann ist die
-      // Grenze nicht zu heben – und ohne gehobene Grenze bricht der Lauf ab.
-      // Also gar nicht erst anfangen.
-      return {
-        geraet: null,
-        grund: 'Die Grafikeinheit gab ihre eigenen Grenzen nicht frei.',
-      };
+    } catch (fehler) {
+      // Ein Adapter darf ablehnen, was er selbst gemeldet hat. Dann noch
+      // einmal mit der einen Grenze, auf die es wirklich ankommt – erst wenn
+      // auch das scheitert, ist hier Schluss. Ohne gehobene Grenze bräuchte
+      // man gar nicht anzufangen.
+      try {
+        return {
+          geraet: await adapter.requestDevice({
+            requiredLimits: { maxStorageBuffersPerShaderStage: kann },
+          }),
+        };
+      } catch {
+        const text = fehler instanceof Error ? fehler.message : String(fehler);
+        return {
+          geraet: null,
+          grund: `Die Grafikeinheit gab ihre eigenen Grenzen nicht frei (${text}).`,
+        };
+      }
     }
   } catch (fehler) {
     return {
@@ -210,33 +252,48 @@ async function geraetPruefen(): Promise<Laufzeit> {
 /**
  * Die Entscheidung – beim zweiten Aufruf sofort dieselbe Antwort.
  *
- * Nur einmal geprüft, weil `requestDevice` beim zweiten Mal ein zweites Gerät
- * liefern würde und weil die Entscheidung ohnehin nicht mehr umkehrbar ist.
+ * Nur einmal geprüft: `requestDevice` gäbe beim zweiten Mal ein zweites
+ * Gerät, und die Sitzung liefe dann auf einem anderen als dem geprüften.
  */
 export function laufzeitEntscheiden(): Promise<Laufzeit> {
-  if (!entschieden) entschieden = geraetPruefen();
+  if (!entschieden) {
+    entschieden = geraetPruefen().then((ergebnis) => {
+      befund = ergebnis;
+      return ergebnis;
+    });
+  }
   return entschieden;
 }
 
 /**
- * Die gemeinsamen Einstellungen setzen. Muss vor der ERSTEN Sitzung laufen –
- * danach ist `proxy` unveränderlich, siehe oben.
+ * Die gemeinsamen Einstellungen setzen. Muss vor der ERSTEN Sitzung laufen.
+ *
+ * Gibt das Gerät zurück, oder wirft mit einem Satz, den man zeigen kann.
+ * Nicht als stiller Rückfall auf den Prozessor – siehe die Messung oben.
  */
 export async function ortVorbereiten(
   // Alle Felder wahlfrei, weil `ort.env` sie so deklariert. Anders herum
   // liesse sich `ort.env` gar nicht übergeben.
   env: { wasm: { wasmPaths?: unknown; numThreads?: number; proxy?: boolean } },
   pfade: { wasm: string; mjs: string },
-): Promise<Laufzeit> {
+): Promise<unknown> {
   const laufzeit = await laufzeitEntscheiden();
+  if (!laufzeit.geraet) {
+    throw new Error(
+      `„Hohe Qualität“ braucht eine Grafikeinheit. ${laufzeit.grund ?? ''} ` +
+        'Auf dem Prozessor rechnet dieses Netz an einem Bild eine Viertelstunde – ' +
+        'nimm „Beliebiges Objekt“, das braucht ein paar Sekunden.',
+    );
+  }
   // Die Laufzeit liegt beim eigenen Server, nicht bei einem fremden CDN.
   env.wasm.wasmPaths = pfade;
-  // Mehrere Fäden brauchten die Kopfzeilen COOP/COEP – die setzen wir nicht,
-  // sie würden eingebettete Inhalte lahmlegen. Also einer.
+  // Mehrere Fäden brauchten die Kopfzeilen COOP/COEP – die setzen wir nicht.
+  // Gerechnet wird ohnehin auf der Grafikeinheit.
   env.wasm.numThreads = 1;
-  // Ohne Grafikeinheit rechnet das grosse Netz minutenlang; das gehört in den
-  // Arbeiter. Mit Grafikeinheit geht es nicht in den Arbeiter, weil das eigene
-  // GPU-Gerät sich nicht dorthin reichen lässt – dafür dauert es Sekunden.
-  env.wasm.proxy = laufzeit.geraet === null;
-  return laufzeit;
+  // Kein Arbeiter: Ein `GPUDevice` lässt sich nicht dorthin reichen, die
+  // Laufzeit schickt beim Hochfahren ihre ganze Umgebung per `postMessage`.
+  // Das ist verschmerzbar, weil die eigentliche Arbeit auf der Grafikeinheit
+  // liegt und der Hauptfaden dabei überwiegend wartet.
+  env.wasm.proxy = false;
+  return laufzeit.geraet;
 }

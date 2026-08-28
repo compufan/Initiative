@@ -53,21 +53,17 @@ let session: InferenceSession | null = null;
 let ladend: Promise<InferenceSession> | null = null;
 
 /**
- * Womit **tatsächlich** gerechnet wurde – und warum, wenn es die CPU wurde.
+ * Wie lange der letzte Lauf gedauert hat, in Millisekunden.
  *
- * Der Wert hier stand früher fest, sobald `navigator.gpu.requestAdapter()`
- * einen Adapter zurückgab: also bevor eine Sitzung existierte, bevor ein
- * Rechenweg gestartet war. Genau das hat den Fehler oben so lange verdeckt –
- * die Oberfläche meldete „webgpu“, während das Netz auf der CPU kroch, und
- * unterdrückte dabei ausgerechnet den Satz, der gestimmt hätte.
- *
- * Jetzt wird er erst gesetzt, wenn `InferenceSession.create` zurückgekommen
- * ist, und `grund` trägt den Originaltext des Fehlschlags.
+ * Steht in der Fehlermeldung, wenn es zu lange war, und beantwortet damit aus
+ * der Ferne die einzige Frage, die zählt: Lief es wirklich auf der
+ * Grafikeinheit? Vorher gab es dazu nur Vermutungen – der Wert war zwar da,
+ * wurde aber nirgends angezeigt.
  */
-let rechenweg: { laufwerk: 'webgpu' | 'wasm'; grund?: string } = { laufwerk: 'wasm' };
+let letzteDauer = 0;
 
-export function birefnetRechenweg(): { laufwerk: 'webgpu' | 'wasm'; grund?: string } {
-  return rechenweg;
+export function birefnetDauer(): number {
+  return letzteDauer;
 }
 
 /**
@@ -118,18 +114,21 @@ async function loadSession(melden?: Fortschritt): Promise<InferenceSession> {
   if (session) return session;
   if (!ladend) {
     ladend = (async () => {
-      melden?.(1, 'Modell wird vorbereitet …');
+      melden?.(0, 'Grafikeinheit wird geprüft …');
       const ort = await import('onnxruntime-web/webgpu');
-      // Die Entscheidung fällt einmal je Seitenaufruf, bevor die Laufzeit
-      // hochfährt – danach darf `proxy` nicht mehr angefasst werden, sonst
-      // sucht die Laufzeit einen Arbeiter, den es nie gegeben hat.
-      const laufzeit = await ortVorbereiten(ort.env, { wasm: ortWasmUrl, mjs: ortMjsUrl });
+      // Wirft mit einem zeigbaren Satz, wenn dieses Gerät nicht taugt. Ein
+      // stiller Rückfall auf den Prozessor stand hier vorher und war der
+      // Grund, dass „Hohe Qualität“ scheinbar „ewig rechnete“: Das Netz hat
+      // Gewichte in halber Genauigkeit, und dafür bringt der Prozessorpfad
+      // keine Rechenwerke mit – nachgemessen 290 s für ein Bild bei halber
+      // Kantenlänge, auf einem Serverprozessor. Siehe ort-laufzeit.ts.
+      const geraet = await ortVorbereiten(ort.env, { wasm: ortWasmUrl, mjs: ortMjsUrl });
 
       const daten = await modellHolen(melden);
 
       // Absichtlich EIN Rechenweg. Mit ['webgpu','wasm'] verwirft ORT einen
-      // unbrauchbaren Weg still und rechnet auf der CPU weiter – genau dieses
-      // Schweigen hat den jsep-Fehler monatelang verdeckt.
+      // unbrauchbaren Weg still und rechnet auf dem Prozessor weiter – genau
+      // dieses Schweigen hat den jsep-Fehler monatelang verdeckt.
       //
       // Das eigene Gerät gehört **hierher**, in die Angaben zur Sitzung, und
       // nicht nach `env.webgpu.device`. Dieses Feld sieht aus wie ein
@@ -139,21 +138,14 @@ async function loadSession(melden?: Fortschritt): Promise<InferenceSession> {
       //     if (ep === 'webgpu') laufzeit.webgpuInit((g) => { env.webgpu.device = g; });
       //                                                      ^ Zuweisung, nicht Abfrage
       //
-      // Nur der Weg über die Sitzung landet bei `webgpuRegisterDevice`, und
-      // nur dort zählt er. Wer stattdessen `env` beschreibt, bekommt keinen
-      // Fehler – sondern schweigend wieder die Mindestgrenzen und damit den
-      // Abbruch „Too many storage buffers in shader. Current: 11, Max is 10“.
-      const weg = laufzeit.geraet
-        ? ({ name: 'webgpu', device: laufzeit.geraet } as const)
-        : ('wasm' as const);
-
+      // Nur der Weg über die Sitzung landet bei `webgpuRegisterDevice`. Wer
+      // stattdessen `env` beschreibt, bekommt keinen Fehler – sondern
+      // schweigend wieder die Mindestgrenzen und damit den Abbruch
+      // „Too many storage buffers in shader. Current: 11, Max is 10“.
       const created = await ort.InferenceSession.create(daten, {
-        executionProviders: [weg],
+        executionProviders: [{ name: 'webgpu', device: geraet } as const],
         graphOptimizationLevel: 'all',
       });
-      rechenweg = laufzeit.geraet
-        ? { laufwerk: 'webgpu' }
-        : { laufwerk: 'wasm', grund: laufzeit.grund };
 
       session = created;
       return created;
@@ -186,51 +178,36 @@ function vorbereiten(image: ImageData): Float32Array {
  */
 export async function birefnetMask(image: ImageData, melden?: Fortschritt): Promise<Uint8Array> {
   const ort = await import('onnxruntime-web/webgpu');
+  const runner = await loadSession(melden);
+  melden?.(1, 'Wird freigestellt …');
 
-  /**
-   * Einmal rechnen – und beim Fehlschlag auf der Grafikeinheit **einmal**
-   * alles wegwerfen und auf der CPU neu aufbauen.
+  const eingabe = new ort.Tensor('float32', vorbereiten(image), [1, 3, EINGABE, EINGABE]);
+
+  /*
+   * Ein Fehlschlag hier ist endgültig, und das ist Absicht.
    *
-   * Das ist der Kern: Die Shader eines WebGPU-Rechenwegs werden erst beim
-   * ersten Lauf übersetzt. Ein Gerät, dessen Grenzen nicht reichen, meldet
-   * sich also nicht beim Erzeugen der Sitzung, sondern hier. Wer nur das
-   * Erzeugen absichert, behält eine Sitzung, die bei jedem Tippen erneut an
-   * derselben Stelle abbricht.
+   * Die Shader eines WebGPU-Rechenwegs werden erst beim ersten Lauf
+   * übersetzt: Ein Gerät, dessen Grenzen nicht reichen, meldet sich nicht
+   * beim Erzeugen der Sitzung, sondern genau hier. Ausweichen liesse sich nur
+   * auf den Prozessor – und der braucht für dieses Netz eine Viertelstunde je
+   * Bild. Also wird der Abbruch gemerkt (beim nächsten Mal fängt es gar nicht
+   * erst an) und ehrlich gesagt, was stattdessen hilft.
    */
-  const rechnen = async (): Promise<Float32Array> => {
-    const runner = await loadSession(melden);
-    melden?.(
-      1,
-      rechenweg.laufwerk === 'webgpu'
-        ? 'Wird freigestellt …'
-        : 'Wird freigestellt – ohne Grafikeinheit dauert das mehrere Minuten.',
-    );
-    const eingabe = new ort.Tensor('float32', vorbereiten(image), [1, 3, EINGABE, EINGABE]);
-    const ergebnis = await runner.run({ [runner.inputNames[0]]: eingabe });
-    return ergebnis[runner.outputNames[0]].data as Float32Array;
-  };
-
-  // Bricht die Grafikeinheit hier ab, lässt sich nicht mehr auf die CPU
-  // ausweichen: Der Arbeiter müsste dafür eingeschaltet werden, und das geht
-  // nach dem Hochfahren der Laufzeit nicht mehr (siehe ort-laufzeit.ts).
-  // Deshalb wird vorher geprüft, ob die Grenzen reichen – und wenn es trotzdem
-  // schiefgeht, ist eine ehrliche Meldung besser als ein zweiter Fehlversuch.
+  const begonnen = Date.now();
   let roh: Float32Array;
   try {
-    roh = await rechnen();
+    const ergebnis = await runner.run({ [runner.inputNames[0]]: eingabe });
+    roh = ergebnis[runner.outputNames[0]].data as Float32Array;
   } catch (fehler) {
-    if (rechenweg.laufwerk === 'webgpu') {
-      // Den Abbruch über das Neuladen hinweg merken. Sonst nähme die App beim
-      // nächsten Start wieder die Grafikeinheit, liefe in denselben Fehler –
-      // und der Satz unten wäre eine Lüge.
-      grafikAufgeben(fehler instanceof Error ? fehler.message : String(fehler));
-      await releaseBirefnet();
-      throw new Error(
-        'Die Grafikeinheit hat mitten im Rechnen abgebrochen. Lade die App neu – dann wird auf dem Prozessor gerechnet. Schneller geht es mit „Beliebiges Objekt“.',
-      );
-    }
-    throw fehler;
+    const text = fehler instanceof Error ? fehler.message : String(fehler);
+    grafikAufgeben(text);
+    await releaseBirefnet();
+    throw new Error(
+      `Die Grafikeinheit hat mitten im Rechnen abgebrochen (${text}). ` +
+        'Nimm „Beliebiges Objekt“ – das rechnet auf jedem Gerät in Sekunden.',
+    );
   }
+  letzteDauer = Date.now() - begonnen;
 
   // Erst die Kurve über die Modellwerte, dann daraus abtasten. Vorher lief
   // `Math.exp` je AUSGABEpunkt statt je Modellpunkt – dasselbe Ergebnis, nur

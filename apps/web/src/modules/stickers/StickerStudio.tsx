@@ -186,6 +186,31 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   const dazuZahl = doc.keep.filter((punkt) => punkt.mode !== 'weg').length;
   const wegZahl = doc.keep.length - dazuZahl;
 
+  /*
+   * Warum „Hohe Qualität“ auf diesem Gerät nicht geht – oder `null`.
+   *
+   * Wird beim Öffnen geprüft, nicht erst beim Drücken. Vorher lud man 78 MB
+   * und bekam danach die Absage; jetzt steht sie am Knopf, bevor irgendetwas
+   * übertragen wird. Die Prüfung selbst lädt kein Modell und keine Laufzeit,
+   * sie fragt nur die Grafikeinheit nach ihren Grenzen.
+   */
+  const [grafikAus, setGrafikAus] = useState<string | null>(null);
+  useEffect(() => {
+    let gilt = true;
+    void import('./engines/ort-laufzeit.js')
+      .then((modul) => modul.laufzeitEntscheiden())
+      .then((laufzeit) => {
+        if (gilt && !laufzeit.geraet) setGrafikAus(laufzeit.grund ?? 'Keine Grafikeinheit.');
+      })
+      .catch(() => {
+        // Schlägt schon die Prüfung fehl, bleibt der Knopf bedienbar und die
+        // Absage kommt wie bisher aus dem Verfahren selbst.
+      });
+    return () => {
+      gilt = false;
+    };
+  }, []);
+
   const render = useCallback((fast: boolean) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1145,7 +1170,14 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                 Modell trifft – und für Geräte ohne die Modelle. */}
             <div className="stk-btn-row">
               {ENGINE_INFO.filter((engine) => engine.key !== 'tap').map((engine) => {
-                const verfuegbar = engineAvailable(engine.key);
+                // „Hohe Qualität“ rechnet ausschliesslich auf der
+                // Grafikeinheit – auf dem Prozessor braucht dieses Netz eine
+                // Viertelstunde je Bild (nachgemessen, siehe
+                // engines/ort-laufzeit.ts). Fehlt sie, ist ein abgeblendeter
+                // Knopf mit Begründung ehrlicher als einer, der scheinbar
+                // arbeitet.
+                const ohneGrafik = engine.key === 'birefnet' ? grafikAus : null;
+                const verfuegbar = engineAvailable(engine.key) && !ohneGrafik;
                 return (
                   <button
                     key={engine.key}
@@ -1154,9 +1186,11 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                     onClick={() => void modellAnwenden(engine.key)}
                     disabled={!hasImage || !verfuegbar || rechnet !== null}
                     title={
-                      verfuegbar
-                        ? engine.description
-                        : 'In den Einstellungen unter „Freistellen für Sticker“ einschaltbar.'
+                      ohneGrafik
+                        ? `${ohneGrafik} Ohne sie rechnet dieses Verfahren an einem Bild eine Viertelstunde – nimm „Beliebiges Objekt“.`
+                        : verfuegbar
+                          ? engine.description
+                          : 'In den Einstellungen unter „Freistellen für Sticker“ einschaltbar.'
                     }
                   >
                     {rechnet === engine.key ? '⏳ ' : '🪄 '}

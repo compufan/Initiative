@@ -128,7 +128,7 @@ export const ENGINE_INFO: EngineInfo[] = [
     key: 'birefnet',
     label: 'Hohe Qualität',
     description:
-      'Dasselbe wie „Beliebiges Objekt“, nur deutlich genauer an Haaren, Zäunen und Brillenbügeln. Dafür der mit Abstand größte Download. Braucht eine Grafikeinheit – ohne sie dauert ein Bild mehrere Minuten.',
+      'Dasselbe wie „Beliebiges Objekt“, nur deutlich genauer an Haaren, Zäunen und Brillenbügeln. Dafür der mit Abstand größte Download. Braucht zwingend eine Grafikeinheit: Die Gewichte liegen in halber Genauigkeit, dafür hat der Prozessorpfad keine Rechenwerke, und ein Bild würde dort eine Viertelstunde dauern statt Sekunden. Fehlt sie, bleibt der Knopf abgeblendet.',
     modelMb: 78.3,
     runtime: 'onnx-gpu',
     defaultEnabled: false,

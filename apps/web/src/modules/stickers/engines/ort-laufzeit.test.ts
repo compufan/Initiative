@@ -1,16 +1,18 @@
 /**
- * Prüft die eine Regel, an der „Hohe Qualität“ zerbrochen ist:
+ * Prüft zwei Regeln, an denen „Hohe Qualität“ nacheinander zerbrochen ist.
  *
- *     no available backend found. ERR: [wasm] Error: worker not ready
+ * 1. Die Entscheidung über die Grafikeinheit fällt **einmal**. Die ONNX-
+ *    Laufzeit erzeugt ihren Arbeiter genau beim Hochfahren und nur dann, wenn
+ *    `env.wasm.proxy` in diesem Augenblick gesetzt ist. Wer sie später
+ *    umlegt, schickt sie zu einem Arbeiter, den es nie gegeben hat:
+ *    `worker not ready`.
  *
- * Die ONNX-Laufzeit erzeugt ihren Arbeiter genau einmal, beim Hochfahren, und
- * nur dann, wenn `env.wasm.proxy` in diesem Augenblick gesetzt ist. Danach
- * liest sie die Einstellung zwar bei jedem Aufruf neu – nur entsteht kein
- * Arbeiter mehr. Wer sie nachträglich umlegt, schickt die Laufzeit zu einem
- * Arbeiter, den es nie gegeben hat.
- *
- * Die Tests hier halten deshalb fest, dass die Entscheidung **einmal** fällt
- * und für jede Umgebung, die danach danach fragt, dieselbe ist.
+ * 2. Ohne taugliche Grafikeinheit wird gar nicht erst angefangen. Nicht aus
+ *    Vorsicht, sondern weil es nachgemessen ist: BiRefNet trägt Gewichte in
+ *    halber Genauigkeit, dafür hat der Prozessorpfad keine Rechenwerke, und
+ *    ein Bild bei halber Kantenlänge braucht 290 s auf einem Serverprozessor
+ *    – gegen 1,7 s für „Beliebiges Objekt“. Ein stiller Rückfall dorthin war
+ *    genau das, was der Anwender als „rechnet ewig“ gemeldet hat.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -105,42 +107,41 @@ describe('Der Arbeiter wird einmal entschieden', () => {
 describe('Womit gerechnet wird', () => {
   it('nimmt die Grafikeinheit ohne Arbeiter, wenn die Puffer reichen', async () => {
     // Ein eigenes GPU-Gerät lässt sich nicht in einen Arbeiter reichen.
-    const g = grafik({ maxStorageBuffersPerShaderStage: 12 });
+    const g = grafik({ maxStorageBuffersPerShaderStage: 11 });
     const m = await laden(g.gpu);
 
     const e = env();
-    const laufzeit = await m.ortVorbereiten(e, PFADE);
-
-    expect(laufzeit.geraet).toBe(g.geraet);
+    expect(await m.ortVorbereiten(e, PFADE)).toBe(g.geraet);
     expect(e.wasm.proxy).toBe(false);
   });
 
-  it('nimmt den Arbeiter, wenn es kein WebGPU gibt', async () => {
-    // Ohne Grafikeinheit dauert das Netz Minuten; im Hauptfaden stünde die
-    // App so lange still.
+  it('fängt ohne WebGPU gar nicht erst an', async () => {
+    // Der Prozessorpfad war die Falle: 290 s für ein Bild. Lieber ein Satz,
+    // der auf „Beliebiges Objekt“ zeigt, als eine Viertelstunde Warten.
     const m = await laden(undefined);
 
-    const e = env();
-    const laufzeit = await m.ortVorbereiten(e, PFADE);
-
-    expect(laufzeit.geraet).toBeNull();
-    expect(e.wasm.proxy).toBe(true);
-    expect(laufzeit.grund).toMatch(/WebGPU/);
+    await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/Grafikeinheit/);
+    await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/Beliebiges Objekt/);
   });
 
-  it('geht gar nicht erst auf die Grafikeinheit, wenn zu wenige Puffer gemeldet sind', async () => {
+  it('lehnt eine Grafikeinheit ab, die zu wenige Puffer meldet – mit der Zahl', async () => {
     // „Too many storage buffers in shader. Current: 11, Max is 10“ – das kam
-    // erst mitten im Rechnen, und dann war der Arbeiter nicht mehr zu haben.
+    // sonst erst mitten im Rechnen. Die gemeldete Zahl gehört in die Meldung:
+    // ohne sie ist aus der Ferne nicht zu klären, woran es liegt.
     const g = grafik({ maxStorageBuffersPerShaderStage: 10 });
     const m = await laden(g.gpu);
 
-    const e = env();
-    const laufzeit = await m.ortVorbereiten(e, PFADE);
-
-    expect(laufzeit.geraet).toBeNull();
-    expect(e.wasm.proxy).toBe(true);
-    expect(laufzeit.grund).toContain('10');
+    await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/nur 10 Speicherpuffer/);
     expect(g.gefragt).toHaveLength(0);
+  });
+
+  it('weist eine Grafikeinheit mit genau elf Puffern NICHT ab', async () => {
+    // Hier stand einmal eine 12 „als Puffer“. Ein erfundener Aufschlag weist
+    // Geräte ab, auf denen es liefe – gemessen gebraucht werden elf.
+    const g = grafik({ maxStorageBuffersPerShaderStage: 11 });
+    const m = await laden(g.gpu);
+
+    expect(await m.ortVorbereiten(env(), PFADE)).toBe(g.geraet);
   });
 
   it('fordert die Grenzen an, die der Adapter meldet – nicht die Mindestwerte', async () => {
@@ -167,13 +168,10 @@ describe('Womit gerechnet wird', () => {
 });
 
 describe('Nach einem Abbruch mitten im Rechnen', () => {
-  it('nimmt beim nächsten Start den Prozessor', async () => {
-    // Das Versprechen der Fehlermeldung lautet „lade neu, dann rechnet der
-    // Prozessor“. Ohne Merkposten wäre das eine Lüge: die App liefe wieder in
-    // denselben Abbruch.
+  it('fängt beim nächsten Start gar nicht erst wieder an – und nennt den Grund', async () => {
     const g = grafik({ maxStorageBuffersPerShaderStage: 20 });
     const m = await laden(g.gpu);
-    expect((await m.ortVorbereiten(env(), PFADE)).geraet).toBe(g.geraet);
+    expect(await m.ortVorbereiten(env(), PFADE)).toBe(g.geraet);
 
     m.grafikAufgeben('Device lost');
 
@@ -184,18 +182,47 @@ describe('Nach einem Abbruch mitten im Rechnen', () => {
     vi.stubGlobal('navigator', { gpu: g.gpu });
     const neu = await import('./ort-laufzeit.js');
 
-    const e = env();
-    const laufzeit = await neu.ortVorbereiten(e, PFADE);
-    expect(laufzeit.geraet).toBeNull();
-    expect(e.wasm.proxy).toBe(true);
-    expect(laufzeit.grund).toContain('Device lost');
+    await expect(neu.ortVorbereiten(env(), PFADE)).rejects.toThrow(/Device lost/);
+  });
+
+  it('vergisst den Abbruch nach einer Woche von selbst', async () => {
+    // Ein Treiber wird erneuert, ein anderes Bild ist kleiner. Ein einziger
+    // schlechter Tag darf das Verfahren nicht für immer abschalten.
+    const g = grafik({ maxStorageBuffersPerShaderStage: 20 });
+    const m = await laden(g.gpu);
+    m.grafikAufgeben('Device lost');
+
+    const alter = globalThis.localStorage;
+    const vorAchtTagen = Date.now() - 8 * 24 * 60 * 60 * 1000;
+    alter.setItem(
+      'initiative.webgpu.aufgegeben',
+      JSON.stringify({ grund: 'Device lost', zeit: vorAchtTagen }),
+    );
+
+    vi.resetModules();
+    vi.stubGlobal('localStorage', alter);
+    vi.stubGlobal('navigator', { gpu: g.gpu });
+    const neu = await import('./ort-laufzeit.js');
+
+    expect(await neu.ortVorbereiten(env(), PFADE)).toBe(g.geraet);
+  });
+
+  it('lässt sich auf Wunsch sofort wieder versuchen', async () => {
+    const g = grafik({ maxStorageBuffersPerShaderStage: 20 });
+    const m = await laden(g.gpu);
+    m.grafikAufgeben('Device lost');
+    await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/Device lost/);
+
+    m.grafikVergessen();
+    expect(await m.ortVorbereiten(env(), PFADE)).toBe(g.geraet);
   });
 });
 
 describe('Die gemeinsamen Einstellungen', () => {
   it('setzt die Adressen der Laufzeit und einen einzigen Faden', async () => {
     // Mehrere Fäden brauchten COOP/COEP – die Kopfzeilen setzen wir nicht.
-    const m = await laden(undefined);
+    const g = grafik({ maxStorageBuffersPerShaderStage: 20 });
+    const m = await laden(g.gpu);
     const e = env();
     await m.ortVorbereiten(e, PFADE);
 
