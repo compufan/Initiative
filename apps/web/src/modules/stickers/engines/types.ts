@@ -128,7 +128,11 @@ export const ENGINE_INFO: EngineInfo[] = [
     key: 'birefnet',
     label: 'Hohe Qualität',
     description:
-      'Dasselbe wie „Beliebiges Objekt“, nur deutlich genauer an Haaren, Zäunen und Brillenbügeln. Dafür der mit Abstand größte Download. Braucht zwingend eine Grafikeinheit: Die Gewichte liegen in halber Genauigkeit, dafür hat der Prozessorpfad keine Rechenwerke, und ein Bild würde dort eine Viertelstunde dauern statt Sekunden. Fehlt sie, bleibt der Knopf abgeblendet.',
+      'Dasselbe wie „Beliebiges Objekt“, nur deutlich genauer an Haaren, Zäunen und Brillenbügeln. Dafür der mit Abstand größte Download. Braucht zwingend eine Grafikeinheit: Die Gewichte liegen in halber Genauigkeit, dafür hat der Prozessorpfad keine Rechenwerke, und ein Bild würde dort Minuten dauern statt Sekunden. Fehlt sie, bleibt der Knopf abgeblendet.',
+    // Nachgemessen an der Datei, die wirklich ausgeliefert wird:
+    // public/models/birefnet-lite-512.onnx.gz = 82.082.888 B = 78,3 MiB.
+    // (Nicht `gzip -9` von Hand nehmen – prepare-models.mjs komprimiert mit
+    // einer anderen Stufe und kommt auf 48 KB mehr.)
     modelMb: 78.3,
     runtime: 'onnx-gpu',
     defaultEnabled: false,

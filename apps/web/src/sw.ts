@@ -15,6 +15,21 @@ const MEDIA_CACHE = 'initiative-media-v1';
  */
 const MODEL_CACHE = 'initiative-models-v1';
 const KEEP_CACHES = [MEDIA_CACHE, MODEL_CACHE];
+
+/**
+ * Modelle, die es nicht mehr gibt – und die aus dem Speicher müssen.
+ *
+ * Der Modellspeicher überlebt jedes Update mit Absicht: Er soll nicht bei
+ * jeder Fassung 80 MB über das Mobilfunknetz nachladen. Genau das macht ihn
+ * aber zur Falle, wenn ein Modell ersetzt wird. Wer die 1024er Fassung von
+ * „Hohe Qualität“ einmal geladen hatte, behielte 114 MB, die nie wieder
+ * jemand anfragt – und lüde die neue Datei zusätzlich.
+ *
+ * Deshalb hier eine ausdrückliche Liste. Sie wächst nur, wenn ein Modell
+ * wirklich verschwindet, und sie ist billig: ein Löschversuch je Eintrag beim
+ * Aktivieren.
+ */
+const ABGELEGTE_MODELLE = ['/models/birefnet-lite-1024.onnx'];
 const SHELL_FALLBACK = '/index.html';
 
 cleanupOutdatedCaches();
@@ -33,6 +48,16 @@ self.addEventListener('activate', (event) => {
           .filter((key) => key.startsWith('initiative-') && !KEEP_CACHES.includes(key))
           .map((key) => caches.delete(key)),
       );
+
+      // Ausgemusterte Modelle wegräumen. Der Speicher selbst bleibt – nur die
+      // Einträge, die keiner mehr anfragt, gehen.
+      if (ABGELEGTE_MODELLE.length > 0) {
+        const modelle = await caches.open(MODEL_CACHE);
+        await Promise.all(
+          ABGELEGTE_MODELLE.map((pfad) => modelle.delete(pfad, { ignoreVary: true })),
+        );
+      }
+
       await self.clients.claim();
     })(),
   );

@@ -40,6 +40,8 @@ function speicher() {
  * Eine Grafikeinheit, die meldet, was ihr mitgegeben wird – und festhält,
  * womit das Gerät angefordert wurde.
  */
+const GROSS = 128 * 1024 * 1024;
+
 function grafik(grenzen: Record<string, number> | null) {
   const gefragt: Record<string, number>[] = [];
   const geraet = { es: 'ist das eigene Geraet' };
@@ -51,7 +53,9 @@ function grafik(grenzen: Record<string, number> | null) {
         grenzen === null
           ? null
           : {
-              limits: grenzen,
+              // Die Bindungsgroesse ist fuer die meisten Faelle nebensaechlich;
+              // wer sie pruefen will, gibt sie ausdruecklich an.
+              limits: { maxStorageBufferBindingSize: GROSS, ...grenzen },
               requestDevice: async (o?: { requiredLimits?: Record<string, number> }) => {
                 gefragt.push(o?.requiredLimits ?? {});
                 return geraet;
@@ -107,7 +111,7 @@ describe('Der Arbeiter wird einmal entschieden', () => {
 describe('Womit gerechnet wird', () => {
   it('nimmt die Grafikeinheit ohne Arbeiter, wenn die Puffer reichen', async () => {
     // Ein eigenes GPU-Gerät lässt sich nicht in einen Arbeiter reichen.
-    const g = grafik({ maxStorageBuffersPerShaderStage: 11 });
+    const g = grafik({ maxStorageBuffersPerShaderStage: 10 });
     const m = await laden(g.gpu);
 
     const e = env();
@@ -124,24 +128,55 @@ describe('Womit gerechnet wird', () => {
     await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/Beliebiges Objekt/);
   });
 
-  it('lehnt eine Grafikeinheit ab, die zu wenige Puffer meldet – mit der Zahl', async () => {
-    // „Too many storage buffers in shader. Current: 11, Max is 10“ – das kam
-    // sonst erst mitten im Rechnen. Die gemeldete Zahl gehört in die Meldung:
-    // ohne sie ist aus der Ferne nicht zu klären, woran es liegt.
+  it('nimmt eine Grafikeinheit, die 10 Puffer meldet – das Gerät des Anwenders', async () => {
+    /*
+     * Der Fall, an dem drei Runden gescheitert sind. Das Samsung Galaxy
+     * Z Flip 6 meldet genau 10, und hier stand eine 11 – abgelesen aus der
+     * Fehlermeldung „Current: 11, Max is 10“.
+     *
+     * Die 11 hat nie etwas bedeutet: ORTs Prüfung ist inkrementell und meldet
+     * immer „Grenze + 1“. Das Modell braucht 7. Ein Gerät mit 10 hat also
+     * reichlich Luft – und wurde trotzdem abgewiesen.
+     */
     const g = grafik({ maxStorageBuffersPerShaderStage: 10 });
     const m = await laden(g.gpu);
 
-    await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/nur 10 Speicherpuffer/);
-    expect(g.gefragt).toHaveLength(0);
+    expect(await m.ortVorbereiten(env(), PFADE)).toBe(g.geraet);
   });
 
-  it('weist eine Grafikeinheit mit genau elf Puffern NICHT ab', async () => {
-    // Hier stand einmal eine 12 „als Puffer“. Ein erfundener Aufschlag weist
-    // Geräte ab, auf denen es liefe – gemessen gebraucht werden elf.
-    const g = grafik({ maxStorageBuffersPerShaderStage: 11 });
+  it('nimmt auch den Mindestwert der Spezifikation, 8', async () => {
+    // 8 ist der Wert, den jede regelkonforme Umsetzung zusichert. Wer den
+    // abweist, weist ein Feld ab, das per Spezifikation reicht.
+    const g = grafik({ maxStorageBuffersPerShaderStage: 8 });
     const m = await laden(g.gpu);
 
     expect(await m.ortVorbereiten(env(), PFADE)).toBe(g.geraet);
+  });
+
+  it('lehnt erst unterhalb der ausgezählten sieben ab – mit der Zahl', async () => {
+    // Unter 7 reicht es wirklich nicht. Die gemeldete Zahl gehört in die
+    // Meldung: ohne sie ist aus der Ferne nicht zu klären, woran es liegt.
+    const g = grafik({ maxStorageBuffersPerShaderStage: 6 });
+    const m = await laden(g.gpu);
+
+    await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/nur 6 Speicherpuffer/);
+    expect(g.gefragt).toHaveLength(0);
+  });
+
+  it('lehnt ab, wenn kein Tensor am Stück gebunden werden kann', async () => {
+    /*
+     * Die zweite Grenze, ohne die die erste wertlos ist: Einen Tensor über
+     * `maxStorageBufferBindingSize` zerlegt ORT in Segmente, und jedes Segment
+     * belegt eine eigene Bindung. Ein Knoten mit 7 Tensoren käme dann auf ein
+     * Vielfaches von 7. Genau hieran scheiterte die 1024er Fassung zusätzlich.
+     */
+    const g = grafik({
+      maxStorageBuffersPerShaderStage: 16,
+      maxStorageBufferBindingSize: 64 * 1024 * 1024,
+    });
+    const m = await laden(g.gpu);
+
+    await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/64 MiB am Stueck/);
   });
 
   it('fordert die Grenzen an, die der Adapter meldet – nicht die Mindestwerte', async () => {

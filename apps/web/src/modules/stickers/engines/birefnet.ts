@@ -38,10 +38,13 @@ import { flaechenMittel, maskeSkalieren } from './prepare.js';
  * Kantenlänge, auf die diese Fassung festgelegt ist.
  *
  * Muss zum Modell in `scripts/prepare-models.mjs` passen – das Netz hat die
- * Grösse fest im Graphen stehen ([1,3,1024,1024]) und lehnt jede andere ab.
+ * Grösse fest im Graphen stehen ([1,3,512,512]) und lehnt jede andere ab.
+ * Nachgeprueft: schon der erste Reshape des Swin-Rumpfes (`/bb/patch_embed/
+ * Reshape_1`) traegt die 128 = 512/4 als Konstante, ein blosses Umstellen der
+ * Eingangsform scheitert dort sofort.
  */
-const EINGABE = 1024;
-const MODEL_URL = '/models/birefnet-lite-1024.onnx';
+const EINGABE = 512;
+const MODEL_URL = '/models/birefnet-lite-512.onnx';
 
 /** Normalisierung wie bei BiRefNet: erst auf 0…1, dann ImageNet-Werte. */
 const MITTEL = [0.485, 0.456, 0.406];
@@ -157,7 +160,7 @@ async function loadSession(melden?: Fortschritt): Promise<InferenceSession> {
   return ladend;
 }
 
-/** Bringt das Bild auf 1024×1024 und in die Form, die das Modell erwartet. */
+/** Bringt das Bild auf 512×512 und in die Form, die das Modell erwartet. */
 function vorbereiten(image: ImageData): Float32Array {
   const { data } = flaechenMittel(image, EINGABE);
   const flaeche = EINGABE * EINGABE;

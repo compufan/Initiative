@@ -60,31 +60,60 @@ const MODELLE = [
     mindestGroesse: 4_000_000,
   },
   {
-    // BiRefNet-lite, 1024er-Fassung, halbe Genauigkeit. MIT-Lizenz, wie das
+    // BiRefNet-lite, 512er-Fassung, halbe Genauigkeit. MIT-Lizenz, wie das
     // Grundmodell ZhengPeng7/BiRefNet_lite. Deutlich sauberere Kanten als
     // U^2-Net – Haare, Zaeune, Brillenbuegel –, dafuer der groesste Download
-    // der App und spuerbar mehr Rechenzeit. Deshalb ein *zusaetzliches*
-    // Verfahren und kein Ersatz, von Haus aus abgeschaltet.
+    // der App. Deshalb ein *zusaetzliches* Verfahren und kein Ersatz, von
+    // Haus aus abgeschaltet.
     //
     // Feste Fassung ueber den Commit statt `main`: Ein Build von heute soll
     // dieselbe Datei bekommen wie einer von naechster Woche.
     //
-    // # Warum die 1024er Fassung
+    // # Warum wieder 512 und nicht 1024
     //
-    // Dasselbe Netz mit doppelter Kantenlänge, also vierfacher Fläche.
-    // Gemessen an einem Haarausschnitt trägt die 1024er Maske 30 % mehr
-    // Struktur; einzelne Strähnen stehen dort als dünne Linien, wo die 512er
-    // einen weichen Wulst zeigt. Die waren nicht schlecht hochgerechnet –
-    // sie sind nie berechnet worden.
+    // Hier stand eine Zeitlang `onnx-community/BiRefNet_lite-ONNX` mit 1024er
+    // Kantenlaenge, mit der Begruendung, die 1024er Maske trage "30 % mehr
+    // Struktur". Beides war falsch.
     //
-    // Der Preis: rund 15 MB mehr Download und etwa die dreieinhalbfache
-    // Rechenzeit. Wem das zu lang dauert, stellt hier wieder auf
-    // `studioludens/birefnet-lite-512` um und setzt EINGABE in
-    // engines/birefnet.ts zurück auf 512 – mehr ist es nicht.
-    name: 'birefnet-lite-1024.onnx',
-    url: 'https://huggingface.co/onnx-community/BiRefNet_lite-ONNX/resolve/de15b22ba131738a16dff04aab8bdf8dc32e3ac1/onnx/model_fp16.onnx',
-    mindestGroesse: 110_000_000,
-    sha256: 'd39b897ceb16ae654c1731f3dba0cf9b368d9cae74b5a57459b455cc8bfec402',
+    // Falsch war erstens die Zahl: an einem Portraet nachgemessen sind es
+    // +4,4 % Randlaenge und ein um ein Viertel schmaleres Uebergangsband
+    // (2,40 px -> 1,63 px), bei 0,17 % abweichenden Bildpunkten und IoU
+    // 0,9966. Ein Gewinn, aber ein kleiner.
+    //
+    // Falsch war zweitens die Annahme, es liefe ueberhaupt. Der 1024er Export
+    // stammt aus dem BiRefNet-Stand VOR dem 5.11.2024, als die Zerlegung in
+    // Kacheln noch eine ausgerollte Python-Schleife war. Im ONNX sind das
+    // 1433 Knoten, darunter 50 `Split` mit bis zu 32 Ausgaengen. ONNX Runtime
+    // bindet je Ausgang einen storage buffer und stueckelt `Split` – anders
+    // als `Concat` – NICHT (split.cc:135-137 gegen concat.cc:140). Der
+    // groesste Knoten verlangt damit 33 Puffer.
+    //
+    // Chromes Dawn deckelt bei 16 und meldet ueberhaupt nur 8, 10 oder 16.
+    // Der 1024er Export lief also auf KEINEM Browser auf der Grafikeinheit –
+    // nicht auf dem Telefon und nicht auf dem Arbeitsplatzrechner. Was der
+    // Anwender als "rechnet ewig" gemeldet hat, war der Rueckfall auf den
+    // Prozessor, und der ist bei fp16-Gewichten aussichtslos (gemessen:
+    // 290 s je Bild bei 512, 1005 s bei 1024).
+    //
+    // Der 512er Export stammt aus dem Stand DANACH und schreibt dieselbe
+    // Rechnung als Reshape/Transpose. Nachgezaehlt: hoechstens 7 Bindungen je
+    // Knoten, kein einziger `Split`, groesster Zwischentensor rund 98 MiB.
+    // Damit haelt er den Mindestwert der WebGPU-Spezifikation (8 Puffer,
+    // 128 MiB je Bindung) ein und laeuft auf jedem regelkonformen Geraet.
+    //
+    // Die Kachelknoten des 1024ers liessen sich verlustfrei umschreiben – das
+    // ist geprueft und war bitgleich. Es half trotzdem nicht: im
+    // Deformable-ASPP des Dekodierers entstehen bei 1024 Zwischentensoren bis
+    // 392 MiB, und die Spezifikation sichert nur 256 MiB zu. Ein voller Lauf
+    // brauchte 8,2 GB Arbeitsspeicher. 1024 ist auf einem Telefon nicht
+    // machbar, gleich wie sauber der Graph ist.
+    //
+    // Die Auslieferungsgroesse ist praktisch dieselbe: 82,03 MB gzip gegen
+    // 82,11 MB. Der Rueckweg kostet also keinen Download, nur die 4,4 %.
+    name: 'birefnet-lite-512.onnx',
+    url: 'https://huggingface.co/studioludens/birefnet-lite-512/resolve/4a3c40c36c94093cc1e724d9ea428b8fa4b57dc7/onnx/model_fp16.onnx',
+    mindestGroesse: 90_000_000,
+    sha256: 'eff9216bb2f9d3f023d9c2b7196845a7485739ab1f231593633e4d2344ffc516',
     // Ein fremder Server, der gerade nicht erreichbar ist, darf keine
     // Veroeffentlichung verhindern. Fehlt die Datei, meldet die App das
     // Verfahren schlicht als nicht verfuegbar.

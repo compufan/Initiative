@@ -60,18 +60,54 @@
  */
 
 /**
- * Wieviele Speicherpuffer ein Shader von BiRefNet braucht.
+ * Wieviele Speicherpuffer ein Shader dieses Netzes braucht.
  *
- * Elf. Nicht geschätzt – die Laufzeit hat es auf dem Gerät des Anwenders
- * selbst gesagt:
+ * Sieben. Ausgezaehlt am ausgelieferten Modell nach der Regel, nach der ONNX
+ * Runtime zaehlt: je Programm-Eingang und je Programm-Ausgang ein storage
+ * buffer (shader_helper.cc:284-293), die Groessenliste eines `Split` liegt auf
+ * dem Prozessor und zaehlt nicht mit (split.cc:157), und `Concat` stueckelt
+ * sich selbst auf `Limit - 1` Eingaenge (concat.cc:140). Ergebnis fuer
+ * birefnet-lite-512: Hoechstwert 7, kein einziger `Split`, kein `Einsum`.
+ *
+ * # Warum hier vorher 11 stand, und warum das der eigentliche Fehler war
+ *
+ * Die 11 stammte aus der Meldung des Anwendergeraets:
  *
  *     Too many storage buffers in shader. Current: 11, Max is 10
  *
- * Hier stand vorübergehend eine 12, „als Puffer“. Das war ein Fehler: Ein
- * erfundener Aufschlag weist Geräte ab, auf denen es liefe. Es steht die
- * gemessene Zahl da, sonst nichts.
+ * Ich habe sie als "das Netz braucht 11" gelesen. Sie heisst nichts
+ * dergleichen. Die Pruefung in ORT ist INKREMENTELL – sie schlaegt an, sobald
+ * der laufende Zaehler das Limit reisst, und meldet deshalb IMMER
+ * "Grenze + 1", ganz gleich wieviel der Shader tatsaechlich wollte. Der
+ * Schuldige war ein `Split` mit 32 Ausgaengen: 33 Puffer. Kein Geraet der
+ * Welt liefert 33 – Chromes Dawn deckelt bei 16.
+ *
+ * Die 11 hier war damit doppelt schaedlich: Sie beschrieb nichts Wirkliches,
+ * und sie haette das Geraet des Anwenders (meldet 10) auch dann noch
+ * abgewiesen, wenn das Modell laengst nur 7 braucht. Ein Rueckweg auf das
+ * saubere Modell allein haette nichts geaendert – die Tuer waere zugeblieben.
+ *
+ * Deshalb steht hier jetzt die ausgezaehlte Zahl des Modells und keine aus
+ * einer Fehlermeldung abgelesene. Zum Vergleich: Der Mindestwert der
+ * WebGPU-Spezifikation ist 8. Jedes regelkonforme Geraet hat also Luft.
  */
-const NOETIGE_PUFFER = 11;
+const NOETIGE_PUFFER = 7;
+
+/**
+ * Wie gross der groesste Tensor werden darf, ohne zerteilt zu werden.
+ *
+ * Zweite Grenze derselben Art, und ohne sie ist die erste wertlos: Einen
+ * Tensor ueber `maxStorageBufferBindingSize` zerlegt ORT in Segmente, und
+ * JEDES Segment belegt eine eigene Bindung (program_manager.cc:58-80 zusammen
+ * mit shader_helper.cc:290). Ein Knoten mit sieben kleinen Tensoren braucht
+ * sieben Bindungen; derselbe Knoten mit sieben grossen braucht ein Vielfaches.
+ *
+ * 128 MiB ist der Mindestwert der Spezifikation. Der groesste Zwischentensor
+ * des ausgelieferten Modells liegt bei rund 98 MiB und bleibt damit ungeteilt.
+ * (Genau hieran scheiterte die 1024er Fassung zusaetzlich: dort werden es
+ * 392 MiB.)
+ */
+const NOETIGE_BINDUNGSGROESSE = 128 * 1024 * 1024;
 
 /**
  * Merkposten für „die Grafikeinheit hat mitten im Rechnen aufgegeben“.
@@ -211,6 +247,15 @@ async function geraetPruefen(): Promise<Laufzeit> {
       return {
         geraet: null,
         grund: `Die Grafikeinheit erlaubt nur ${kann} Speicherpuffer je Shader, gebraucht werden ${NOETIGE_PUFFER}.`,
+      };
+    }
+
+    const bindung = adapter.limits.maxStorageBufferBindingSize ?? 0;
+    if (bindung < NOETIGE_BINDUNGSGROESSE) {
+      const mib = Math.round(bindung / 1024 / 1024);
+      return {
+        geraet: null,
+        grund: `Die Grafikeinheit bindet hoechstens ${mib} MiB am Stueck, gebraucht werden ${NOETIGE_BINDUNGSGROESSE / 1024 / 1024}.`,
       };
     }
 
