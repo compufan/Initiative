@@ -1,113 +1,97 @@
 /**
  * Die eine Stelle, an der über die Grafikeinheit entschieden wird.
  *
+ * # Was hier NICHT mehr passiert, und warum das der Kern ist
+ *
+ * Hier wurde eine Zeitlang selbst ein `GPUDevice` angefordert und an die
+ * Laufzeit weitergereicht. Die Begründung war, `requestDevice()` ohne
+ * `requiredLimits` liefere die Mindestwerte der Spezifikation statt dessen,
+ * was der Adapter kann. Das beschreibt WebGPU richtig – und traf auf ONNX
+ * Runtime trotzdem nie zu:
+ *
+ *     required_features = GetAvailableRequiredFeatures(adapter);   // :121
+ *     required_limits   = GetRequiredLimits(adapter);              // :126
+ *     …
+ *     required_limits.maxStorageBuffersPerShaderStage
+ *         = adapter_limits.maxStorageBuffersPerShaderStage;        // :764
+ *
+ * ORT fordert die Adaptergrenzen von sich aus an – alle zehn, wo hier fünf
+ * standen – und dazu `ShaderF16`, `Subgroups` und `TimestampQuery`, sofern
+ * der Adapter sie mitbringt.
+ *
+ * Das Einschleusen war also nicht bloss überflüssig, es war schädlich. Der
+ * ganze Block oben hängt an einer Bedingung:
+ *
+ *     if (device_ == nullptr) { …Adapter holen, Fähigkeiten und Grenzen
+ *                                anfordern, Gerät erzeugen… }        // :60
+ *
+ * Wer ein Gerät mitbringt, überspringt ihn vollständig. Gefüllt wird das
+ * Fähigkeitsverzeichnis danach trotzdem – aus dem mitgebrachten Gerät
+ * (:189-193). Und ein Gerät, das ohne `requiredFeatures` angefordert wurde,
+ * hat laut Spezifikation „exactly the specified set of features, and no more
+ * or less“: keine. Beim ersten Shader kommt dann
+ *
+ *     Program Transpose requires f16 but the device does not support it.
+ *
+ * Das Netz trägt fp16-Gewichte. Ohne `shader-f16` läuft kein einziger Shader.
+ *
+ * Gegenprobe aus der eigenen Geschichte: Der allererste Fehler auf dem Gerät
+ * des Anwenders („Max is 10“) kam aus einer Fassung OHNE eingeschleustes
+ * Gerät – also von ORTs eigenem, das die Adaptergrenze angefordert hatte. Die
+ * 10 war nie ein Mindestwert der Spezifikation (der ist 8), sondern die echte
+ * Auskunft dieses Adapters. Es gab nie etwas anzuheben.
+ *
+ * # Was hier stattdessen passiert
+ *
+ * Nur noch nachsehen und berichten. Kein Gerät, keine Grenzen, keine Wünsche
+ * – die Entscheidung, ob „Hohe Qualität“ angeboten wird, und ein Satz, der
+ * sagt warum nicht. Das Gerät besorgt sich die Laufzeit selbst.
+ *
  * # Warum „Hohe Qualität“ ohne Grafikeinheit gar nicht erst anfängt
  *
- * Nicht aus Bequemlichkeit, sondern weil es nachgemessen ist. Beide Modelle
- * einmal auf einem **Serverprozessor**, ein Faden, ONNX Runtime 1.29:
+ * Nachgemessen, ONNX Runtime 1.29, ein Faden, Serverprozessor:
  *
  *     u2netp („Beliebiges Objekt“, 320, fp32)      1,7 s
- *     BiRefNet-lite („Hohe Qualität“, 512, fp16) 290,4 s
+ *     BiRefNet-lite („Hohe Qualität“, 512, fp16) 295,1 s
  *
- * 170-mal langsamer. Das ist nicht die Grösse des Netzes – so viel mehr
- * rechnet BiRefNet nicht. Es ist das Format. Beim Laden sagt die Laufzeit es
- * selbst, hundertfach:
+ * Das ist nicht die Grösse des Netzes. Dasselbe Netz in fp32 braucht 4,9 s –
+ * Faktor 60. Es ist allein das Format: für halbe Genauigkeit bringt der
+ * Prozessorpfad keine Rechenwerke mit und rechnet jede Zahl über eine
+ * Ersatzdarstellung. Beim Laden sagt die Laufzeit es selbst, hundertfach:
  *
  *     Could not find a CPU kernel and hence can't constant fold Div node …
  *
- * Die Gewichte sind halbe Genauigkeit (437 von 437 Tensoren), und dafür
- * bringt der Prozessorpfad schlicht keine Rechenwerke mit. Jede Rechnung
- * geht den Umweg über eine Ersatzdarstellung. Auf der Grafikeinheit ist
- * halbe Genauigkeit dagegen der Normalfall und kostet nichts extra.
+ * Ein Prozessorpfad stand hier trotzdem einmal – und hat genau das getan, was
+ * der Anwender gemeldet hat: „rechnet immer noch ewig“. Ein Verfahren, das
+ * eine Viertelstunde braucht, ist kein langsames Verfahren, sondern eine
+ * Falle. „Beliebiges Objekt“ rechnet dieselbe Art Aufgabe in Sekunden.
  *
- * Ein Ausweg wäre die Fassung mit voller Genauigkeit – die gibt es, aber sie
- * wiegt rund 220 MB statt 78. Etwas Kleineres bietet die Quelle nicht an
- * (nachgesehen: `onnx/model.onnx` und `onnx/model_fp16.onnx`, sonst nichts).
- * Auf ein Telefon lädt man das nicht.
- *
- * Also: Mit Grafikeinheit Sekunden, ohne sie gar nicht. Ein Prozessorpfad
- * stand hier vorher trotzdem – und hat genau das getan, was der Anwender
- * gemeldet hat: „rechnet immer noch ewig“. Ein Verfahren, das eine
- * Viertelstunde braucht, ist kein langsames Verfahren, sondern eine Falle.
- * „Beliebiges Objekt“ rechnet dieselbe Art Aufgabe in Sekunden.
- *
- * # Warum die Entscheidung hierher gehört und nur einmal fällt
- *
- * `ort.env.wasm.proxy` sagt, ob gerechnet wird, wo die Oberfläche lebt, oder
- * in einem Arbeiter daneben. Der Haken steht im Quelltext der Laufzeit:
- *
- *     istArbeiter = () => !!env.wasm.proxy && typeof document !== "undefined";
- *     laufzeitStarten = async () => {
- *       if (gestartet) return;
- *       if (istArbeiter()) { …hier und NUR hier entsteht der Arbeiter… }
- *     };
- *
- * Gelesen wird bei jedem Aufruf, erzeugt nur einmal. Wer die Einstellung
- * nachträglich umlegt, schickt die Laufzeit zu einem Arbeiter, den es nie
- * gegeben hat: `worker not ready`. Seit es keinen Prozessorpfad mehr gibt,
- * gibt es auch nichts mehr umzulegen – die Zwickmühle ist damit weg, nicht
- * bloss umschifft.
+ * (Damit ist auch der Notausgang bekannt, falls ein Gerät kein `shader-f16`
+ * hat: die Gewichte fp16 auf der Platte lassen und je einen Cast nach fp32
+ * davorsetzen. ORT faltet die beim Laden weg, die Auslieferungsgrösse sinkt
+ * sogar leicht. Gemessen, aber noch nicht gebaut – es wird erst gebraucht,
+ * wenn sich ein Gerät wirklich so meldet.)
  *
  * # Wer hier hereingehört und wer nicht
  *
  * Nur `onnxruntime-web/webgpu`, heute allein „Hohe Qualität“.
  * `onnxruntime-web/wasm` ist eine eigene, in sich geschlossene Fassung der
- * Laufzeit mit eigener Umgebung und eigenem Arbeiter (nachgeprüft: die
- * beiden Dateien teilen sich keinen einzigen Import). „Beliebiges Objekt“
- * und „Antippen (genau)“ rechnen dort, mit vollen Genauigkeiten, immer auf
- * dem Prozessor und immer im Arbeiter. Für die gibt es nichts zu
- * entscheiden.
+ * Laufzeit mit eigener Umgebung und eigenem Arbeiter (nachgeprüft: die beiden
+ * Dateien teilen sich keinen einzigen Import). „Beliebiges Objekt“ und
+ * „Antippen (genau)“ rechnen dort, mit voller Genauigkeit, immer auf dem
+ * Prozessor und immer im Arbeiter. Für die gibt es nichts zu entscheiden.
  */
 
 /**
- * Wieviele Speicherpuffer ein Shader dieses Netzes braucht.
+ * Die Fähigkeit, an der alles hängt.
  *
- * Sieben. Ausgezaehlt am ausgelieferten Modell nach der Regel, nach der ONNX
- * Runtime zaehlt: je Programm-Eingang und je Programm-Ausgang ein storage
- * buffer (shader_helper.cc:284-293), die Groessenliste eines `Split` liegt auf
- * dem Prozessor und zaehlt nicht mit (split.cc:157), und `Concat` stueckelt
- * sich selbst auf `Limit - 1` Eingaenge (concat.cc:140). Ergebnis fuer
- * birefnet-lite-512: Hoechstwert 7, kein einziger `Split`, kein `Einsum`.
- *
- * # Warum hier vorher 11 stand, und warum das der eigentliche Fehler war
- *
- * Die 11 stammte aus der Meldung des Anwendergeraets:
- *
- *     Too many storage buffers in shader. Current: 11, Max is 10
- *
- * Ich habe sie als "das Netz braucht 11" gelesen. Sie heisst nichts
- * dergleichen. Die Pruefung in ORT ist INKREMENTELL – sie schlaegt an, sobald
- * der laufende Zaehler das Limit reisst, und meldet deshalb IMMER
- * "Grenze + 1", ganz gleich wieviel der Shader tatsaechlich wollte. Der
- * Schuldige war ein `Split` mit 32 Ausgaengen: 33 Puffer. Kein Geraet der
- * Welt liefert 33 – Chromes Dawn deckelt bei 16.
- *
- * Die 11 hier war damit doppelt schaedlich: Sie beschrieb nichts Wirkliches,
- * und sie haette das Geraet des Anwenders (meldet 10) auch dann noch
- * abgewiesen, wenn das Modell laengst nur 7 braucht. Ein Rueckweg auf das
- * saubere Modell allein haette nichts geaendert – die Tuer waere zugeblieben.
- *
- * Deshalb steht hier jetzt die ausgezaehlte Zahl des Modells und keine aus
- * einer Fehlermeldung abgelesene. Zum Vergleich: Der Mindestwert der
- * WebGPU-Spezifikation ist 8. Jedes regelkonforme Geraet hat also Luft.
+ * Alle 437 Gewichtstensoren des Netzes liegen in halber Genauigkeit. ORT
+ * prüft vor jedem Shader `DeviceHasFeature(ShaderF16)` und bricht sonst ab
+ * (shader_helper.cc:401). Es gibt weder einen Schalter noch eine automatische
+ * Umwandlung – im ganzen WebGPU-Teil der Laufzeit kommt `ShaderF16` genau
+ * zweimal vor: bei der Anforderung und bei dieser Prüfung.
  */
-const NOETIGE_PUFFER = 7;
-
-/**
- * Wie gross der groesste Tensor werden darf, ohne zerteilt zu werden.
- *
- * Zweite Grenze derselben Art, und ohne sie ist die erste wertlos: Einen
- * Tensor ueber `maxStorageBufferBindingSize` zerlegt ORT in Segmente, und
- * JEDES Segment belegt eine eigene Bindung (program_manager.cc:58-80 zusammen
- * mit shader_helper.cc:290). Ein Knoten mit sieben kleinen Tensoren braucht
- * sieben Bindungen; derselbe Knoten mit sieben grossen braucht ein Vielfaches.
- *
- * 128 MiB ist der Mindestwert der Spezifikation. Der groesste Zwischentensor
- * des ausgelieferten Modells liegt bei rund 98 MiB und bleibt damit ungeteilt.
- * (Genau hieran scheiterte die 1024er Fassung zusaetzlich: dort werden es
- * 392 MiB.)
- */
-const NOETIGE_BINDUNGSGROESSE = 128 * 1024 * 1024;
+const NOETIGE_FAEHIGKEIT = 'shader-f16';
 
 /**
  * Merkposten für „die Grafikeinheit hat mitten im Rechnen aufgegeben“.
@@ -115,39 +99,32 @@ const NOETIGE_BINDUNGSGROESSE = 128 * 1024 * 1024;
  * Muss den Seitenaufruf überleben, sonst liefe die App beim nächsten Versuch
  * in denselben Abbruch. Aber er darf nicht ewig gelten: Ein Treiber wird
  * erneuert, ein anderes Bild ist kleiner, und ein einziger schlechter Tag
- * soll das Verfahren nicht für immer abschalten. Deshalb mit Datum, und
- * `vergessen()` räumt ihn auf Wunsch sofort weg.
+ * soll das Verfahren nicht für immer abschalten. Deshalb mit Datum – und mit
+ * `grafikVergessen()` einem Weg zurück, der auch wirklich an einem Knopf
+ * hängt. Eine Sperre ohne Ausweg ist keine Vorsicht, sondern ein Defekt.
  */
 const AUFGEGEBEN = 'initiative.webgpu.aufgegeben';
 const VERGESSEN_NACH = 7 * 24 * 60 * 60 * 1000;
 
 /** Gerade so viel WebGPU, wie hier gebraucht wird – statt einer Abhängigkeit. */
 interface GpuAdapter {
-  readonly limits: { readonly [name: string]: number | undefined };
-  requestDevice(optionen?: { requiredLimits?: Record<string, number> }): Promise<unknown>;
+  readonly features: { has(name: string): boolean };
 }
 interface GpuZugang {
   requestAdapter(): Promise<GpuAdapter | null>;
 }
 
 export interface Laufzeit {
-  /**
-   * Das eigene Gerät, oder `null`, wenn dieses Telefon nicht taugt.
-   *
-   * Wird als `executionProviders: [{ name: 'webgpu', device }]` übergeben,
-   * **nicht** über `env.webgpu.device`: Dieses Feld ist eine Ausgabe. Die
-   * Laufzeit schreibt dort beim Hochfahren das Gerät hinein, das sie sich
-   * selbst besorgt hat – mit den Mindestgrenzen der Spezifikation. Wer
-   * hineinschreibt, bekommt keinen Fehler, sondern schweigend die alten
-   * Grenzen zurück.
-   */
-  geraet: unknown | null;
+  /** Ob „Hohe Qualität“ auf diesem Gerät angeboten werden darf. */
+  taugt: boolean;
   /**
    * Warum nicht – ein Satz, der dem Anwender gezeigt werden kann und der die
    * gemessenen Zahlen mitbringt. Ohne sie ist aus der Ferne nicht zu klären,
    * woran es auf einem bestimmten Telefon liegt.
    */
   grund?: string;
+  /** Ob der Grund eine gemerkte Aufgabe ist – dann lohnt ein neuer Versuch. */
+  gemerkt?: boolean;
 }
 
 let entschieden: Promise<Laufzeit> | null = null;
@@ -156,8 +133,7 @@ let befund: Laufzeit | null = null;
 /**
  * Was die Prüfung ergeben hat – ohne zu warten.
  *
- * `null`, solange noch niemand gefragt hat. Damit lässt sich die Oberfläche
- * einrichten, ohne auf die Grafikeinheit zu warten.
+ * `null`, solange noch niemand gefragt hat.
  */
 export function grafikBefund(): Laufzeit | null {
   return befund;
@@ -206,89 +182,46 @@ export function grafikVergessen(): void {
   befund = null;
 }
 
-/** Die Grenzen, die dieses Netz reisst, wenn man sie nicht anhebt. */
-const GRENZEN = [
-  'maxStorageBuffersPerShaderStage',
-  'maxStorageBufferBindingSize',
-  'maxBufferSize',
-  'maxComputeInvocationsPerWorkgroup',
-  'maxComputeWorkgroupStorageSize',
-];
-
 /**
- * Ob die Grafikeinheit taugt – **vor** dem Hochfahren der Laufzeit geprüft.
+ * Nachsehen, ob „Hohe Qualität“ angeboten werden kann.
  *
- * Die Puffergrenze ist der Punkt, an dem es auf dem Gerät des Anwenders
- * scheiterte. Die dort gemeldete 10 ist keine Eigenschaft der Grafikeinheit,
- * sondern das, womit das Gerät angefordert wurde: `requestDevice()` ohne
- * `requiredLimits` liefert die **Mindestwerte** der Spezifikation. Hier wird
- * deshalb ausdrücklich nach dem gefragt, was der Adapter meldet.
+ * Fragt den **Adapter**, nicht ein Gerät: Der Adapter sagt, was das Gerät
+ * könnte; ein Gerät sagt nur, was beim Anfordern verlangt wurde. Genau diese
+ * Verwechslung war der letzte Fehler.
  */
 async function geraetPruefen(): Promise<Laufzeit> {
   const alterAbbruch = abbruchMerken();
   if (alterAbbruch) {
     return {
-      geraet: null,
+      taugt: false,
+      gemerkt: true,
       grund: `Die Grafikeinheit hat hier zuletzt mitten im Rechnen abgebrochen (${alterAbbruch}).`,
     };
   }
 
   const gpu = (globalThis.navigator as (Navigator & { gpu?: GpuZugang }) | undefined)?.gpu;
-  if (!gpu) return { geraet: null, grund: 'Dieser Browser bietet kein WebGPU an.' };
+  if (!gpu) return { taugt: false, grund: 'Dieser Browser bietet kein WebGPU an.' };
 
   try {
     const adapter = await gpu.requestAdapter();
-    if (!adapter) return { geraet: null, grund: 'Es war keine Grafikeinheit zu bekommen.' };
+    if (!adapter) return { taugt: false, grund: 'Es war keine Grafikeinheit zu bekommen.' };
 
-    const kann = adapter.limits.maxStorageBuffersPerShaderStage ?? 0;
-    if (kann < NOETIGE_PUFFER) {
-      // Jetzt ehrlich sein statt mitten im Rechnen abbrechen: Reicht die
-      // Grenze nicht, verwirft die Grafikeinheit den Shader beim ersten Lauf.
+    if (!adapter.features.has(NOETIGE_FAEHIGKEIT)) {
+      // Ehrlich sein, bevor 78 MB geladen sind. Ohne halbe Genauigkeit auf der
+      // Grafikeinheit bricht der erste Shader ab, und ein Ausweichen auf den
+      // Prozessor dauert bei diesem Format eine Viertelstunde.
       return {
-        geraet: null,
-        grund: `Die Grafikeinheit erlaubt nur ${kann} Speicherpuffer je Shader, gebraucht werden ${NOETIGE_PUFFER}.`,
+        taugt: false,
+        grund: `Die Grafikeinheit rechnet nicht in halber Genauigkeit (${NOETIGE_FAEHIGKEIT} fehlt).`,
       };
     }
 
-    const bindung = adapter.limits.maxStorageBufferBindingSize ?? 0;
-    if (bindung < NOETIGE_BINDUNGSGROESSE) {
-      const mib = Math.round(bindung / 1024 / 1024);
-      return {
-        geraet: null,
-        grund: `Die Grafikeinheit bindet hoechstens ${mib} MiB am Stueck, gebraucht werden ${NOETIGE_BINDUNGSGROESSE / 1024 / 1024}.`,
-      };
-    }
-
-    const wunsch: Record<string, number> = {};
-    for (const name of GRENZEN) {
-      const wert = adapter.limits[name];
-      if (typeof wert === 'number') wunsch[name] = wert;
-    }
-
-    try {
-      return { geraet: await adapter.requestDevice({ requiredLimits: wunsch }) };
-    } catch (fehler) {
-      // Ein Adapter darf ablehnen, was er selbst gemeldet hat. Dann noch
-      // einmal mit der einen Grenze, auf die es wirklich ankommt – erst wenn
-      // auch das scheitert, ist hier Schluss. Ohne gehobene Grenze bräuchte
-      // man gar nicht anzufangen.
-      try {
-        return {
-          geraet: await adapter.requestDevice({
-            requiredLimits: { maxStorageBuffersPerShaderStage: kann },
-          }),
-        };
-      } catch {
-        const text = fehler instanceof Error ? fehler.message : String(fehler);
-        return {
-          geraet: null,
-          grund: `Die Grafikeinheit gab ihre eigenen Grenzen nicht frei (${text}).`,
-        };
-      }
-    }
+    // Nach den Grenzen wird ausdrücklich NICHT gefragt: ORT fordert sie selbst
+    // beim Adapter an, und zwar mehr davon, als hier je standen. Siehe oben.
+    return { taugt: true };
   } catch (fehler) {
     return {
-      geraet: null,
+      taugt: false,
       grund: fehler instanceof Error ? fehler.message : 'Die Grafikeinheit meldete einen Fehler.',
     };
   }
@@ -297,8 +230,8 @@ async function geraetPruefen(): Promise<Laufzeit> {
 /**
  * Die Entscheidung – beim zweiten Aufruf sofort dieselbe Antwort.
  *
- * Nur einmal geprüft: `requestDevice` gäbe beim zweiten Mal ein zweites
- * Gerät, und die Sitzung liefe dann auf einem anderen als dem geprüften.
+ * Gemerkt wird sie, weil die Oberfläche sie beim Öffnen des Studios braucht
+ * und das Verfahren selbst noch einmal beim Rechnen.
  */
 export function laufzeitEntscheiden(): Promise<Laufzeit> {
   if (!entschieden) {
@@ -313,17 +246,17 @@ export function laufzeitEntscheiden(): Promise<Laufzeit> {
 /**
  * Die gemeinsamen Einstellungen setzen. Muss vor der ERSTEN Sitzung laufen.
  *
- * Gibt das Gerät zurück, oder wirft mit einem Satz, den man zeigen kann.
- * Nicht als stiller Rückfall auf den Prozessor – siehe die Messung oben.
+ * Wirft mit einem Satz, den man zeigen kann, wenn dieses Gerät nicht taugt –
+ * nicht als stiller Rückfall auf den Prozessor, siehe die Messung oben.
  */
 export async function ortVorbereiten(
   // Alle Felder wahlfrei, weil `ort.env` sie so deklariert. Anders herum
   // liesse sich `ort.env` gar nicht übergeben.
   env: { wasm: { wasmPaths?: unknown; numThreads?: number; proxy?: boolean } },
   pfade: { wasm: string; mjs: string },
-): Promise<unknown> {
+): Promise<void> {
   const laufzeit = await laufzeitEntscheiden();
-  if (!laufzeit.geraet) {
+  if (!laufzeit.taugt) {
     throw new Error(
       `„Hohe Qualität“ braucht eine Grafikeinheit. ${laufzeit.grund ?? ''} ` +
         'Auf dem Prozessor rechnet dieses Netz an einem Bild eine Viertelstunde – ' +
@@ -335,10 +268,12 @@ export async function ortVorbereiten(
   // Mehrere Fäden brauchten die Kopfzeilen COOP/COEP – die setzen wir nicht.
   // Gerechnet wird ohnehin auf der Grafikeinheit.
   env.wasm.numThreads = 1;
-  // Kein Arbeiter: Ein `GPUDevice` lässt sich nicht dorthin reichen, die
-  // Laufzeit schickt beim Hochfahren ihre ganze Umgebung per `postMessage`.
-  // Das ist verschmerzbar, weil die eigentliche Arbeit auf der Grafikeinheit
-  // liegt und der Hauptfaden dabei überwiegend wartet.
+  // Vorerst kein Arbeiter. Der Grund dafür (ein eigenes `GPUDevice` lässt sich
+  // nicht per `postMessage` hinüberreichen) ist mit dem Einschleusen zwar
+  // entfallen, und der Arbeiter wäre besser – er hielte die Oberfläche
+  // während des Rechnens am Leben und nähme ihr die 25,7 MB Laufzeit und die
+  // 78 MB Modellbytes ab. Aber das ist eine zweite, unabhängige Annahme, und
+  // zwei Änderungen auf einmal heissen bei einem Fehlschlag zwei Verdächtige.
+  // Erst soll der f16-Fehler nachweislich weg sein.
   env.wasm.proxy = false;
-  return laufzeit.geraet;
 }

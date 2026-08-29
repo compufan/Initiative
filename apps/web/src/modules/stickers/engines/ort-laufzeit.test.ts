@@ -1,18 +1,15 @@
 /**
- * Prüft zwei Regeln, an denen „Hohe Qualität“ nacheinander zerbrochen ist.
+ * Hält die Regeln fest, an denen „Hohe Qualität“ nacheinander zerbrochen ist.
  *
- * 1. Die Entscheidung über die Grafikeinheit fällt **einmal**. Die ONNX-
- *    Laufzeit erzeugt ihren Arbeiter genau beim Hochfahren und nur dann, wenn
- *    `env.wasm.proxy` in diesem Augenblick gesetzt ist. Wer sie später
- *    umlegt, schickt sie zu einem Arbeiter, den es nie gegeben hat:
- *    `worker not ready`.
+ * Die Reihe ist lehrreich, deshalb steht sie hier: Erst wurde `proxy` mitten
+ * im Lauf umgelegt (`worker not ready`), dann eine Zahl aus einer
+ * Fehlermeldung als Bedarf gelesen (Geräte grundlos abgewiesen), dann ein
+ * eigenes `GPUDevice` eingeschleust – und damit ORT der Block übersprungen,
+ * der `shader-f16` anfordert (`requires f16 but the device does not support
+ * it`). Jedes Mal war die Ursache dieselbe: an der Laufzeit vorbei etwas
+ * selbst regeln wollen, was sie besser weiss.
  *
- * 2. Ohne taugliche Grafikeinheit wird gar nicht erst angefangen. Nicht aus
- *    Vorsicht, sondern weil es nachgemessen ist: BiRefNet trägt Gewichte in
- *    halber Genauigkeit, dafür hat der Prozessorpfad keine Rechenwerke, und
- *    ein Bild bei halber Kantenlänge braucht 290 s auf einem Serverprozessor
- *    – gegen 1,7 s für „Beliebiges Objekt“. Ein stiller Rückfall dorthin war
- *    genau das, was der Anwender als „rechnet ewig“ gemeldet hat.
+ * Deshalb prüfen die Tests hier vor allem, was NICHT mehr passiert.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -37,28 +34,23 @@ function speicher() {
 }
 
 /**
- * Eine Grafikeinheit, die meldet, was ihr mitgegeben wird – und festhält,
- * womit das Gerät angefordert wurde.
+ * Eine Grafikeinheit, die meldet, was ihr mitgegeben wird – und festhält, ob
+ * jemand versucht hat, ein eigenes Gerät anzufordern.
  */
-const GROSS = 128 * 1024 * 1024;
-
-function grafik(grenzen: Record<string, number> | null) {
-  const gefragt: Record<string, number>[] = [];
-  const geraet = { es: 'ist das eigene Geraet' };
+function grafik(faehigkeiten: string[] | null) {
+  const geraeteVersuche: unknown[] = [];
   return {
-    gefragt,
-    geraet,
+    geraeteVersuche,
     gpu: {
       requestAdapter: async () =>
-        grenzen === null
+        faehigkeiten === null
           ? null
           : {
-              // Die Bindungsgroesse ist fuer die meisten Faelle nebensaechlich;
-              // wer sie pruefen will, gibt sie ausdruecklich an.
-              limits: { maxStorageBufferBindingSize: GROSS, ...grenzen },
-              requestDevice: async (o?: { requiredLimits?: Record<string, number> }) => {
-                gefragt.push(o?.requiredLimits ?? {});
-                return geraet;
+              features: { has: (name: string) => faehigkeiten.includes(name) },
+              // Wer das hier aufruft, macht den Fehler von damals.
+              requestDevice: async (o?: unknown) => {
+                geraeteVersuche.push(o);
+                return { es: 'ist ein Geraet ohne Faehigkeiten' };
               },
             },
     },
@@ -79,134 +71,91 @@ beforeEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('Der Arbeiter wird einmal entschieden', () => {
-  it('legt „proxy“ nicht mehr um, egal wie oft gefragt wird', async () => {
-    // Das ist der eigentliche Fehler gewesen: erst ohne Arbeiter starten,
-    // dann für den Rückfall den Arbeiter wollen.
-    const g = grafik({ maxStorageBuffersPerShaderStage: 20, maxBufferSize: 1 << 30 });
+describe('Die Laufzeit macht ihr Gerät selbst', () => {
+  it('fordert KEIN eigenes Gerät an', async () => {
+    /*
+     * Der Fehler der letzten Runde. Ein selbst angefordertes Gerät lässt ORT
+     * den Block überspringen, der Fähigkeiten UND Grenzen besorgt
+     * (webgpu_context.cc:60). Das Fähigkeitsverzeichnis wird danach trotzdem
+     * gefüllt – aus dem mitgebrachten Gerät. Und das hat laut Spezifikation
+     * „exactly the specified set of features, and no more or less“: keine.
+     */
+    const g = grafik(['shader-f16']);
     const m = await laden(g.gpu);
 
-    const erste = env();
-    const zweite = env();
-    await m.ortVorbereiten(erste, PFADE);
-    await m.ortVorbereiten(zweite, PFADE);
+    await m.ortVorbereiten(env(), PFADE);
 
-    expect(erste.wasm.proxy).toBe(zweite.wasm.proxy);
+    expect(g.geraeteVersuche).toHaveLength(0);
   });
 
-  it('fragt die Grafikeinheit nur ein einziges Mal', async () => {
-    // Ein zweiter `requestDevice`-Aufruf gäbe ein zweites Gerät – und die
-    // Sitzung liefe dann auf einem anderen als dem geprüften.
-    const g = grafik({ maxStorageBuffersPerShaderStage: 20 });
+  it('fragt den Adapter nur ein einziges Mal', async () => {
+    const g = grafik(['shader-f16']);
     const m = await laden(g.gpu);
+    let gefragt = 0;
+    const zaehlend = {
+      requestAdapter: async () => {
+        gefragt += 1;
+        return (await g.gpu.requestAdapter()) as never;
+      },
+    };
+    vi.resetModules();
+    vi.stubGlobal('localStorage', speicher());
+    vi.stubGlobal('navigator', { gpu: zaehlend });
+    const neu = await import('./ort-laufzeit.js');
 
-    await m.ortVorbereiten(env(), PFADE);
-    await m.ortVorbereiten(env(), PFADE);
-    await m.laufzeitEntscheiden();
+    await neu.ortVorbereiten(env(), PFADE);
+    await neu.ortVorbereiten(env(), PFADE);
+    await neu.laufzeitEntscheiden();
 
-    expect(g.gefragt).toHaveLength(1);
+    expect(gefragt).toBe(1);
   });
 });
 
 describe('Womit gerechnet wird', () => {
-  it('nimmt die Grafikeinheit ohne Arbeiter, wenn die Puffer reichen', async () => {
-    // Ein eigenes GPU-Gerät lässt sich nicht in einen Arbeiter reichen.
-    const g = grafik({ maxStorageBuffersPerShaderStage: 10 });
+  it('lässt zu, wenn der Adapter halbe Genauigkeit kann', async () => {
+    const g = grafik(['shader-f16', 'timestamp-query']);
     const m = await laden(g.gpu);
 
     const e = env();
-    expect(await m.ortVorbereiten(e, PFADE)).toBe(g.geraet);
-    expect(e.wasm.proxy).toBe(false);
+    await expect(m.ortVorbereiten(e, PFADE)).resolves.toBeUndefined();
+    expect((await m.laufzeitEntscheiden()).taugt).toBe(true);
+  });
+
+  it('lehnt ab, wenn dem Adapter shader-f16 fehlt – und sagt es', async () => {
+    /*
+     * Alle 437 Gewichtstensoren liegen in halber Genauigkeit. Ohne
+     * `shader-f16` bricht ORT vor dem ersten Shader ab. Das gehört vor den
+     * Download von 78 MB, nicht danach.
+     */
+    const g = grafik(['timestamp-query']);
+    const m = await laden(g.gpu);
+
+    await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/shader-f16/);
+    await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/halber Genauigkeit/);
   });
 
   it('fängt ohne WebGPU gar nicht erst an', async () => {
-    // Der Prozessorpfad war die Falle: 290 s für ein Bild. Lieber ein Satz,
-    // der auf „Beliebiges Objekt“ zeigt, als eine Viertelstunde Warten.
+    // Der Prozessorpfad war die Falle: 295 s für ein Bild gegen 1,7 s bei
+    // „Beliebiges Objekt“. Lieber ein Satz, der dorthin zeigt.
     const m = await laden(undefined);
 
-    await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/Grafikeinheit/);
+    await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/WebGPU/);
     await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/Beliebiges Objekt/);
   });
 
-  it('nimmt eine Grafikeinheit, die 10 Puffer meldet – das Gerät des Anwenders', async () => {
-    /*
-     * Der Fall, an dem drei Runden gescheitert sind. Das Samsung Galaxy
-     * Z Flip 6 meldet genau 10, und hier stand eine 11 – abgelesen aus der
-     * Fehlermeldung „Current: 11, Max is 10“.
-     *
-     * Die 11 hat nie etwas bedeutet: ORTs Prüfung ist inkrementell und meldet
-     * immer „Grenze + 1“. Das Modell braucht 7. Ein Gerät mit 10 hat also
-     * reichlich Luft – und wurde trotzdem abgewiesen.
-     */
-    const g = grafik({ maxStorageBuffersPerShaderStage: 10 });
+  it('lehnt ab, wenn gar kein Adapter zu bekommen ist', async () => {
+    const g = grafik(null);
     const m = await laden(g.gpu);
 
-    expect(await m.ortVorbereiten(env(), PFADE)).toBe(g.geraet);
-  });
-
-  it('nimmt auch den Mindestwert der Spezifikation, 8', async () => {
-    // 8 ist der Wert, den jede regelkonforme Umsetzung zusichert. Wer den
-    // abweist, weist ein Feld ab, das per Spezifikation reicht.
-    const g = grafik({ maxStorageBuffersPerShaderStage: 8 });
-    const m = await laden(g.gpu);
-
-    expect(await m.ortVorbereiten(env(), PFADE)).toBe(g.geraet);
-  });
-
-  it('lehnt erst unterhalb der ausgezählten sieben ab – mit der Zahl', async () => {
-    // Unter 7 reicht es wirklich nicht. Die gemeldete Zahl gehört in die
-    // Meldung: ohne sie ist aus der Ferne nicht zu klären, woran es liegt.
-    const g = grafik({ maxStorageBuffersPerShaderStage: 6 });
-    const m = await laden(g.gpu);
-
-    await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/nur 6 Speicherpuffer/);
-    expect(g.gefragt).toHaveLength(0);
-  });
-
-  it('lehnt ab, wenn kein Tensor am Stück gebunden werden kann', async () => {
-    /*
-     * Die zweite Grenze, ohne die die erste wertlos ist: Einen Tensor über
-     * `maxStorageBufferBindingSize` zerlegt ORT in Segmente, und jedes Segment
-     * belegt eine eigene Bindung. Ein Knoten mit 7 Tensoren käme dann auf ein
-     * Vielfaches von 7. Genau hieran scheiterte die 1024er Fassung zusätzlich.
-     */
-    const g = grafik({
-      maxStorageBuffersPerShaderStage: 16,
-      maxStorageBufferBindingSize: 64 * 1024 * 1024,
-    });
-    const m = await laden(g.gpu);
-
-    await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/64 MiB am Stueck/);
-  });
-
-  it('fordert die Grenzen an, die der Adapter meldet – nicht die Mindestwerte', async () => {
-    // `requestDevice()` ohne `requiredLimits` gibt die Mindestwerte der
-    // Spezifikation zurück, nicht das, was das Gerät kann. Genau daran ist es
-    // auf dem Z Flip 6 gescheitert.
-    const g = grafik({
-      maxStorageBuffersPerShaderStage: 30,
-      maxStorageBufferBindingSize: 2 ** 31,
-      maxBufferSize: 2 ** 31,
-      maxComputeInvocationsPerWorkgroup: 1024,
-      maxComputeWorkgroupStorageSize: 32768,
-    });
-    const m = await laden(g.gpu);
-
-    await m.ortVorbereiten(env(), PFADE);
-
-    expect(g.gefragt[0]).toMatchObject({
-      maxStorageBuffersPerShaderStage: 30,
-      maxStorageBufferBindingSize: 2 ** 31,
-      maxBufferSize: 2 ** 31,
-    });
+    await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/keine Grafikeinheit/i);
   });
 });
 
 describe('Nach einem Abbruch mitten im Rechnen', () => {
   it('fängt beim nächsten Start gar nicht erst wieder an – und nennt den Grund', async () => {
-    const g = grafik({ maxStorageBuffersPerShaderStage: 20 });
+    const g = grafik(['shader-f16']);
     const m = await laden(g.gpu);
-    expect(await m.ortVorbereiten(env(), PFADE)).toBe(g.geraet);
+    await m.ortVorbereiten(env(), PFADE);
 
     m.grafikAufgeben('Device lost');
 
@@ -218,20 +167,18 @@ describe('Nach einem Abbruch mitten im Rechnen', () => {
     const neu = await import('./ort-laufzeit.js');
 
     await expect(neu.ortVorbereiten(env(), PFADE)).rejects.toThrow(/Device lost/);
+    expect((await neu.laufzeitEntscheiden()).gemerkt).toBe(true);
   });
 
   it('vergisst den Abbruch nach einer Woche von selbst', async () => {
-    // Ein Treiber wird erneuert, ein anderes Bild ist kleiner. Ein einziger
-    // schlechter Tag darf das Verfahren nicht für immer abschalten.
-    const g = grafik({ maxStorageBuffersPerShaderStage: 20 });
+    const g = grafik(['shader-f16']);
     const m = await laden(g.gpu);
     m.grafikAufgeben('Device lost');
 
     const alter = globalThis.localStorage;
-    const vorAchtTagen = Date.now() - 8 * 24 * 60 * 60 * 1000;
     alter.setItem(
       'initiative.webgpu.aufgegeben',
-      JSON.stringify({ grund: 'Device lost', zeit: vorAchtTagen }),
+      JSON.stringify({ grund: 'Device lost', zeit: Date.now() - 8 * 24 * 60 * 60 * 1000 }),
     );
 
     vi.resetModules();
@@ -239,29 +186,32 @@ describe('Nach einem Abbruch mitten im Rechnen', () => {
     vi.stubGlobal('navigator', { gpu: g.gpu });
     const neu = await import('./ort-laufzeit.js');
 
-    expect(await neu.ortVorbereiten(env(), PFADE)).toBe(g.geraet);
+    await expect(neu.ortVorbereiten(env(), PFADE)).resolves.toBeUndefined();
   });
 
   it('lässt sich auf Wunsch sofort wieder versuchen', async () => {
-    const g = grafik({ maxStorageBuffersPerShaderStage: 20 });
+    // Ohne diesen Weg sperrt ein einmaliger Fehler das Verfahren sieben Tage
+    // lang unwiderruflich aus. Am Knopf haengt `grafikVergessen`.
+    const g = grafik(['shader-f16']);
     const m = await laden(g.gpu);
     m.grafikAufgeben('Device lost');
     await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/Device lost/);
 
     m.grafikVergessen();
-    expect(await m.ortVorbereiten(env(), PFADE)).toBe(g.geraet);
+    await expect(m.ortVorbereiten(env(), PFADE)).resolves.toBeUndefined();
   });
 });
 
 describe('Die gemeinsamen Einstellungen', () => {
   it('setzt die Adressen der Laufzeit und einen einzigen Faden', async () => {
     // Mehrere Fäden brauchten COOP/COEP – die Kopfzeilen setzen wir nicht.
-    const g = grafik({ maxStorageBuffersPerShaderStage: 20 });
+    const g = grafik(['shader-f16']);
     const m = await laden(g.gpu);
     const e = env();
     await m.ortVorbereiten(e, PFADE);
 
     expect(e.wasm.wasmPaths).toEqual(PFADE);
     expect(e.wasm.numThreads).toBe(1);
+    expect(e.wasm.proxy).toBe(false);
   });
 });

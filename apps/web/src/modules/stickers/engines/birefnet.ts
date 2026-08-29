@@ -123,30 +123,43 @@ async function loadSession(melden?: Fortschritt): Promise<InferenceSession> {
       // stiller Rückfall auf den Prozessor stand hier vorher und war der
       // Grund, dass „Hohe Qualität“ scheinbar „ewig rechnete“: Das Netz hat
       // Gewichte in halber Genauigkeit, und dafür bringt der Prozessorpfad
-      // keine Rechenwerke mit – nachgemessen 290 s für ein Bild bei halber
-      // Kantenlänge, auf einem Serverprozessor. Siehe ort-laufzeit.ts.
-      const geraet = await ortVorbereiten(ort.env, { wasm: ortWasmUrl, mjs: ortMjsUrl });
+      // keine Rechenwerke mit – nachgemessen 295 s für ein Bild, auf einem
+      // Serverprozessor. Siehe ort-laufzeit.ts.
+      await ortVorbereiten(ort.env, { wasm: ortWasmUrl, mjs: ortMjsUrl });
 
       const daten = await modellHolen(melden);
 
-      // Absichtlich EIN Rechenweg. Mit ['webgpu','wasm'] verwirft ORT einen
-      // unbrauchbaren Weg still und rechnet auf dem Prozessor weiter – genau
-      // dieses Schweigen hat den jsep-Fehler monatelang verdeckt.
-      //
-      // Das eigene Gerät gehört **hierher**, in die Angaben zur Sitzung, und
-      // nicht nach `env.webgpu.device`. Dieses Feld sieht aus wie ein
-      // Stellrad, ist aber eine Anzeige: Die Laufzeit schreibt dort beim
-      // Hochfahren das Gerät hinein, das sie sich selbst besorgt hat.
-      //
-      //     if (ep === 'webgpu') laufzeit.webgpuInit((g) => { env.webgpu.device = g; });
-      //                                                      ^ Zuweisung, nicht Abfrage
-      //
-      // Nur der Weg über die Sitzung landet bei `webgpuRegisterDevice`. Wer
-      // stattdessen `env` beschreibt, bekommt keinen Fehler – sondern
-      // schweigend wieder die Mindestgrenzen und damit den Abbruch
-      // „Too many storage buffers in shader. Current: 11, Max is 10“.
+      /*
+       * Absichtlich EIN Rechenweg, und absichtlich OHNE eigenes Gerät.
+       *
+       * Mit ['webgpu','wasm'] verwirft ORT einen unbrauchbaren Weg still und
+       * rechnet auf dem Prozessor weiter – genau dieses Schweigen hat den
+       * jsep-Fehler monatelang verdeckt.
+       *
+       * Hier stand eine Zeitlang `{ name: 'webgpu', device: geraet }` mit
+       * einem selbst angeforderten Gerät, um die Puffergrenze anzuheben. Das
+       * war gleich doppelt falsch.
+       *
+       * Es war schädlich: Ein eingeschleustes Gerät lässt ORT den ganzen
+       * Block überspringen, der Fähigkeiten und Grenzen anfordert
+       * (webgpu_context.cc:60, `if (device_ == nullptr)`). Das Feature-
+       * Verzeichnis wird danach trotzdem gefüllt – aus dem eingeschleusten
+       * Gerät (:189-193). Und ein Gerät, das ohne `requiredFeatures`
+       * angefordert wurde, hat laut Spezifikation „exactly the specified set
+       * of features, and no more or less“, also keine. Ergebnis:
+       *
+       *     Program Transpose requires f16 but the device does not support it.
+       *
+       * Es war zugleich überflüssig: ORT fordert von sich aus die
+       * Adapter-Grenzen an, `maxStorageBuffersPerShaderStage` ausdrücklich
+       * eingeschlossen (:764) – und dazu ShaderF16, Subgroups und
+       * TimestampQuery, sofern der Adapter sie hat (:742). Meine Liste von
+       * fünf Grenzen war eine echte Teilmenge der zehn, die ORT ohnehin holt.
+       *
+       * Also: nichts einschleusen. Die Laufzeit macht es richtig.
+       */
       const created = await ort.InferenceSession.create(daten, {
-        executionProviders: [{ name: 'webgpu', device: geraet } as const],
+        executionProviders: ['webgpu'],
         graphOptimizationLevel: 'all',
       });
 

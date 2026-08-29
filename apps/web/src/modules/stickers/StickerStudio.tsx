@@ -195,13 +195,18 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
    * übertragen wird. Die Prüfung selbst lädt kein Modell und keine Laufzeit,
    * sie fragt nur die Grafikeinheit nach ihren Grenzen.
    */
-  const [grafikAus, setGrafikAus] = useState<string | null>(null);
-  useEffect(() => {
+  const [grafikAus, setGrafikAus] = useState<{ grund: string; gemerkt: boolean } | null>(null);
+  const grafikPruefen = useCallback(() => {
     let gilt = true;
     void import('./engines/ort-laufzeit.js')
       .then((modul) => modul.laufzeitEntscheiden())
       .then((laufzeit) => {
-        if (gilt && !laufzeit.geraet) setGrafikAus(laufzeit.grund ?? 'Keine Grafikeinheit.');
+        if (!gilt) return;
+        setGrafikAus(
+          laufzeit.taugt
+            ? null
+            : { grund: laufzeit.grund ?? 'Keine Grafikeinheit.', gemerkt: !!laufzeit.gemerkt },
+        );
       })
       .catch(() => {
         // Schlägt schon die Prüfung fehl, bleibt der Knopf bedienbar und die
@@ -211,6 +216,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       gilt = false;
     };
   }, []);
+  useEffect(() => grafikPruefen(), [grafikPruefen]);
 
   const render = useCallback((fast: boolean) => {
     const canvas = canvasRef.current;
@@ -1188,7 +1194,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                     disabled={!hasImage || !verfuegbar || rechnet !== null}
                     title={
                       ohneGrafik
-                        ? `${ohneGrafik} Ohne sie rechnet dieses Verfahren an einem Bild eine Viertelstunde – nimm „Beliebiges Objekt“.`
+                        ? `${ohneGrafik.grund} Ohne sie rechnet dieses Verfahren an einem Bild eine Viertelstunde – nimm „Beliebiges Objekt“.`
                         : verfuegbar
                           ? engine.description
                           : 'In den Einstellungen unter „Freistellen für Sticker“ einschaltbar.'
@@ -1225,9 +1231,30 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                 nicht wollte. */}
             {grafikAus && isEngineEnabled('birefnet') && (
               <p className="stk-hint" role="status">
-                „Hohe Qualität“ geht auf diesem Gerät nicht: {grafikAus} Dieses Verfahren rechnet
-                ausschließlich auf der Grafikeinheit – auf dem Prozessor bräuchte ein Bild eine
-                Viertelstunde. „Beliebiges Objekt“ macht dieselbe Art Ausschnitt in Sekunden.
+                „Hohe Qualität“ geht auf diesem Gerät nicht: {grafikAus.grund} Dieses Verfahren
+                rechnet ausschließlich auf der Grafikeinheit – auf dem Prozessor bräuchte ein Bild
+                eine Viertelstunde. „Beliebiges Objekt“ macht dieselbe Art Ausschnitt in Sekunden.
+                {/* Ein gemerkter Abbruch gilt sonst sieben Tage, ohne jeden Weg
+                    zurück. Ein Treiber wird erneuert, ein anderes Bild ist
+                    kleiner – eine Sperre ohne Ausweg ist kein Schutz, sondern
+                    ein Defekt. Also ein Knopf. */}
+                {grafikAus.gemerkt && (
+                  <>
+                    {' '}
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => {
+                        void import('./engines/ort-laufzeit.js').then((modul) => {
+                          modul.grafikVergessen();
+                          grafikPruefen();
+                        });
+                      }}
+                    >
+                      Trotzdem noch einmal versuchen
+                    </button>
+                  </>
+                )}
               </p>
             )}
             {modellStand && (
