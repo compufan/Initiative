@@ -82,3 +82,58 @@ test('das Menü führt weiterhin vollständig zu allem', async ({ browser }) => 
     await expect(menue.getByRole('button', { name: eintrag, exact: true })).toBeVisible();
   }
 });
+
+test('ohne Grafikeinheit steht die Begründung LESBAR da, nicht im Tooltip', async ({ browser }) => {
+  /*
+   * Der Anwender meldete: „Der Knopf ist ausgeblendet. Ein Tooltip, wenn ich
+   * darauf klicke, erscheint nicht.“
+   *
+   * Genau so war es gebaut, und das war der Fehler: Die Begründung stand im
+   * `title` des Knopfes. Auf einem Telefon gibt es kein Schweben, und ein
+   * abgeblendeter Knopf nimmt nicht einmal eine Berührung entgegen – die
+   * einzige Auskunft darüber, warum „Hohe Qualität“ fehlt, lag also an der
+   * einen Stelle, die auf dem Zielgerät unerreichbar ist.
+   *
+   * Der Test prüft deshalb ausdrücklich SICHTBAREN Text. Kopflos gestartetes
+   * Chromium bringt kein WebGPU mit – das ist hier kein Mangel, sondern
+   * genau der Fall, um den es geht.
+   */
+  const alice = credentials('gpu');
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  // „Hohe Qualität“ ist von Haus aus aus; ohne diesen Schritt gäbe es nichts
+  // zu erklären, und die Meldung soll dann auch nicht erscheinen.
+  await page.addInitScript(() => {
+    window.localStorage.setItem('initiative.cutout-engines', JSON.stringify({ birefnet: true }));
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: /Noch kein Konto/ }).click();
+  await page.getByLabel('Benutzername').fill(alice.username);
+  await page.getByLabel('Anzeigename').fill(alice.displayName);
+  await page.getByLabel('Passwort', { exact: true }).fill(alice.password);
+  await page.getByRole('button', { name: 'Konto erstellen' }).click();
+  await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
+
+  // Ins Studio geht es über einen Chat – so, wie der Anwender auch dorthin
+  // kommt. Ein direkter Aufruf gibt es nicht.
+  const bob = credentials('gziel');
+  await signUp(browser, bob);
+  await page.getByRole('button', { name: 'Neuer Chat' }).click();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await page.getByText(bob.displayName).first().click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Sticker', exact: true }).click();
+  await page.getByRole('button', { name: /Sticker erstellen/ }).click();
+  await page.getByRole('tab', { name: 'Freistellen' }).click();
+
+  // Sichtbar, ohne Schweben, ohne Klick auf einen toten Knopf.
+  const hinweis = page.getByText('„Hohe Qualität“ geht auf diesem Gerät nicht');
+  await expect(hinweis).toBeVisible({ timeout: 15_000 });
+
+  // Und der Knopf ist abgeblendet statt scheinbar bedienbar.
+  await expect(page.getByRole('button', { name: /Hohe Qualität/ })).toBeDisabled();
+
+  await context.close();
+});

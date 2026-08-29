@@ -30,6 +30,7 @@ import {
   EngineError,
   engineAvailable,
   engineInfo,
+  isEngineEnabled,
   runEngine,
   type EngineKey,
 } from './engines/index.js';
@@ -1214,6 +1215,21 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                 </button>
               )}
             </div>
+            {/* Warum „Hohe Qualität“ nicht geht – als SICHTBARER Satz.
+                Er stand vorher nur im `title` des Knopfes. Auf einem Telefon
+                gibt es kein Schweben, und ein abgeblendeter Knopf nimmt nicht
+                einmal eine Berührung entgegen: Die Begründung war damit
+                genau dort untergebracht, wo sie niemand lesen kann.
+                Angezeigt nur, wenn das Verfahren überhaupt eingeschaltet ist
+                – sonst wäre es eine Meldung über etwas, das der Anwender gar
+                nicht wollte. */}
+            {grafikAus && isEngineEnabled('birefnet') && (
+              <p className="stk-hint" role="status">
+                „Hohe Qualität“ geht auf diesem Gerät nicht: {grafikAus} Dieses Verfahren rechnet
+                ausschließlich auf der Grafikeinheit – auf dem Prozessor bräuchte ein Bild eine
+                Viertelstunde. „Beliebiges Objekt“ macht dieselbe Art Ausschnitt in Sekunden.
+              </p>
+            )}
             {modellStand && (
               <p className="stk-hint" role="status">
                 {modellStand}
