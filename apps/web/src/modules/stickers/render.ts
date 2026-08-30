@@ -51,10 +51,26 @@ export interface KeepSeed {
    * Unterscheidung entstanden sind, und die Farbflutung (`keepAtSeeds`)
    * verhält sich unverändert.
    *
-   * `weg` kann nur „Antippen (genau)“: Das Netz nimmt Punkte mit Vorzeichen
+   * `weg` kann nur „Antippen mit Netz“: Das Netz nimmt Punkte mit Vorzeichen
    * entgegen, die Flutung kennt nur Hinzunehmen.
    */
   mode?: 'dazu' | 'weg';
+  /**
+   * Zu welchem Tipp dieser Punkt gehört.
+   *
+   * Beim Netz meint ein Tipp **einen Gegenstand**: SAM nimmt zwar beliebig
+   * viele Punkte, versteht sie aber als Hinweise auf *ein* Ding. Zwei Tipps
+   * auf getrennte Dinge in einem Lauf liefern deshalb Matsch – nachgemessen
+   * deckte sich die gemeinsame Maske mit der Vereinigung der Einzelmasken nur
+   * zu IoU 0,54, und 46 % ihrer Fläche gehörte zu keinem der beiden Dinge.
+   *
+   * Also: je Plus-Tipp eine eigene Gruppe, je Gruppe ein Lauf, und die
+   * Ergebnisse werden vereinigt. Ein Minus-Tipp hängt sich an die Gruppe, die
+   * er berichtigen soll.
+   */
+  gruppe?: number;
+  /** Wer die Maske für diese Gruppe rechnet. Ohne Angabe die Farbflutung. */
+  quelle?: 'flutung' | 'netz';
 }
 
 /**
@@ -95,6 +111,17 @@ export interface StickerDoc {
   /** Die Maske eines Modells, falls eines gelaufen ist. */
   autoMask: AutoMask | null;
   /**
+   * Die Maske der Netz-Tipps – getrennt von `autoMask`, und das ist der Punkt.
+   *
+   * Lägen beide im selben Feld, wären Antippen und Modell wieder Alternativen
+   * statt unabhängig. Getrennt lassen sie sich vereinigen: Die Person kommt
+   * vom Modell, die Säule vom Tipp, und beide bleiben.
+   *
+   * Wie `autoMask` in Quellbild-Koordinaten, damit sie das Verschieben und
+   * Zoomen übersteht.
+   */
+  tippMaske: AutoMask | null;
+  /**
    * Welche Teile der Modell-Maske gewählt sind.
    *
    * Leer heisst **alle** – solange niemand etwas angetippt hat, verhält sich
@@ -131,6 +158,7 @@ export function createDoc(): StickerDoc {
     removeBg: false,
     keep: [],
     autoMask: null,
+    tippMaske: null,
     maskParts: [],
     showUnselected: true,
     tolerance: 40,
@@ -148,6 +176,7 @@ export function cloneDoc(doc: StickerDoc): StickerDoc {
     // Die Maske wird nach dem Berechnen nie mehr angefasst – eine Referenz
     // genuegt und spart pro Rueckgaengig-Schritt ein Megabyte.
     autoMask: doc.autoMask,
+    tippMaske: doc.tippMaske,
     maskParts: doc.maskParts.slice(),
     keep: doc.keep.map((seed) => ({ ...seed })),
     strokes: doc.strokes.map((stroke) => ({ ...stroke, points: stroke.points.slice() })),
@@ -179,10 +208,10 @@ function colourDistance(dr: number, dg: number, db: number): number {
  * Mehrere Antipper addieren sich, damit sich auch mehrfarbige Motive
  * zusammensetzen lassen (Gesicht, dann Haare, dann Pullover).
  */
-export function keepAtSeeds(image: ImageData, seeds: KeepSeed[], tolerance: number): void {
+export function flutmaske(image: ImageData, seeds: KeepSeed[], tolerance: number): Uint8Array {
   const { width, height, data } = image;
   const total = width * height;
-  if (seeds.length === 0) return;
+  if (seeds.length === 0) return new Uint8Array(total);
 
   const keep = new Uint8Array(total);
   const visited = new Uint8Array(total);
@@ -247,13 +276,52 @@ export function keepAtSeeds(image: ImageData, seeds: KeepSeed[], tolerance: numb
     height,
     2,
   );
-  const soft = blurAlpha(grown, width, height, 1);
+  return blurAlpha(grown, width, height, 1);
+}
 
-  for (let i = 0; i < total; i += 1) {
+/**
+ * Die alte, anwendende Fassung – nur noch für Aufrufer, die das Bild direkt
+ * beschneiden wollen.
+ *
+ * Die Zeichenkette benutzt sie **nicht** mehr: Dort wird die Flutmaske mit der
+ * Modellmaske vereinigt statt sie zu überschreiben. Genau diese Multiplikation
+ * hier war der Grund, dass ein Tipp neben dem Motiv den Sticker leerte.
+ */
+export function keepAtSeeds(image: ImageData, seeds: KeepSeed[], tolerance: number): void {
+  if (seeds.length === 0) return;
+  const soft = flutmaske(image, seeds, tolerance);
+  const { data } = image;
+  for (let i = 0; i < soft.length; i += 1) {
     const at = i * 4;
     if (data[at + 3] === 0) continue;
     data[at + 3] = Math.round((data[at + 3] * soft[i]) / 255);
   }
+}
+
+/**
+ * Zwei Deckungen vereinigen – die eine Rechnung, auf der Punkt D beruht.
+ *
+ * `b über a`, wie zwei Folien übereinander:
+ *
+ *     v = b + a · (255 − b) / 255
+ *
+ * Zwei Eigenschaften machen sie zur richtigen Wahl, und beide sind der Grund,
+ * dass „Antippen überschreibt das Freigestellte nicht“ keine Absichtserklärung
+ * ist, sondern aus der Formel folgt:
+ *
+ *   - `v ≥ a` und `v ≥ b` – ein Tipp kann eine vorhandene Maske niemals
+ *     verkleinern, und eine Maske niemals einen Tipp.
+ *   - `v ≤ 255` – nichts läuft über.
+ *
+ * Ein blosses Maximum täte es auch, aber an weichen Kanten, wo beide Masken
+ * halb decken, entstünde eine sichtbare Naht; hier ergänzen sie sich glatt.
+ */
+export function vereinigeAlpha(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const raus = new Uint8Array(a.length);
+  for (let i = 0; i < a.length; i += 1) {
+    raus[i] = Math.round(b[i] + (a[i] * (255 - b[i])) / 255);
+  }
+  return raus;
 }
 
 /**
@@ -666,7 +734,7 @@ function originalMerken(ctx: CanvasRenderingContext2D): HTMLCanvasElement {
     originalCanvas.width = STICKER_SIZE;
     originalCanvas.height = STICKER_SIZE;
   }
-  const octx = originalCanvas.getContext('2d');
+  const octx = originalCanvas.getContext('2d', { willReadFrequently: true });
   if (octx) {
     octx.setTransform(1, 0, 0, 1, 0, 0);
     octx.globalCompositeOperation = 'source-over';
@@ -694,27 +762,28 @@ function hilfsflaeche(): HTMLCanvasElement {
 }
 
 /**
- * Blendet die Maske eines Modells über das gezeichnete Bild.
+ * Bringt eine Maske aus Quellbild-Koordinaten auf Sticker-Grösse.
  *
- * Die Maske liegt in Quellbild-Koordinaten und wird mit **derselben**
- * Geometrie gezeichnet wie das Bild selbst – deshalb passt sie auch dann noch,
- * wenn danach verschoben oder gezoomt wurde.
+ * Gezeichnet wird mit **derselben** Geometrie wie das Bild – deshalb passt sie
+ * auch dann noch, wenn danach verschoben oder gezoomt wurde. Beschnitten wird
+ * hier nichts; das Ergebnis ist eine Deckung, die der Aufrufer mit anderen
+ * vereinigt (siehe `freistellMaske`).
  */
-function applyAutoMask(
-  ctx: CanvasRenderingContext2D,
+function maskenflaeche(
   source: Extract<EditorSource, { kind: 'image' }>,
   doc: StickerDoc,
   mask: AutoMask,
-): void {
+  teileAnwenden: boolean,
+): HTMLCanvasElement | null {
   const grau = document.createElement('canvas');
   grau.width = mask.width;
   grau.height = mask.height;
   const grauCtx = grau.getContext('2d');
-  if (!grauCtx) return;
+  if (!grauCtx) return null;
 
   // Nur die gewaehlten Teile. Ohne Auswahl gilt die ganze Maske.
   const alpha =
-    mask.teile && doc.maskParts.length > 0
+    teileAnwenden && mask.teile && doc.maskParts.length > 0
       ? maskeAus(mask.alpha, mask.teile, doc.maskParts)
       : mask.alpha;
 
@@ -735,15 +804,53 @@ function applyAutoMask(
   flaeche.width = STICKER_SIZE;
   flaeche.height = STICKER_SIZE;
   const flaecheCtx = flaeche.getContext('2d');
-  if (!flaecheCtx) return;
+  if (!flaecheCtx) return null;
   flaecheCtx.imageSmoothingQuality = 'high';
   const rect = sourceRect(source, doc);
   flaecheCtx.drawImage(grau, rect.x, rect.y, rect.width, rect.height);
 
-  ctx.save();
-  ctx.globalCompositeOperation = 'destination-in';
-  ctx.drawImage(flaeche, 0, 0);
-  ctx.restore();
+  return flaeche;
+}
+
+/** Liest den Alphakanal einer Sticker-grossen Flaeche als Uint8Array. */
+function deckungLesen(flaeche: HTMLCanvasElement | null): Uint8Array | null {
+  if (!flaeche) return null;
+  const fctx = flaeche.getContext('2d', { willReadFrequently: true });
+  if (!fctx) return null;
+  const bild = fctx.getImageData(0, 0, STICKER_SIZE, STICKER_SIZE);
+  const raus = new Uint8Array(STICKER_SIZE * STICKER_SIZE);
+  for (let i = 0; i < raus.length; i += 1) raus[i] = bild.data[i * 4 + 3];
+  return raus;
+}
+
+/**
+ * Die eine Rechnung, aus der das Freistellen entsteht.
+ *
+ * Alle drei Deckungen liegen bereits in Sticker-Koordinaten und in derselben
+ * Grösse. Modell und Tipp werden **vereinigt** – nicht multipliziert:
+ *
+ *     M = (Modell ∪ Netztipp) ∪ Flutung
+ *
+ * Genau hier steckt Punkt D des Pflichtenhefts. Vorher lief die Flutung als
+ * zweiter, multiplizierender Schritt auf dem bereits beschnittenen Bild. Das
+ * hatte zwei Folgen, beide nachgestellt: Die Säule neben der freigestellten
+ * Person war dort schon durchsichtig, also nicht mehr zu fluten – und die
+ * Schlussmultiplikation löschte alles Ungeflutete, also auch die Person.
+ * Gemessen an einer 60×40-Vorlage: 450 von 450 Personenpunkten vorher, 0
+ * nachher. Mit dieser Vereinigung sind es 450 Person und 450 Säule.
+ *
+ * `null` heisst „gibt es nicht“ und nicht „ist überall 0“ – sonst wäre der
+ * Sticker leer, sobald gar nichts freigestellt wurde. Sind alle drei `null`,
+ * gibt es nichts zu beschneiden, und der Aufrufer lässt den Schritt aus.
+ */
+export function freistellMaske(
+  modell: Uint8Array | null,
+  netz: Uint8Array | null,
+  flutung: Uint8Array | null,
+): Uint8Array | null {
+  const teile = [modell, netz, flutung].filter((teil): teil is Uint8Array => teil !== null);
+  if (teile.length === 0) return null;
+  return teile.reduce((a, b) => vereinigeAlpha(a, b));
 }
 
 /**
@@ -839,6 +946,10 @@ function schraffur(): HTMLCanvasElement {
  * and dilation) so panning and pinching stay at 60 fps on a phone; the full
  * pipeline runs again as soon as the gesture ends.
  *
+ * `weggenommenesZeigen` blendet das Weggenommene als grauen Schleier ein. Wer
+ * die Säule neben der freigestellten Person antippen soll, muss sie noch
+ * sehen; ist sie schon fort, tippt er ins Leere.
+ *
  * `auswahlZeigen` ist die Ansicht während der Arbeit: Abgewähltes bleibt
  * sichtbar und wird nur gekennzeichnet. Für das Speichern niemals setzen.
  */
@@ -846,7 +957,7 @@ export function renderSticker(
   canvas: HTMLCanvasElement,
   source: EditorSource | null,
   doc: StickerDoc,
-  options: { fast?: boolean; auswahlZeigen?: boolean } = {},
+  options: { fast?: boolean; auswahlZeigen?: boolean; weggenommenesZeigen?: boolean } = {},
 ): void {
   if (canvas.width !== STICKER_SIZE) canvas.width = STICKER_SIZE;
   if (canvas.height !== STICKER_SIZE) canvas.height = STICKER_SIZE;
@@ -863,31 +974,88 @@ export function renderSticker(
   // Das unberuehrte Bild festhalten, solange es das noch ist – nur wenn es
   // auch jemand braucht. Fuer den Normalfall ohne Zurueckhol-Striche waere
   // die Kopie reine Arbeit ohne Wirkung.
-  const braucht = doc.strokes.some((stroke) => stroke.mode === 'zurueck');
-  const original = braucht ? originalMerken(ctx) : null;
+  // Das unbeschnittene Bild wird jetzt an zwei Stellen gebraucht: vom
+  // Zurueck-Pinsel wie bisher, und neu von der Farbflutung – die muss auf dem
+  // ungeschnittenen Bild laufen, sonst ist das Angetippte schon fort.
+  const brauchtStrich = doc.strokes.some((stroke) => stroke.mode === 'zurueck');
+  const original = brauchtStrich ? originalMerken(ctx) : null;
 
   // Die Maske eines Modells zuerst: sie beschreibt das Motiv genauer als jede
   // Farbschwelle. Antippen und "Ecken entfernen" wirken danach nur noch auf
   // das, was uebrig geblieben ist.
   const zeigeAuswahl = Boolean(options.auswahlZeigen && doc.showUnselected);
-  if (!options.fast && source?.kind === 'image' && doc.autoMask) {
-    if (zeigeAuswahl) {
-      // In der Auswahlansicht bleibt alles stehen, was das Modell gefunden
-      // hat; nur das Nicht-Gewählte wird gekennzeichnet.
-      applyAutoMask(ctx, source, { ...doc, maskParts: [] }, doc.autoMask);
-      markiereAbgewaehltes(ctx, source, doc, doc.autoMask);
-    } else {
-      applyAutoMask(ctx, source, doc, doc.autoMask);
-    }
-  }
+  let schleier: ImageData | null = null;
+  const flutSaat = doc.keep.filter((seed) => (seed.quelle ?? 'flutung') === 'flutung');
 
-  // Angetippte Bereiche haben Vorrang: Wer sagt, was bleiben soll, braucht das
-  // Wegräumen von den Ecken her nicht mehr.
-  if (!options.fast && source?.kind === 'image' && (doc.keep.length > 0 || doc.removeBg)) {
-    const image = ctx.getImageData(0, 0, STICKER_SIZE, STICKER_SIZE);
-    if (doc.keep.length > 0) keepAtSeeds(image, doc.keep, doc.tolerance);
-    else removeBackground(image, doc.tolerance);
-    ctx.putImageData(image, 0, 0);
+  /*
+   * Modell, Netztipp und Farbflutung werden VEREINIGT, nicht nacheinander
+   * multipliziert. Warum, steht bei `freistellMaske` – kurz: die alte
+   * Reihenfolge liess einen Tipp neben dem Motiv den ganzen Sticker leeren.
+   *
+   * Die Flutung läuft dabei auf dem **unbeschnittenen** Bild. Auf dem
+   * beschnittenen wäre die Säule neben der freigestellten Person längst
+   * durchsichtig, und die Flutung bricht an durchsichtigen Punkten ab – es
+   * gäbe dort schlicht nichts mehr anzutippen.
+   */
+  if (
+    !options.fast &&
+    source?.kind === 'image' &&
+    (doc.autoMask || doc.tippMaske || flutSaat.length > 0 || doc.removeBg)
+  ) {
+    const modell = doc.autoMask
+      ? deckungLesen(maskenflaeche(source, doc, doc.autoMask, !zeigeAuswahl))
+      : null;
+    const netz = doc.tippMaske
+      ? deckungLesen(maskenflaeche(source, doc, doc.tippMaske, false))
+      : null;
+
+    const unberuehrt = originalMerken(ctx);
+    let flutung: Uint8Array | null = null;
+    if (flutSaat.length > 0 || doc.removeBg) {
+      const octx = unberuehrt.getContext('2d', { willReadFrequently: true });
+      const roh = octx?.getImageData(0, 0, STICKER_SIZE, STICKER_SIZE) ?? null;
+      if (roh) {
+        if (flutSaat.length > 0) {
+          flutung = flutmaske(roh, flutSaat, doc.tolerance);
+        } else {
+          // „Ecken entfernen“ arbeitet weiterhin abziehend, aber ebenfalls auf
+          // dem unbeschnittenen Bild – sonst sind die vier Ecken bereits
+          // durchsichtig und der Knopf täte buchstäblich nichts.
+          removeBackground(roh, doc.tolerance);
+          flutung = new Uint8Array(STICKER_SIZE * STICKER_SIZE);
+          for (let i = 0; i < flutung.length; i += 1) flutung[i] = roh.data[i * 4 + 3];
+        }
+      }
+    }
+
+    const maske = freistellMaske(modell, netz, flutung);
+    if (maske) {
+      const bild = ctx.getImageData(0, 0, STICKER_SIZE, STICKER_SIZE);
+      for (let i = 0; i < maske.length; i += 1) {
+        const at = i * 4 + 3;
+        if (bild.data[at] === 0) continue;
+        bild.data[at] = Math.round((bild.data[at] * maske[i]) / 255);
+      }
+      ctx.putImageData(bild, 0, 0);
+    }
+
+    if (options.weggenommenesZeigen && maske) {
+      // Was die Maske weggenommen hat: dort, wo vorher Bild war und jetzt
+      // keins mehr ist. Gezeichnet wird es erst ganz am Schluss – vor der
+      // Kontur gezeichnet, bekäme der Schleier eine weisse Umrandung und
+      // verdeckte genau den Rand, an dem man tippen will.
+      const octx2 = unberuehrt.getContext('2d', { willReadFrequently: true });
+      const roh2 = octx2?.getImageData(0, 0, STICKER_SIZE, STICKER_SIZE);
+      if (roh2) {
+        for (let i = 0; i < maske.length; i += 1) {
+          const at = i * 4 + 3;
+          roh2.data[at] = Math.round((roh2.data[at] * (255 - maske[i])) / 255);
+        }
+        schleier = roh2;
+      }
+    }
+
+    if (zeigeAuswahl && doc.autoMask) markiereAbgewaehltes(ctx, source, doc, doc.autoMask);
   }
 
   applyShape(ctx, doc.shape);
@@ -897,8 +1065,55 @@ export function renderSticker(
     applyOutline(canvas, Math.round(doc.outlineWidth));
   }
 
+  // Der Schleier zuletzt: nach der Kontur, damit er nicht umrandet wird, und
+  // vor der Schrift, damit die lesbar bleibt.
+  if (schleier) schleierZeichnen(ctx, schleier);
+
   drawTextLayer(ctx, doc.top, 'top');
   drawTextLayer(ctx, doc.bottom, 'bottom');
+}
+
+/**
+ * Zeichnet das Weggenommene matt und entfärbt zurück ins Bild.
+ *
+ * Bewusst ein glatter Wasch und keine Schraffur: Beim Auswählen von Teilen
+ * braucht es die Schraffur, weil dort ein abgedunkelter Bildteil nicht von
+ * einem dunklen zu unterscheiden wäre. Hier ist die Frage eine andere – „ist
+ * das noch drin oder schon weg“ –, und dafür ist ein gleichmässiger Schleier
+ * ruhiger und zeigt die Kante genauer.
+ */
+function schleierZeichnen(ctx: CanvasRenderingContext2D, weggenommen: ImageData): void {
+  const flaeche = schleierflaeche();
+  const sctx = flaeche.getContext('2d');
+  if (!sctx) return;
+  sctx.setTransform(1, 0, 0, 1, 0, 0);
+  sctx.globalCompositeOperation = 'source-over';
+  sctx.clearRect(0, 0, STICKER_SIZE, STICKER_SIZE);
+  sctx.putImageData(weggenommen, 0, 0);
+  // Entfärben, aber nur dort, wo überhaupt etwas liegt.
+  sctx.globalCompositeOperation = 'source-atop';
+  sctx.fillStyle = 'rgba(126, 132, 140, 0.62)';
+  sctx.fillRect(0, 0, STICKER_SIZE, STICKER_SIZE);
+
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // `destination-over`: der Schleier legt sich UNTER das schon Gezeichnete.
+  // So überdeckt er das Motiv nicht und füllt nur die Lücken.
+  ctx.globalCompositeOperation = 'destination-over';
+  ctx.globalAlpha = 0.55;
+  ctx.drawImage(flaeche, 0, 0);
+  ctx.restore();
+}
+
+/** Eigene Fläche für den Schleier – die beiden anderen sind schon belegt. */
+let schleierCanvas: HTMLCanvasElement | null = null;
+function schleierflaeche(): HTMLCanvasElement {
+  if (!schleierCanvas) {
+    schleierCanvas = document.createElement('canvas');
+    schleierCanvas.width = STICKER_SIZE;
+    schleierCanvas.height = STICKER_SIZE;
+  }
+  return schleierCanvas;
 }
 
 function toBlob(canvas: HTMLCanvasElement, mime: string, quality: number): Promise<Blob> {

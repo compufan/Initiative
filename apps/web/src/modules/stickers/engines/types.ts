@@ -25,7 +25,7 @@ export type EngineKey = 'tap' | 'tippen' | 'person' | 'face' | 'object' | 'biref
  * asyncify-Fassung. Zwei Dateien, zwei Downloads.
  *
  * Hier stand für beide `onnx`, und `downloadHint()` versprach deshalb, wer
- * „Beliebiges Objekt“ schon habe, brauche für „Hohe Qualität“ nur noch das
+ * „Niedrige Qualität“ schon habe, brauche für „Hohe Qualität“ nur noch das
  * Modell. Das stimmte nie – vorher waren es die jsep- statt der
  * asyncify-Fassung, also ebenfalls zwei verschiedene Dateien.
  */
@@ -90,9 +90,9 @@ export const ENGINE_INFO: EngineInfo[] = [
   },
   {
     key: 'tippen',
-    label: 'Antippen (genau)',
+    label: 'Antippen mit Netz',
     description:
-      'Wie „Antippen“, versteht aber, was ein Gegenstand ist: Flasche antippen, Flasche kommt – samt Glanzlicht. Der erste Tipp je Foto rechnet kurz, jeder weitere kommt sofort.',
+      'Der Zusatz zu „Antippen“: Statt nach Farbe zu fluten, versteht ein Netz, was ein Gegenstand ist – Flasche antippen, Flasche kommt, samt Glanzlicht. Klassenfrei, also für Gegenstände wie für Personen. Der erste Tipp je Foto sieht sich das Bild an (rund eine Sekunde), jeder weitere kommt in Sekundenbruchteilen.',
     // Encoder 12,7 MB + Decoder 16,5 MB, beide roh (Caddy komprimiert .onnx
     // nur ueber die vorbereitete .gz, siehe prepare-models.mjs).
     modelMb: 26.9,
@@ -117,9 +117,9 @@ export const ENGINE_INFO: EngineInfo[] = [
   },
   {
     key: 'object',
-    label: 'Beliebiges Objekt',
+    label: 'Niedrige Qualität',
     description:
-      'Stellt auch Gegenstände frei – Tasse, Hund, Blume. Rechnet auf älteren Geräten spürbar länger.',
+      'Stellt auch Gegenstände frei – Tasse, Hund, Blume. Kommt ohne Grafikeinheit aus und rechnet auf jedem Gerät in Sekunden; die Kante ist gröber als bei „Hohe Qualität“.',
     modelMb: 4.0,
     runtime: 'onnx',
     defaultEnabled: false,
@@ -128,7 +128,7 @@ export const ENGINE_INFO: EngineInfo[] = [
     key: 'birefnet',
     label: 'Hohe Qualität',
     description:
-      'Dasselbe wie „Beliebiges Objekt“, nur deutlich genauer an Haaren, Zäunen und Brillenbügeln. Dafür der mit Abstand größte Download. Braucht zwingend eine Grafikeinheit: Die Gewichte liegen in halber Genauigkeit, dafür hat der Prozessorpfad keine Rechenwerke, und ein Bild würde dort Minuten dauern statt Sekunden. Fehlt sie, bleibt der Knopf abgeblendet.',
+      'Dasselbe wie „Niedrige Qualität“, nur deutlich genauer an Haaren, Zäunen und Brillenbügeln. Dafür der mit Abstand größte Download. Braucht zwingend eine Grafikeinheit: Die Gewichte liegen in halber Genauigkeit, dafür hat der Prozessorpfad keine Rechenwerke, und ein Bild würde dort Minuten dauern statt Sekunden. Fehlt sie, bleibt der Knopf abgeblendet.',
     // Nachgemessen an der Datei, die wirklich ausgeliefert wird:
     // public/models/birefnet-lite-512.onnx.gz = 82.082.888 B = 78,3 MiB.
     // (Nicht `gzip -9` von Hand nehmen – prepare-models.mjs komprimiert mit

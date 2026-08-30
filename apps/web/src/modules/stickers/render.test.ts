@@ -4,10 +4,13 @@ import {
   cloneDoc,
   createDoc,
   isEmptyDoc,
+  flutmaske,
+  freistellMaske,
   keepAtSeeds,
   lupeGrenzen,
   removeBackground,
   strichBloecke,
+  vereinigeAlpha,
 } from './render.js';
 import type { Stroke } from './render.js';
 
@@ -182,5 +185,127 @@ describe('Lupe', () => {
   it('gibt bei 1× die ganze Fläche frei – der Mittelpunkt ist dann die Mitte', () => {
     const ganz = lupeGrenzen({ zoom: 1, x: 0, y: STICKER_SIZE }, 8);
     expect(ganz).toEqual({ zoom: 1, x: mitte, y: mitte });
+  });
+});
+
+/**
+ * Der Fall, den der Anwender beschrieben hat: „Wenn eine Person neben einer
+ * Säule steht und die Person freigestellt wurde (die Säule als weg radiert
+ * wurde) sollte man mit Antippen die Säule antippen können und diese wird
+ * zusätzlich freigestellt.“
+ *
+ * Vorher tat die App das Gegenteil, und zwar aus zwei Gründen zugleich: Die
+ * Farbflutung lief auf dem BEREITS beschnittenen Bild – die Säule war dort
+ * schon durchsichtig, und die Flutung bricht an durchsichtigen Punkten ab –
+ * und sie multiplizierte am Ende alles Ungeflutete weg, also auch die Person.
+ * Ein Tipp neben dem Motiv leerte den Sticker.
+ */
+describe('Antippen nimmt hinzu, statt zu überschreiben', () => {
+  const B = 60;
+  const H = 40;
+  // Person links, Säule rechts, beide vor einem einheitlichen Grund.
+  const person = (x: number, y: number) => x >= 5 && x < 20 && y >= 5 && y < 35;
+  const saeule = (x: number, y: number) => x >= 35 && x < 50 && y >= 5 && y < 35;
+
+  function vorlage(): ImageData {
+    const data = new Uint8ClampedArray(B * H * 4);
+    for (let y = 0; y < H; y += 1) {
+      for (let x = 0; x < B; x += 1) {
+        const at = (y * B + x) * 4;
+        const [r, g, b] = person(x, y)
+          ? [220, 40, 40]
+          : saeule(x, y)
+            ? [40, 40, 220]
+            : [20, 200, 20];
+        data[at] = r;
+        data[at + 1] = g;
+        data[at + 2] = b;
+        data[at + 3] = 255;
+      }
+    }
+    return { width: B, height: H, data, colorSpace: 'srgb' } as unknown as ImageData;
+  }
+
+  /** Die Modellmaske: genau die Person, sonst nichts. */
+  function modellmaske(): Uint8Array {
+    const a = new Uint8Array(B * H);
+    for (let y = 0; y < H; y += 1) {
+      for (let x = 0; x < B; x += 1) a[y * B + x] = person(x, y) ? 255 : 0;
+    }
+    return a;
+  }
+
+  const zaehle = (maske: Uint8Array, drin: (x: number, y: number) => boolean) => {
+    let n = 0;
+    for (let y = 0; y < H; y += 1) {
+      for (let x = 0; x < B; x += 1) if (drin(x, y) && maske[y * B + x] > 128) n += 1;
+    }
+    return n;
+  };
+  const flaeche = 15 * 30;
+
+  it('behält die Person UND nimmt die angetippte Säule dazu', () => {
+    const modell = modellmaske();
+    // Die Flutung läuft auf dem UNBESCHNITTENEN Bild – das ist die halbe
+    // Lösung. Auf dem beschnittenen wäre hier nichts mehr anzutippen.
+    const flutung = flutmaske(vorlage(), [{ x: 42, y: 20 }], 40);
+    const maske = freistellMaske(modell, null, flutung);
+
+    expect(maske).not.toBeNull();
+    expect(zaehle(maske!, person)).toBe(flaeche);
+    expect(zaehle(maske!, saeule)).toBe(flaeche);
+  });
+
+  it('lässt den Grund weiterhin weg', () => {
+    const maske = freistellMaske(modellmaske(), null, flutmaske(vorlage(), [{ x: 42, y: 20 }], 40));
+    // Mitten im Grund, weit weg von beiden Kanten – der weiche Saum aus
+    // dilateAlpha/blurAlpha trägt ein paar Punkte über die Rechtecke hinaus,
+    // deshalb wird ausdrücklich in der Mitte gemessen und nicht am Rand.
+    expect(maske![20 * B + 28]).toBe(0);
+    expect(maske![2 * B + 2]).toBe(0);
+  });
+
+  it('so lief es vorher: die Flutung auf dem beschnittenen Bild löscht beides', () => {
+    // Die Gegenprobe zur alten Reihenfolge. Sie ist der eigentliche Beleg,
+    // dass hier ein Fehler behoben wurde und nicht bloss etwas umgebaut.
+    const bild = vorlage();
+    const modell = modellmaske();
+    for (let i = 0; i < modell.length; i += 1) {
+      bild.data[i * 4 + 3] = modell[i];
+    }
+    keepAtSeeds(bild, [{ x: 42, y: 20 }], 40);
+
+    let sichtbar = 0;
+    for (let i = 0; i < modell.length; i += 1) if (bild.data[i * 4 + 3] > 128) sichtbar += 1;
+    expect(sichtbar).toBe(0);
+  });
+
+  it('ohne Tipp bleibt es beim Modell, ohne Modell beim Tipp', () => {
+    const nurModell = freistellMaske(modellmaske(), null, null);
+    expect(zaehle(nurModell!, person)).toBe(flaeche);
+    expect(zaehle(nurModell!, saeule)).toBe(0);
+
+    const nurTipp = freistellMaske(null, null, flutmaske(vorlage(), [{ x: 42, y: 20 }], 40));
+    expect(zaehle(nurTipp!, saeule)).toBe(flaeche);
+    expect(zaehle(nurTipp!, person)).toBe(0);
+  });
+
+  it('ohne alles gibt es nichts zu beschneiden', () => {
+    // Wichtig: `null` heisst „gibt es nicht“, nicht „überall 0“. Sonst wäre
+    // ein Sticker ohne Freistellen leer.
+    expect(freistellMaske(null, null, null)).toBeNull();
+  });
+
+  it('die Vereinigung kann nie kleiner werden als ihre Teile', () => {
+    // Das ist die Zusage „Antippen überschreibt das Freigestellte nicht“,
+    // als Eigenschaft der Formel statt als Absichtserklärung.
+    const a = new Uint8Array([0, 40, 128, 200, 255, 255]);
+    const b = new Uint8Array([0, 200, 30, 10, 0, 255]);
+    const v = vereinigeAlpha(a, b);
+    for (let i = 0; i < a.length; i += 1) {
+      expect(v[i]).toBeGreaterThanOrEqual(a[i]);
+      expect(v[i]).toBeGreaterThanOrEqual(b[i]);
+      expect(v[i]).toBeLessThanOrEqual(255);
+    }
   });
 });

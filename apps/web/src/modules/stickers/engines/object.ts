@@ -1,5 +1,5 @@
 /**
- * „Beliebiges Objekt freistellen“ – U²-Net über ONNX Runtime.
+ * „Niedrige Qualität freistellen“ – U²-Net über ONNX Runtime.
  *
  * Das Modell sucht nicht nach Menschen, sondern nach dem *auffälligsten*
  * Ding im Bild: Tasse, Hund, Auto, Blume. Genau dafür ist es da, wenn

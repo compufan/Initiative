@@ -1,7 +1,7 @@
 /**
  * „Hohe Qualität“ – BiRefNet-lite über ONNX Runtime.
  *
- * Dasselbe Ziel wie „Beliebiges Objekt“, nur genauer: BiRefNet trennt Haare,
+ * Dasselbe Ziel wie „Niedrige Qualität“, nur genauer: BiRefNet trennt Haare,
  * Zaunlatten und Brillenbügel dort, wo U²-Net einen Klumpen macht. Der Preis
  * steht in der Beschreibung und wird nicht schöngeredet – knapp 94 MB einmalig
  * und auf einem älteren Telefon spürbar mehr Rechenzeit.
@@ -82,7 +82,7 @@ async function modellHolen(melden?: Fortschritt): Promise<Uint8Array> {
   const antwort = await fetch(MODEL_URL);
   if (antwort.status === 404) {
     throw new Error(
-      'Das Modell für „Hohe Qualität“ ist in dieser Fassung der App nicht vorhanden. Nimm solange „Beliebiges Objekt“.',
+      'Das Modell für „Hohe Qualität“ ist in dieser Fassung der App nicht vorhanden. Nimm solange „Niedrige Qualität“.',
     );
   }
   if (!antwort.ok) throw new Error(`Das Modell konnte nicht geladen werden (${antwort.status}).`);
@@ -220,7 +220,7 @@ export async function birefnetMask(image: ImageData, melden?: Fortschritt): Prom
     await releaseBirefnet();
     throw new Error(
       `Die Grafikeinheit hat mitten im Rechnen abgebrochen (${text}). ` +
-        'Nimm „Beliebiges Objekt“ – das rechnet auf jedem Gerät in Sekunden.',
+        'Nimm „Niedrige Qualität“ – das rechnet auf jedem Gerät in Sekunden.',
     );
   }
   letzteDauer = Date.now() - begonnen;

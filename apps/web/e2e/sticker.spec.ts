@@ -137,3 +137,53 @@ test('ohne Grafikeinheit steht die Begründung LESBAR da, nicht im Tooltip', asy
 
   await context.close();
 });
+
+test('das Freistellen bietet genau fünf Knöpfe, und Antippen ist einer davon', async ({
+  browser,
+}) => {
+  /*
+   * Der Anwender hat die Reihe selbst festgelegt: „Nur noch die Knöpfe:
+   * Gesicht, Person, Niedrige Qualität, Hohe Qualität und Antippen."
+   *
+   * Vorher waren es bis zu acht, verteilt über vier Reihen – „Antippen zum
+   * Behalten" stand als Werkzeug ganz woanders als die Verfahren, und
+   * „Freistellen zurücknehmen" sass mit in derselben Reihe, aus fünf wurden
+   * also nach jedem Lauf sechs.
+   */
+  const alice = credentials('fuenf');
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto('/');
+  await page.getByRole('button', { name: /Noch kein Konto/ }).click();
+  await page.getByLabel('Benutzername').fill(alice.username);
+  await page.getByLabel('Anzeigename').fill(alice.displayName);
+  await page.getByLabel('Passwort', { exact: true }).fill(alice.password);
+  await page.getByRole('button', { name: 'Konto erstellen' }).click();
+  await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
+
+  const bob = credentials('fziel');
+  await signUp(browser, bob);
+  await page.getByRole('button', { name: 'Neuer Chat' }).click();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await page.getByText(bob.displayName).first().click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await page.getByRole('button', { name: 'Sticker', exact: true }).click();
+  await page.getByRole('button', { name: /Sticker erstellen/ }).click();
+  await page.getByRole('tab', { name: 'Freistellen' }).click();
+
+  const reihe = page.getByRole('group', { name: 'Freistellen' });
+  await expect(reihe.getByRole('button')).toHaveCount(5);
+  for (const name of [
+    'Gesicht',
+    'Person',
+    'Niedrige Qualität',
+    'Hohe Qualität',
+    'Antippen',
+  ]) {
+    await expect(reihe.getByRole('button', { name: new RegExp(name) })).toHaveCount(1);
+  }
+  // „Antippen (genau)" darf es als eigenen Knopf nicht mehr geben.
+  await expect(page.getByRole('button', { name: /Antippen \(genau\)/ })).toHaveCount(0);
+
+  await context.close();
+});

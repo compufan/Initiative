@@ -20,24 +20,38 @@ import {
   lupeGrenzen,
   renderSticker,
   toSourcePoint,
+  vereinigeAlpha,
   type EditorSource,
   type ShapeKind,
   type StickerDoc,
   type TextSlot,
 } from './render.js';
 import {
-  ENGINE_INFO,
   EngineError,
   engineAvailable,
   engineInfo,
+  firstUseMb,
   isEngineEnabled,
   runEngine,
+  writeEngineSetting,
   type EngineKey,
 } from './engines/index.js';
 import { kanteWeichzeichnen, maskeTraegt, vorlageAus } from './engines/prepare.js';
 import { teilAn, teileFinden } from './engines/teile.js';
 
 type Tool = 'move' | 'erase' | 'keep' | 'teile';
+
+/**
+ * Die vier Verfahren in der Reihe, in genau dieser Folge.
+ *
+ * Ausdrücklich hier und nicht aus `ENGINE_INFO` abgeleitet: Dort steht die
+ * Datenreihenfolge, und die hatte mit dem, was der Anwender sehen soll, nichts
+ * zu tun – zuletzt stand „Antippen mit Netz“ als erster Knopf, obwohl es gar
+ * kein eigenes Verfahren mehr ist, sondern ein Zusatz zum Antippen.
+ *
+ * Von grob nach fein, und „Gesicht“ zuerst, weil es der häufigste Fall ist.
+ */
+const VERFAHREN: EngineKey[] = ['face', 'person', 'object', 'birefnet'];
 type Tab = 'source' | 'move' | 'shape' | 'cutout' | 'detail' | 'outline' | 'text';
 
 const TABS: { key: Tab; icon: string; label: string }[] = [
@@ -115,11 +129,22 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   /**
    * Ob ein Tipp hinzunimmt oder wegnimmt.
    *
-   * Nur „Antippen (genau)“ kann wegnehmen – das Netz nimmt Punkte mit
+   * Nur „Antippen mit Netz“ kann wegnehmen – das Netz nimmt Punkte mit
    * Vorzeichen entgegen. Die Farbflutung kennt nur Hinzunehmen und
    * überspringt Minus-Tipps.
    */
   const [tippModus, setTippModus] = useState<'dazu' | 'weg'>('dazu');
+  /**
+   * Ob Antippen das Netz benutzt statt der Farbflutung.
+   *
+   * Steht bewusst NICHT im `doc`: Es ist eine Einstellung des Geräts, keine
+   * Eigenschaft dieses Stickers. Läge sie im Dokument, holte ein
+   * Rückgängig-Schritt sie mit zurück – der Schalter spränge dem Anwender
+   * unter der Hand um.
+   */
+  const [mitNetz, setMitNetz] = useState(() => isEngineEnabled('tippen'));
+  /** Läuft gerade ein Netzlauf für einen Tipp? Dann kein zweiter daneben. */
+  const [tippRechnet, setTippRechnet] = useState(false);
   /**
    * Die Lupe: reine Ansicht, nicht Teil des Stickers.
    *
@@ -144,6 +169,21 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   const brushRef = useRef(brush);
   const pinselRef = useRef(pinsel);
   const tippModusRef = useRef(tippModus);
+  const mitNetzRef = useRef(mitNetz);
+  const tippRechnetRef = useRef(tippRechnet);
+  /** Zähler für Tippgruppen – je Plus-Tipp eine neue. */
+  const gruppeRef = useRef(0);
+  /**
+   * Die Vorlage je Quellbild, einmal gerechnet.
+   *
+   * Vorher entstand bei jedem Lauf ein frisches `ImageData`. Das Netz merkt
+   * sich seine Einbettung an der Identität des Bildes – mit einer neuen
+   * Vorlage je Tipp konnte der Zwischenspeicher nie greifen, und jeder Tipp
+   * rechnete den Encoder von vorn (rund eine Sekunde statt eines Viertels).
+   */
+  const vorlageRef = useRef<{ bild: HTMLImageElement; vorlage: ReturnType<typeof vorlageAus> } | null>(
+    null,
+  );
   const lupeRef = useRef(lupe);
   const history = useRef<StickerDoc[]>([]);
   const lastCommit = useRef<{ label: string; at: number }>({ label: '', at: 0 });
@@ -178,12 +218,26 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   const frame = useRef<number | null>(null);
 
   /**
-   * Ob „Antippen (genau)“ bereitsteht.
+   * Ob „Antippen mit Netz“ bereitsteht.
    *
    * Nur dann gibt es Minus-Tipps: Die Farbflutung kann kein Wegnehmen, und
    * ein Knopf, der nichts tut, ist schlimmer als keiner.
    */
-  const genauVerfuegbar = engineAvailable('tippen');
+  /**
+   * Wieviel der Netz-Zusatz beim ersten Mal kostet – aus derselben Rechnung,
+   * die auch in den Einstellungen steht, damit die beiden Zahlen nicht
+   * auseinanderlaufen.
+   */
+  const netzMb = firstUseMb(engineInfo('tippen')).toLocaleString('de-DE');
+  /**
+   * Ob das Netz schon im Gerät liegt.
+   *
+   * Bewusst an `doc.tippMaske` abgelesen und nicht an den Modulvariablen von
+   * `tippen.ts`: die setzt `releaseEngines()` beim Schliessen des Studios auf
+   * null, und dann stünde beim nächsten Öffnen wieder „einmalig 30,3 MB“,
+   * obwohl der Service Worker die Datei längst hat.
+   */
+  const netzBereit = doc.tippMaske !== null;
   const dazuZahl = doc.keep.filter((punkt) => punkt.mode !== 'weg').length;
   const wegZahl = doc.keep.length - dazuZahl;
 
@@ -225,6 +279,9 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       fast,
       // Waehrend der Arbeit bleibt Abgewaehltes sichtbar und gekennzeichnet.
       auswahlZeigen: toolRef.current === 'teile',
+      // Und beim Antippen bleibt das Weggenommene als grauer Schleier stehen –
+      // sonst tippt man ins Leere (Punkt E).
+      weggenommenesZeigen: toolRef.current === 'keep',
     });
   }, []);
 
@@ -244,7 +301,11 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
 
   useEffect(() => {
     toolRef.current = tool;
-  }, [tool]);
+    // Neu zeichnen: Der Schleier haengt am Werkzeug, nicht am Dokument. Ohne
+    // das erschiene er erst beim naechsten Tipp – also genau dann, wenn man
+    // ihn nicht mehr braucht.
+    schedule();
+  }, [tool, schedule]);
 
   useEffect(() => {
     pinselRef.current = pinsel;
@@ -253,6 +314,14 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   useEffect(() => {
     tippModusRef.current = tippModus;
   }, [tippModus]);
+
+  useEffect(() => {
+    mitNetzRef.current = mitNetz;
+  }, [mitNetz]);
+
+  useEffect(() => {
+    tippRechnetRef.current = tippRechnet;
+  }, [tippRechnet]);
 
   useEffect(() => {
     lupeRef.current = lupe;
@@ -368,6 +437,118 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
    * Alles rechnet im Gerät. Beim ersten Mal wird das Modell geladen – deshalb
    * der Hinweis im Knopf, wie gross das ist.
    */
+  /** Die Vorlage je Quellbild – einmal gerechnet, dann gemerkt. */
+  const vorlageHolen = useCallback((quelle: Extract<EditorSource, { kind: 'image' }>) => {
+    const da = vorlageRef.current;
+    if (da && da.bild === quelle.image) return da.vorlage;
+    const vorlage = vorlageAus(quelle.image, quelle.width, quelle.height);
+    vorlageRef.current = { bild: quelle.image, vorlage };
+    return vorlage;
+  }, []);
+
+  /**
+   * Ein Tipp auf das Bild.
+   *
+   * Ohne Netz ist das ein reiner Dokumentschritt: Punkt anhängen, die
+   * Zeichenkette flutet beim nächsten Bild. Mit Netz kommt ein Lauf dazu, und
+   * dessen Ergebnis wird mit dem vorhandenen VEREINIGT – je Tipp ein
+   * Gegenstand. Das Netz versteht mehrere Punkte als Hinweise auf EIN Ding;
+   * zwei getrennte Dinge in einem Lauf ergeben Matsch (nachgemessen: die
+   * gemeinsame Maske deckte sich mit der Vereinigung der Einzelmasken nur zu
+   * IoU 0,54).
+   */
+  const tippAnwenden = useCallback(
+    async (punkt: { x: number; y: number }) => {
+      const quelle = sourceRef.current;
+      if (!quelle || quelle.kind !== 'image') return;
+
+      const netz = mitNetzRef.current && engineAvailable('tippen');
+      const dazu = tippModusRef.current !== 'weg';
+
+      // Ein Minus-Tipp berichtigt die zuletzt mit dem Netz gesetzte Gruppe.
+      // Ohne eine solche Gruppe hätte er nichts, woran er sich berichtigen
+      // könnte – die Flutung kann kein Wegnehmen.
+      const letzteNetzGruppe = [...docRef.current.keep]
+        .reverse()
+        .find((seed) => seed.quelle === 'netz')?.gruppe;
+      if (!dazu && letzteNetzGruppe === undefined) {
+        setModellFehler('Tippe zuerst mit Netz auf das, was bleiben soll – dann kannst du davon etwas wegnehmen.');
+        return;
+      }
+      const gruppe = dazu ? (gruppeRef.current += 1) : letzteNetzGruppe!;
+
+      // Der Punkt wandert ins Quellbild. Dort liegen auch die Masken, und nur
+      // so überlebt er das Verschieben und Zoomen.
+      const imBild = toSourcePoint(punkt, quelle, docRef.current);
+      const seed = {
+        x: imBild.x,
+        y: imBild.y,
+        mode: dazu ? ('dazu' as const) : ('weg' as const),
+        gruppe,
+        quelle: netz ? ('netz' as const) : ('flutung' as const),
+      };
+
+      commit();
+      // Der Punkt wird SOFORT abgelegt, auch wenn das Netz noch rechnet. Ihn
+      // wegzuwerfen wäre für den Anwender ein toter Knopf – und genau davon
+      // hat diese App schon genug gehabt.
+      setDoc((value) => ({ ...value, keep: [...value.keep, seed] }));
+      if (!netz) return;
+
+      if (tippRechnetRef.current) return;
+      setTippRechnet(true);
+      setModellFehler(null);
+      try {
+        const { image, faktor } = vorlageHolen(quelle);
+        const meine = [...docRef.current.keep, seed].filter((p) => p.gruppe === gruppe);
+        const roh = await runEngine('tippen', {
+          image,
+          seeds: meine.map((p) => ({ x: p.x * faktor, y: p.y * faktor, dazu: p.mode !== 'weg' })),
+          fortschritt: (_anteil, text) => setModellStand(text),
+        });
+
+        setDoc((value) => {
+          // Ist der Tipp inzwischen zurückgenommen worden (Rückgängig, „Letzten
+          // Tipp zurück“), gehört das Ergebnis nirgendwohin. Es sonst
+          // nachzuschieben liesse eine Fläche wieder auferstehen, die der
+          // Anwender gerade entfernt hat – ein Sticker, der sich von selbst
+          // ändert.
+          if (!value.keep.some((p) => p.gruppe === gruppe)) return value;
+          const alt = value.tippMaske;
+          const neu =
+            alt && alt.width === image.width && alt.height === image.height
+              ? vereinigeAlpha(alt.alpha, roh)
+              : roh;
+          return {
+            ...value,
+            tippMaske: { engine: 'tippen', width: image.width, height: image.height, alpha: neu },
+          };
+        });
+      } catch (error) {
+        // Der Tipp bleibt stehen und wird von der Flutung gemacht – lieber ein
+        // gröberer Ausschnitt als ein verschluckter Tipp.
+        setDoc((value) => ({
+          ...value,
+          keep: value.keep.map((p) => (p.gruppe === gruppe ? { ...p, quelle: 'flutung' } : p)),
+        }));
+        setModellFehler(
+          `Das Netz ging nicht (${error instanceof Error ? error.message : 'unbekannt'}). Dieser Tipp wurde nach Farbe gemacht.`,
+        );
+      } finally {
+        setTippRechnet(false);
+        setModellStand(null);
+      }
+    },
+    [commit, vorlageHolen],
+  );
+
+  // Der Zeiger-Behandler steht weiter unten und darf `tippAnwenden` nicht als
+  // Abhaengigkeit tragen – sonst haengt an jedem Tipp ein neuer Behandler.
+  const tippAnwendenRef = useRef(tippAnwenden);
+  useEffect(() => {
+    tippAnwendenRef.current = tippAnwenden;
+  }, [tippAnwenden]);
+
   const modellAnwenden = useCallback(
     async (key: EngineKey) => {
       const quelle = sourceRef.current;
@@ -376,26 +557,18 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       setModellFehler(null);
       setModellStand(null);
       try {
-        const { image, faktor } = vorlageAus(quelle.image, quelle.width, quelle.height);
+        const { image } = vorlageHolen(quelle);
 
-        // Angetippte Punkte liegen auf der Sticker-Fläche und müssen zurück
-        // ins Bild. „Gesicht“ braucht nur den letzten – „Antippen (genau)“
-        // bekommt alle, mit Vorzeichen.
-        const insBild = (punkt: { x: number; y: number }) => {
-          const p = toSourcePoint(punkt, quelle, docRef.current);
-          return { x: p.x * faktor, y: p.y * faktor };
-        };
-        const seeds = docRef.current.keep.map((punkt) => ({
-          ...insBild(punkt),
-          dazu: punkt.mode !== 'weg',
-        }));
-        const letzter = docRef.current.keep.at(-1);
-        const seed = letzter ? insBild(letzter) : undefined;
-
+        /*
+         * Den Modellen werden AUSDRÜCKLICH keine angetippten Punkte mehr
+         * mitgegeben. Antippen ist jetzt unabhängig (Punkt C), und die
+         * Übergabe war überdies eine Falle: `face.ts` versteht einen `seed`
+         * als „nimm genau diesen einen Kopf“ – ein alter Tipp irgendwo im Bild
+         * hätte „Gesicht“ also stillschweigend auf ein einziges Gesicht
+         * verengt, sobald die Punkte nicht mehr zurückgesetzt werden.
+         */
         const roh = await runEngine(key, {
           image,
-          seed,
-          seeds,
           fortschritt: (_anteil, text) => setModellStand(text),
         });
         // Der Weichzeichner glättet die harte Treppe, die die kleineren Netze
@@ -424,13 +597,16 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
           // Leere Auswahl heisst „alles“ – wer nichts antippt, bekommt wie
           // bisher das ganze Ergebnis des Modells.
           maskParts: [],
-          // Antippen und "Ecken entfernen" wuerden dem Modell nur ins Handwerk
-          // pfuschen – die faengt man neu an, wenn man sie braucht.
-          keep: [],
-          removeBg: false,
+          // `keep` und `removeBg` bleiben ausdrücklich STEHEN. Sie hier zu
+          // leeren war die eigentliche Sperre gegen Punkt C und D – noch vor
+          // der Reihenfolge in der Zeichenkette: Wer erst tippt und dann ein
+          // Modell laufen lässt, verlor seine Tipps wortlos.
         }));
-        // Gibt es mehr als eine Flaeche, ist Auswaehlen das Naheliegende.
-        setTool(teile.anzahl > 1 ? 'teile' : 'move');
+        // Gibt es mehr als eine Flaeche, ist Auswaehlen das Naheliegende –
+        // aber nicht, wenn der Anwender gerade antippt. Ihm dabei das
+        // Werkzeug unter der Hand wegzunehmen wäre das Gegenteil von
+        // „Antippen ist unabhängig“.
+        if (toolRef.current !== 'keep') setTool(teile.anzahl > 1 ? 'teile' : 'move');
       } catch (error) {
         setModellFehler(
           error instanceof EngineError
@@ -630,10 +806,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       commitArmedGesture();
       // Kein Ziehen: Ein Antippen ist ein Punkt, aus dem der Bereich waechst.
       gesture.current = { ...gesture.current, mode: 'none' };
-      setDoc((value) => ({
-        ...value,
-        keep: [...value.keep, { x: point.x, y: point.y, mode: tippModusRef.current }],
-      }));
+      void tippAnwendenRef.current?.(point);
       return;
     }
     if (toolRef.current === 'erase') {
@@ -997,7 +1170,9 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                   ? '🧽 Radieren'
                   : '↩️ Zurückholen'
                 : tool === 'keep'
-                  ? '👆 Antippen zum Behalten'
+                  ? tippRechnet
+                    ? '⏳ Antippen rechnet …'
+                    : '👆 Antippen'
                   : tool === 'teile'
                     ? '🎯 Teile antippen'
                     : '✋ Verschieben'}
@@ -1172,68 +1347,79 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
 
         {tab === 'cutout' && (
           <>
-            {/* Zuerst die Modelle: Ein Klick, und das Motiv steht frei. Das
-                Antippen darunter bleibt der Rückfall für alles, was kein
-                Modell trifft – und für Geräte ohne die Modelle. */}
-            <div className="stk-btn-row">
-              {ENGINE_INFO.filter((engine) => engine.key !== 'tap').map((engine) => {
+            {/*
+                Genau fünf Knöpfe, in fester Folge. Die ersten vier sind
+                HANDLUNGEN (rechnen einmal, legen eine Maske ab), der fünfte
+                ist ein MODUS (ändert, was der Finger tut). Deshalb dürfen zwei
+                zugleich hell sein – „Person“ und „Antippen“ –, und genau das
+                ist die sichtbare Übersetzung von „Antippen ist unabhängig und
+                wirkt MIT den anderen“.
+
+                Die Reihe stand vorher nicht hier: Sie kam aus der Reihenfolge
+                von ENGINE_INFO, und „Freistellen zurücknehmen“ sass mit darin
+                – aus fünf wurden nach jedem Lauf sechs. Der Knopf steht jetzt
+                weiter unten, wo er hingehört.
+            */}
+            <div className="stk-btn-row" role="group" aria-label="Freistellen">
+              {VERFAHREN.map((schluessel) => {
+                const engine = engineInfo(schluessel);
                 // „Hohe Qualität“ rechnet ausschliesslich auf der
                 // Grafikeinheit – auf dem Prozessor braucht dieses Netz eine
                 // Viertelstunde je Bild (nachgemessen, siehe
                 // engines/ort-laufzeit.ts). Fehlt sie, ist ein abgeblendeter
                 // Knopf mit Begründung ehrlicher als einer, der scheinbar
                 // arbeitet.
-                const ohneGrafik = engine.key === 'birefnet' ? grafikAus : null;
-                const verfuegbar = engineAvailable(engine.key) && !ohneGrafik;
+                const ohneGrafik = schluessel === 'birefnet' ? grafikAus : null;
+                // `engineAvailable` bleibt in der Bedingung: Es ist die
+                // einzige Stelle, an der geprüft wird, ob das Gerät überhaupt
+                // WebAssembly kann.
+                const verfuegbar = engineAvailable(schluessel) && !ohneGrafik;
                 return (
                   <button
-                    key={engine.key}
+                    key={schluessel}
                     type="button"
-                    className={`btn btn-sm ${doc.autoMask?.engine === engine.key ? 'stk-chip-active' : ''}`}
-                    onClick={() => void modellAnwenden(engine.key)}
-                    disabled={!hasImage || !verfuegbar || rechnet !== null}
+                    className={`btn btn-sm ${doc.autoMask?.engine === schluessel ? 'stk-chip-active' : ''}`}
+                    onClick={() => void modellAnwenden(schluessel)}
+                    disabled={!hasImage || !verfuegbar || rechnet !== null || tippRechnet}
                     title={
                       ohneGrafik
-                        ? `${ohneGrafik.grund} Ohne sie rechnet dieses Verfahren an einem Bild eine Viertelstunde – nimm „Beliebiges Objekt“.`
+                        ? `${ohneGrafik.grund} Ohne sie rechnet dieses Verfahren an einem Bild eine Viertelstunde – nimm „Niedrige Qualität“.`
                         : verfuegbar
                           ? engine.description
                           : 'In den Einstellungen unter „Freistellen für Sticker“ einschaltbar.'
                     }
                   >
-                    {rechnet === engine.key ? '⏳ ' : '🪄 '}
+                    {rechnet === schluessel ? '⏳ ' : '🪄 '}
                     {engine.label}
-                    {rechnet === engine.key ? ' rechnet …' : ''}
+                    {rechnet === schluessel ? ' rechnet …' : ''}
                   </button>
                 );
               })}
-              {doc.autoMask && (
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => {
-                    commit();
-                    setDoc((value) => ({ ...value, autoMask: null }));
-                    setModellFehler(null);
-                  }}
-                  disabled={rechnet !== null}
-                >
-                  Freistellen zurücknehmen
-                </button>
-              )}
+              {/* Der fünfte: kein Verfahren, sondern ein Modus. */}
+              <button
+                type="button"
+                className={`btn btn-sm ${tool === 'keep' ? 'stk-chip-active' : ''}`}
+                onClick={() => setTool(tool === 'keep' ? 'move' : 'keep')}
+                disabled={!hasImage || rechnet !== null}
+                title="Tippe an, was zusätzlich im Sticker bleiben soll. Wirkt zusammen mit den anderen Verfahren, statt sie zu ersetzen."
+              >
+                👆 Antippen {tool === 'keep' ? 'an' : 'aus'}
+              </button>
             </div>
             {/* Warum „Hohe Qualität“ nicht geht – als SICHTBARER Satz.
                 Er stand vorher nur im `title` des Knopfes. Auf einem Telefon
                 gibt es kein Schweben, und ein abgeblendeter Knopf nimmt nicht
                 einmal eine Berührung entgegen: Die Begründung war damit
                 genau dort untergebracht, wo sie niemand lesen kann.
-                Angezeigt nur, wenn das Verfahren überhaupt eingeschaltet ist
-                – sonst wäre es eine Meldung über etwas, das der Anwender gar
-                nicht wollte. */}
-            {grafikAus && isEngineEnabled('birefnet') && (
+                Sie hing eine Zeitlang zusätzlich an `isEngineEnabled` – mit
+                der Folge, dass auf einem frischen Gerät ein abgeblendeter
+                Knopf OHNE jede Begründung stand. Genau die Beschwerde, die
+                das hier auslösen sollte. */}
+            {grafikAus && (
               <p className="stk-hint" role="status">
                 „Hohe Qualität“ geht auf diesem Gerät nicht: {grafikAus.grund} Dieses Verfahren
                 rechnet ausschließlich auf der Grafikeinheit – auf dem Prozessor bräuchte ein Bild
-                eine Viertelstunde. „Beliebiges Objekt“ macht dieselbe Art Ausschnitt in Sekunden.
+                eine Viertelstunde. „Niedrige Qualität“ macht dieselbe Art Ausschnitt in Sekunden.
                 {/* Ein gemerkter Abbruch gilt sonst sieben Tage, ohne jeden Weg
                     zurück. Ein Treiber wird erneuert, ein anderes Bild ist
                     kleiner – eine Sperre ohne Ausweg ist kein Schutz, sondern
@@ -1256,6 +1442,22 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                   </>
                 )}
               </p>
+            )}
+            {doc.autoMask && (
+              <div className="stk-btn-row">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => {
+                    commit();
+                    setDoc((value) => ({ ...value, autoMask: null }));
+                    setModellFehler(null);
+                  }}
+                  disabled={rechnet !== null || tippRechnet}
+                >
+                  Freistellen zurücknehmen
+                </button>
+              </div>
             )}
             {modellStand && (
               <p className="stk-hint" role="status">
@@ -1312,56 +1514,85 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                 deinem Gerät – es wird kein Bild irgendwohin geschickt.
               </p>
             )}
-            <div className="stk-btn-row">
-              <button
-                type="button"
-                className={`btn btn-sm ${tool === 'keep' ? 'stk-chip-active' : ''}`}
-                onClick={() => setTool(tool === 'keep' ? 'move' : 'keep')}
-                disabled={!hasImage}
-              >
-                👆 Antippen zum Behalten {tool === 'keep' ? 'an' : 'aus'}
-              </button>
-              {tool === 'keep' && genauVerfuegbar && (
-                <button
-                  type="button"
-                  className={`btn btn-sm ${tippModus === 'weg' ? 'stk-chip-active' : ''}`}
-                  onClick={() => setTippModus(tippModus === 'weg' ? 'dazu' : 'weg')}
-                  disabled={!hasImage}
-                >
-                  {tippModus === 'weg' ? '➖ Wegnehmen' : '➕ Dazunehmen'}
-                </button>
-              )}
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => {
-                  commit();
-                  setDoc((value) => ({ ...value, keep: value.keep.slice(0, -1) }));
-                }}
-                disabled={!hasImage || doc.keep.length === 0}
-              >
-                Letzten Tipp zurück
-              </button>
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => {
-                  commit();
-                  setDoc((value) => ({ ...value, keep: [] }));
-                }}
-                disabled={!hasImage || doc.keep.length === 0}
-              >
-                Auswahl zurücksetzen
-              </button>
-            </div>
-            {doc.keep.length > 0 && (
-              <p className="stk-hint">
-                {dazuZahl === 1 ? '1 Stelle' : `${dazuZahl} Stellen`} dazu
-                {wegZahl > 0 && `, ${wegZahl} weggenommen`}.{' '}
-                {genauVerfuegbar
-                  ? 'Sitzt etwas nicht, tippe mit „Wegnehmen“ darauf – der Rest bleibt.'
-                  : 'Tippe weitere Bereiche an, die dazugehören – etwa Haare oder Pullover.'}
-              </p>
+            {/*
+                Alles zum Antippen steht EINGERÜCKT unter der Fünferreihe und
+                nur, solange Antippen an ist. Vorher lag es in einem ganz
+                anderen Abschnitt weiter unten – der Anwender sah zwei Reihen,
+                die dasselbe zu meinen schienen.
+            */}
+            {tool === 'keep' && (
+              <div className="stk-unterzeile">
+                <p className="stk-hint" role="status">
+                  {tippRechnet
+                    ? '⏳ Das Netz sieht sich das Bild an …'
+                    : 'Das Graue ist weg. Tippe hinein, um es dazuzunehmen – das schon Freigestellte bleibt.'}
+                </p>
+                <div className="stk-btn-row">
+                  {/*
+                      Der Netz-Schalter. Er lädt NICHTS, solange niemand tippt –
+                      er ist eine Absichtserklärung. Die Zahl steht dran,
+                      solange das Modell noch nicht da ist: 30 MB auf einem
+                      Mobilfunkvertrag sind eine Entscheidung, keine Fussnote.
+                  */}
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${mitNetz ? 'stk-chip-active' : ''}`}
+                    onClick={() => {
+                      const naechst = !mitNetz;
+                      setMitNetz(naechst);
+                      writeEngineSetting('tippen', naechst);
+                    }}
+                    disabled={!hasImage || tippRechnet}
+                    title="Statt nach Farbe zu fluten, versteht ein Netz, was ein Gegenstand ist – für Gegenstände wie für Personen."
+                  >
+                    {mitNetz ? '☑' : '☐'} mit Netz
+                    {!netzBereit && ` — einmalig ${netzMb} MB`}
+                  </button>
+                  {mitNetz && (
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${tippModus === 'weg' ? 'stk-chip-active' : ''}`}
+                      onClick={() => setTippModus(tippModus === 'weg' ? 'dazu' : 'weg')}
+                      disabled={!hasImage || tippRechnet}
+                    >
+                      {tippModus === 'weg' ? '➖ Wegnehmen' : '➕ Dazunehmen'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => {
+                      commit();
+                      setDoc((value) => ({ ...value, keep: value.keep.slice(0, -1) }));
+                    }}
+                    disabled={!hasImage || doc.keep.length === 0 || tippRechnet}
+                  >
+                    Letzten Tipp zurück
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => {
+                      commit();
+                      // Die Netzmaske muss mit weg – sonst bliebe eine Fläche
+                      // freigestellt, deren Tipp der Anwender gerade gelöscht hat.
+                      setDoc((value) => ({ ...value, keep: [], tippMaske: null }));
+                    }}
+                    disabled={!hasImage || (doc.keep.length === 0 && !doc.tippMaske) || tippRechnet}
+                  >
+                    Auswahl zurücksetzen
+                  </button>
+                </div>
+                {doc.keep.length > 0 && (
+                  <p className="stk-hint">
+                    {dazuZahl === 1 ? '1 Stelle' : `${dazuZahl} Stellen`} dazu
+                    {wegZahl > 0 && `, ${wegZahl} weggenommen`}.{' '}
+                    {mitNetz
+                      ? 'Sitzt etwas nicht, tippe mit „Wegnehmen“ darauf – der Rest bleibt.'
+                      : 'Tippe weitere Bereiche an, die dazugehören – etwa Haare oder Pullover.'}
+                  </p>
+                )}
+              </div>
             )}
             <div className="stk-btn-row">
               <button
@@ -1371,7 +1602,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                   commit();
                   setDoc((value) => ({ ...value, removeBg: !value.removeBg }));
                 }}
-                disabled={!hasImage || doc.keep.length > 0}
+                disabled={!hasImage || doc.keep.length > 0 || tippRechnet}
               >
                 🪄 Ecken entfernen {doc.removeBg ? 'an' : 'aus'}
               </button>
@@ -1397,7 +1628,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                 ? 'Freistellen gibt es nur für Fotos.'
                 : doc.keep.length > 0
                   ? 'Die Toleranz bestimmt, wie weit ein Antippen ins Bild wächst. Bleibt zu wenig stehen: erhöhen. Greift es auf den Hintergrund über: senken.'
-                  : 'Tippe oben auf „Antippen zum Behalten“ und dann im Bild auf das, was im Sticker bleiben soll. „Ecken entfernen“ ist die einfachere Variante für einfarbige Hintergründe.'}
+                  : 'Tippe oben auf „Antippen“ und dann im Bild auf das, was zusätzlich im Sticker bleiben soll. „Ecken entfernen“ ist die einfachere Variante für einfarbige Hintergründe.'}
             </p>
           </>
         )}

@@ -1,5 +1,5 @@
 /**
- * „Antippen (genau)“ – NanoSAM über ONNX Runtime.
+ * „Antippen mit Netz“ – NanoSAM über ONNX Runtime.
  *
  * Das vorhandene „Antippen“ flutet vom angetippten Punkt aus über ähnliche
  * Farben. Das trägt bei einem Motiv vor gleichmässigem Grund und versagt

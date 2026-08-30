@@ -568,3 +568,20 @@
   text-align: center;
   font-size: 0.85rem;
 }
+
+/*
+ * Die Unterzeile zum Antippen.
+ *
+ * Eingerückt und mit einer Linie an der Seite, damit sichtbar ist, dass sie
+ * zum Knopf darüber gehört und nicht eine weitere gleichrangige Reihe ist.
+ * Genau diese Verwechslung gab es vorher: zwei Reihen, die dasselbe zu meinen
+ * schienen.
+ */
+.stk-unterzeile {
+  margin-left: 0.75rem;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--line, rgba(127, 127, 127, 0.3));
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}

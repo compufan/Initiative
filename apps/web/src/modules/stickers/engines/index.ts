@@ -22,7 +22,7 @@ export interface MaskRequest {
   /**
    * Alle angetippten Punkte mit Vorzeichen, in Bildkoordinaten.
    *
-   * Nur „Antippen (genau)“ wertet das aus – dessen Netz nimmt beliebig viele
+   * Nur „Antippen mit Netz“ wertet das aus – dessen Netz nimmt beliebig viele
    * Punkte entgegen, und ein Minus-Tipp ist die einzige Art, „das nicht“ zu
    * sagen. Die anderen Verfahren brauchen hoechstens `seed`.
    */

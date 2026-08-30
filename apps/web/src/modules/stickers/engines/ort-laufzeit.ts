@@ -51,7 +51,7 @@
  *
  * Nachgemessen, ONNX Runtime 1.29, ein Faden, Serverprozessor:
  *
- *     u2netp („Beliebiges Objekt“, 320, fp32)      1,7 s
+ *     u2netp („Niedrige Qualität“, 320, fp32)      1,7 s
  *     BiRefNet-lite („Hohe Qualität“, 512, fp16) 295,1 s
  *
  * Das ist nicht die Grösse des Netzes. Dasselbe Netz in fp32 braucht 4,9 s –
@@ -64,7 +64,7 @@
  * Ein Prozessorpfad stand hier trotzdem einmal – und hat genau das getan, was
  * der Anwender gemeldet hat: „rechnet immer noch ewig“. Ein Verfahren, das
  * eine Viertelstunde braucht, ist kein langsames Verfahren, sondern eine
- * Falle. „Beliebiges Objekt“ rechnet dieselbe Art Aufgabe in Sekunden.
+ * Falle. „Niedrige Qualität“ rechnet dieselbe Art Aufgabe in Sekunden.
  *
  * (Damit ist auch der Notausgang bekannt, falls ein Gerät kein `shader-f16`
  * hat: die Gewichte fp16 auf der Platte lassen und je einen Cast nach fp32
@@ -77,8 +77,8 @@
  * Nur `onnxruntime-web/webgpu`, heute allein „Hohe Qualität“.
  * `onnxruntime-web/wasm` ist eine eigene, in sich geschlossene Fassung der
  * Laufzeit mit eigener Umgebung und eigenem Arbeiter (nachgeprüft: die beiden
- * Dateien teilen sich keinen einzigen Import). „Beliebiges Objekt“ und
- * „Antippen (genau)“ rechnen dort, mit voller Genauigkeit, immer auf dem
+ * Dateien teilen sich keinen einzigen Import). „Niedrige Qualität“ und
+ * „Antippen mit Netz“ rechnen dort, mit voller Genauigkeit, immer auf dem
  * Prozessor und immer im Arbeiter. Für die gibt es nichts zu entscheiden.
  */
 
@@ -260,7 +260,7 @@ export async function ortVorbereiten(
     throw new Error(
       `„Hohe Qualität“ braucht eine Grafikeinheit. ${laufzeit.grund ?? ''} ` +
         'Auf dem Prozessor rechnet dieses Netz an einem Bild eine Viertelstunde – ' +
-        'nimm „Beliebiges Objekt“, das braucht ein paar Sekunden.',
+        'nimm „Niedrige Qualität“, das braucht ein paar Sekunden.',
     );
   }
   // Die Laufzeit liegt beim eigenen Server, nicht bei einem fremden CDN.

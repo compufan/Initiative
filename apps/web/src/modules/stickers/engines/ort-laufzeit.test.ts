@@ -136,11 +136,11 @@ describe('Womit gerechnet wird', () => {
 
   it('fängt ohne WebGPU gar nicht erst an', async () => {
     // Der Prozessorpfad war die Falle: 295 s für ein Bild gegen 1,7 s bei
-    // „Beliebiges Objekt“. Lieber ein Satz, der dorthin zeigt.
+    // „Niedrige Qualität“. Lieber ein Satz, der dorthin zeigt.
     const m = await laden(undefined);
 
     await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/WebGPU/);
-    await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/Beliebiges Objekt/);
+    await expect(m.ortVorbereiten(env(), PFADE)).rejects.toThrow(/Niedrige Qualität/);
   });
 
   it('lehnt ab, wenn gar kein Adapter zu bekommen ist', async () => {
