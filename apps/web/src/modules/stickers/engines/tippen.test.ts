@@ -10,7 +10,7 @@
  * nur den gueltigen Ausschnitt. Genau darauf zielt der erste Test.
  */
 import { describe, expect, it } from 'vitest';
-import { maskeAusLogits } from './tippen.js';
+import { fuerLauf, maskeAusLogits } from './tippen.js';
 
 const MASKE = 256;
 
@@ -79,5 +79,54 @@ describe('maskeAusLogits', () => {
     const daten = logits(0, { x0: 0, y0: 0, x1: 256, y1: 256 });
     const alpha = maskeAusLogits(daten, 0, 100, 300);
     expect(Array.from(alpha).every((w) => w >= 0 && w <= 255)).toBe(true);
+  });
+});
+
+/**
+ * Der Fehler beim ZWEITEN Tipp:
+ *
+ *     Failed to execute 'postMessage' on 'Worker':
+ *     ArrayBuffer at index 0 is already detached.
+ *
+ * Die Laufzeit rechnet im Arbeiter und ÜBERTRÄGT die Eingabepuffer, statt sie
+ * zu kopieren. Ein übertragener Puffer ist beim Absender danach abgetrennt.
+ * Die zwischengespeicherte Einbettung darf deshalb niemals selbst hinausgehen
+ * – nur eine Kopie je Lauf.
+ *
+ * Der Test stellt die Übertragung wirklich nach, statt sie zu beschreiben:
+ * `structuredClone` mit `transfer` trennt den Puffer genauso ab wie
+ * `postMessage` es tut.
+ */
+describe('Die Einbettung überlebt mehrere Läufe', () => {
+  /** Verhält sich wie ORTs `postMessage(…, [eingabe.buffer])`. */
+  function hinausgeben(daten: Float32Array): void {
+    structuredClone(daten.buffer, { transfer: [daten.buffer] });
+  }
+
+  it('gibt je Lauf eine Kopie heraus, sodass der Vorrat heil bleibt', () => {
+    const vorrat = Float32Array.from([1, 2, 3, 4]);
+
+    // Erster Tipp.
+    const erste = fuerLauf(vorrat);
+    hinausgeben(erste);
+    expect(erste.byteLength).toBe(0); // wirklich abgetrennt
+    expect(vorrat.byteLength).toBe(16); // der Vorrat nicht
+
+    // Zweiter Tipp – genau hier brach es vorher ab.
+    const zweite = fuerLauf(vorrat);
+    expect(Array.from(zweite)).toEqual([1, 2, 3, 4]);
+    hinausgeben(zweite);
+
+    // Und ein dritter ginge auch noch.
+    expect(Array.from(fuerLauf(vorrat))).toEqual([1, 2, 3, 4]);
+  });
+
+  it('so ging es vorher: derselbe Puffer ein zweites Mal ist abgetrennt', () => {
+    // Die Gegenprobe. Wer den Vorrat selbst herausgibt, kann ihn danach nicht
+    // noch einmal verschicken – das ist genau der gemeldete Fehler.
+    const vorrat = Float32Array.from([1, 2, 3, 4]);
+    hinausgeben(vorrat);
+    expect(vorrat.byteLength).toBe(0);
+    expect(() => hinausgeben(vorrat)).toThrow();
   });
 });

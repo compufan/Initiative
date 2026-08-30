@@ -70,7 +70,43 @@ let ladend: Promise<void> | null = null;
  * `releaseTippen()` wieder freigegeben.
  */
 let letztesBild: Bildpunkte | null = null;
-let letzteEinbettung: Tensor | null = null;
+/**
+ * Die Einbettung als eigene Meisterkopie, nicht als Tensor.
+ *
+ * Der Grund steht in `fuerLauf` – kurz: Ein Tensor, den man der Laufzeit als
+ * Eingabe gibt, ist danach leer.
+ */
+let einbettung: { daten: Float32Array; form: readonly number[] } | null = null;
+
+/**
+ * Eine Kopie der Einbettung für genau einen Lauf.
+ *
+ * # Warum eine Kopie und nicht die Einbettung selbst
+ *
+ * Die Laufzeit rechnet im Arbeiter, und sie ÜBERTRÄGT die Eingabepuffer,
+ * statt sie zu kopieren. Im ausgelieferten Bündel steht das so:
+ *
+ *     arbeiter.postMessage(nachricht, Tt(eingaben));
+ *     Tt = (n) => { … für jede Eingabe: liste.push(eingabe.buffer) … }
+ *
+ * Ein übertragener `ArrayBuffer` ist beim Absender danach **abgetrennt** –
+ * Länge 0, kein Zugriff mehr. Beim zweiten Tipp kam deshalb:
+ *
+ *     Failed to execute 'postMessage' on 'Worker':
+ *     ArrayBuffer at index 0 is already detached.
+ *
+ * Das ist die Kehrseite des Zwischenspeichers: Solange bei jedem Tipp eine
+ * frische Einbettung gerechnet wurde, fiel es nicht auf. Erst als der
+ * Zwischenspeicher wirklich griff, wurde derselbe Puffer ein zweites Mal
+ * verschickt.
+ *
+ * Die Kopie kostet vier Megabyte je Tipp und ist damit deutlich billiger als
+ * der Encoder, den sie erspart (rund eine halbe Sekunde gegen wenige
+ * Millisekunden).
+ */
+export function fuerLauf(daten: Float32Array): Float32Array {
+  return daten.slice();
+}
 
 async function laden(melden?: Fortschritt): Promise<void> {
   if (encoder && decoder) return;
@@ -140,12 +176,15 @@ export async function tippenMask(
   const { width, height } = image;
 
   // --- Der teure Teil, einmal je Bild --------------------------------------
-  if (letztesBild !== image || !letzteEinbettung) {
+  if (letztesBild !== image || !einbettung) {
     melden?.(0.6, 'Bild wird angesehen …');
     const { tensor } = briefkasten(image, BILD);
     const eingabe = new ort.Tensor('float32', tensor, [1, 3, BILD, BILD]);
     const antwort = await encoder.run({ [encoder.inputNames[0]]: eingabe });
-    letzteEinbettung = antwort[encoder.outputNames[0]] as Tensor;
+    const raus = antwort[encoder.outputNames[0]] as Tensor;
+    // Sofort in eigenen Besitz bringen. Was aus dem Arbeiter zurückkommt,
+    // gehört uns – was wir hineingeben, ist danach fort.
+    einbettung = { daten: (raus.data as Float32Array).slice(), form: raus.dims };
     letztesBild = image;
   }
 
@@ -171,7 +210,8 @@ export async function tippenMask(
   });
 
   const ergebnis = await decoder.run({
-    image_embeddings: letzteEinbettung,
+    // `fuerLauf` und nicht die Einbettung selbst – siehe dort.
+    image_embeddings: new ort.Tensor('float32', fuerLauf(einbettung.daten), [...einbettung.form]),
     point_coords: new ort.Tensor('float32', koordinaten, [1, punkte.length, 2]),
     point_labels: new ort.Tensor('float32', marken, [1, punkte.length]),
     mask_input: new ort.Tensor('float32', new Float32Array(MASKE * MASKE), [1, 1, MASKE, MASKE]),
@@ -263,5 +303,5 @@ export async function releaseTippen(): Promise<void> {
   decoder = null;
   ladend = null;
   letztesBild = null;
-  letzteEinbettung = null;
+  einbettung = null;
 }
