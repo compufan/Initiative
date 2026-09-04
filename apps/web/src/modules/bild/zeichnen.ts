@@ -173,16 +173,46 @@ interface MalOptionen {
  * Malt Bild, Striche und Schriftzüge – der gemeinsame Kern von Ansicht und
  * Ausgabe.
  */
+/** Ein fertig gerechneter Unkenntlich-Strich, so wie er gezeichnet wird. */
+interface Unkenntlichkeit {
+  flaeche: HTMLCanvasElement;
+  /** Die betroffene Fläche in Bildpunkten – dorthin wird zurückgezeichnet. */
+  x0: number;
+  y0: number;
+  bw: number;
+  bh: number;
+  /** Massstab, in dem gerechnet wurde. Ändert er sich, gilt der Zettel nicht. */
+  skala: number;
+  /** Länge des Strichs. Kommt ein Punkt dazu, gilt der Zettel nicht. */
+  punkte: number;
+}
+
+/**
+ * Der Merkzettel: je Strich das fertige Ergebnis.
+ *
+ * `WeakMap` und nicht `Map`: Ein Strich, der aus dem Dokument verschwindet
+ * (rückgängig, gelöscht), nimmt seinen Zettel mit. Eine gewöhnliche Map
+ * hielte beides fest, und jeder zurückgenommene Weichzeichner bliebe für
+ * immer im Speicher stehen.
+ */
+const gemerkt = new WeakMap<Malstrich, Unkenntlichkeit>();
+
 /**
  * Verpixelt oder verwischt, was unter dem Strich liegt.
  *
- * Die Rechnung läuft auf dem, was bis hierher gezeichnet ist – also auf dem
- * Bild samt aller vorherigen Striche. Beschnitten wird sie durch die
- * Strichform selbst, damit ein Zug mit rundem Pinsel auch rund wirkt und
- * nicht als Rechteck.
+ * Die Rechnung läuft auf dem Quellbild, beschnitten durch die Strichform
+ * selbst, damit ein Zug mit rundem Pinsel auch rund wirkt und nicht als
+ * Rechteck.
  *
- * Bewusst je Strich einmal und nicht je Bild: Ein Zug über ein Kennzeichen
- * kostet einmal ein Auslesen, danach steht das Ergebnis im Bild.
+ * Zwei Dinge halten das bezahlbar:
+ *
+ * 1. Gerechnet wird in der Auflösung, in der das Ergebnis auch gezeigt wird.
+ *    Ein 4000er Foto in einer 1200er Ansicht braucht keine 4000er Kacheln –
+ *    das ist rund elfmal weniger Arbeit, sichtbar ist davon nichts.
+ * 2. Das Ergebnis bleibt am Strich hängen. Vorher rechnete *jeder*
+ *    Zeichenrahmen *jeden* Weichzeichner neu – bei einem grossen Strich
+ *    Sekunden, und zwar je Bild. Jetzt einmal je Strich, wie es hier immer
+ *    schon behauptet wurde.
  */
 function unkenntlich(
   ctx: CanvasRenderingContext2D,
@@ -190,7 +220,14 @@ function unkenntlich(
   strich: Malstrich,
   width: number,
   height: number,
+  skala: number,
 ): void {
+  const alt = gemerkt.get(strich);
+  if (alt && alt.skala === skala && alt.punkte === strich.punkte.length) {
+    ctx.drawImage(alt.flaeche, alt.x0, alt.y0, alt.bw, alt.bh);
+    return;
+  }
+
   // Die betroffene Fläche, grosszügig um die halbe Strichbreite erweitert.
   let x0 = Infinity;
   let y0 = Infinity;
@@ -210,6 +247,9 @@ function unkenntlich(
   const bw = x1 - x0;
   const bh = y1 - y0;
   if (bw <= 0 || bh <= 0) return;
+  // Die Arbeitsgrösse: so gross wie die Ausgabe, nie grösser als das Original.
+  const pw = Math.max(1, Math.round(bw * skala));
+  const ph = Math.max(1, Math.round(bh * skala));
 
   /*
    * Gelesen wird aus dem QUELLBILD, nicht aus der Leinwand.
@@ -226,28 +266,30 @@ function unkenntlich(
    * Aus dem Quellbild zu lesen ist zugleich das richtigere Ergebnis: Verpixelt
    * wird das Foto, nicht die Kringel, die jemand darübergemalt hat.
    */
-  const hilf = arbeitsflaeche(bw, bh);
+  const hilf = arbeitsflaeche(pw, ph);
   const hctx = hilf.getContext('2d', { willReadFrequently: true });
   if (!hctx) return;
   hctx.setTransform(1, 0, 0, 1, 0, 0);
   hctx.globalCompositeOperation = 'source-over';
-  hctx.clearRect(0, 0, bw, bh);
-  hctx.drawImage(bild, x0, y0, bw, bh, 0, 0, bw, bh);
-  const daten = hctx.getImageData(0, 0, bw, bh);
-  const kachel = Math.max(2, Math.round(strich.breite / 2));
+  hctx.clearRect(0, 0, pw, ph);
+  hctx.drawImage(bild, x0, y0, bw, bh, 0, 0, pw, ph);
+  const daten = hctx.getImageData(0, 0, pw, ph);
+  // Kachel und Radius wandern in denselben Massstab wie die Fläche, sonst
+  // wäre die Verpixelung in der Ansicht gröber oder feiner als im Ergebnis.
+  const kachel = Math.max(2, Math.round((strich.breite * skala) / 2));
   if (strich.art === 'pixel') {
     // Kachelweise Mittelwert – die klassische Verpixelung.
-    for (let ky = 0; ky < bh; ky += kachel) {
-      for (let kx = 0; kx < bw; kx += kachel) {
+    for (let ky = 0; ky < ph; ky += kachel) {
+      for (let kx = 0; kx < pw; kx += kachel) {
         let r = 0;
         let g = 0;
         let b = 0;
         let n = 0;
-        const bisY = Math.min(ky + kachel, bh);
-        const bisX = Math.min(kx + kachel, bw);
+        const bisY = Math.min(ky + kachel, ph);
+        const bisX = Math.min(kx + kachel, pw);
         for (let y = ky; y < bisY; y += 1) {
           for (let x = kx; x < bisX; x += 1) {
-            const at = (y * bw + x) * 4;
+            const at = (y * pw + x) * 4;
             r += daten.data[at];
             g += daten.data[at + 1];
             b += daten.data[at + 2];
@@ -260,7 +302,7 @@ function unkenntlich(
         b = Math.round(b / n);
         for (let y = ky; y < bisY; y += 1) {
           for (let x = kx; x < bisX; x += 1) {
-            const at = (y * bw + x) * 4;
+            const at = (y * pw + x) * 4;
             daten.data[at] = r;
             daten.data[at + 1] = g;
             daten.data[at + 2] = b;
@@ -271,13 +313,16 @@ function unkenntlich(
   } else {
     // Kastenweichzeichner, getrennt in zwei Durchgänge – das ist linear in
     // der Radiusgrösse statt quadratisch.
-    const radius = Math.max(1, Math.round(strich.breite / 6));
-    kastenWeich(daten.data, bw, bh, radius);
+    const radius = Math.max(1, Math.round((strich.breite * skala) / 6));
+    kastenWeich(daten.data, pw, ph, radius);
   }
 
-  // Zurück auf die Hilfsfläche, dann die Strichform als Schablone.
+  // Zurück auf die Hilfsfläche, dann die Strichform als Schablone. Die
+  // Transformation bringt Bildpunkte auf die Hilfsfläche – so darf der Strich
+  // mit seinen eigenen Koordinaten gezeichnet werden.
   hctx.putImageData(daten, 0, 0);
   hctx.globalCompositeOperation = 'destination-in';
+  hctx.setTransform(skala, 0, 0, skala, -x0 * skala, -y0 * skala);
   hctx.lineCap = 'round';
   hctx.lineJoin = 'round';
   hctx.strokeStyle = '#000';
@@ -285,16 +330,28 @@ function unkenntlich(
   hctx.lineWidth = strich.breite;
   hctx.beginPath();
   if (strich.punkte.length === 2) {
-    hctx.arc(strich.punkte[0] - x0, strich.punkte[1] - y0, strich.breite / 2, 0, Math.PI * 2);
+    hctx.arc(strich.punkte[0], strich.punkte[1], strich.breite / 2, 0, Math.PI * 2);
     hctx.fill();
   } else {
-    hctx.moveTo(strich.punkte[0] - x0, strich.punkte[1] - y0);
+    hctx.moveTo(strich.punkte[0], strich.punkte[1]);
     for (let i = 2; i < strich.punkte.length; i += 2) {
-      hctx.lineTo(strich.punkte[i] - x0, strich.punkte[i + 1] - y0);
+      hctx.lineTo(strich.punkte[i], strich.punkte[i + 1]);
     }
     hctx.stroke();
   }
-  ctx.drawImage(hilf, x0, y0);
+  hctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  // Die Arbeitsfläche ist geteilt und beim nächsten Strich überschrieben –
+  // für den Merkzettel braucht es eine eigene Kopie.
+  const eigen = document.createElement('canvas');
+  eigen.width = pw;
+  eigen.height = ph;
+  const ectx = eigen.getContext('2d');
+  if (ectx) {
+    ectx.drawImage(hilf, 0, 0);
+    gemerkt.set(strich, { flaeche: eigen, x0, y0, bw, bh, skala, punkte: strich.punkte.length });
+  }
+  ctx.drawImage(hilf, x0, y0, bw, bh);
 }
 
 /** Kastenweichzeichner, waagerecht und senkrecht getrennt. */
@@ -356,12 +413,27 @@ function malen(
   // ein Kringel um einen Kopf bleibt um den Kopf.
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
+
+  /*
+   * Erst unkenntlich machen, dann malen – und zwar unabhängig davon, in
+   * welcher Reihenfolge die Striche entstanden sind.
+   *
+   * `unkenntlich` liest aus dem Quellbild und zeichnet mit `source-over`.
+   * Wer also einen schwarzen Balken über ein Kennzeichen zieht und danach
+   * daneben verwischt, holte mit dem Verwischen das Foto unter dem Balken
+   * wieder hervor, soweit sich beide überlappen. Das ist genau der Fall, in
+   * dem jemand etwas verbergen wollte – der teuerste denkbare Fehler.
+   */
+  const skala = Math.min(1, optionen.faktor);
   for (const strich of doc.striche) {
     if (strich.punkte.length < 2) continue;
     if (strich.art === 'pixel' || strich.art === 'weich') {
-      unkenntlich(ctx, bild, strich, width, height);
-      continue;
+      unkenntlich(ctx, bild, strich, width, height, skala);
     }
+  }
+  for (const strich of doc.striche) {
+    if (strich.punkte.length < 2) continue;
+    if (strich.art === 'pixel' || strich.art === 'weich') continue;
     ctx.strokeStyle = strich.farbe;
     ctx.fillStyle = strich.farbe;
     ctx.lineWidth = strich.breite;

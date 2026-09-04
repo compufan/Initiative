@@ -24,9 +24,11 @@ import {
   zuschnittHalten,
   zuschnittInAnsicht,
   type BildDoc,
+  type Malstrich,
   type Schriftzug,
   type Zuschnitt,
 } from './doc.js';
+import { basisAus, lupeHalten, zoomAusSpanne } from './lupe.js';
 import { SCHRIFTEN, trifftText, zeichneAnsicht, zeichneAusgabe } from './zeichnen.js';
 import './styles.css';
 
@@ -145,12 +147,21 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     start: { x: number; y: number };
     startZ: Zuschnitt;
     startText: { x: number; y: number };
+    /**
+     * Ob dieser Zug schon etwas am Dokument geändert hat.
+     *
+     * Trennt „Antippen“ von „Ziehen“: Ein Antippen wirkt erst beim Loslassen,
+     * und bis dahin kann aus dem ersten Finger noch eine Zwei-Finger-Geste
+     * werden.
+     */
+    begonnen: boolean;
   }>({
     art: 'keiner',
     griff: '',
     start: { x: 0, y: 0 },
     startZ: { x: 0, y: 0, w: 0, h: 0 },
     startText: { x: 0, y: 0 },
+    begonnen: false,
   });
   /** Ob dieser Zug schon einen Rückgängig-Schritt angelegt hat. */
   const zugGemerkt = useRef(false);
@@ -310,24 +321,41 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
 
   /* ---------- Umrechnung Bildschirm → Ansicht ---------- */
 
-  function ansichtsPunkt(clientX: number, clientY: number): { x: number; y: number } {
+  /**
+   * Bildschirmpunkt → Leinwandpunkt.
+   *
+   * Nur der Massstab zwischen CSS-Punkten und Gerätepunkten der Arbeitsfläche,
+   * ohne Lupe. Getrennt vom Schritt darunter, weil die Zwei-Finger-Geste
+   * genau diese Zwischenstufe braucht.
+   */
+  function leinwandPunkt(clientX: number, clientY: number): { x: number; y: number } {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
     const proPixel = massRef.current.breite / (rect.width || 1);
+    return { x: (clientX - rect.left) * proPixel, y: (clientY - rect.top) * proPixel };
+  }
+
+  function ansichtsPunkt(clientX: number, clientY: number): { x: number; y: number } {
     // Der gezeigte Ausschnitt beginnt bei `versatz` – ohne ihn träfe jeder
     // Griff bei herangezoomter Ansicht daneben.
     const { faktor, versatz } = massRef.current;
-    return {
-      x: ((clientX - rect.left) * proPixel) / faktor + versatz.x,
-      y: ((clientY - rect.top) * proPixel) / faktor + versatz.y,
-    };
+    const auf = leinwandPunkt(clientX, clientY);
+    return { x: auf.x / faktor + versatz.x, y: auf.y / faktor + versatz.y };
   }
 
   /** Welcher Griff des Zuschnittrahmens am nächsten liegt – oder „innen“. */
   function griffAn(punkt: { x: number; y: number }, z: Zuschnitt): string {
-    // In Ansichtspunkten, damit der Fangbereich auf jedem Bild gleich gross wirkt.
-    const nah = Math.max(28 / massRef.current.faktor, Math.min(z.w, z.h) * 0.2);
+    /*
+     * Ein Finger ist rund 28 Leinwandpunkte breit – das ist der Fangbereich,
+     * umgerechnet in Ansichtspunkte. Vorher stand hier `Math.max(…, 20 % des
+     * Rahmens)`: Bei einem grossen Rahmen führte der zweite Wert, und der
+     * schrumpft beim Heranzoomen nicht mit. Auf Zoom 3 lag der Fangbereich
+     * dann über der halben Bildschirmbreite – „innen“ war nicht mehr
+     * erreichbar. Umgekehrt gedeckelt, damit bei einem winzigen Rahmen nicht
+     * jeder Griff gleichzeitig alle vier Kanten trifft.
+     */
+    const nah = Math.min(28 / massRef.current.faktor, Math.min(z.w, z.h) * 0.25);
     const links = Math.abs(punkt.x - z.x) < nah;
     const rechts = Math.abs(punkt.x - (z.x + z.w)) < nah;
     const oben = Math.abs(punkt.y - z.y) < nah;
@@ -350,7 +378,14 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
    * nicht zu erkennen, der zweite Finger überschrieb schlicht den ersten.
    */
   const finger = useRef(new Map<number, { x: number; y: number }>());
-  const zweiFinger = useRef<{ abstand: number; zoom: number; mitte: { x: number; y: number }; versatz: { x: number; y: number } } | null>(null);
+  const zweiFinger = useRef<{
+    /** Fingerabstand beim Aufsetzen, in Bildschirmpunkten. */
+    abstand: number;
+    /** Der Lupenfaktor beim Aufsetzen. */
+    zoom: number;
+    /** Der Bildpunkt unter der Fingermitte – der soll dort bleiben. */
+    mitte: { x: number; y: number };
+  } | null>(null);
 
   /** Abstand und Mitte zweier Finger, in Bildschirmpunkten. */
   function spanne(): { abstand: number; mitte: { x: number; y: number } } | null {
@@ -364,22 +399,37 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     };
   }
 
+  /** Ein neuer Strich mit den gerade eingestellten Werten. */
+  function neuerStrich(quellBild: HTMLImageElement, punkte: number[]): Malstrich {
+    return {
+      farbe: farbeRef.current,
+      // Relativ zur Bildkante, nicht absolut: 14 Punkte sind auf einem 1920er
+      // Bild 0,7 %, auf einem 600er aber 2,3 % – ein Strich, der auf dem einen
+      // fein ist, deckt auf dem anderen alles zu. Die Schriftgrösse macht es
+      // längst richtig.
+      breite:
+        (breiteRef.current / 100) *
+        (Math.max(quellBild.naturalWidth, quellBild.naturalHeight) / 20),
+      punkte,
+      art: malartRef.current,
+    };
+  }
+
   function onPointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
     const aktuell = docRef.current;
     const quellBild = bildRef.current;
     if (!aktuell || !quellBild) return;
     finger.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (finger.current.size >= 2) {
-      // Zwei Finger heisst Ansicht, nicht Bearbeiten: einen begonnenen Zug
-      // abbrechen, damit nicht nebenbei gemalt oder zugeschnitten wird.
-      zug.current = { ...zug.current, art: 'keiner' };
+      // Zwei Finger heisst Ansicht, nicht Bearbeiten: die notierte Absicht
+      // fallenlassen, damit nicht nebenbei gemalt oder zugeschnitten wird.
+      zug.current = { ...zug.current, art: 'keiner', begonnen: false };
       const jetzt = spanne();
       if (jetzt) {
         zweiFinger.current = {
           abstand: jetzt.abstand,
           zoom: lupeRef.current.zoom,
           mitte: ansichtsPunkt(jetzt.mitte.x, jetzt.mitte.y),
-          versatz: { x: lupeRef.current.x, y: lupeRef.current.y },
         };
       }
       return;
@@ -393,50 +443,52 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     const W = quellBild.naturalWidth;
     const H = quellBild.naturalHeight;
 
+    /*
+     * Hier wird ausschliesslich notiert, was gemeint ist – geändert wird
+     * nichts.
+     *
+     * Zwei Finger können nie in einem einzigen `pointerdown` ankommen: Der
+     * erste löst immer für sich aus, der zweite kommt eine Handbreit später.
+     * Vorher legte dieser erste Finger schon einen Strich an oder rückte
+     * einen Schriftzug – das nachträgliche `art: 'keiner'` hielt nur
+     * kommende Bewegungen auf, den Punkt im Bild nahm es nicht zurück. Wer
+     * mit dem Pinsel in der Hand heranzoomen wollte, hatte danach einen
+     * Klecks. Jetzt entsteht der Strich bei der ersten Bewegung, der
+     * Antipp-Punkt erst beim Loslassen.
+     */
+    zugGemerkt.current = false;
+    const leer = { x: 0, y: 0, w: 0, h: 0 };
+
     if (werkzeugRef.current === 'zuschnitt') {
       const inAnsicht = zuschnittInAnsicht(aktuell.zuschnitt, W, H, aktuell);
       // Erst merken, wenn sich wirklich etwas bewegt – siehe `zugGemerkt`.
       // Vorher legte jedes blosse Antippen der Fläche einen Schritt an, und
       // fünf Fehlgriffe hintereinander schoben den Verlauf leer.
-      zugGemerkt.current = false;
       zug.current = {
         art: 'zuschnitt',
         griff: griffAn(punkt, inAnsicht),
         start: punkt,
         startZ: inAnsicht,
         startText: { x: 0, y: 0 },
+        begonnen: false,
       };
       return;
     }
 
     if (werkzeugRef.current === 'malen') {
-      merken();
-      const amBild = nachOriginal(punkt, W, H, aktuell);
-      zug.current = { ...zug.current, art: 'malen' };
-      setDoc((wert) =>
-        wert
-          ? {
-              ...wert,
-              striche: [
-                ...wert.striche,
-                {
-                  farbe: farbeRef.current,
-                  // Relativ zur Bildkante, nicht absolut: 14 Punkte sind auf
-                  // einem 1920er Bild 0,7 %, auf einem 600er aber 2,3 % – ein
-                  // Strich, der auf dem einen fein ist, deckt auf dem anderen
-                  // alles zu. Die Schriftgrösse macht es längst richtig.
-                  breite: (breiteRef.current / 100) * (Math.max(quellBild.naturalWidth, quellBild.naturalHeight) / 20),
-                  punkte: [amBild.x, amBild.y],
-                  art: malartRef.current,
-                },
-              ],
-            }
-          : wert,
-      );
+      zug.current = {
+        art: 'malen',
+        griff: '',
+        start: punkt,
+        startZ: leer,
+        startText: { x: 0, y: 0 },
+        begonnen: false,
+      };
       return;
     }
 
-    // Text: einen vorhandenen greifen, sonst den gewählten dorthin setzen.
+    // Text: einen vorhandenen greifen, sonst den gewählten beim Loslassen
+    // dorthin setzen. Ein leerer `griff` heisst „setzen“.
     const ctx = canvasRef.current?.getContext('2d');
     const getroffen = ctx
       ? [...aktuell.texte]
@@ -446,32 +498,25 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
           )
       : undefined;
     if (getroffen) {
-      merken();
       setGewaehlterText(getroffen.id);
       zug.current = {
         art: 'text',
         griff: getroffen.id,
         start: punkt,
-        startZ: { x: 0, y: 0, w: 0, h: 0 },
+        startZ: leer,
         startText: { x: getroffen.x, y: getroffen.y },
+        begonnen: false,
       };
       return;
     }
-    const gewaehlt = aktuell.texte.find((text) => text.id === gewaehltRef.current);
-    if (gewaehlt) {
-      merken();
-      const amBild = nachOriginal(punkt, W, H, aktuell);
-      setDoc((wert) =>
-        wert
-          ? {
-              ...wert,
-              texte: wert.texte.map((text) =>
-                text.id === gewaehlt.id ? { ...text, x: amBild.x, y: amBild.y } : text,
-              ),
-            }
-          : wert,
-      );
-    }
+    zug.current = {
+      art: 'text',
+      griff: '',
+      start: punkt,
+      startZ: leer,
+      startText: { x: 0, y: 0 },
+      begonnen: false,
+    };
   }
 
   function onPointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
@@ -484,18 +529,24 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     if (anker && finger.current.size >= 2) {
       const jetzt = spanne();
       if (!jetzt || anker.abstand <= 0) return;
-      const zoom = Math.max(1, Math.min(8, (anker.zoom * jetzt.abstand) / anker.abstand));
-      /*
-       * Der Punkt unter der Fingermitte soll dort bleiben, wo er ist. Aus
-       *     bildschirm = (ansicht − versatz) · faktor
-       * folgt bei festgehaltenem `ansicht`
-       *     versatz = ansicht − (bildschirm / faktor)
-       * und der Bildschirmanteil ändert sich mit dem Zoom nicht.
-       */
-      const basis = massRef.current.faktor / lupeRef.current.zoom;
-      const halbB = massRef.current.breite / (basis * zoom) / 2;
-      const halbH = massRef.current.hoehe / (basis * zoom) / 2;
-      setLupe({ zoom, x: anker.mitte.x - halbB, y: anker.mitte.y - halbH });
+      const bildJetzt = bildRef.current;
+      const docJetzt = docRef.current;
+      if (!bildJetzt || !docJetzt) return;
+      // Die Rechnung steht in `lupe.ts` – dort ist sie nachprüfbar, hier
+      // wäre sie zwischen Zeigerereignissen und Zeichenrahmen begraben.
+      const sicht = ansichtGroesse(
+        bildJetzt.naturalWidth,
+        bildJetzt.naturalHeight,
+        docJetzt.drehung,
+      );
+      setLupe(
+        lupeHalten({
+          ankerAnsicht: anker.mitte,
+          mitteLeinwand: leinwandPunkt(jetzt.mitte.x, jetzt.mitte.y),
+          basis: basisAus(massRef.current.breite, sicht.w),
+          zoom: zoomAusSpanne(anker.zoom, anker.abstand, jetzt.abstand),
+        }),
+      );
       return;
     }
 
@@ -504,6 +555,11 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     const aktuell = docRef.current;
     const quellBild = bildRef.current;
     if (!aktuell || !quellBild) return;
+    // Ziehen auf leerer Fläche mit dem Textwerkzeug: Es gibt nichts zu
+    // greifen. Vor `merken`, sonst legte jedes Danebengreifen einen leeren
+    // Rückgängig-Schritt an.
+    if (art === 'text' && zug.current.griff === '') return;
+
     const punkt = ansichtsPunkt(event.clientX, event.clientY);
     const W = quellBild.naturalWidth;
     const H = quellBild.naturalHeight;
@@ -562,12 +618,31 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
       const sicht = ansichtGroesse(W, H, aktuell.drehung);
       const gehalten = zuschnittHalten(rechteck, sicht.w, sicht.h);
       const amBild = ansichtAlsZuschnitt(gehalten, W, H, aktuell);
+      zug.current = { ...zug.current, begonnen: true };
       setDoc((wert) => (wert ? { ...wert, zuschnitt: amBild } : wert));
       return;
     }
 
     if (art === 'malen') {
       const amBild = nachOriginal(punkt, W, H, aktuell);
+      if (!zug.current.begonnen) {
+        // Der Strich beginnt beim Aufsetzpunkt, nicht erst hier – sonst
+        // fehlte der ersten Bewegung ihr Anfang.
+        const anfang = nachOriginal(zug.current.start, W, H, aktuell);
+        zug.current = { ...zug.current, begonnen: true };
+        setDoc((wert) =>
+          wert
+            ? {
+                ...wert,
+                striche: [
+                  ...wert.striche,
+                  neuerStrich(quellBild, [anfang.x, anfang.y, amBild.x, amBild.y]),
+                ],
+              }
+            : wert,
+        );
+        return;
+      }
       setDoc((wert) => {
         if (!wert) return wert;
         const striche = wert.striche.slice();
@@ -583,6 +658,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     }
 
     if (art === 'text') {
+      zug.current = { ...zug.current, begonnen: true };
       const start = nachAnsicht(zug.current.startText, W, H, aktuell);
       const ziel = nachOriginal(
         {
@@ -606,10 +682,77 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     }
   }
 
-  function onPointerUp(event?: ReactPointerEvent<HTMLCanvasElement>) {
+  /**
+   * Ende eines Zuges.
+   *
+   * `tippen` unterscheidet Loslassen von Abbruch: Ein `pointercancel` kommt,
+   * wenn das System den Finger übernimmt (Wischgeste, Anruf). Daraus einen
+   * Klecks oder einen versetzten Schriftzug zu machen, wäre falsch.
+   */
+  function zugBeenden(event: ReactPointerEvent<HTMLCanvasElement> | undefined, tippen: boolean) {
     if (event) finger.current.delete(event.pointerId);
-    if (finger.current.size < 2) zweiFinger.current = null;
-    zug.current = { ...zug.current, art: 'keiner' };
+    if (finger.current.size < 2) {
+      zweiFinger.current = null;
+    } else {
+      // Von drei Fingern bleiben zwei übrig: Der Anker gehört zu einem
+      // anderen Paar und würde das Bild springen lassen. Neu aufsetzen.
+      const jetzt = spanne();
+      if (jetzt) {
+        zweiFinger.current = {
+          abstand: jetzt.abstand,
+          zoom: lupeRef.current.zoom,
+          mitte: ansichtsPunkt(jetzt.mitte.x, jetzt.mitte.y),
+        };
+      }
+    }
+    const zustand = zug.current;
+    zug.current = { ...zustand, art: 'keiner', begonnen: false };
+    // Hat der Zug schon gewirkt, ist er hier fertig. War es eine
+    // Zwei-Finger-Geste, steht `art` längst auf `keiner`.
+    if (!tippen || zustand.begonnen || zustand.art === 'keiner') return;
+
+    const aktuell = docRef.current;
+    const quellBild = bildRef.current;
+    if (!aktuell || !quellBild) return;
+    const W = quellBild.naturalWidth;
+    const H = quellBild.naturalHeight;
+
+    if (zustand.art === 'malen') {
+      // Ein Tupfen: ein Strich aus einem einzigen Punkt.
+      const amBild = nachOriginal(zustand.start, W, H, aktuell);
+      merken();
+      setDoc((wert) =>
+        wert
+          ? { ...wert, striche: [...wert.striche, neuerStrich(quellBild, [amBild.x, amBild.y])] }
+          : wert,
+      );
+      return;
+    }
+
+    if (zustand.art === 'text' && zustand.griff === '') {
+      const gewaehlt = aktuell.texte.find((text) => text.id === gewaehltRef.current);
+      if (!gewaehlt) return;
+      const amBild = nachOriginal(zustand.start, W, H, aktuell);
+      merken();
+      setDoc((wert) =>
+        wert
+          ? {
+              ...wert,
+              texte: wert.texte.map((text) =>
+                text.id === gewaehlt.id ? { ...text, x: amBild.x, y: amBild.y } : text,
+              ),
+            }
+          : wert,
+      );
+    }
+  }
+
+  function onPointerUp(event?: ReactPointerEvent<HTMLCanvasElement>) {
+    zugBeenden(event, true);
+  }
+
+  function onPointerCancel(event?: ReactPointerEvent<HTMLCanvasElement>) {
+    zugBeenden(event, false);
   }
 
   /* ---------- Werkzeugbefehle ---------- */
@@ -837,7 +980,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
-          onPointerCancel={onPointerUp}
+          onPointerCancel={onPointerCancel}
           onContextMenu={(event) => event.preventDefault()}
         />
       </div>
@@ -864,7 +1007,8 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
                 <button
                   key={eintrag.label}
                   type="button"
-                  className={`btn btn-sm ${verhaeltnis === eintrag.wert ? 'is-aktiv' : ''}`}
+                  className={`btn btn-sm ${verhaeltnis === eintrag.wert ? 'is-active' : ''}`}
+                  aria-pressed={verhaeltnis === eintrag.wert}
                   onClick={() => verhaeltnisSetzen(eintrag.wert)}
                   title={
                     eintrag.wert === null
@@ -901,7 +1045,8 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
                 <button
                   key={wert}
                   type="button"
-                  className={`btn btn-sm ${malart === wert ? 'is-aktiv' : ''}`}
+                  className={`btn btn-sm ${malart === wert ? 'is-active' : ''}`}
+                  aria-pressed={malart === wert}
                   onClick={() => setMalart(wert)}
                 >
                   {beschriftung}
