@@ -8,15 +8,22 @@
  * Rechnung mit laufender Summe kommt mit einer Addition und einer
  * Subtraktion je Bildpunkt aus, unabhängig vom Radius.
  *
- * Nachgemessen auf 1200 × 900, beide Fassungen gegeneinander:
+ * Nachgemessen auf 1200 × 900, beide Fassungen gegeneinander, nach
+ * Aufwärmlauf und als Bestwert aus drei Durchgängen:
  *
- *     Radius 8:   365 ms → 84 ms   (Faktor 4,4)
- *     Radius 24:  904 ms → 59 ms   (Faktor 15,2)
- *     Radius 36: 1395 ms → 62 ms   (Faktor 22,5)
+ *     Radius 8:   308 ms → 41 ms   (Faktor 7,6)
+ *     Radius 24:  854 ms → 40 ms   (Faktor 21,6)
+ *     Radius 36: 1217 ms → 43 ms   (Faktor 28,1)
+ *     Radius 60: 2083 ms → 43 ms   (Faktor 48,2)
  *
- * Die zweite Spalte ist die eigentliche Aussage: Sie steht. Der alte
- * Weichzeichner wird mit dem Radius linear teurer, dieser gar nicht – und
- * genau am Radius dreht beim Bokeh der Regler.
+ * Die zweite Spalte ist die eigentliche Aussage: Sie steht, über den ganzen
+ * Bereich. Der alte Weichzeichner wächst linear mit dem Radius, dieser gar
+ * nicht – und genau am Radius dreht beim Bokeh der Regler.
+ *
+ * Der Aufwärmlauf ist nicht kosmetisch: Ohne ihn kam für Radius 8 der höchste
+ * Wert der ganzen Reihe heraus (84 ms gegen 43 ms bei Radius 36), also eine
+ * Kurve, die mit dem Radius FÄLLT. Das war die Übersetzungsarbeit des ersten
+ * Laufs, als Messung ausgegeben.
  *
  * Kein Aufruf von `zeichnen.ts` wandert hier mit hinein: Diese Datei ist rein
  * – kein Dokument, keine Leinwand, keine `ImageData` – und deshalb unter
@@ -46,6 +53,21 @@ export function kastenWeichRgba(
   hoehe: number,
   radius: number,
 ): void {
+  /*
+   * Positiv abfragen, nicht negativ ausschliessen.
+   *
+   * `r <= 0` ist bei `NaN` falsch, die Abkürzung griffe also nicht: `teiler`
+   * würde NaN, jeder Farbwert als NaN geschrieben und von
+   * `Uint8ClampedArray` stumm als 0 abgelegt. Nachgemessen: ein Feld aus
+   * lauter 200 kam mit `radius = NaN` als reines Schwarz zurück, bei
+   * unverändertem Alphakanal – unter einer Maske also ein schwarzer Fleck
+   * ohne jede Fehlermeldung.
+   *
+   * Der Weg dahin ist kurz: `bokehRadius(NaN, 1200)` gibt ebenfalls NaN
+   * zurück, und die beiden Funktionen sind genau so verkettet gedacht. Ein
+   * unendlicher Radius wiederum liesse den Vorlauf gar nicht enden.
+   */
+  if (!Number.isFinite(radius) || !Number.isFinite(breite) || !Number.isFinite(hoehe)) return;
   const r = Math.floor(radius);
   if (r <= 0 || breite <= 0 || hoehe <= 0) return;
 
@@ -65,7 +87,7 @@ export function kastenWeichRgba(
       }
       for (let x = 0; x < breite; x += 1) {
         zwischen[zeile + x * 4 + k] = summe * teiler;
-        // Erst das eintretende addieren, dann das austretende abziehen. Wer
+        // Wer
         // das Abziehen vergisst, bekommt keinen Weichzeichner, sondern ein
         // nach rechts immer heller laufendes Bild.
         const rein = daten[zeile + Math.min(breite - 1, x + r + 1) * 4 + k];
@@ -102,7 +124,7 @@ export function kastenWeichRgba(
  * der Ausgabe halb so stark wie in der Vorschau – man stellt das Bokeh am
  * Regler ein und bekommt ein anderes Bild heraus, als man gesehen hat.
  *
- * Dieselbe Regel wie in `ton.ts`: Die Regler dort sind einheitenlose Werte
+ * Dieselbe Regel wie in `ton.ts`/`tonGpu.ts`: Die Regler dort sind einheitenlose Werte
  * von 0 … 1, und wo eine Länge vorkommt, ist sie am Bild gemessen und nicht
  * in Bildpunkten – `vignetteFaktor` bekommt `u`/`v` in 0 … 1 und normiert auf
  * die halbe Diagonale. Die eine Stelle, die das nicht tut, ist die

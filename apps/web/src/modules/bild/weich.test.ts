@@ -76,7 +76,7 @@ describe('kastenWeichRgba', () => {
     kastenWeichRgba(gemessen, breite, hoehe, radius);
     for (let i = 0; i < gemessen.length; i += 1) {
       if (i % 4 === 3) continue;
-      expect(Math.abs(gemessen[i] - massstab[i])).toBeLessThanOrEqual(1);
+      expect(Math.abs(gemessen[i] - massstab[i])).toBeLessThanOrEqual(0.5);
     }
   });
 
@@ -138,8 +138,6 @@ describe('bokehRadius', () => {
     const klein = bokehRadius(0.5, 1200);
     expect(klein).toBe(12);
     expect(gross).toBe(26);
-    // Die Rundung darf das Verhältnis um höchstens 0,5/12 verfehlen.
-    expect(gross / klein).toBeCloseTo(2560 / 1200, 1);
   });
 
   it('gibt nie einen negativen Radius zurück', () => {
@@ -148,5 +146,55 @@ describe('bokehRadius', () => {
     // sinnlose Länge, sobald jemand die Abkürzung umstellt.
     expect(bokehRadius(0, 2560)).toBe(0);
     expect(bokehRadius(-1, 2560)).toBe(0);
+  });
+});
+
+/*
+ * Nachgereicht aus einer Gegenprüfung, die die behaupteten Mutationen wirklich
+ * ausgeführt hat: Zwei davon überlebten die ganze Reihe.
+ */
+describe('nachgereicht', () => {
+  it('kommt mit einem Radius zurecht, der breiter ist als das Bild', () => {
+    /*
+     * Die Klemme im waagerechten Vorlauf war von keiner Prüfung berührt: Alle
+     * hatten einen Radius, der im Vorlauf den rechten Rand nie erreichte.
+     *
+     * Erreichbar ist der Fall aber ohne Weiteres – `bokehRadius(1, 1200)` ist
+     * 24, und jeder Ausschnitt, der schmaler als 24 Punkte ist, fällt hinein.
+     * Ohne die Klemme greift der Vorlauf in die nächste Zeile und auf der
+     * letzten hinter den Puffer: `undefined` wird zu NaN und landet als 0 –
+     * aus dem Bild wird stumm ein schwarzer Streifen.
+     */
+    const w = 4;
+    const h = 3;
+    const daten = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y += 1)
+      for (let x = 0; x < w; x += 1) {
+        const at = (y * w + x) * 4;
+        daten[at] = y === 0 ? 0 : 255;
+        daten[at + 1] = daten[at];
+        daten[at + 2] = daten[at];
+        daten[at + 3] = 255;
+      }
+    kastenWeichRgba(daten, w, h, 6);
+    // Alles bleibt im gültigen Bereich, nichts wird schwarz, und die Zeilen
+    // werden von oben nach unten heller.
+    for (let i = 0; i < daten.length; i += 4) expect(daten[i]).toBeGreaterThan(0);
+    expect(daten[0]).toBeLessThan(daten[2 * w * 4]);
+  });
+
+  it('rührt bei einem unbrauchbaren Radius gar nichts an', () => {
+    /*
+     * `Math.floor(NaN)` ist NaN, und `NaN <= 0` ist falsch – die Abkürzung
+     * griff also nicht. Nachgemessen: Ein Feld aus lauter 200 kam mit
+     * `radius = NaN` als reines Schwarz zurück, bei unverändertem Alphakanal.
+     * Unter einer Maske wäre das ein schwarzer Fleck ohne Fehlermeldung, und
+     * `bokehRadius(NaN, 1200)` liefert genau dieses NaN.
+     */
+    for (const schlecht of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      const daten = new Uint8ClampedArray(4 * 4 * 4).fill(200);
+      kastenWeichRgba(daten, 4, 4, schlecht);
+      expect(Math.min(...daten)).toBe(200);
+    }
   });
 });

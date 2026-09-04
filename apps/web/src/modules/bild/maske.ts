@@ -426,9 +426,33 @@ export function teilBauen(teil: Maskenteil, raster: Raster): Uint8Array {
  * weg – umgekehrt bleibt vom Abziehen auf leerem Feld nichts übrig.
  */
 export function teileFalten(teile: readonly Maskenteil[], raster: Raster): Uint8Array {
-  const werk = new Uint8Array(raster.breite * raster.hoehe);
-  for (const teil of teile) {
-    const g = teilBauen(teil, raster);
+  return felderFalten(
+    teile,
+    teile.map((teil) => teilBauen(teil, raster)),
+    raster.breite * raster.hoehe,
+  );
+}
+
+/**
+ * Dieselbe Faltung, aber mit schon gebauten Feldern.
+ *
+ * Getrennt, weil der Zwischenspeicher (`maskenSpeicher.ts`) die Teilfelder
+ * aufhebt und beim Reglerziehen gar nicht neu baut – er braucht die
+ * Faltungsvorschrift, nicht das Bauen. Die Vorschrift steht deshalb hier
+ * genau einmal; `teileFalten` ist nur noch der Weg für alle, die beides
+ * wollen.
+ *
+ * `laenge` statt `raster`, damit die Funktion nichts über Raster wissen muss.
+ */
+export function felderFalten(
+  teile: readonly Maskenteil[],
+  felder: readonly Uint8Array[],
+  laenge: number,
+): Uint8Array {
+  const werk = new Uint8Array(laenge);
+  for (const [nummer, teil] of teile.entries()) {
+    const g = felder[nummer];
+    if (!g) continue;
     switch (teil.modus) {
       case 'dazu':
         for (let i = 0; i < werk.length; i += 1) if (g[i] > werk[i]) werk[i] = g[i];

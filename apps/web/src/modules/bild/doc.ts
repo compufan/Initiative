@@ -162,10 +162,7 @@ export interface NetzTeil {
 }
 
 export type Maskenteil = { id: string; modus: Maskenmodus; umkehren: boolean } & (
-  | VerlaufTeil
-  | RadialTeil
-  | PinselTeil
-  | NetzTeil
+  VerlaufTeil | RadialTeil | PinselTeil | NetzTeil
 );
 
 /**
