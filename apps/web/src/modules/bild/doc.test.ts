@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  BEREICH_NEUTRAL,
   ansichtAlsZuschnitt,
   ansichtGroesse,
   aufVerhaeltnis,
   ausgabeGroesse,
+  docKopie,
+  docUnberuehrt,
   nachAnsicht,
   nachOriginal,
   neuesDoc,
@@ -12,6 +15,7 @@ import {
   zuschnittInAnsicht,
   type BildDoc,
   type Drehung,
+  type Maskenteil,
 } from './doc.js';
 
 const W = 400;
@@ -139,5 +143,94 @@ describe('Ausgabegrösse', () => {
   it('rechnet die Drehung mit ein, nicht nur den Ausschnitt', () => {
     const hochkant = ausgabeGroesse({ x: 0, y: 0, w: 400, h: 300 }, 90);
     expect(hochkant).toEqual({ w: 300, h: 400, faktor: 1 });
+  });
+});
+
+describe('Bereiche im Dokument', () => {
+  /** Ein Bereich mit einem Netzteil – dem grössten, das es gibt. */
+  function mitBereich(): BildDoc {
+    const doc = neuesDoc(4000, 3000);
+    const netz: Maskenteil = {
+      id: 't1',
+      modus: 'dazu',
+      umkehren: false,
+      art: 'netz',
+      netz: 'object',
+      breite: 4,
+      hoehe: 4,
+      alpha: new Uint8Array(16).fill(200),
+      marke: 1,
+    };
+    return {
+      ...doc,
+      bereiche: [
+        {
+          id: 'b1',
+          name: 'Motiv',
+          aktiv: true,
+          teile: [netz],
+          anpassung: { ...BEREICH_NEUTRAL, belichtung: 0.5 },
+        },
+      ],
+    };
+  }
+
+  it('legt ein neues Dokument ohne Bereiche an', () => {
+    expect(neuesDoc(100, 80).bereiche).toEqual([]);
+  });
+
+  it('nimmt die Bereiche in die Kopie mit', () => {
+    // Die Falle, die erst beim ersten Rückgängig auffiele: Ein vergessenes
+    // Feld in `docKopie` löscht die Bereiche lautlos, sobald jemand einen
+    // Schritt zurückgeht.
+    const kopie = docKopie(mitBereich());
+    expect(kopie.bereiche).toHaveLength(1);
+    expect(kopie.bereiche[0].name).toBe('Motiv');
+    expect(kopie.bereiche[0].anpassung.belichtung).toBe(0.5);
+  });
+
+  it('teilt die Maskenteile per Referenz und kopiert die Regler', () => {
+    /*
+     * Der Unterschied ist Speicher, und zwar viel: Ein Netzteil ist bei einem
+     * Handyfoto bis zu 1,8 MB gross, der Verlauf fasst 25 Schritte, und es
+     * dürfen vier Bereiche sein. Tief kopiert wären das 180 MB für nichts –
+     * die Teile werden nie an Ort und Stelle geändert.
+     *
+     * Die Regler dagegen MÜSSEN kopiert werden: An ihnen wird gedreht.
+     */
+    const doc = mitBereich();
+    const kopie = docKopie(doc);
+    expect(kopie.bereiche[0].teile).toBe(doc.bereiche[0].teile);
+    expect(kopie.bereiche[0].anpassung).not.toBe(doc.bereiche[0].anpassung);
+    expect(kopie.bereiche[0]).not.toBe(doc.bereiche[0]);
+    expect(kopie.bereiche).not.toBe(doc.bereiche);
+  });
+
+  it('lässt eine Änderung an der Kopie das Original in Ruhe', () => {
+    const doc = mitBereich();
+    const kopie = docKopie(doc);
+    kopie.bereiche[0].anpassung.belichtung = -2;
+    kopie.bereiche[0].name = 'anders';
+    kopie.bereiche.push({ ...kopie.bereiche[0], id: 'b2' });
+    expect(doc.bereiche[0].anpassung.belichtung).toBe(0.5);
+    expect(doc.bereiche[0].name).toBe('Motiv');
+    expect(doc.bereiche).toHaveLength(1);
+  });
+
+  it('legt über fünfundzwanzig Verlaufsschritte kein zweites Maskenfeld an', () => {
+    // 25 ist `VERLAUF_MAX` im Editor. Die Prüfung ist der Grund, warum die
+    // Teile per Referenz wandern.
+    const doc = mitBereich();
+    const alpha = (doc.bereiche[0].teile[0] as { alpha: Uint8Array }).alpha;
+    let jetzt = doc;
+    for (let i = 0; i < 25; i += 1) jetzt = docKopie(jetzt);
+    expect((jetzt.bereiche[0].teile[0] as { alpha: Uint8Array }).alpha).toBe(alpha);
+  });
+
+  it('gilt mit einem Bereich nicht mehr als unberührt', () => {
+    // Sonst behauptete der Editor „Noch nichts geändert – gespeichert würde
+    // eine Kopie des Originals“ für ein Bild mit vier örtlichen Anpassungen.
+    expect(docUnberuehrt(neuesDoc(4000, 3000), 4000, 3000)).toBe(true);
+    expect(docUnberuehrt(mitBereich(), 4000, 3000)).toBe(false);
   });
 });

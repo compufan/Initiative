@@ -14,7 +14,7 @@
  * dazwischen übersetzen `nachAnsicht` und `nachOriginal`.
  */
 
-import { NEUTRAL, istNeutral, type Anpassung } from './ton.js';
+import { FARB_NEUTRAL, NEUTRAL, istNeutral, type Anpassung, type Farbanpassung } from './ton.js';
 
 export type Drehung = 0 | 90 | 180 | 270;
 
@@ -64,6 +64,141 @@ export interface Schriftzug {
   fett: boolean;
 }
 
+/* ---------- örtliche Anpassungen ---------- */
+
+/**
+ * Wieviele Bereiche es höchstens gibt.
+ *
+ * Vier, weil die Masken der Grafikeinheit als EINE Textur mit vier Kanälen
+ * übergeben werden – Rot, Grün, Blau, Alpha, je ein Bereich. Ein Feld von
+ * Abtastern wäre in GLSL ES 3.00 nicht mit einer Laufvariablen indizierbar.
+ *
+ * Vier reicht: In der Praxis sind das Himmel, Vordergrund, Gesicht und ein
+ * Nachbesserer. Die Knopfreihe verschwindet bei Erreichen der Grenze, statt
+ * einen gesperrten Knopf ohne Erklärung zu zeigen.
+ */
+export const BEREICHE_MAX = 4;
+
+/**
+ * Wie ein Maskenteil mit dem verrechnet wird, was vor ihm liegt.
+ *
+ * `dazu` vereinigt, `weg` zieht ab, `nur` schneidet. Damit lässt sich „das
+ * Motiv, aber nicht sein Schatten“ aus zwei Teilen bauen, ohne dass eines
+ * das andere überschreibt.
+ */
+export type Maskenmodus = 'dazu' | 'weg' | 'nur';
+
+/** Ein linearer Verlauf. Die Weiche IST der Abstand der beiden Griffe. */
+export interface VerlaufTeil {
+  art: 'verlauf';
+  /** Achsenanfang in ORIGINALpunkten – dort ist das Gewicht 0. */
+  von: Punkt;
+  /** Achsenende – dort 1. */
+  bis: Punkt;
+}
+
+/** Eine Ellipse. Mitte und Halbachsen in Originalpunkten. */
+export interface RadialTeil {
+  art: 'radial';
+  mitte: Punkt;
+  rx: number;
+  ry: number;
+  /** Drehung der Ellipse im Bogenmass, im ORIGINALraum. */
+  winkel: number;
+  /** Breite des Abfalls als Anteil des Radius, 0,02 … 1. */
+  weichheit: number;
+}
+
+/**
+ * Ein Pinselzug auf der Maske.
+ *
+ * Ausdrücklich KEIN `Malstrich`: Der würde von `malen()` als sichtbare Farbe
+ * ins Bild gezeichnet. Hier ist er nur eine Form, die Gewicht hinzufügt oder
+ * abzieht.
+ */
+export interface Pinselstrich {
+  /** Flach x/y, in Originalpunkten. */
+  punkte: number[];
+  /** Durchmesser in Originalpunkten. */
+  breite: number;
+  /** 0 = ganz weiche Kante, 1 = harte. */
+  haerte: number;
+  /** Radiergummi statt Pinsel. */
+  abziehen: boolean;
+}
+
+export interface PinselTeil {
+  art: 'pinsel';
+  striche: Pinselstrich[];
+}
+
+/**
+ * Das Ergebnis eines lokalen Netzes.
+ *
+ * Nach dem Rechnen UNVERÄNDERLICH und deshalb in `docKopie` per Referenz
+ * weitergereicht – genau wie `autoMask` im Sticker-Studio. Gemessen: Ein
+ * Netzlauf auf einem 4000 × 3000-Foto liefert heute 12 MB Maske. 25
+ * Verlaufsschritte davon wären 300 MB, und zwar für eine Maske, die das
+ * Modell in Wahrheit auf 320 × 320 auflöst.
+ *
+ * Deshalb steht hier die Grösse der VORLAGE (höchstens 1536 lange Kante),
+ * nicht die des Originals.
+ */
+export interface NetzTeil {
+  art: 'netz';
+  netz: 'person' | 'object';
+  readonly breite: number;
+  readonly hoehe: number;
+  readonly alpha: Uint8Array;
+  /**
+   * Einmal vergeben, nie geändert.
+   *
+   * Ein Zwischenspeicher kann einen `Uint8Array` nicht in einen Schlüssel
+   * schreiben – er würde zu `[object Object]`, und der Merkzettel lieferte
+   * alte Bildpunkte ohne jede Fehlermeldung. Die Marke ist die
+   * Ersatzidentität.
+   */
+  readonly marke: number;
+}
+
+export type Maskenteil = { id: string; modus: Maskenmodus; umkehren: boolean } & (
+  | VerlaufTeil
+  | RadialTeil
+  | PinselTeil
+  | NetzTeil
+);
+
+/**
+ * Die Regler eines Bereichs: die neun Farbregler plus die Tiefenschärfe.
+ *
+ * Kein `schaerfe` und kein `vignette`. Beide brauchen etwas, das es an dieser
+ * Stelle nicht gibt: Die Unschärfemaske braucht die Nachbarn eines noch
+ * ungetönten Bildpunkts, die Vignette den Ort im Bild – und ein Bereich hat
+ * keinen eigenen Bildrand.
+ */
+export interface Bereichston extends Farbanpassung {
+  /** Tiefenschärfe: 0 … 1, wieviel Unschärfe der Bereich bekommt. */
+  unschaerfe: number;
+}
+
+export const BEREICH_NEUTRAL: Bereichston = { ...FARB_NEUTRAL, unschaerfe: 0 };
+
+export interface Bereich {
+  id: string;
+  /** „Verlauf 1“, „Motiv“, „Hintergrund“ – was im Streifen steht. */
+  name: string;
+  aktiv: boolean;
+  /**
+   * Die Teile, aus denen sich die Maske zusammensetzt, in Wirkreihenfolge.
+   *
+   * Unveränderlich behandelt: Jede Änderung legt ein NEUES Feld an. Daran
+   * hängt der Zwischenspeicher – ist das Feld dasselbe Objekt, ist die Maske
+   * dieselbe, und ein Reglerzug kostet keine einzige gerasterte Maske.
+   */
+  teile: readonly Maskenteil[];
+  anpassung: Bereichston;
+}
+
 export interface BildDoc {
   drehung: Drehung;
   spiegel: boolean;
@@ -77,6 +212,8 @@ export interface BildDoc {
    * Belichtungsregler, den man nicht zurücknehmen kann, ist keiner.
    */
   anpassung: Anpassung;
+  /** Örtliche Anpassungen, in der Reihenfolge, in der sie wirken. */
+  bereiche: Bereich[];
 }
 
 /** Die längste Kante, die beim Speichern herauskommt. */
@@ -90,6 +227,7 @@ export function neuesDoc(width: number, height: number): BildDoc {
     striche: [],
     texte: [],
     anpassung: { ...NEUTRAL },
+    bereiche: [],
   };
 }
 
@@ -101,6 +239,22 @@ export function docKopie(doc: BildDoc): BildDoc {
     striche: doc.striche.map((strich) => ({ ...strich, punkte: strich.punkte.slice() })),
     texte: doc.texte.map((text) => ({ ...text })),
     anpassung: { ...doc.anpassung },
+    bereiche: doc.bereiche.map((bereich) => ({
+      ...bereich,
+      /*
+       * Die Maskenteile wandern per REFERENZ, nicht als Kopie.
+       *
+       * Sie werden nie an Ort und Stelle geändert – wer etwas ändert, legt
+       * ein neues Feld an. Eine tiefe Kopie brächte also nichts und kostete
+       * alles: Ein Netzteil ist bis zu 1,8 MB gross, und der Verlauf fasst 25
+       * Schritte.
+       *
+       * `docKopie` zählt die Felder einzeln auf und ist kein Spread – wer
+       * hier ein Feld vergisst, merkt es erst beim ersten Rückgängig.
+       */
+      teile: bereich.teile,
+      anpassung: { ...bereich.anpassung },
+    })),
   };
 }
 
@@ -110,6 +264,7 @@ export function docUnberuehrt(doc: BildDoc, width: number, height: number): bool
     doc.drehung === 0 &&
     !doc.spiegel &&
     istNeutral(doc.anpassung) &&
+    doc.bereiche.length === 0 &&
     doc.striche.length === 0 &&
     doc.texte.every((text) => text.text.trim().length === 0) &&
     doc.zuschnitt.x === 0 &&
