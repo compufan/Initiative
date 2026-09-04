@@ -438,6 +438,23 @@ describe('Saatpunkte zwischen Quellbild und Fläche', () => {
     expect(raus.gruppe).toBe(7);
   });
 
+  it('lässt einen hinausgeschobenen Tipp fallen, statt den Sticker zu leeren', () => {
+    /*
+     * Die Falle eine Handbewegung später: Wer sein Bild so weit verschiebt,
+     * dass ein alter Tipp die Fläche verlässt, bekäme sonst wieder einen
+     * schwarzen Sticker – eine leere Flutmaske heisst in der Vereinigung
+     * nicht „trägt nichts bei“, sondern „behalte nichts“.
+     */
+    const quelle = { width: 800, height: 600 };
+    const mitte = toSourcePoint({ x: 256, y: 256 }, quelle, doc);
+    // Weit genug zur Seite geschoben, dass der Punkt hinausfällt.
+    const weit = { scale: 1, offsetX: -900, offsetY: 0 };
+
+    expect(saatAufFlaeche([mitte], quelle, weit)).toHaveLength(0);
+    // Und ohne Saat gibt es nichts zu beschneiden – statt einer Nullmaske.
+    expect(freistellMaske([], [])).toBeNull();
+  });
+
   it('so war es kaputt: die rohe Quellkoordinate liegt neben der Fläche', () => {
     // Die Gegenprobe. 1512 ist weit ausserhalb von 0…511, die Saat wurde
     // verworfen, und der Sticker blieb leer.

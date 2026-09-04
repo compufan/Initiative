@@ -658,13 +658,27 @@ export function zurFlaeche(
   };
 }
 
-/** Alle Saatpunkte auf die Fläche bringen – die Form, die `flutmaske` braucht. */
+/**
+ * Alle Saatpunkte auf die Fläche bringen – die Form, die `flutmaske` braucht.
+ *
+ * Punkte, die dabei ausserhalb der Fläche landen, fallen **hier** heraus und
+ * nicht erst in `flutmaske`. Der Unterschied ist nicht kosmetisch: Eine
+ * Flutung ohne brauchbare Saat liefert ein Nullfeld, und ein Nullfeld heisst
+ * in der Vereinigung nicht „trägt nichts bei“, sondern „behalte nichts“ – der
+ * Sticker wäre schwarz. Wer sein Bild so weit verschiebt, dass ein alter Tipp
+ * hinausrutscht, soll das Bild behalten und nicht den Tipp bestraft bekommen.
+ */
 export function saatAufFlaeche(
   seeds: KeepSeed[],
   source: { width: number; height: number },
   doc: Pick<StickerDoc, 'scale' | 'offsetX' | 'offsetY'>,
 ): KeepSeed[] {
-  return seeds.map((seed) => ({ ...seed, ...zurFlaeche(seed, source, doc) }));
+  return seeds
+    .map((seed) => ({ ...seed, ...zurFlaeche(seed, source, doc) }))
+    .filter(
+      (seed) =>
+        seed.x >= 0 && seed.y >= 0 && seed.x < STICKER_SIZE && seed.y < STICKER_SIZE,
+    );
 }
 
 function drawSource(ctx: CanvasRenderingContext2D, source: EditorSource, doc: StickerDoc): void {
@@ -1127,18 +1141,13 @@ export function renderSticker(
     if (roh) {
       // Je Vorzeichen eine eigene Flutung. `flutmaske` überspringt Minus-Tipps
       // von sich aus, deshalb werden sie hier als eigene Saat übergeben.
-      if (flutPlus.length > 0) {
-        dazu.push(flutmaske(roh, saatAufFlaeche(flutPlus, source, doc), doc.tolerance));
-      }
-      if (flutMinus.length > 0) {
-        weg.push(
-          flutmaske(
-            roh,
-            saatAufFlaeche(flutMinus, source, doc).map((s) => ({ ...s, mode: 'dazu' as const })),
-            doc.tolerance,
-          ),
-        );
-      }
+      const saatPlus = saatAufFlaeche(flutPlus, source, doc);
+      if (saatPlus.length > 0) dazu.push(flutmaske(roh, saatPlus, doc.tolerance));
+      const saatMinus = saatAufFlaeche(flutMinus, source, doc).map((s) => ({
+        ...s,
+        mode: 'dazu' as const,
+      }));
+      if (saatMinus.length > 0) weg.push(flutmaske(roh, saatMinus, doc.tolerance));
       if (flutPlus.length === 0 && doc.removeBg) {
         // „Ecken entfernen“ arbeitet weiterhin abziehend, aber ebenfalls auf
         // dem unbeschnittenen Bild – sonst sind die vier Ecken bereits
