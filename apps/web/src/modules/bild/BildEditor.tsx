@@ -107,6 +107,18 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
    * Modus, sondern eine einmalige Zurechtrückung.
    */
   const [verhaeltnis, setVerhaeltnis] = useState<number | null>(null);
+  /** Was der Pinsel tut: malen, verpixeln oder verwischen. */
+  const [malart, setMalart] = useState<'farbe' | 'pixel' | 'weich'>('farbe');
+  const malartRef = useRef(malart);
+  /**
+   * Die Lupe: reine Ansicht, nicht Teil des Bildes.
+   *
+   * Steht bewusst nicht im Dokument – sonst landete jedes Heranzoomen im
+   * Rückgängig-Verlauf. `x`/`y` ist die linke obere Ecke des gezeigten
+   * Ausschnitts in Ansichtspunkten.
+   */
+  const [lupe, setLupe] = useState({ zoom: 1, x: 0, y: 0 });
+  const lupeRef = useRef(lupe);
   const verhaeltnisRef = useRef<number | null>(null);
   const [farbe, setFarbe] = useState('#ff3b30');
   const [breite, setBreite] = useState(14);
@@ -125,7 +137,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
   const verlauf = useRef<BildDoc[]>([]);
   /** Der Vor-Stapel: was zurückgenommen wurde und wiederkommen kann. */
   const vor = useRef<BildDoc[]>([]);
-  const massRef = useRef({ faktor: 1, breite: 1, hoehe: 1 });
+  const massRef = useRef({ faktor: 1, breite: 1, hoehe: 1, versatz: { x: 0, y: 0 } });
   const rahmen = useRef<number | null>(null);
   const zug = useRef<{
     art: 'keiner' | 'zuschnitt' | 'malen' | 'text';
@@ -182,6 +194,16 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     return { klein: Math.max(8, kante / 60), gross: kante / 3 };
   }, [bild]);
 
+  const planenRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    malartRef.current = malart;
+  }, [malart]);
+
+  useEffect(() => {
+    lupeRef.current = lupe;
+    planenRef.current?.();
+  }, [lupe]);
+
   const zeichnen = useCallback(() => {
     const canvas = canvasRef.current;
     const quellBild = bildRef.current;
@@ -193,7 +215,12 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
       quellBild.naturalWidth,
       quellBild.naturalHeight,
       aktuell,
-      { maxKante: ansichtsKante(), zuschnittZeigen: werkzeugRef.current === 'zuschnitt' },
+      {
+        maxKante: ansichtsKante(),
+        zuschnittZeigen: werkzeugRef.current === 'zuschnitt',
+        zoom: lupeRef.current.zoom,
+        versatz: { x: lupeRef.current.x, y: lupeRef.current.y },
+      },
     );
     if (mass) massRef.current = mass;
   }, []);
@@ -205,6 +232,10 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
       zeichnen();
     });
   }, [zeichnen]);
+
+  useEffect(() => {
+    planenRef.current = planen;
+  }, [planen]);
 
   useEffect(() => {
     docRef.current = doc;
@@ -284,9 +315,12 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
     const proPixel = massRef.current.breite / (rect.width || 1);
+    // Der gezeigte Ausschnitt beginnt bei `versatz` – ohne ihn träfe jeder
+    // Griff bei herangezoomter Ansicht daneben.
+    const { faktor, versatz } = massRef.current;
     return {
-      x: ((clientX - rect.left) * proPixel) / massRef.current.faktor,
-      y: ((clientY - rect.top) * proPixel) / massRef.current.faktor,
+      x: ((clientX - rect.left) * proPixel) / faktor + versatz.x,
+      y: ((clientY - rect.top) * proPixel) / faktor + versatz.y,
     };
   }
 
@@ -309,10 +343,47 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     return 'innen';
   }
 
+  /**
+   * Die gerade aufliegenden Finger.
+   *
+   * Vorher gab es genau ein `zug.current` – damit ist eine Zwei-Finger-Geste
+   * nicht zu erkennen, der zweite Finger überschrieb schlicht den ersten.
+   */
+  const finger = useRef(new Map<number, { x: number; y: number }>());
+  const zweiFinger = useRef<{ abstand: number; zoom: number; mitte: { x: number; y: number }; versatz: { x: number; y: number } } | null>(null);
+
+  /** Abstand und Mitte zweier Finger, in Bildschirmpunkten. */
+  function spanne(): { abstand: number; mitte: { x: number; y: number } } | null {
+    const zwei = [...finger.current.values()];
+    if (zwei.length < 2) return null;
+    const dx = zwei[0].x - zwei[1].x;
+    const dy = zwei[0].y - zwei[1].y;
+    return {
+      abstand: Math.hypot(dx, dy),
+      mitte: { x: (zwei[0].x + zwei[1].x) / 2, y: (zwei[0].y + zwei[1].y) / 2 },
+    };
+  }
+
   function onPointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
     const aktuell = docRef.current;
     const quellBild = bildRef.current;
     if (!aktuell || !quellBild) return;
+    finger.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (finger.current.size >= 2) {
+      // Zwei Finger heisst Ansicht, nicht Bearbeiten: einen begonnenen Zug
+      // abbrechen, damit nicht nebenbei gemalt oder zugeschnitten wird.
+      zug.current = { ...zug.current, art: 'keiner' };
+      const jetzt = spanne();
+      if (jetzt) {
+        zweiFinger.current = {
+          abstand: jetzt.abstand,
+          zoom: lupeRef.current.zoom,
+          mitte: ansichtsPunkt(jetzt.mitte.x, jetzt.mitte.y),
+          versatz: { x: lupeRef.current.x, y: lupeRef.current.y },
+        };
+      }
+      return;
+    }
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
     } catch {
@@ -350,8 +421,13 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
                 ...wert.striche,
                 {
                   farbe: farbeRef.current,
-                  breite: breiteRef.current,
+                  // Relativ zur Bildkante, nicht absolut: 14 Punkte sind auf
+                  // einem 1920er Bild 0,7 %, auf einem 600er aber 2,3 % – ein
+                  // Strich, der auf dem einen fein ist, deckt auf dem anderen
+                  // alles zu. Die Schriftgrösse macht es längst richtig.
+                  breite: (breiteRef.current / 100) * (Math.max(quellBild.naturalWidth, quellBild.naturalHeight) / 20),
                   punkte: [amBild.x, amBild.y],
+                  art: malartRef.current,
                 },
               ],
             }
@@ -399,6 +475,30 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
   }
 
   function onPointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
+    if (finger.current.has(event.pointerId)) {
+      finger.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    }
+
+    // Zwei Finger: zoomen und schieben, nichts am Bild ändern.
+    const anker = zweiFinger.current;
+    if (anker && finger.current.size >= 2) {
+      const jetzt = spanne();
+      if (!jetzt || anker.abstand <= 0) return;
+      const zoom = Math.max(1, Math.min(8, (anker.zoom * jetzt.abstand) / anker.abstand));
+      /*
+       * Der Punkt unter der Fingermitte soll dort bleiben, wo er ist. Aus
+       *     bildschirm = (ansicht − versatz) · faktor
+       * folgt bei festgehaltenem `ansicht`
+       *     versatz = ansicht − (bildschirm / faktor)
+       * und der Bildschirmanteil ändert sich mit dem Zoom nicht.
+       */
+      const basis = massRef.current.faktor / lupeRef.current.zoom;
+      const halbB = massRef.current.breite / (basis * zoom) / 2;
+      const halbH = massRef.current.hoehe / (basis * zoom) / 2;
+      setLupe({ zoom, x: anker.mitte.x - halbB, y: anker.mitte.y - halbH });
+      return;
+    }
+
     const art = zug.current.art;
     if (art === 'keiner') return;
     const aktuell = docRef.current;
@@ -506,7 +606,9 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     }
   }
 
-  function onPointerUp() {
+  function onPointerUp(event?: ReactPointerEvent<HTMLCanvasElement>) {
+    if (event) finger.current.delete(event.pointerId);
+    if (finger.current.size < 2) zweiFinger.current = null;
     zug.current = { ...zug.current, art: 'keiner' };
   }
 
@@ -712,6 +814,19 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
         >
           ↻
         </button>
+        {/* Nur sichtbar, wenn herangezoomt ist – ein Knopf, der immer „1×“
+            sagt, ist Zierrat. Antippen setzt zurück. */}
+        {lupe.zoom > 1 && (
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setLupe({ zoom: 1, x: 0, y: 0 })}
+            aria-label="Ansicht zurücksetzen"
+            title="Ansicht zurücksetzen"
+          >
+            🔍 {Math.round(lupe.zoom * 10) / 10}×
+          </button>
+        )}
       </header>
 
       <div className="bild-buehne">
@@ -769,18 +884,44 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
 
         {werkzeug === 'malen' && (
           <>
-            <div className="bild-farben">
-              {FARBEN.map((wert) => (
+            {/*
+                Drei Pinsel statt einem. Verpixeln und Verwischen sind die
+                zwei Werkzeuge, mit denen man ein Kennzeichen oder ein fremdes
+                Gesicht unkenntlich macht, ohne einen schwarzen Balken über
+                das halbe Bild zu ziehen.
+            */}
+            <div className="bild-reihe">
+              {(
+                [
+                  ['farbe', '✏️ Malen'],
+                  ['pixel', '▦ Verpixeln'],
+                  ['weich', '💧 Verwischen'],
+                ] as const
+              ).map(([wert, beschriftung]) => (
                 <button
                   key={wert}
                   type="button"
-                  className={`bild-farbe ${farbe === wert ? 'is-active' : ''}`}
-                  style={{ background: wert }}
-                  onClick={() => setFarbe(wert)}
-                  aria-label={`Farbe ${wert}`}
-                />
+                  className={`btn btn-sm ${malart === wert ? 'is-aktiv' : ''}`}
+                  onClick={() => setMalart(wert)}
+                >
+                  {beschriftung}
+                </button>
               ))}
             </div>
+            {malart === 'farbe' && (
+              <div className="bild-farben">
+                {FARBEN.map((wert) => (
+                  <button
+                    key={wert}
+                    type="button"
+                    className={`bild-farbe ${farbe === wert ? 'is-active' : ''}`}
+                    style={{ background: wert }}
+                    onClick={() => setFarbe(wert)}
+                    aria-label={`Farbe ${wert}`}
+                  />
+                ))}
+              </div>
+            )}
             <label className="bild-schieber">
               <span>Strich</span>
               <input

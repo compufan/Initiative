@@ -13,6 +13,7 @@ import {
   nachAnsicht,
   zuschnittInAnsicht,
   type BildDoc,
+  type Malstrich,
   type Schriftzug,
   type Zuschnitt,
 } from './doc.js';
@@ -172,6 +173,172 @@ interface MalOptionen {
  * Malt Bild, Striche und Schriftzüge – der gemeinsame Kern von Ansicht und
  * Ausgabe.
  */
+/**
+ * Verpixelt oder verwischt, was unter dem Strich liegt.
+ *
+ * Die Rechnung läuft auf dem, was bis hierher gezeichnet ist – also auf dem
+ * Bild samt aller vorherigen Striche. Beschnitten wird sie durch die
+ * Strichform selbst, damit ein Zug mit rundem Pinsel auch rund wirkt und
+ * nicht als Rechteck.
+ *
+ * Bewusst je Strich einmal und nicht je Bild: Ein Zug über ein Kennzeichen
+ * kostet einmal ein Auslesen, danach steht das Ergebnis im Bild.
+ */
+function unkenntlich(
+  ctx: CanvasRenderingContext2D,
+  bild: CanvasImageSource,
+  strich: Malstrich,
+  width: number,
+  height: number,
+): void {
+  // Die betroffene Fläche, grosszügig um die halbe Strichbreite erweitert.
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (let i = 0; i < strich.punkte.length; i += 2) {
+    x0 = Math.min(x0, strich.punkte[i]);
+    x1 = Math.max(x1, strich.punkte[i]);
+    y0 = Math.min(y0, strich.punkte[i + 1]);
+    y1 = Math.max(y1, strich.punkte[i + 1]);
+  }
+  const rand = strich.breite / 2 + 2;
+  x0 = Math.max(0, Math.floor(x0 - rand));
+  y0 = Math.max(0, Math.floor(y0 - rand));
+  x1 = Math.min(width, Math.ceil(x1 + rand));
+  y1 = Math.min(height, Math.ceil(y1 + rand));
+  const bw = x1 - x0;
+  const bh = y1 - y0;
+  if (bw <= 0 || bh <= 0) return;
+
+  /*
+   * Gelesen wird aus dem QUELLBILD, nicht aus der Leinwand.
+   *
+   * Das ist keine Bequemlichkeit, sondern notwendig: `getImageData` arbeitet
+   * laut Spezifikation im Raster der Ausgabe und ignoriert die aktuelle
+   * Transformation, `drawImage` dagegen zeichnet durch sie hindurch. An
+   * dieser Stelle trägt die Leinwand Massstab, Versatz und Drehung – ein
+   * `getImageData(x0, y0, …)` mit Bildkoordinaten läse also an einer ganz
+   * anderen Stelle als der, an die anschliessend gezeichnet wird. Bei Faktor
+   * 0,5 läge ein Strich bei Bildpunkt 1000 auf Gerätepunkt 500, gelesen würde
+   * aber bei 1000 – meist ausserhalb der Leinwand, also nichts.
+   *
+   * Aus dem Quellbild zu lesen ist zugleich das richtigere Ergebnis: Verpixelt
+   * wird das Foto, nicht die Kringel, die jemand darübergemalt hat.
+   */
+  const hilf = arbeitsflaeche(bw, bh);
+  const hctx = hilf.getContext('2d', { willReadFrequently: true });
+  if (!hctx) return;
+  hctx.setTransform(1, 0, 0, 1, 0, 0);
+  hctx.globalCompositeOperation = 'source-over';
+  hctx.clearRect(0, 0, bw, bh);
+  hctx.drawImage(bild, x0, y0, bw, bh, 0, 0, bw, bh);
+  const daten = hctx.getImageData(0, 0, bw, bh);
+  const kachel = Math.max(2, Math.round(strich.breite / 2));
+  if (strich.art === 'pixel') {
+    // Kachelweise Mittelwert – die klassische Verpixelung.
+    for (let ky = 0; ky < bh; ky += kachel) {
+      for (let kx = 0; kx < bw; kx += kachel) {
+        let r = 0;
+        let g = 0;
+        let b = 0;
+        let n = 0;
+        const bisY = Math.min(ky + kachel, bh);
+        const bisX = Math.min(kx + kachel, bw);
+        for (let y = ky; y < bisY; y += 1) {
+          for (let x = kx; x < bisX; x += 1) {
+            const at = (y * bw + x) * 4;
+            r += daten.data[at];
+            g += daten.data[at + 1];
+            b += daten.data[at + 2];
+            n += 1;
+          }
+        }
+        if (n === 0) continue;
+        r = Math.round(r / n);
+        g = Math.round(g / n);
+        b = Math.round(b / n);
+        for (let y = ky; y < bisY; y += 1) {
+          for (let x = kx; x < bisX; x += 1) {
+            const at = (y * bw + x) * 4;
+            daten.data[at] = r;
+            daten.data[at + 1] = g;
+            daten.data[at + 2] = b;
+          }
+        }
+      }
+    }
+  } else {
+    // Kastenweichzeichner, getrennt in zwei Durchgänge – das ist linear in
+    // der Radiusgrösse statt quadratisch.
+    const radius = Math.max(1, Math.round(strich.breite / 6));
+    kastenWeich(daten.data, bw, bh, radius);
+  }
+
+  // Zurück auf die Hilfsfläche, dann die Strichform als Schablone.
+  hctx.putImageData(daten, 0, 0);
+  hctx.globalCompositeOperation = 'destination-in';
+  hctx.lineCap = 'round';
+  hctx.lineJoin = 'round';
+  hctx.strokeStyle = '#000';
+  hctx.fillStyle = '#000';
+  hctx.lineWidth = strich.breite;
+  hctx.beginPath();
+  if (strich.punkte.length === 2) {
+    hctx.arc(strich.punkte[0] - x0, strich.punkte[1] - y0, strich.breite / 2, 0, Math.PI * 2);
+    hctx.fill();
+  } else {
+    hctx.moveTo(strich.punkte[0] - x0, strich.punkte[1] - y0);
+    for (let i = 2; i < strich.punkte.length; i += 2) {
+      hctx.lineTo(strich.punkte[i] - x0, strich.punkte[i + 1] - y0);
+    }
+    hctx.stroke();
+  }
+  ctx.drawImage(hilf, x0, y0);
+}
+
+/** Kastenweichzeichner, waagerecht und senkrecht getrennt. */
+function kastenWeich(daten: Uint8ClampedArray, w: number, h: number, r: number): void {
+  const zwischen = new Uint8ClampedArray(daten.length);
+  for (let k = 0; k < 3; k += 1) {
+    for (let y = 0; y < h; y += 1) {
+      for (let x = 0; x < w; x += 1) {
+        let summe = 0;
+        let n = 0;
+        for (let d = -r; d <= r; d += 1) {
+          const xx = x + d;
+          if (xx < 0 || xx >= w) continue;
+          summe += daten[(y * w + xx) * 4 + k];
+          n += 1;
+        }
+        zwischen[(y * w + x) * 4 + k] = summe / n;
+      }
+    }
+    for (let x = 0; x < w; x += 1) {
+      for (let y = 0; y < h; y += 1) {
+        let summe = 0;
+        let n = 0;
+        for (let d = -r; d <= r; d += 1) {
+          const yy = y + d;
+          if (yy < 0 || yy >= h) continue;
+          summe += zwischen[(yy * w + x) * 4 + k];
+          n += 1;
+        }
+        daten[(y * w + x) * 4 + k] = summe / n;
+      }
+    }
+  }
+}
+
+/** Eine wiederverwendete Arbeitsfläche – nicht bei jedem Strich eine neue. */
+let arbeitsCanvas: HTMLCanvasElement | null = null;
+function arbeitsflaeche(w: number, h: number): HTMLCanvasElement {
+  if (!arbeitsCanvas) arbeitsCanvas = document.createElement('canvas');
+  if (arbeitsCanvas.width !== w) arbeitsCanvas.width = w;
+  if (arbeitsCanvas.height !== h) arbeitsCanvas.height = h;
+  return arbeitsCanvas;
+}
+
 function malen(
   ctx: CanvasRenderingContext2D,
   bild: CanvasImageSource,
@@ -191,6 +358,10 @@ function malen(
   ctx.lineJoin = 'round';
   for (const strich of doc.striche) {
     if (strich.punkte.length < 2) continue;
+    if (strich.art === 'pixel' || strich.art === 'weich') {
+      unkenntlich(ctx, bild, strich, width, height);
+      continue;
+    }
     ctx.strokeStyle = strich.farbe;
     ctx.fillStyle = strich.farbe;
     ctx.lineWidth = strich.breite;
@@ -222,6 +393,15 @@ export interface AnsichtMass {
   faktor: number;
   breite: number;
   hoehe: number;
+  /**
+   * Die linke obere Ecke des gezeigten Ausschnitts, in Ansichtspunkten.
+   *
+   * Gehört zum Rückgabewert, weil die Bedienseite ihn zum Zurückrechnen von
+   * Bildschirmpunkten braucht – und weil er hier gekappt wird, damit der
+   * Ausschnitt nicht über das Bild hinausläuft. Wer den ungekappten Wunsch
+   * zurückrechnete, träfe daneben.
+   */
+  versatz: { x: number; y: number };
 }
 
 /**
@@ -237,12 +417,31 @@ export function zeichneAnsicht(
   width: number,
   height: number,
   doc: BildDoc,
-  optionen: { maxKante: number; zuschnittZeigen: boolean },
+  optionen: {
+    maxKante: number;
+    zuschnittZeigen: boolean;
+    /** Lupenfaktor, 1 = ganzes Bild. */
+    zoom?: number;
+    /** Linke obere Ecke des sichtbaren Ausschnitts, in Ansichtspunkten. */
+    versatz?: { x: number; y: number };
+  },
 ): AnsichtMass | null {
   const sicht = ansichtGroesse(width, height, doc.drehung);
-  const faktor = Math.min(1, optionen.maxKante / Math.max(sicht.w, sicht.h));
-  const breite = Math.max(1, Math.round(sicht.w * faktor));
-  const hoehe = Math.max(1, Math.round(sicht.h * faktor));
+  // Die Leinwand behält ihre Grösse; herangezoomt wird der INHALT. So bleibt
+  // das Fenster gleich und man sieht einen Ausschnitt statt eines grösseren
+  // Bildes, das über den Rand hinausragt.
+  const basis = Math.min(1, optionen.maxKante / Math.max(sicht.w, sicht.h));
+  const zoom = Math.max(1, optionen.zoom ?? 1);
+  const faktor = basis * zoom;
+  const breite = Math.max(1, Math.round(sicht.w * basis));
+  const hoehe = Math.max(1, Math.round(sicht.h * basis));
+  // Der Ausschnitt darf nicht über das Bild hinauslaufen.
+  const sichtbarB = breite / faktor;
+  const sichtbarH = hoehe / faktor;
+  const versatz = {
+    x: Math.max(0, Math.min(sicht.w - sichtbarB, optionen.versatz?.x ?? 0)),
+    y: Math.max(0, Math.min(sicht.h - sichtbarH, optionen.versatz?.y ?? 0)),
+  };
   if (canvas.width !== breite) canvas.width = breite;
   if (canvas.height !== hoehe) canvas.height = hoehe;
   const ctx = canvas.getContext('2d');
@@ -251,16 +450,19 @@ export function zeichneAnsicht(
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, breite, hoehe);
   ctx.imageSmoothingQuality = 'high';
-  malen(ctx, bild, width, height, doc, { faktor, versatz: { x: 0, y: 0 } });
+  malen(ctx, bild, width, height, doc, { faktor, versatz });
 
   if (optionen.zuschnittZeigen) {
-    zeichneZuschnitt(ctx, zuschnittInAnsicht(doc.zuschnitt, width, height, doc), faktor, {
-      breite,
-      hoehe,
-    });
+    zeichneZuschnitt(
+      ctx,
+      zuschnittInAnsicht(doc.zuschnitt, width, height, doc),
+      faktor,
+      { breite, hoehe },
+      versatz,
+    );
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  return { faktor, breite, hoehe };
+  return { faktor, breite, hoehe, versatz };
 }
 
 /** Der abgedunkelte Rand mit Rahmen, Ecken und Drittellinien. */
@@ -269,9 +471,10 @@ function zeichneZuschnitt(
   z: Zuschnitt,
   faktor: number,
   leinwand: { breite: number; hoehe: number },
+  versatz: { x: number; y: number } = { x: 0, y: 0 },
 ): void {
-  const x = z.x * faktor;
-  const y = z.y * faktor;
+  const x = (z.x - versatz.x) * faktor;
+  const y = (z.y - versatz.y) * faktor;
   const w = z.w * faktor;
   const h = z.h * faktor;
 

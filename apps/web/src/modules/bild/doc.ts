@@ -34,6 +34,18 @@ export interface Malstrich {
   farbe: string;
   breite: number;
   punkte: number[];
+  /**
+   * Was der Strich tut.
+   *
+   * `farbe` malt wie bisher. `pixel` und `weich` bearbeiten stattdessen das,
+   * was darunter liegt – die zwei Werkzeuge, mit denen man ein Kennzeichen
+   * oder ein fremdes Gesicht unkenntlich macht, ohne einen schwarzen Balken
+   * über das halbe Bild zu ziehen.
+   *
+   * Wahlfrei, damit vorhandene Striche (und die Tests dazu) unverändert
+   * gelten: ohne Angabe wird gemalt.
+   */
+  art?: 'farbe' | 'pixel' | 'weich';
 }
 
 export interface Schriftzug {
