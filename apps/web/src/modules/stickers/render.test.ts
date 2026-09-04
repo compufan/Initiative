@@ -5,6 +5,7 @@ import {
   createDoc,
   isEmptyDoc,
   flutmaske,
+  abziehenAlpha,
   freistellMaske,
   keepAtSeeds,
   lupeGrenzen,
@@ -249,7 +250,7 @@ describe('Antippen nimmt hinzu, statt zu überschreiben', () => {
     // Die Flutung läuft auf dem UNBESCHNITTENEN Bild – das ist die halbe
     // Lösung. Auf dem beschnittenen wäre hier nichts mehr anzutippen.
     const flutung = flutmaske(vorlage(), [{ x: 42, y: 20 }], 40);
-    const maske = freistellMaske(modell, null, flutung);
+    const maske = freistellMaske([modell, flutung], []);
 
     expect(maske).not.toBeNull();
     expect(zaehle(maske!, person)).toBe(flaeche);
@@ -257,7 +258,7 @@ describe('Antippen nimmt hinzu, statt zu überschreiben', () => {
   });
 
   it('lässt den Grund weiterhin weg', () => {
-    const maske = freistellMaske(modellmaske(), null, flutmaske(vorlage(), [{ x: 42, y: 20 }], 40));
+    const maske = freistellMaske([modellmaske(), flutmaske(vorlage(), [{ x: 42, y: 20 }], 40)], []);
     // Mitten im Grund, weit weg von beiden Kanten – der weiche Saum aus
     // dilateAlpha/blurAlpha trägt ein paar Punkte über die Rechtecke hinaus,
     // deshalb wird ausdrücklich in der Mitte gemessen und nicht am Rand.
@@ -281,11 +282,11 @@ describe('Antippen nimmt hinzu, statt zu überschreiben', () => {
   });
 
   it('ohne Tipp bleibt es beim Modell, ohne Modell beim Tipp', () => {
-    const nurModell = freistellMaske(modellmaske(), null, null);
+    const nurModell = freistellMaske([modellmaske()], []);
     expect(zaehle(nurModell!, person)).toBe(flaeche);
     expect(zaehle(nurModell!, saeule)).toBe(0);
 
-    const nurTipp = freistellMaske(null, null, flutmaske(vorlage(), [{ x: 42, y: 20 }], 40));
+    const nurTipp = freistellMaske([flutmaske(vorlage(), [{ x: 42, y: 20 }], 40)], []);
     expect(zaehle(nurTipp!, saeule)).toBe(flaeche);
     expect(zaehle(nurTipp!, person)).toBe(0);
   });
@@ -293,7 +294,7 @@ describe('Antippen nimmt hinzu, statt zu überschreiben', () => {
   it('ohne alles gibt es nichts zu beschneiden', () => {
     // Wichtig: `null` heisst „gibt es nicht“, nicht „überall 0“. Sonst wäre
     // ein Sticker ohne Freistellen leer.
-    expect(freistellMaske(null, null, null)).toBeNull();
+    expect(freistellMaske([null, null], [])).toBeNull();
   });
 
   it('die Vereinigung kann nie kleiner werden als ihre Teile', () => {
@@ -307,5 +308,75 @@ describe('Antippen nimmt hinzu, statt zu überschreiben', () => {
       expect(v[i]).toBeGreaterThanOrEqual(b[i]);
       expect(v[i]).toBeLessThanOrEqual(255);
     }
+  });
+});
+
+/**
+ * „Das Wegnehmen bei Antippen funktioniert noch nicht. Auch das sollte
+ * zusammen mit einer Freistellen-Auswahl funktionieren — wenn das Bild
+ * bereits freigestellt ist, sollte man einzelne Elemente des Freigestellten
+ * wieder ausblenden können.“
+ *
+ * Vorher wurde auch ein Minus-Tipp VEREINIGT, und eine Vereinigung kann nie
+ * kleiner werden: Der Tipp war wirkungslos. Und gegen ein Modellergebnis
+ * konnte er von vornherein nichts ausrichten.
+ */
+describe('Wegnehmen', () => {
+  const N = 40;
+  const links = (i: number) => i % N < 20;
+
+  /** Zwei Hälften, damit sich Hinzunehmen und Wegnehmen trennen lassen. */
+  function haelfte(linkeSeite: boolean): Uint8Array {
+    const a = new Uint8Array(N * N);
+    for (let i = 0; i < a.length; i += 1) a[i] = links(i) === linkeSeite ? 255 : 0;
+    return a;
+  }
+
+  it('nimmt aus dem Ergebnis eines MODELLS etwas heraus', () => {
+    // Das Modell hat alles gefunden, ein Minus-Tipp nimmt die rechte Hälfte
+    // wieder heraus. Genau der Fall, den der Anwender beschrieben hat.
+    const modell = new Uint8Array(N * N).fill(255);
+    const maske = freistellMaske([modell], [haelfte(false)]);
+
+    expect(maske![0]).toBe(255); // links bleibt
+    expect(maske![25]).toBe(0); // rechts ist weg
+  });
+
+  it('war vorher wirkungslos: vereinigt statt abgezogen', () => {
+    // Die Gegenprobe. So lief es, und deshalb tat der Knopf nichts.
+    const modell = new Uint8Array(N * N).fill(255);
+    const falsch = vereinigeAlpha(modell, haelfte(false));
+    expect(falsch[25]).toBe(255);
+  });
+
+  it('ohne alles Positive heisst ein Minus-Tipp „alles ausser dem“', () => {
+    // Wer auf einem unbeschnittenen Bild sagt „das da weg“, meint genau das.
+    const maske = freistellMaske([], [haelfte(false)]);
+    expect(maske![0]).toBe(255);
+    expect(maske![25]).toBe(0);
+  });
+
+  it('wirkt auch gegen einen Plus-Tipp, nicht nur gegen das Modell', () => {
+    const maske = freistellMaske([haelfte(true), haelfte(false)], [haelfte(false)]);
+    expect(maske![0]).toBe(255);
+    expect(maske![25]).toBe(0);
+  });
+
+  it('abziehenAlpha bleibt im Bereich und wird nie grösser', () => {
+    const a = new Uint8Array([0, 40, 128, 200, 255]);
+    const b = new Uint8Array([0, 200, 30, 255, 128]);
+    const v = abziehenAlpha(a, b);
+    for (let i = 0; i < a.length; i += 1) {
+      expect(v[i]).toBeLessThanOrEqual(a[i]);
+      expect(v[i]).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('weiche Kanten bleiben weich', () => {
+    // Ein halb deckender Punkt, halb weggenommen: das Ergebnis muss dazwischen
+    // liegen und darf nicht auf 0 oder 255 springen.
+    const v = abziehenAlpha(new Uint8Array([128]), new Uint8Array([128]));
+    expect(v[0]).toBeGreaterThan(50);
+    expect(v[0]).toBeLessThan(80);
   });
 });

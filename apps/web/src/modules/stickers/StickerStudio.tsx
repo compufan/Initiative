@@ -237,7 +237,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
    * null, und dann stünde beim nächsten Öffnen wieder „einmalig 30,3 MB“,
    * obwohl der Service Worker die Datei längst hat.
    */
-  const netzBereit = doc.tippMaske !== null;
+  const netzBereit = doc.tippGruppen.length > 0;
   const dazuZahl = doc.keep.filter((punkt) => punkt.mode !== 'weg').length;
   const wegZahl = doc.keep.length - dazuZahl;
 
@@ -465,17 +465,24 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       const netz = mitNetzRef.current && engineAvailable('tippen');
       const dazu = tippModusRef.current !== 'weg';
 
-      // Ein Minus-Tipp berichtigt die zuletzt mit dem Netz gesetzte Gruppe.
-      // Ohne eine solche Gruppe hätte er nichts, woran er sich berichtigen
-      // könnte – die Flutung kann kein Wegnehmen.
-      const letzteNetzGruppe = [...docRef.current.keep]
-        .reverse()
-        .find((seed) => seed.quelle === 'netz')?.gruppe;
-      if (!dazu && letzteNetzGruppe === undefined) {
-        setModellFehler('Tippe zuerst mit Netz auf das, was bleiben soll – dann kannst du davon etwas wegnehmen.');
-        return;
-      }
-      const gruppe = dazu ? (gruppeRef.current += 1) : letzteNetzGruppe!;
+      /*
+       * Ein Minus-Tipp ist eine eigene Gruppe mit eigener Maske, nicht die
+       * Berichtigung einer vorhandenen.
+       *
+       * Vorher hing er an der letzten Netzgruppe und wurde als SAMs negativer
+       * Hinweis mitgeschickt. Zweierlei ging dabei schief: Das Ergebnis wurde
+       * mit der alten Maske VEREINIGT, und eine Vereinigung kann nie kleiner
+       * werden – der Tipp blieb wirkungslos. Und gegen ein Modellergebnis
+       * konnte er von vornherein nichts ausrichten.
+       *
+       * Jetzt heisst ein Minus-Tipp schlicht: „finde, was hier liegt, und nimm
+       * es weg“. Das Netz bekommt den Punkt deshalb als POSITIVEN Hinweis –
+       * es soll den Gegenstand ja finden –, und die gefundene Maske wird am
+       * Ende abgezogen. Damit wirkt er auch gegen „Person“ oder „Hohe
+       * Qualität“, und die Bedingung „tippe zuerst mit Netz auf das, was
+       * bleiben soll“ ist ersatzlos entfallen.
+       */
+      const gruppe = (gruppeRef.current += 1);
 
       // Der Punkt wandert ins Quellbild. Dort liegen auch die Masken, und nur
       // so überlebt er das Verschieben und Zoomen.
@@ -500,10 +507,12 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       setModellFehler(null);
       try {
         const { image, faktor } = vorlageHolen(quelle);
-        const meine = [...docRef.current.keep, seed].filter((p) => p.gruppe === gruppe);
         const roh = await runEngine('tippen', {
           image,
-          seeds: meine.map((p) => ({ x: p.x * faktor, y: p.y * faktor, dazu: p.mode !== 'weg' })),
+          // Immer als positiver Hinweis: Das Netz soll den Gegenstand FINDEN.
+          // Ob er dazukommt oder wegfällt, entscheidet das Vorzeichen der
+          // Gruppe, nicht der Hinweis an das Netz.
+          seeds: [{ x: imBild.x * faktor, y: imBild.y * faktor, dazu: true }],
           fortschritt: (_anteil, text) => setModellStand(text),
         });
 
@@ -514,14 +523,18 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
           // Anwender gerade entfernt hat – ein Sticker, der sich von selbst
           // ändert.
           if (!value.keep.some((p) => p.gruppe === gruppe)) return value;
-          const alt = value.tippMaske;
-          const neu =
-            alt && alt.width === image.width && alt.height === image.height
-              ? vereinigeAlpha(alt.alpha, roh)
-              : roh;
           return {
             ...value,
-            tippMaske: { engine: 'tippen', width: image.width, height: image.height, alpha: neu },
+            tippGruppen: [
+              ...value.tippGruppen,
+              {
+                nummer: gruppe,
+                vorzeichen: dazu ? ('dazu' as const) : ('weg' as const),
+                width: image.width,
+                height: image.height,
+                alpha: roh,
+              },
+            ],
           };
         });
       } catch (error) {
@@ -1525,7 +1538,9 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                 <p className="stk-hint" role="status">
                   {tippRechnet
                     ? '⏳ Das Netz sieht sich das Bild an …'
-                    : 'Das Graue ist weg. Tippe hinein, um es dazuzunehmen – das schon Freigestellte bleibt.'}
+                    : tippModus === 'weg'
+                      ? 'Tippe auf etwas Farbiges, um es herauszunehmen – auch aus dem, was ein Modell gefunden hat.'
+                      : 'Das Graue ist weg. Tippe hinein, um es dazuzunehmen – das schon Freigestellte bleibt.'}
                 </p>
                 <div className="stk-btn-row">
                   {/*
@@ -1548,22 +1563,35 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                     {mitNetz ? '☑' : '☐'} mit Netz
                     {!netzBereit && ` — einmalig ${netzMb} MB`}
                   </button>
-                  {mitNetz && (
-                    <button
-                      type="button"
-                      className={`btn btn-sm ${tippModus === 'weg' ? 'stk-chip-active' : ''}`}
-                      onClick={() => setTippModus(tippModus === 'weg' ? 'dazu' : 'weg')}
-                      disabled={!hasImage || tippRechnet}
-                    >
-                      {tippModus === 'weg' ? '➖ Wegnehmen' : '➕ Dazunehmen'}
-                    </button>
-                  )}
+                  {/*
+                      Plus und Minus gelten jetzt IMMER, nicht nur mit Netz.
+                      Ein Minus-Tipp heisst „finde, was hier liegt, und nimm es
+                      weg“ – das kann die Farbflutung genauso, und es wirkt
+                      auch gegen das Ergebnis von „Person“ oder „Hohe Qualität“.
+                  */}
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${tippModus === 'weg' ? 'stk-chip-active' : ''}`}
+                    onClick={() => setTippModus(tippModus === 'weg' ? 'dazu' : 'weg')}
+                    disabled={!hasImage || tippRechnet}
+                  >
+                    {tippModus === 'weg' ? '➖ Wegnehmen' : '➕ Dazunehmen'}
+                  </button>
                   <button
                     type="button"
                     className="btn btn-sm"
                     onClick={() => {
                       commit();
-                      setDoc((value) => ({ ...value, keep: value.keep.slice(0, -1) }));
+                      setDoc((value) => {
+                        const letzter = value.keep.at(-1);
+                        return {
+                          ...value,
+                          keep: value.keep.slice(0, -1),
+                          // Die Maske dieses Tipps muss mit weg, sonst bliebe
+                          // seine Wirkung stehen.
+                          tippGruppen: value.tippGruppen.filter((g) => g.nummer !== letzter?.gruppe),
+                        };
+                      });
                     }}
                     disabled={!hasImage || doc.keep.length === 0 || tippRechnet}
                   >
@@ -1576,9 +1604,11 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                       commit();
                       // Die Netzmaske muss mit weg – sonst bliebe eine Fläche
                       // freigestellt, deren Tipp der Anwender gerade gelöscht hat.
-                      setDoc((value) => ({ ...value, keep: [], tippMaske: null }));
+                      setDoc((value) => ({ ...value, keep: [], tippGruppen: [] }));
                     }}
-                    disabled={!hasImage || (doc.keep.length === 0 && !doc.tippMaske) || tippRechnet}
+                    disabled={
+                      !hasImage || (doc.keep.length === 0 && doc.tippGruppen.length === 0) || tippRechnet
+                    }
                   >
                     Auswahl zurücksetzen
                   </button>
@@ -1589,7 +1619,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                     {wegZahl > 0 && `, ${wegZahl} weggenommen`}.{' '}
                     {mitNetz
                       ? 'Sitzt etwas nicht, tippe mit „Wegnehmen“ darauf – der Rest bleibt.'
-                      : 'Tippe weitere Bereiche an, die dazugehören – etwa Haare oder Pullover.'}
+                      : 'Tippe weitere Bereiche an, die dazugehören – etwa Haare oder Pullover. Mit „Wegnehmen“ geht auch das Gegenteil.'}
                   </p>
                 )}
               </div>

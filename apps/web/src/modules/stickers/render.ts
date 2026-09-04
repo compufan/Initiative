@@ -100,6 +100,15 @@ export interface AutoMask {
   teile?: Teile;
 }
 
+/** Ein Tipp mit Netz: eine Maske, und ob sie hinzunimmt oder wegnimmt. */
+export interface TippGruppe {
+  nummer: number;
+  vorzeichen: 'dazu' | 'weg';
+  width: number;
+  height: number;
+  alpha: Uint8Array;
+}
+
 export interface StickerDoc {
   offsetX: number;
   offsetY: number;
@@ -111,16 +120,21 @@ export interface StickerDoc {
   /** Die Maske eines Modells, falls eines gelaufen ist. */
   autoMask: AutoMask | null;
   /**
-   * Die Maske der Netz-Tipps – getrennt von `autoMask`, und das ist der Punkt.
+   * Die Masken der Netz-Tipps – je Tipp eine, mit Vorzeichen.
    *
-   * Lägen beide im selben Feld, wären Antippen und Modell wieder Alternativen
-   * statt unabhängig. Getrennt lassen sie sich vereinigen: Die Person kommt
-   * vom Modell, die Säule vom Tipp, und beide bleiben.
+   * Getrennt von `autoMask`, und das ist der Punkt: Lägen sie im selben Feld,
+   * wären Antippen und Modell wieder Alternativen statt unabhängig. Getrennt
+   * lassen sie sich verrechnen — die Person kommt vom Modell, die Säule vom
+   * Plus-Tipp, und ein Minus-Tipp nimmt beiden etwas weg.
+   *
+   * Je Gruppe EINE Maske und nicht eine aufsummierte: Ein Minus-Tipp liefert
+   * eine kleinere Maske, und eine aufsummierte könnte nie wieder schrumpfen –
+   * genau daran war das Wegnehmen wirkungslos.
    *
    * Wie `autoMask` in Quellbild-Koordinaten, damit sie das Verschieben und
    * Zoomen übersteht.
    */
-  tippMaske: AutoMask | null;
+  tippGruppen: TippGruppe[];
   /**
    * Welche Teile der Modell-Maske gewählt sind.
    *
@@ -158,7 +172,7 @@ export function createDoc(): StickerDoc {
     removeBg: false,
     keep: [],
     autoMask: null,
-    tippMaske: null,
+    tippGruppen: [],
     maskParts: [],
     showUnselected: true,
     tolerance: 40,
@@ -176,7 +190,9 @@ export function cloneDoc(doc: StickerDoc): StickerDoc {
     // Die Maske wird nach dem Berechnen nie mehr angefasst – eine Referenz
     // genuegt und spart pro Rueckgaengig-Schritt ein Megabyte.
     autoMask: doc.autoMask,
-    tippMaske: doc.tippMaske,
+    // Die Masken selbst werden nie geändert – eine flache Kopie der Liste
+    // genügt und spart je Rückgängig-Schritt mehrere Megabyte.
+    tippGruppen: doc.tippGruppen.slice(),
     maskParts: doc.maskParts.slice(),
     keep: doc.keep.map((seed) => ({ ...seed })),
     strokes: doc.strokes.map((stroke) => ({ ...stroke, points: stroke.points.slice() })),
@@ -320,6 +336,26 @@ export function vereinigeAlpha(a: Uint8Array, b: Uint8Array): Uint8Array {
   const raus = new Uint8Array(a.length);
   for (let i = 0; i < a.length; i += 1) {
     raus[i] = Math.round(b[i] + (a[i] * (255 - b[i])) / 255);
+  }
+  return raus;
+}
+
+/**
+ * Die Gegenrichtung: `b` aus `a` herausnehmen.
+ *
+ * Das Gegenstück zu `vereinigeAlpha` und der Grund, dass ein Minus-Tipp
+ * überhaupt etwas bewirken kann. Vorher wurde auch er vereinigt – und eine
+ * Vereinigung kann nie kleiner werden, der Tipp war also wirkungslos.
+ *
+ * Bewusst gegen das Ergebnis der ganzen Vereinigung gerechnet und nicht nur
+ * gegen die Tippmasken: Nur so lässt sich auch ein Stück aus dem herausnehmen,
+ * was ein Modell gefunden hat – „wenn das Bild bereits freigestellt ist,
+ * sollte man einzelne Elemente des Freigestellten wieder ausblenden können“.
+ */
+export function abziehenAlpha(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const raus = new Uint8Array(a.length);
+  for (let i = 0; i < a.length; i += 1) {
+    raus[i] = Math.max(0, Math.round((a[i] * (255 - b[i])) / 255));
   }
   return raus;
 }
@@ -839,18 +875,35 @@ function deckungLesen(flaeche: HTMLCanvasElement | null): Uint8Array | null {
  * Gemessen an einer 60×40-Vorlage: 450 von 450 Personenpunkten vorher, 0
  * nachher. Mit dieser Vereinigung sind es 450 Person und 450 Säule.
  *
+ * Und die Gegenrichtung, seit der Anwender sie verlangt hat: Was mit einem
+ * Minus-Tipp bezeichnet wurde, wird am Ende ABGEZOGEN – auch aus dem, was ein
+ * Modell gefunden hat. Damit lässt sich aus einer freigestellten Person die
+ * Hand wieder herausnehmen, ohne den Radiergummi zu bemühen.
+ *
+ *     M = (Modell ∪ Netztipps+ ∪ Flutung+) ∖ (Netztipps− ∪ Flutung−)
+ *
  * `null` heisst „gibt es nicht“ und nicht „ist überall 0“ – sonst wäre der
- * Sticker leer, sobald gar nichts freigestellt wurde. Sind alle drei `null`,
- * gibt es nichts zu beschneiden, und der Aufrufer lässt den Schritt aus.
+ * Sticker leer, sobald gar nichts freigestellt wurde. Ist alles `null`, gibt
+ * es nichts zu beschneiden, und der Aufrufer lässt den Schritt aus.
  */
 export function freistellMaske(
-  modell: Uint8Array | null,
-  netz: Uint8Array | null,
-  flutung: Uint8Array | null,
+  dazu: (Uint8Array | null)[],
+  weg: (Uint8Array | null)[],
 ): Uint8Array | null {
-  const teile = [modell, netz, flutung].filter((teil): teil is Uint8Array => teil !== null);
-  if (teile.length === 0) return null;
-  return teile.reduce((a, b) => vereinigeAlpha(a, b));
+  const plus = dazu.filter((teil): teil is Uint8Array => teil !== null);
+  const minus = weg.filter((teil): teil is Uint8Array => teil !== null);
+  if (plus.length === 0 && minus.length === 0) return null;
+
+  // Gibt es nur Minus-Tipps, ist die Grundlage „alles“ – der Anwender hat auf
+  // einem unbeschnittenen Bild gesagt „das da weg“, und genau das soll dann
+  // passieren.
+  const positiv =
+    plus.length > 0
+      ? plus.reduce((a, b) => vereinigeAlpha(a, b))
+      : new Uint8Array(minus[0].length).fill(255);
+  if (minus.length === 0) return positiv;
+
+  return abziehenAlpha(positiv, minus.reduce((a, b) => vereinigeAlpha(a, b)));
 }
 
 /**
@@ -985,10 +1038,15 @@ export function renderSticker(
   // das, was uebrig geblieben ist.
   const zeigeAuswahl = Boolean(options.auswahlZeigen && doc.showUnselected);
   let schleier: ImageData | null = null;
-  const flutSaat = doc.keep.filter((seed) => (seed.quelle ?? 'flutung') === 'flutung');
+  const flutPlus = doc.keep.filter(
+    (seed) => (seed.quelle ?? 'flutung') === 'flutung' && seed.mode !== 'weg',
+  );
+  const flutMinus = doc.keep.filter(
+    (seed) => (seed.quelle ?? 'flutung') === 'flutung' && seed.mode === 'weg',
+  );
 
   /*
-   * Modell, Netztipp und Farbflutung werden VEREINIGT, nicht nacheinander
+   * Modell, Netztipps und Farbflutung werden VERRECHNET, nicht nacheinander
    * multipliziert. Warum, steht bei `freistellMaske` – kurz: die alte
    * Reihenfolge liess einen Tipp neben dem Motiv den ganzen Sticker leeren.
    *
@@ -1000,35 +1058,53 @@ export function renderSticker(
   if (
     !options.fast &&
     source?.kind === 'image' &&
-    (doc.autoMask || doc.tippMaske || flutSaat.length > 0 || doc.removeBg)
+    (doc.autoMask || doc.tippGruppen.length > 0 || doc.keep.length > 0 || doc.removeBg)
   ) {
-    const modell = doc.autoMask
-      ? deckungLesen(maskenflaeche(source, doc, doc.autoMask, !zeigeAuswahl))
-      : null;
-    const netz = doc.tippMaske
-      ? deckungLesen(maskenflaeche(source, doc, doc.tippMaske, false))
-      : null;
+    const alsMaske = (gruppe: TippGruppe) =>
+      deckungLesen(
+        maskenflaeche(
+          source,
+          doc,
+          { engine: 'tippen', width: gruppe.width, height: gruppe.height, alpha: gruppe.alpha },
+          false,
+        ),
+      );
+
+    const dazu: (Uint8Array | null)[] = [
+      doc.autoMask ? deckungLesen(maskenflaeche(source, doc, doc.autoMask, !zeigeAuswahl)) : null,
+      ...doc.tippGruppen.filter((g) => g.vorzeichen === 'dazu').map(alsMaske),
+    ];
+    const weg: (Uint8Array | null)[] = doc.tippGruppen
+      .filter((g) => g.vorzeichen === 'weg')
+      .map(alsMaske);
 
     const unberuehrt = originalMerken(ctx);
-    let flutung: Uint8Array | null = null;
-    if (flutSaat.length > 0 || doc.removeBg) {
-      const octx = unberuehrt.getContext('2d', { willReadFrequently: true });
-      const roh = octx?.getImageData(0, 0, STICKER_SIZE, STICKER_SIZE) ?? null;
-      if (roh) {
-        if (flutSaat.length > 0) {
-          flutung = flutmaske(roh, flutSaat, doc.tolerance);
-        } else {
-          // „Ecken entfernen“ arbeitet weiterhin abziehend, aber ebenfalls auf
-          // dem unbeschnittenen Bild – sonst sind die vier Ecken bereits
-          // durchsichtig und der Knopf täte buchstäblich nichts.
-          removeBackground(roh, doc.tolerance);
-          flutung = new Uint8Array(STICKER_SIZE * STICKER_SIZE);
-          for (let i = 0; i < flutung.length; i += 1) flutung[i] = roh.data[i * 4 + 3];
-        }
+    const octx = unberuehrt.getContext('2d', { willReadFrequently: true });
+    const roh = octx?.getImageData(0, 0, STICKER_SIZE, STICKER_SIZE) ?? null;
+    if (roh) {
+      // Je Vorzeichen eine eigene Flutung. `flutmaske` überspringt Minus-Tipps
+      // von sich aus, deshalb werden sie hier als eigene Saat übergeben.
+      if (flutPlus.length > 0) dazu.push(flutmaske(roh, flutPlus, doc.tolerance));
+      if (flutMinus.length > 0) {
+        weg.push(flutmaske(roh, flutMinus.map((s) => ({ ...s, mode: 'dazu' as const })), doc.tolerance));
+      }
+      if (flutPlus.length === 0 && doc.removeBg) {
+        // „Ecken entfernen“ arbeitet weiterhin abziehend, aber ebenfalls auf
+        // dem unbeschnittenen Bild – sonst sind die vier Ecken bereits
+        // durchsichtig und der Knopf täte buchstäblich nichts.
+        const ecken = new ImageData(
+          new Uint8ClampedArray(roh.data),
+          STICKER_SIZE,
+          STICKER_SIZE,
+        );
+        removeBackground(ecken, doc.tolerance);
+        const behalten = new Uint8Array(STICKER_SIZE * STICKER_SIZE);
+        for (let i = 0; i < behalten.length; i += 1) behalten[i] = ecken.data[i * 4 + 3];
+        dazu.push(behalten);
       }
     }
 
-    const maske = freistellMaske(modell, netz, flutung);
+    const maske = freistellMaske(dazu, weg);
     if (maske) {
       const bild = ctx.getImageData(0, 0, STICKER_SIZE, STICKER_SIZE);
       for (let i = 0; i < maske.length; i += 1) {
