@@ -136,16 +136,29 @@ let webpSupport: boolean | null = null;
  * Downscale a photo before upload and build the tiny inline preview that makes
  * chats render instantly (and readable offline).
  */
-export async function prepareImage(file: Blob, maxDimension = 1920): Promise<PreparedImage> {
+export async function prepareImage(
+  file: Blob,
+  maxDimension = 1920,
+  /**
+   * Das Bild ist bereits fertig – nur die Vorschau soll noch entstehen.
+   *
+   * Für alles, was aus dem Bild-Editor kommt. Dort ist schon einmal
+   * verlustbehaftet kodiert worden (WebP 0,92); es hier ein zweites Mal durch
+   * WebP 0,82 zu schicken, kostet Güte, ohne irgendetwas zu gewinnen. Bei
+   * einem Bild, das aus der Kamera kam, sind das drei Kodierungen
+   * hintereinander – jede baut auf den Artefakten der vorigen auf.
+   */
+  fertig = false,
+): Promise<PreparedImage> {
   const source = await loadBitmap(file);
   const naturalWidth = 'width' in source ? source.width : 0;
   const naturalHeight = 'height' in source ? source.height : 0;
-  const scale = Math.min(1, maxDimension / Math.max(naturalWidth, naturalHeight || 1));
+  const scale = fertig ? 1 : Math.min(1, maxDimension / Math.max(naturalWidth, naturalHeight || 1));
   const width = Math.round(naturalWidth * scale);
   const height = Math.round(naturalHeight * scale);
 
-  const mime = (await supportsWebp()) ? 'image/webp' : 'image/jpeg';
-  const full = await toBlob(drawTo(source, width, height), mime, 0.82);
+  const mime = fertig ? file.type || 'image/webp' : (await supportsWebp()) ? 'image/webp' : 'image/jpeg';
+  const full = fertig ? file : await toBlob(drawTo(source, width, height), mime, 0.82);
 
   const previewScale = Math.min(1, 48 / Math.max(width, height || 1));
   const preview = drawTo(source, width * previewScale, height * previewScale);

@@ -87,7 +87,7 @@ export function ImageBubble({ message, isMine }: MessageRendererProps) {
           ablegen={async (blob, name) => {
             // Als neue Nachricht, nicht als Ersatz: Das Original bleibt im
             // Verlauf stehen, wo es steht.
-            const bild = await prepareImage(blob);
+            const bild = await prepareImage(blob, 1920, true);
             await sendMedia(message.conversationId, 'image', null, [
               buildAttachment({
                 kind: 'image',

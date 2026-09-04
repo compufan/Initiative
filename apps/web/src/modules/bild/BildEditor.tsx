@@ -51,8 +51,15 @@ const VERHAELTNISSE: { label: string; wert: number | null }[] = [
   { label: '16:9', wert: 16 / 9 },
 ];
 
-/** Die Anzeigeauflösung der Arbeitsfläche – mehr sieht niemand, kostet aber. */
-const ANSICHT_KANTE = 1400;
+/**
+ * Die Anzeigeauflösung der Arbeitsfläche – mehr sieht niemand, kostet aber.
+ *
+ * Obergrenze, nicht Vorgabe: Gerechnet wird mit der tatsächlichen Breite der
+ * Bühne mal Gerätedichte. Auf einem Telefon sind das oft 400 × 3 = 1200 statt
+ * fester 1400 – ein Viertel weniger Bildpunkte je Neuzeichnen, ohne dass
+ * jemand einen Unterschied sieht.
+ */
+const ANSICHT_KANTE_MAX = 1400;
 
 const VERLAUF_MAX = 25;
 
@@ -92,12 +99,22 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
   const [bild, setBild] = useState<HTMLImageElement | null>(null);
   const [doc, setDoc] = useState<BildDoc | null>(null);
   const [werkzeug, setWerkzeug] = useState<Werkzeug>('zuschnitt');
+  /**
+   * Das gewählte Seitenverhältnis – und zwar dauerhaft.
+   *
+   * Vorher wandte `verhaeltnisSetzen` es genau einmal an; wer danach eine Ecke
+   * zog, hatte es wieder verloren. „Auf 16:9 zuschneiden“ war damit kein
+   * Modus, sondern eine einmalige Zurechtrückung.
+   */
+  const [verhaeltnis, setVerhaeltnis] = useState<number | null>(null);
+  const verhaeltnisRef = useRef<number | null>(null);
   const [farbe, setFarbe] = useState('#ff3b30');
   const [breite, setBreite] = useState(14);
   const [gewaehlterText, setGewaehlterText] = useState<string | null>(null);
   const [laedt, setLaedt] = useState(true);
   const [speichert, setSpeichert] = useState(false);
   const [kannZurueck, setKannZurueck] = useState(false);
+  const [kannVor, setKannVor] = useState(false);
 
   const docRef = useRef<BildDoc | null>(null);
   const bildRef = useRef<HTMLImageElement | null>(null);
@@ -106,6 +123,8 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
   const breiteRef = useRef(breite);
   const gewaehltRef = useRef<string | null>(null);
   const verlauf = useRef<BildDoc[]>([]);
+  /** Der Vor-Stapel: was zurückgenommen wurde und wiederkommen kann. */
+  const vor = useRef<BildDoc[]>([]);
   const massRef = useRef({ faktor: 1, breite: 1, hoehe: 1 });
   const rahmen = useRef<number | null>(null);
   const zug = useRef<{
@@ -121,6 +140,8 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     startZ: { x: 0, y: 0, w: 0, h: 0 },
     startText: { x: 0, y: 0 },
   });
+  /** Ob dieser Zug schon einen Rückgängig-Schritt angelegt hat. */
+  const zugGemerkt = useRef(false);
 
   useEffect(() => {
     werkzeugRef.current = werkzeug;
@@ -135,6 +156,32 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     gewaehltRef.current = gewaehlterText;
   }, [gewaehlterText]);
 
+  /**
+   * Wieviele Bildpunkte die Arbeitsfläche wirklich braucht.
+   *
+   * Nicht mehr als der Bildschirm hergibt: Auf einem Telefon sind das oft
+   * 1200 statt fester 1400 – ein Viertel weniger Arbeit je Neuzeichnen, ohne
+   * sichtbaren Unterschied. Nach oben gedeckelt, damit ein grosser Monitor
+   * nicht in die Vollauflösung rutscht.
+   */
+  const ansichtsKante = useCallback(() => {
+    const breite = canvasRef.current?.parentElement?.clientWidth ?? 0;
+    const dichte = Math.min(globalThis.devicePixelRatio || 1, 3);
+    if (breite <= 0) return ANSICHT_KANTE_MAX;
+    return Math.max(512, Math.min(ANSICHT_KANTE_MAX, Math.round(breite * dichte)));
+  }, []);
+
+  /**
+   * Feste Grenzen für die Schriftgrösse, abgeleitet von der Bildkante.
+   *
+   * Vorher hing `min` am aktuellen Wert (`groesse/8`): Wer die Schrift einmal
+   * gross zog, konnte sie nie wieder klein machen, weil die Skala mitwanderte.
+   */
+  const schriftGrenzen = useMemo(() => {
+    const kante = Math.max(bild?.naturalWidth ?? 512, bild?.naturalHeight ?? 512);
+    return { klein: Math.max(8, kante / 60), gross: kante / 3 };
+  }, [bild]);
+
   const zeichnen = useCallback(() => {
     const canvas = canvasRef.current;
     const quellBild = bildRef.current;
@@ -146,7 +193,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
       quellBild.naturalWidth,
       quellBild.naturalHeight,
       aktuell,
-      { maxKante: ANSICHT_KANTE, zuschnittZeigen: werkzeugRef.current === 'zuschnitt' },
+      { maxKante: ansichtsKante(), zuschnittZeigen: werkzeugRef.current === 'zuschnitt' },
     );
     if (mass) massRef.current = mass;
   }, []);
@@ -198,15 +245,36 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     const aktuell = docRef.current;
     if (!aktuell) return;
     verlauf.current = [...verlauf.current, docKopie(aktuell)].slice(-VERLAUF_MAX);
+    // Ein neuer Schritt macht den Vor-Stapel gegenstandslos: Von hier führt
+    // kein Weg mehr zu dem, was zurückgenommen wurde.
+    vor.current = [];
     setKannZurueck(true);
+    setKannVor(false);
   }, []);
 
   const zurueck = useCallback(() => {
     const vorher = verlauf.current[verlauf.current.length - 1];
     if (!vorher) return;
+    const jetzt = docRef.current;
     verlauf.current = verlauf.current.slice(0, -1);
+    // Was zurückgenommen wird, kommt auf den Vor-Stapel. Ohne ihn war ein
+    // versehentliches Rückgängig unumkehrbar – die häufigste Art, Arbeit zu
+    // verlieren.
+    if (jetzt) vor.current = [...vor.current, docKopie(jetzt)].slice(-VERLAUF_MAX);
     setKannZurueck(verlauf.current.length > 0);
+    setKannVor(vor.current.length > 0);
     setDoc(vorher);
+  }, []);
+
+  const wieder = useCallback(() => {
+    const naechster = vor.current[vor.current.length - 1];
+    if (!naechster) return;
+    const jetzt = docRef.current;
+    vor.current = vor.current.slice(0, -1);
+    if (jetzt) verlauf.current = [...verlauf.current, docKopie(jetzt)].slice(-VERLAUF_MAX);
+    setKannVor(vor.current.length > 0);
+    setKannZurueck(true);
+    setDoc(naechster);
   }, []);
 
   /* ---------- Umrechnung Bildschirm → Ansicht ---------- */
@@ -256,7 +324,10 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
 
     if (werkzeugRef.current === 'zuschnitt') {
       const inAnsicht = zuschnittInAnsicht(aktuell.zuschnitt, W, H, aktuell);
-      merken();
+      // Erst merken, wenn sich wirklich etwas bewegt – siehe `zugGemerkt`.
+      // Vorher legte jedes blosse Antippen der Fläche einen Schritt an, und
+      // fünf Fehlgriffe hintereinander schoben den Verlauf leer.
+      zugGemerkt.current = false;
       zug.current = {
         art: 'zuschnitt',
         griff: griffAn(punkt, inAnsicht),
@@ -337,6 +408,13 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     const W = quellBild.naturalWidth;
     const H = quellBild.naturalHeight;
 
+    // Jetzt bewegt sich wirklich etwas – jetzt lohnt ein Rückgängig-Schritt.
+    // Beim blossen Antippen der Fläche entsteht keiner mehr.
+    if (!zugGemerkt.current) {
+      zugGemerkt.current = true;
+      merken();
+    }
+
     if (art === 'zuschnitt') {
       const start = zug.current.startZ;
       const dx = punkt.x - zug.current.start.x;
@@ -357,6 +435,18 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
           h = start.h - dy;
         }
         if (griff.includes('u')) h = start.h + dy;
+        // Das gewählte Verhältnis gilt auch beim Ziehen, nicht nur beim
+        // Drücken des Knopfes. Die Breite führt, die Höhe folgt – und an den
+        // Oberkanten wandert der Ursprung mit, sonst rutscht das Rechteck weg.
+        if (verhaeltnisRef.current) {
+          const v =
+            aktuell.drehung === 90 || aktuell.drehung === 270
+              ? 1 / verhaeltnisRef.current
+              : verhaeltnisRef.current;
+          const neueHoehe = Math.abs(w) / v;
+          if (griff.includes('o')) y = start.y + start.h - neueHoehe;
+          h = neueHoehe;
+        }
         // Über den gegenüberliegenden Rand hinausgezogen: das Rechteck klappt
         // um, statt eine negative Breite zu bekommen.
         if (w < 0) {
@@ -433,6 +523,8 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
   }
 
   function verhaeltnisSetzen(wert: number | null) {
+    setVerhaeltnis(wert);
+    verhaeltnisRef.current = wert;
     if (!bild || wert === null) return;
     merken();
     setDoc((aktuell) =>
@@ -494,8 +586,32 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     [doc, gewaehlterText],
   );
 
+  /**
+   * Merkt gebündelt: mehrere gleichartige Änderungen kurz nacheinander werden
+   * zu EINEM Rückgängig-Schritt.
+   *
+   * Ohne das legte jeder Tastendruck im Textfeld und jede Raste am
+   * Größenregler einen eigenen Schritt an – nach dem Tippen eines Wortes wäre
+   * der Verlauf (25 Schritte) voll und alles davor fort. Mit dem Muster aus
+   * dem Sticker-Studio: gleiche Art innerhalb einer Sekunde = ein Schritt.
+   */
+  const letzteBuendelung = useRef<{ art: string; zeit: number }>({ art: '', zeit: 0 });
+  const merkenGebuendelt = useCallback(
+    (art: string) => {
+      const jetzt = Date.now();
+      const vorher = letzteBuendelung.current;
+      letzteBuendelung.current = { art, zeit: jetzt };
+      if (vorher.art === art && jetzt - vorher.zeit < 1000) return;
+      merken();
+    },
+    [merken],
+  );
+
   function textAendern(aenderung: Partial<Schriftzug>) {
     if (!aktiverText) return;
+    // Vorher fehlte das ganz: Text tippen, Farbe und Größe waren nicht
+    // rücknehmbar, während Löschen es korrekt war.
+    merkenGebuendelt(`text:${aktiverText.id}:${Object.keys(aenderung).join(',')}`);
     setDoc((wert) =>
       wert
         ? {
@@ -587,6 +703,15 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
         >
           ↺
         </button>
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={wieder}
+          disabled={!kannVor}
+          aria-label="Wiederherstellen"
+        >
+          ↻
+        </button>
       </header>
 
       <div className="bild-buehne">
@@ -624,9 +749,8 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
                 <button
                   key={eintrag.label}
                   type="button"
-                  className="btn btn-sm"
+                  className={`btn btn-sm ${verhaeltnis === eintrag.wert ? 'is-aktiv' : ''}`}
                   onClick={() => verhaeltnisSetzen(eintrag.wert)}
-                  disabled={eintrag.wert === null}
                   title={
                     eintrag.wert === null
                       ? 'Ziehe die Ecken – ohne festes Verhältnis.'
@@ -794,10 +918,14 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
                   <span>Größe</span>
                   <input
                     type="range"
-                    min={Math.max(8, Math.round(aktiverText.groesse / 8))}
-                    max={Math.round(
-                      Math.max(bild?.naturalWidth ?? 512, bild?.naturalHeight ?? 512) / 3,
-                    )}
+                    /*
+                     * Feste Grenzen, abgeleitet von der Bildkante – nicht vom
+                     * aktuellen Wert. Vorher war `min` an `groesse/8` gebunden:
+                     * Wer die Schrift einmal gross machte, konnte sie nie
+                     * wieder klein machen, weil die Skala mitwanderte.
+                     */
+                    min={Math.max(8, Math.round(schriftGrenzen.klein))}
+                    max={Math.round(schriftGrenzen.gross)}
                     value={aktiverText.groesse}
                     onChange={(event) => textAendern({ groesse: Number(event.target.value) })}
                   />

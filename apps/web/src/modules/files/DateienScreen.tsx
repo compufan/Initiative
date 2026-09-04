@@ -358,7 +358,7 @@ export function DateienScreen() {
               ? async (blob, name) => {
                   // Die bearbeitete Fassung kommt als eigener Eintrag dazu; das
                   // Original bleibt unberuehrt daneben stehen.
-                  const bild = await prepareImage(blob);
+                  const bild = await prepareImage(blob, 1920, true);
                   const anhang = await uploadBlob({
                     kind: 'image',
                     mime: bild.mime,
