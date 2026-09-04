@@ -12,6 +12,9 @@ import { toast, useHideNav } from '../../state/ui.js';
 import { clamp, errorMessage, firstEmoji, loadImageFromBlob, supportsWebp } from './helpers.js';
 import { SavePackSheet } from './SavePackSheet.js';
 import {
+  MAX_SCALE,
+  MIN_SCALE,
+  motivFuellen,
   STICKER_SIZE,
   cloneDoc,
   createDoc,
@@ -73,8 +76,7 @@ const SHAPES: { key: ShapeKind; label: string; icon: string }[] = [
 const START_EMOJI = ['😀', '😂', '😍', '🥳', '😎', '🤔', '🙈', '🔥', '✨', '💜', '🎉', '🚀'];
 const TEXT_COLORS = ['#ffffff', '#111111', '#ff3b30', '#ffcc00', '#34c759', '#0a84ff', '#af52de'];
 
-const MIN_SCALE = 0.3;
-const MAX_SCALE = 5;
+
 
 /**
  * Wie weit die Lupe vergrössert.
@@ -826,11 +828,19 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       armGesture();
       commitArmedGesture();
       gesture.current = { ...gesture.current, mode: 'erase' };
+      // Striche liegen im QUELLBILD, damit sie am Motiv kleben statt an der
+      // Fläche – wer radiert und danach zoomt, soll seine Löcher dort
+      // wiederfinden, wo das Motiv sie hat. Auch die Breite zählt in
+      // Quellpunkten; beim Zeichnen geht sie durch dieselbe Abbildung.
+      const q = sourceRef.current;
+      if (!q || q.kind !== 'image') return;
+      const start = toSourcePoint(point, q, docRef.current);
+      const breite = brushRef.current * (q.width / STICKER_SIZE) / docRef.current.scale;
       setDoc((value) => ({
         ...value,
         strokes: [
           ...value.strokes,
-          { size: brushRef.current, points: [point.x, point.y], mode: pinselRef.current },
+          { size: breite, points: [start.x, start.y], mode: pinselRef.current },
         ],
       }));
       return;
@@ -932,13 +942,18 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     }
 
     if (state.mode === 'erase') {
+      const q = sourceRef.current;
+      if (!q || q.kind !== 'image') return;
+      // Ebenfalls im Quellbild – sonst läge der Anfang eines Striches am
+      // Motiv und sein Verlauf an der Fläche.
+      const imBild = toSourcePoint(point, q, docRef.current);
       setDoc((value) => {
         const strokes = value.strokes.slice();
         const last = strokes[strokes.length - 1];
         if (!last) return value;
         strokes[strokes.length - 1] = {
           ...last,
-          points: [...last.points, point.x, point.y],
+          points: [...last.points, imBild.x, imBild.y],
         };
         return { ...value, strokes };
       });
@@ -1457,20 +1472,80 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
               </p>
             )}
             {doc.autoMask && (
-              <div className="stk-btn-row">
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  onClick={() => {
-                    commit();
-                    setDoc((value) => ({ ...value, autoMask: null }));
-                    setModellFehler(null);
-                  }}
-                  disabled={rechnet !== null || tippRechnet}
-                >
-                  Freistellen zurücknehmen
-                </button>
-              </div>
+              <>
+                <div className="stk-btn-row">
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => {
+                      const quelle = sourceRef.current;
+                      const maske = doc.autoMask;
+                      if (!quelle || quelle.kind !== 'image' || !maske) return;
+                      const passend = motivFuellen(maske.alpha, maske.width, maske.height, quelle);
+                      if (!passend) return;
+                      commit();
+                      setDoc((value) => ({ ...value, ...passend }));
+                    }}
+                    disabled={rechnet !== null || tippRechnet}
+                    title="Zoom und Ausschnitt so setzen, dass das Freigestellte die Fläche füllt."
+                  >
+                    ⤢ Motiv füllen
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => {
+                      commit();
+                      setDoc((value) => ({ ...value, autoMask: null }));
+                      setModellFehler(null);
+                    }}
+                    disabled={rechnet !== null || tippRechnet}
+                  >
+                    Freistellen zurücknehmen
+                  </button>
+                </div>
+                {/*
+                    Die zwei Regler, die bei einem Freisteller den Unterschied
+                    zwischen „fast richtig“ und „sitzt“ machen. Der
+                    Weichzeichner war vorher fest auf 1 verdrahtet.
+                */}
+                <label className="stk-slider">
+                  <span>Kante</span>
+                  <input
+                    type="range"
+                    min={-8}
+                    max={8}
+                    value={doc.ausweiten}
+                    onChange={(event) => {
+                      commit('ausweiten');
+                      const ausweiten = Number(event.target.value);
+                      setDoc((value) => ({ ...value, ausweiten }));
+                    }}
+                  />
+                  <span className="stk-slider-value">
+                    {doc.ausweiten > 0 ? `+${doc.ausweiten}` : doc.ausweiten}
+                  </span>
+                </label>
+                <label className="stk-slider">
+                  <span>Weichheit</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={6}
+                    value={doc.weicher}
+                    onChange={(event) => {
+                      commit('weicher');
+                      const weicher = Number(event.target.value);
+                      setDoc((value) => ({ ...value, weicher }));
+                    }}
+                  />
+                  <span className="stk-slider-value">{doc.weicher}</span>
+                </label>
+                <p className="stk-hint">
+                  „Kante“ holt einen Saum dazu (gegen den hellen Rand an Haaren) oder zieht ihn
+                  herein (gegen einen Hof vom Hintergrund).
+                </p>
+              </>
             )}
             {modellStand && (
               <p className="stk-hint" role="status">

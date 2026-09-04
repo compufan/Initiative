@@ -8,7 +8,10 @@ import {
   abziehenAlpha,
   freistellMaske,
   keepAtSeeds,
+  MAX_SCALE,
+  MIN_SCALE,
   lupeGrenzen,
+  motivFuellen,
   removeBackground,
   saatAufFlaeche,
   strichBloecke,
@@ -464,5 +467,67 @@ describe('Saatpunkte zwischen Quellbild und Fläche', () => {
     expect(flutmaske(makeImage(64, () => [10, 10, 10, 255]), [imBild], 40).some((v) => v > 0)).toBe(
       false,
     );
+  });
+});
+
+/**
+ * „Motiv füllen“: der Handgriff, den jede Sticker-App hat.
+ *
+ * Nach dem Freistellen sitzt das Motiv irgendwo im Bild, oft klein und aus
+ * der Mitte. Von Hand passend zu schieben dauert länger als das Freistellen.
+ */
+describe('motivFuellen', () => {
+  const B = 100;
+  const H = 100;
+
+  /** Eine Maske mit einem Rechteck an frei wählbarer Stelle. */
+  function maske(x0: number, y0: number, x1: number, y1: number): Uint8Array {
+    const a = new Uint8Array(B * H);
+    for (let y = y0; y < y1; y += 1) for (let x = x0; x < x1; x += 1) a[y * B + x] = 255;
+    return a;
+  }
+
+  /** Wohin ein Quellpunkt auf der Fläche landet – die Rechnung aus sourceRect. */
+  function aufFlaeche(p: { x: number; y: number }, q: { width: number; height: number }, d: any) {
+    const cover = Math.max(STICKER_SIZE / q.width, STICKER_SIZE / q.height);
+    const g = cover * d.scale;
+    return {
+      x: (STICKER_SIZE - q.width * g) / 2 + d.offsetX + p.x * g,
+      y: (STICKER_SIZE - q.height * g) / 2 + d.offsetY + p.y * g,
+    };
+  }
+
+  it('rückt die Mitte des Motivs in die Mitte der Fläche', () => {
+    const quelle = { width: 400, height: 400 };
+    // Ein kleines Motiv oben links, Mitte bei (20,20) von 100 -> (80,80) im Bild.
+    const passend = motivFuellen(maske(10, 10, 30, 30), B, H, quelle);
+    expect(passend).not.toBeNull();
+
+    const mitte = aufFlaeche({ x: 80, y: 80 }, quelle, passend!);
+    expect(mitte.x).toBeCloseTo(STICKER_SIZE / 2, 4);
+    expect(mitte.y).toBeCloseTo(STICKER_SIZE / 2, 4);
+  });
+
+  it('lässt Luft am Rand, statt das Motiv anzuschneiden', () => {
+    const quelle = { width: 400, height: 400 };
+    const passend = motivFuellen(maske(10, 10, 30, 30), B, H, quelle)!;
+    // Die Ecken des Motivs (40,40) und (120,120) im Bild müssen drin liegen.
+    const oben = aufFlaeche({ x: 40, y: 40 }, quelle, passend);
+    const unten = aufFlaeche({ x: 120, y: 120 }, quelle, passend);
+    expect(oben.x).toBeGreaterThan(0);
+    expect(unten.x).toBeLessThan(STICKER_SIZE);
+    // Aber nicht zuviel Luft: mindestens 80 % der Fläche soll gefüllt sein.
+    expect(unten.x - oben.x).toBeGreaterThan(STICKER_SIZE * 0.8);
+  });
+
+  it('hält die Zoomgrenzen ein', () => {
+    // Ein winziges Motiv würde rechnerisch einen riesigen Zoom verlangen.
+    const passend = motivFuellen(maske(50, 50, 51, 51), B, H, { width: 4000, height: 4000 })!;
+    expect(passend.scale).toBeLessThanOrEqual(MAX_SCALE);
+    expect(passend.scale).toBeGreaterThanOrEqual(MIN_SCALE);
+  });
+
+  it('gibt nichts zurück, wenn die Maske leer ist', () => {
+    expect(motivFuellen(new Uint8Array(B * H), B, H, { width: 400, height: 400 })).toBeNull();
   });
 });

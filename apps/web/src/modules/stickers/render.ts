@@ -13,6 +13,10 @@ import { maskeAus, type Teile } from './engines/teile.js';
 
 export const STICKER_SIZE = 512;
 
+/** Grenzen des Zooms – hier, weil auch `motivFuellen` sie einhalten muss. */
+export const MIN_SCALE = 0.3;
+export const MAX_SCALE = 5;
+
 const FONT_STACK =
   "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
 
@@ -27,11 +31,24 @@ export interface TextLayer {
 }
 
 /**
- * Ein Pinselstrich in Sticker-Koordinaten, Punkte als flache x/y-Liste.
+ * Ein Pinselstrich im QUELLBILD, Punkte als flache x/y-Liste.
  *
  * `weg` radiert, `zurueck` holt das Original wieder hervor. Das zweite ist
  * kein Luxus: Ein Modell frisst gern eine Ohrspitze oder eine Haarsträhne
  * weg, und ohne Zurückholen bliebe nur, das Freistellen ganz zu verwerfen.
+ *
+ * # Warum im Quellbild und nicht auf der Fläche
+ *
+ * Hier stand einmal „in Sticker-Koordinaten“, und das war ein Fehler mit
+ * einer sehr sichtbaren Folge: Wer eine Ohrspitze wegradierte und danach das
+ * Bild verschob oder zoomte, schob das Bild unter seinen Löchern weg – die
+ * Löcher blieben stehen, wo der Finger war. Jede Feinarbeit war hinfällig,
+ * sobald man das Motiv noch einmal anfasste.
+ *
+ * Im Quellbild klebt der Strich am Motiv, genau wie die Masken der Modelle
+ * und die Antipp-Punkte. `size` zählt dabei ebenfalls in Quellpunkten – die
+ * Umrechnung besorgt beim Zeichnen dieselbe Abbildung, die auch das Bild
+ * bekommt.
  */
 export interface Stroke {
   size: number;
@@ -147,6 +164,20 @@ export interface StickerDoc {
    */
   tippGruppen: TippGruppe[];
   /**
+   * Die Kante der fertigen Maske nachjustieren.
+   *
+   * `ausweiten` in Bildpunkten: positiv holt einen Saum dazu (gegen den
+   * hellen Rand, den ein Modell an Haaren stehen lässt), negativ zieht die
+   * Kante herein (gegen einen Hof vom Hintergrund). `weicher` zeichnet die
+   * Kante weich.
+   *
+   * Der Weichzeichner war vorher fest auf 1 verdrahtet. Genau diese zwei
+   * Regler machen bei einem Freisteller den Unterschied zwischen „fast
+   * richtig“ und „sitzt“ – und sie kosten kein Megabyte.
+   */
+  ausweiten: number;
+  weicher: number;
+  /**
    * Welche Teile der Modell-Maske gewählt sind.
    *
    * Leer heisst **alle** – solange niemand etwas angetippt hat, verhält sich
@@ -184,6 +215,8 @@ export function createDoc(): StickerDoc {
     keep: [],
     autoMask: null,
     tippGruppen: [],
+    ausweiten: 0,
+    weicher: 1,
     maskParts: [],
     showUnselected: true,
     tolerance: 40,
@@ -623,6 +656,71 @@ export function sourceRect(
  * Wird gebraucht, wenn jemand ein Gesicht antippt: das Modell arbeitet im
  * Quellbild, der Finger auf der Fläche.
  */
+/**
+ * Setzt Zoom und Versatz so, dass das Freigestellte die Fläche füllt.
+ *
+ * Der Handgriff, den jede Sticker-App hat und der hier fehlte: Nach dem
+ * Freistellen sitzt das Motiv irgendwo im Bild, oft klein und aus der Mitte.
+ * Von Hand passend zu schieben und zu zoomen dauert länger als das
+ * Freistellen selbst.
+ *
+ * Gerechnet wird über die tatsächliche Ausdehnung der Maske, mit etwas Luft
+ * am Rand – ein Motiv, das die Kante berührt, sieht abgeschnitten aus, auch
+ * wenn es das nicht ist.
+ */
+export function motivFuellen(
+  alpha: Uint8Array,
+  width: number,
+  height: number,
+  source: { width: number; height: number },
+  luft = 0.08,
+): { scale: number; offsetX: number; offsetY: number } | null {
+  let x0 = width;
+  let y0 = height;
+  let x1 = -1;
+  let y1 = -1;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      if (alpha[y * width + x] <= 128) continue;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+  if (x1 < x0 || y1 < y0) return null;
+
+  // Von der Maskengrösse auf Quellbildpunkte.
+  const jeX = source.width / width;
+  const jeY = source.height / height;
+  const breit = (x1 - x0 + 1) * jeX;
+  const hoch = (y1 - y0 + 1) * jeY;
+  const mitteX = ((x0 + x1 + 1) / 2) * jeX;
+  const mitteY = ((y0 + y1 + 1) / 2) * jeY;
+
+  const cover = Math.max(STICKER_SIZE / source.width, STICKER_SIZE / source.height);
+  const noetig =
+    (Math.min(STICKER_SIZE / breit, STICKER_SIZE / hoch) / cover) * (1 - luft);
+  const scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, noetig));
+
+  /*
+   * Der Versatz, damit die Mitte des Motivs in der Mitte der Fläche liegt.
+   * Aus `sourceRect` hergeleitet: Ein Quellpunkt mx landet bei
+   *
+   *     sx = (STICKER_SIZE − sw·g)/2 + offsetX + mx·g       mit g = cover·scale
+   *
+   * Setzt man sx = STICKER_SIZE/2 und löst nach offsetX auf, bleibt
+   *
+   *     offsetX = g · (sw/2 − mx)
+   */
+  const g = cover * scale;
+  return {
+    scale,
+    offsetX: g * (source.width / 2 - mitteX),
+    offsetY: g * (source.height / 2 - mitteY),
+  };
+}
+
 export function toSourcePoint(
   point: { x: number; y: number },
   source: { width: number; height: number },
@@ -771,13 +869,36 @@ function strichZeichnen(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
  * `original` ist das Bild, wie es vor dem Freistellen gezeichnet war. Ohne das
  * gäbe es nichts zurückzuholen.
  */
+/**
+ * Setzt die Zeichenfläche in die Geometrie des Quellbildes.
+ *
+ * Danach zählt eine Einheit einen Quellbildpunkt – Striche lassen sich dann
+ * unverändert so zeichnen, wie sie abgelegt wurden, und wandern beim
+ * Verschieben und Zoomen mit dem Motiv mit. Auch die Strichbreite skaliert
+ * dabei richtig mit, weil `lineWidth` durch dieselbe Abbildung geht.
+ */
+function inQuellraum(
+  ctx: CanvasRenderingContext2D,
+  source: EditorSource | null,
+  doc: StickerDoc,
+): boolean {
+  if (source?.kind !== 'image') return false;
+  const rect = sourceRect(source, doc);
+  ctx.translate(rect.x, rect.y);
+  ctx.scale(rect.width / source.width, rect.height / source.height);
+  return true;
+}
+
 function applyStrokes(
   ctx: CanvasRenderingContext2D,
   strokes: Stroke[],
   original: HTMLCanvasElement | null,
+  source: EditorSource | null,
+  doc: StickerDoc,
 ): void {
   if (strokes.length === 0) return;
   ctx.save();
+  inQuellraum(ctx, source, doc);
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.fillStyle = '#000000';
@@ -800,15 +921,23 @@ function applyStrokes(
     hctx.setTransform(1, 0, 0, 1, 0, 0);
     hctx.globalCompositeOperation = 'source-over';
     hctx.clearRect(0, 0, STICKER_SIZE, STICKER_SIZE);
+    // Das Original liegt in Flächenkoordinaten – erst danach in den
+    // Quellraum wechseln, damit die Strichform wieder am Motiv klebt.
     hctx.drawImage(original, 0, 0);
+    hctx.save();
+    inQuellraum(hctx, source, doc);
     hctx.globalCompositeOperation = 'destination-in';
     hctx.lineCap = 'round';
     hctx.lineJoin = 'round';
     hctx.fillStyle = '#000000';
     hctx.strokeStyle = '#000000';
     for (const stroke of block) strichZeichnen(hctx, stroke);
+    hctx.restore();
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.globalCompositeOperation = 'source-over';
     ctx.drawImage(hilf, 0, 0);
+    ctx.restore();
   }
   ctx.restore();
 }
@@ -1164,7 +1293,23 @@ export function renderSticker(
       }
     }
 
-    const maske = freistellMaske(dazu, weg);
+    let maske = freistellMaske(dazu, weg);
+    if (maske) {
+      // Erst ausweiten/hereinziehen, dann weichzeichnen – in dieser Folge,
+      // sonst frisst der Weichzeichner den Saum wieder weg.
+      if (doc.ausweiten > 0) {
+        maske = dilateAlpha(maske, STICKER_SIZE, STICKER_SIZE, Math.round(doc.ausweiten));
+      } else if (doc.ausweiten < 0) {
+        // Hereinziehen = das Gegenteil ausweiten und umkehren.
+        const um = new Uint8Array(maske.length);
+        for (let i = 0; i < maske.length; i += 1) um[i] = 255 - maske[i];
+        const breiter = dilateAlpha(um, STICKER_SIZE, STICKER_SIZE, Math.round(-doc.ausweiten));
+        for (let i = 0; i < maske.length; i += 1) maske[i] = 255 - breiter[i];
+      }
+      if (doc.weicher > 0) {
+        maske = blurAlpha(maske, STICKER_SIZE, STICKER_SIZE, Math.round(doc.weicher));
+      }
+    }
     if (maske) {
       const bild = ctx.getImageData(0, 0, STICKER_SIZE, STICKER_SIZE);
       for (let i = 0; i < maske.length; i += 1) {
@@ -1195,7 +1340,7 @@ export function renderSticker(
   }
 
   applyShape(ctx, doc.shape);
-  applyStrokes(ctx, doc.strokes, original);
+  applyStrokes(ctx, doc.strokes, original, source, doc);
 
   if (!options.fast && doc.outline && doc.outlineWidth > 0) {
     applyOutline(canvas, Math.round(doc.outlineWidth));
