@@ -3,7 +3,17 @@
 .bild-editor {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  /*
+   * Über dem Bildbetrachter (70), nicht darunter.
+   *
+   * Mit 60 lag der ganze Editor unter dessen zu 96 % deckendem Grund: Man
+   * sah ein fahles Gespenst seiner Knöpfe, die Leinwand gar nicht, und
+   * `elementFromPoint` auf dem Reiter „Ton“ lieferte `div.media-zoom` –
+   * jeder Fingertipp ging an den Betrachter. „Bild bearbeiten“ war aus dem
+   * Foto heraus schlicht unbenutzbar. Nachgestellt und im Bild festgehalten;
+   * `e2e/bilder.spec.ts` hält es fest.
+   */
+  z-index: 75;
   display: flex;
   flex-direction: column;
   background: var(--bg);
@@ -105,13 +115,21 @@
   color: var(--text-muted);
 }
 
+/* Feste Spalte für die Beschriftung: Elf Regler untereinander, deren
+   Schieber alle woanders anfangen, sehen aus wie ein Fehler. */
+.bild-schieber > span:first-child {
+  flex: none;
+  width: 5.5rem;
+}
+
 .bild-schieber input {
   flex: 1;
   min-width: 0;
 }
 
 .bild-wert {
-  min-width: 3ch;
+  /* Breit genug für „−2.35 EV“ – sonst springt die Spalte beim Ziehen. */
+  min-width: 6ch;
   text-align: right;
   font-variant-numeric: tabular-nums;
   color: var(--text);
@@ -148,11 +166,30 @@
 
 .bild-reiter-knopf {
   flex: 1;
+  /* `min-width: 0` ist bei vier Reitern nötig: Ohne das setzt Flexbox die
+     Mindestbreite auf den Inhalt, und die Leiste läuft auf einem schmalen
+     Telefon über den Rand hinaus. */
+  min-width: 0;
   min-height: 44px;
+  padding-inline: 4px;
   border-radius: var(--radius-full);
   color: var(--text-muted);
   font-weight: 600;
-  font-size: 0.85rem;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+/* Auf sehr schmalen Geräten weicht das Sinnbild, nicht das Wort. */
+@media (max-width: 400px) {
+  .bild-reiter-knopf span[aria-hidden='true'] {
+    display: none;
+  }
+}
+
+/* Der Tonwert-Reiter bringt elf Regler mit – ihm etwas mehr Platz geben,
+   sonst scrollt man bei jedem Griff. */
+.bild-panel.ist-ton {
+  max-height: 56vh;
 }
 
 .bild-fuss .bild-reihe .btn-primary {

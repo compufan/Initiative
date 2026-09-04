@@ -14,6 +14,8 @@
  * dazwischen übersetzen `nachAnsicht` und `nachOriginal`.
  */
 
+import { NEUTRAL, istNeutral, type Anpassung } from './ton.js';
+
 export type Drehung = 0 | 90 | 180 | 270;
 
 export interface Punkt {
@@ -68,6 +70,13 @@ export interface BildDoc {
   zuschnitt: Zuschnitt;
   striche: Malstrich[];
   texte: Schriftzug[];
+  /**
+   * Belichtung, Kontrast, Farbe – die Regler aus `ton.ts`.
+   *
+   * Teil des Dokuments und damit des Rückgängig-Verlaufs: Ein
+   * Belichtungsregler, den man nicht zurücknehmen kann, ist keiner.
+   */
+  anpassung: Anpassung;
 }
 
 /** Die längste Kante, die beim Speichern herauskommt. */
@@ -80,6 +89,7 @@ export function neuesDoc(width: number, height: number): BildDoc {
     zuschnitt: { x: 0, y: 0, w: width, h: height },
     striche: [],
     texte: [],
+    anpassung: { ...NEUTRAL },
   };
 }
 
@@ -90,6 +100,7 @@ export function docKopie(doc: BildDoc): BildDoc {
     zuschnitt: { ...doc.zuschnitt },
     striche: doc.striche.map((strich) => ({ ...strich, punkte: strich.punkte.slice() })),
     texte: doc.texte.map((text) => ({ ...text })),
+    anpassung: { ...doc.anpassung },
   };
 }
 
@@ -98,6 +109,7 @@ export function docUnberuehrt(doc: BildDoc, width: number, height: number): bool
   return (
     doc.drehung === 0 &&
     !doc.spiegel &&
+    istNeutral(doc.anpassung) &&
     doc.striche.length === 0 &&
     doc.texte.every((text) => text.text.trim().length === 0) &&
     doc.zuschnitt.x === 0 &&

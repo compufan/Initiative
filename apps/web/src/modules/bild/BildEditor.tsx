@@ -29,10 +29,48 @@ import {
   type Zuschnitt,
 } from './doc.js';
 import { basisAus, lupeHalten, zoomAusSpanne } from './lupe.js';
+import { NEUTRAL, autoAnpassung, istNeutral, type Anpassung } from './ton.js';
 import { SCHRIFTEN, trifftText, zeichneAnsicht, zeichneAusgabe } from './zeichnen.js';
 import './styles.css';
 
-type Werkzeug = 'zuschnitt' | 'malen' | 'text';
+type Werkzeug = 'zuschnitt' | 'ton' | 'malen' | 'text';
+
+/**
+ * Die Tonwert-Regler, in der Reihenfolge, in der man sie benutzt.
+ *
+ * Von grob nach fein: erst wieviel Licht, dann wie es verteilt ist, dann die
+ * Farbe, zuletzt der Feinschliff. Das ist die Reihenfolge, die jede
+ * Dunkelkammer und jedes Bearbeitungsprogramm benutzt – und sie ist nicht
+ * dieselbe wie die Reihenfolge, in der gerechnet wird.
+ */
+const TONREGLER: {
+  key: keyof Anpassung;
+  label: string;
+  min: number;
+  max: number;
+  schritt: number;
+  /** Wie der Wert unter dem Regler steht. */
+  zeigen?: (wert: number) => string;
+}[] = [
+  {
+    key: 'belichtung',
+    label: 'Belichtung',
+    min: -3,
+    max: 3,
+    schritt: 0.05,
+    zeigen: (wert) => `${wert > 0 ? '+' : ''}${wert.toFixed(2)} EV`,
+  },
+  { key: 'kontrast', label: 'Kontrast', min: -1, max: 1, schritt: 0.01 },
+  { key: 'lichter', label: 'Lichter', min: -1, max: 1, schritt: 0.01 },
+  { key: 'tiefen', label: 'Tiefen', min: -1, max: 1, schritt: 0.01 },
+  { key: 'schwarz', label: 'Schwarz', min: -1, max: 1, schritt: 0.01 },
+  { key: 'waerme', label: 'Wärme', min: -1, max: 1, schritt: 0.01 },
+  { key: 'toenung', label: 'Tönung', min: -1, max: 1, schritt: 0.01 },
+  { key: 'saettigung', label: 'Sättigung', min: -1, max: 1, schritt: 0.01 },
+  { key: 'dynamik', label: 'Dynamik', min: -1, max: 1, schritt: 0.01 },
+  { key: 'schaerfe', label: 'Schärfe', min: 0, max: 1, schritt: 0.01 },
+  { key: 'vignette', label: 'Vignette', min: -1, max: 1, schritt: 0.01 },
+];
 
 const FARBEN = [
   '#ffffff',
@@ -852,6 +890,68 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     [merken],
   );
 
+  /**
+   * Einen Tonwert-Regler setzen.
+   *
+   * Gebündelt je Regler: Wer einen Schieber über die halbe Skala zieht,
+   * erzeugt hundert Änderungen. Ohne die Bündelung wäre der Verlauf nach
+   * einem Zug voll und alles davor fort.
+   */
+  const tonSetzen = useCallback(
+    (welcher: keyof Anpassung, wert: number) => {
+      merkenGebuendelt(`ton-${welcher}`);
+      setDoc((alt) => (alt ? { ...alt, anpassung: { ...alt.anpassung, [welcher]: wert } } : alt));
+    },
+    [merkenGebuendelt],
+  );
+
+  /**
+   * Der Vorschlag der Automatik.
+   *
+   * Gerechnet wird auf einer stark verkleinerten Fassung des Bildes: Für ein
+   * Histogramm braucht es keine zwölf Millionen Bildpunkte, und 65 536
+   * liefern dieselben Perzentile auf zwei Stellen genau. Auf dem Original
+   * dauerte derselbe Griff auf einem Telefon spürbar lange.
+   */
+  const automatik = useCallback(() => {
+    const quellBild = bildRef.current;
+    if (!quellBild) return;
+    const kante = 256;
+    const flaeche = document.createElement('canvas');
+    flaeche.width = kante;
+    flaeche.height = kante;
+    const ctx = flaeche.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return;
+    ctx.drawImage(quellBild, 0, 0, kante, kante);
+    const daten = ctx.getImageData(0, 0, kante, kante).data;
+    const histogramm = new Uint32Array(256);
+    for (let i = 0; i < daten.length; i += 4) {
+      const y = 0.2126 * daten[i] + 0.7152 * daten[i + 1] + 0.0722 * daten[i + 2];
+      histogramm[Math.min(255, Math.max(0, Math.round(y)))] += 1;
+    }
+    merken();
+    const vorschlag = autoAnpassung(histogramm);
+    setDoc((alt) =>
+      alt
+        ? {
+            ...alt,
+            // Schärfe und Vignette bleiben, wie sie sind: Die Automatik
+            // beurteilt Helligkeit und Farbe, nicht den Geschmack.
+            anpassung: {
+              ...vorschlag,
+              schaerfe: alt.anpassung.schaerfe,
+              vignette: alt.anpassung.vignette,
+            },
+          }
+        : alt,
+    );
+  }, [merken]);
+
+  const tonZuruecksetzen = useCallback(() => {
+    merken();
+    setDoc((alt) => (alt ? { ...alt, anpassung: { ...NEUTRAL } } : alt));
+  }, [merken]);
+
   function textAendern(aenderung: Partial<Schriftzug>) {
     if (!aktiverText) return;
     // Vorher fehlte das ganz: Text tippen, Farbe und Größe waren nicht
@@ -985,7 +1085,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
         />
       </div>
 
-      <div className="bild-panel">
+      <div className={`bild-panel ${werkzeug === 'ton' ? 'ist-ton' : ''}`}>
         {werkzeug === 'zuschnitt' && (
           <>
             <div className="bild-reihe">
@@ -1022,6 +1122,53 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
             </div>
             <p className="bild-hinweis">
               Zieh an den Ecken oder Kanten. Innerhalb des Rahmens verschiebst du den Ausschnitt.
+            </p>
+          </>
+        )}
+
+        {werkzeug === 'ton' && doc && (
+          <>
+            <div className="bild-reihe">
+              <button type="button" className="btn btn-sm" onClick={automatik}>
+                ✨ Automatik
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={tonZuruecksetzen}
+                disabled={istNeutral(doc.anpassung)}
+              >
+                Zurücksetzen
+              </button>
+            </div>
+            {TONREGLER.map((regler) => {
+              const wert = doc.anpassung[regler.key];
+              return (
+                <label className="bild-schieber" key={regler.key}>
+                  <span>{regler.label}</span>
+                  <input
+                    type="range"
+                    min={regler.min}
+                    max={regler.max}
+                    step={regler.schritt}
+                    value={wert}
+                    onChange={(event) => tonSetzen(regler.key, Number(event.target.value))}
+                    /* Doppeltippen setzt einen einzelnen Regler zurück – der
+                       Griff, den man am häufigsten braucht und am seltensten
+                       findet. */
+                    onDoubleClick={() => tonSetzen(regler.key, 0)}
+                  />
+                  <span className="bild-wert">
+                    {regler.zeigen
+                      ? regler.zeigen(wert)
+                      : `${wert > 0 ? '+' : ''}${Math.round(wert * 100)}`}
+                  </span>
+                </label>
+              );
+            })}
+            <p className="bild-hinweis">
+              Doppeltippen auf einen Regler stellt ihn zurück. Die Regler wirken auf das Foto, nicht
+              auf das Gemalte oder die Schrift.
             </p>
           </>
         )}
@@ -1239,6 +1386,13 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
             onClick={() => setWerkzeug('zuschnitt')}
           >
             <span aria-hidden="true">✂️</span> Zuschnitt
+          </button>
+          <button
+            type="button"
+            className={`bild-reiter-knopf ${werkzeug === 'ton' ? 'is-active' : ''}`}
+            onClick={() => setWerkzeug('ton')}
+          >
+            <span aria-hidden="true">🎚️</span> Ton
           </button>
           <button
             type="button"

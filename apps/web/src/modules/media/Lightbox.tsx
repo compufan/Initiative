@@ -182,7 +182,23 @@ export function Lightbox({ items, index, onClose, ablegen, zielName }: LightboxP
   const fadeOut = Math.min(dismissY / 400, 0.7);
 
   return createPortal(
-    <div className="media-lightbox" role="dialog" aria-modal="true" aria-label="Foto">
+    <div
+      className="media-lightbox"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Foto"
+      /*
+       * Solange Editor oder Sticker-Studio offen sind, ist der Betrachter
+       * nicht bedienbar – auch nicht für einen Vorleser. `inert` und nicht
+       * `aria-hidden`: Der Knopf, über den man gerade in den Editor gegangen
+       * ist, hat den Tastaturfokus, und `aria-hidden` über einem
+       * fokussierten Element ist ein Fehler. `inert` nimmt ihn korrekt weg.
+       *
+       * Die Anzeige regelt das nicht: Editor und Studio liegen jetzt mit
+       * z-index 75 darüber. Das hier ist die Ebene darunter.
+       */
+      inert={werkstattOffen}
+    >
       <div className="media-lightbox-bar" style={{ opacity: 1 - fadeOut }}>
         <button type="button" className="media-round-btn" onClick={onClose} aria-label="Schließen">
           ✕

@@ -17,6 +17,7 @@ import {
   type Schriftzug,
   type Zuschnitt,
 } from './doc.js';
+import { getoentesBild } from './tonGpu.js';
 
 /**
  * Die Schriftarten zur Auswahl.
@@ -185,6 +186,14 @@ interface Unkenntlichkeit {
   skala: number;
   /** Länge des Strichs. Kommt ein Punkt dazu, gilt der Zettel nicht. */
   punkte: number;
+  /**
+   * Aus welchem Bild gelesen wurde.
+   *
+   * Muss mit: Seit die Tonwerte davorliegen, ist das Quellbild nicht mehr
+   * konstant. Wer die Belichtung anhebt, bekäme sonst einen Balken, der noch
+   * das dunkle Foto von vorhin verpixelt.
+   */
+  quelle: CanvasImageSource;
 }
 
 /**
@@ -221,9 +230,10 @@ function unkenntlich(
   width: number,
   height: number,
   skala: number,
+  quellSkala: number,
 ): void {
   const alt = gemerkt.get(strich);
-  if (alt && alt.skala === skala && alt.punkte === strich.punkte.length) {
+  if (alt && alt.skala === skala && alt.punkte === strich.punkte.length && alt.quelle === bild) {
     ctx.drawImage(alt.flaeche, alt.x0, alt.y0, alt.bw, alt.bh);
     return;
   }
@@ -272,7 +282,21 @@ function unkenntlich(
   hctx.setTransform(1, 0, 0, 1, 0, 0);
   hctx.globalCompositeOperation = 'source-over';
   hctx.clearRect(0, 0, pw, ph);
-  hctx.drawImage(bild, x0, y0, bw, bh, 0, 0, pw, ph);
+  // `quellSkala`: Das getönte Bild liegt in Arbeitsgrösse vor, das rohe in
+  // voller. Beides kommt hier an, also muss der Ausschnitt umgerechnet
+  // werden – sonst läse ein Balken bei halbem Massstab an der doppelten
+  // Stelle, also meist neben dem Bild.
+  hctx.drawImage(
+    bild,
+    x0 * quellSkala,
+    y0 * quellSkala,
+    bw * quellSkala,
+    bh * quellSkala,
+    0,
+    0,
+    pw,
+    ph,
+  );
   const daten = hctx.getImageData(0, 0, pw, ph);
   // Kachel und Radius wandern in denselben Massstab wie die Fläche, sonst
   // wäre die Verpixelung in der Ansicht gröber oder feiner als im Ergebnis.
@@ -349,7 +373,16 @@ function unkenntlich(
   const ectx = eigen.getContext('2d');
   if (ectx) {
     ectx.drawImage(hilf, 0, 0);
-    gemerkt.set(strich, { flaeche: eigen, x0, y0, bw, bh, skala, punkte: strich.punkte.length });
+    gemerkt.set(strich, {
+      flaeche: eigen,
+      x0,
+      y0,
+      bw,
+      bh,
+      skala,
+      punkte: strich.punkte.length,
+      quelle: bild,
+    });
   }
   ctx.drawImage(hilf, x0, y0, bw, bh);
 }
@@ -398,12 +431,36 @@ function arbeitsflaeche(w: number, h: number): HTMLCanvasElement {
 
 function malen(
   ctx: CanvasRenderingContext2D,
-  bild: CanvasImageSource,
+  roh: CanvasImageSource,
   width: number,
   height: number,
   doc: BildDoc,
   optionen: MalOptionen,
 ): void {
+  /*
+   * Die Tonwerte zuerst, und zwar so, dass alles Weitere sie schon vorfindet.
+   *
+   * `getoentesBild` liefert bei neutraler Einstellung das Bild selbst zurück
+   * – dann kostet der Weg nichts. Sonst eine Leinwand, die überall dort
+   * einspringt, wo sonst das Quellbild stünde: auch beim Verpixeln und beim
+   * Zurückholen. Sonst holte ein Wisch mit dem Verwischer die unbearbeitete
+   * Fassung zurück ins Bild.
+   *
+   * Gerechnet wird in der Grösse, in der gezeichnet wird. Vignette und
+   * Unschärfemaske hängen vom Massstab ab; eine in Ansichtsgrösse gerechnete
+   * und dann hochskalierte Vignette sässe in der Ausgabe falsch.
+   */
+  const skala = Math.min(1, optionen.faktor);
+  const bild = getoentesBild(
+    roh,
+    Math.max(1, Math.round(width * skala)),
+    Math.max(1, Math.round(height * skala)),
+    doc.anpassung,
+  );
+  // Wieviele Bildpunkte des gelieferten Bildes auf einen Quellbildpunkt
+  // kommen: eins, wenn nichts eingestellt ist und das Original zurückkam.
+  const quellSkala = bild === roh ? 1 : skala;
+
   ansichtsRaum(ctx, optionen.faktor, optionen.versatz);
   ctx.save();
   bildRaum(ctx, width, height, doc);
@@ -424,11 +481,10 @@ function malen(
    * wieder hervor, soweit sich beide überlappen. Das ist genau der Fall, in
    * dem jemand etwas verbergen wollte – der teuerste denkbare Fehler.
    */
-  const skala = Math.min(1, optionen.faktor);
   for (const strich of doc.striche) {
     if (strich.punkte.length < 2) continue;
     if (strich.art === 'pixel' || strich.art === 'weich') {
-      unkenntlich(ctx, bild, strich, width, height, skala);
+      unkenntlich(ctx, bild, strich, width, height, skala, quellSkala);
     }
   }
   for (const strich of doc.striche) {
