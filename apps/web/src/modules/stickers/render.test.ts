@@ -5,6 +5,7 @@ import {
   createDoc,
   isEmptyDoc,
   flutmaske,
+  formPfad,
   abziehenAlpha,
   freistellMaske,
   keepAtSeeds,
@@ -12,6 +13,11 @@ import {
   MIN_SCALE,
   lupeGrenzen,
   motivFuellen,
+  normGrad,
+  rasten,
+  sourceRect,
+  zurFlaeche,
+  zweiFingerZug,
   removeBackground,
   saatAufFlaeche,
   strichBloecke,
@@ -399,7 +405,7 @@ describe('Wegnehmen', () => {
  * ohne einen einzigen Megabyte Download auskommt.
  */
 describe('Saatpunkte zwischen Quellbild und Fläche', () => {
-  const doc = { scale: 1, offsetX: 0, offsetY: 0 };
+  const doc = { scale: 1, offsetX: 0, offsetY: 0, drehung: 0 };
 
   it('bringt einen Tipp aus einem Handyfoto zurück auf die Fläche', () => {
     // Hochkant, wie es aus einer Telefonkamera kommt.
@@ -415,7 +421,7 @@ describe('Saatpunkte zwischen Quellbild und Fläche', () => {
 
   it('bleibt auch bei Zoom und Verschiebung genau', () => {
     const quelle = { width: 1200, height: 800 };
-    const verschoben = { scale: 2.4, offsetX: -70, offsetY: 35 };
+    const verschoben = { scale: 2.4, offsetX: -70, offsetY: 35, drehung: 0 };
     for (const punkt of [
       { x: 10, y: 10 },
       { x: 256, y: 256 },
@@ -451,7 +457,7 @@ describe('Saatpunkte zwischen Quellbild und Fläche', () => {
     const quelle = { width: 800, height: 600 };
     const mitte = toSourcePoint({ x: 256, y: 256 }, quelle, doc);
     // Weit genug zur Seite geschoben, dass der Punkt hinausfällt.
-    const weit = { scale: 1, offsetX: -900, offsetY: 0 };
+    const weit = { scale: 1, offsetX: -900, offsetY: 0, drehung: 0 };
 
     expect(saatAufFlaeche([mitte], quelle, weit)).toHaveLength(0);
     // Und ohne Saat gibt es nichts zu beschneiden – statt einer Nullmaske.
@@ -464,9 +470,13 @@ describe('Saatpunkte zwischen Quellbild und Fläche', () => {
     const quelle = { width: 3024, height: 4032 };
     const imBild = toSourcePoint({ x: 256, y: 256 }, quelle, doc);
     expect(imBild.x).toBeGreaterThan(STICKER_SIZE);
-    expect(flutmaske(makeImage(64, () => [10, 10, 10, 255]), [imBild], 40).some((v) => v > 0)).toBe(
-      false,
-    );
+    expect(
+      flutmaske(
+        makeImage(64, () => [10, 10, 10, 255]),
+        [imBild],
+        40,
+      ).some((v) => v > 0),
+    ).toBe(false);
   });
 });
 
@@ -529,5 +539,332 @@ describe('motivFuellen', () => {
 
   it('gibt nichts zurück, wenn die Maske leer ist', () => {
     expect(motivFuellen(new Uint8Array(B * H), B, H, { width: 400, height: 400 })).toBeNull();
+  });
+});
+
+/*
+ * Drehung – Stufe 2.
+ *
+ * Der Punkt der ganzen Umstellung ist, dass es nur EINE Abbildung zwischen
+ * Quellbild und Fläche gibt (`quellLage`). Diese Prüfungen halten sie gegen
+ * die alte, drehungsfreie Rechnung und gegen sich selbst.
+ */
+describe('quellLage und die Drehung', () => {
+  const quelle = { width: 1200, height: 800 };
+  const grund = { scale: 1.4, offsetX: 30, offsetY: -20 };
+
+  it('fällt ohne Drehung mit sourceRect zusammen', () => {
+    const doc = { ...grund, drehung: 0 };
+    const rect = sourceRect(quelle, doc);
+    // Die linke obere Ecke des Bildes ist der Quellpunkt (0, 0).
+    const ecke = zurFlaeche({ x: 0, y: 0 }, quelle, doc);
+    expect(ecke.x).toBeCloseTo(rect.x, 9);
+    expect(ecke.y).toBeCloseTo(rect.y, 9);
+    // Und die rechte untere die Ecke plus Breite und Höhe.
+    const unten = zurFlaeche({ x: quelle.width, y: quelle.height }, quelle, doc);
+    expect(unten.x).toBeCloseTo(rect.x + rect.width, 9);
+    expect(unten.y).toBeCloseTo(rect.y + rect.height, 9);
+  });
+
+  it('ist auch gedreht in beide Richtungen umkehrbar', () => {
+    for (const drehung of [-180, -37, 0, 3, 90, 174]) {
+      const doc = { ...grund, drehung };
+      for (const punkt of [
+        { x: 0, y: 0 },
+        { x: 256, y: 256 },
+        { x: 511, y: 40 },
+      ]) {
+        const imBild = toSourcePoint(punkt, quelle, doc);
+        const zurueck = zurFlaeche(imBild, quelle, doc);
+        expect(zurueck.x).toBeCloseTo(punkt.x, 6);
+        expect(zurueck.y).toBeCloseTo(punkt.y, 6);
+      }
+    }
+  });
+
+  it('lässt die Bildmitte an ihrem Platz – die Drehung ist um sie herum', () => {
+    const bildMitte = { x: quelle.width / 2, y: quelle.height / 2 };
+    const ohne = zurFlaeche(bildMitte, quelle, { ...grund, drehung: 0 });
+    for (const drehung of [17, 90, -145]) {
+      const mit = zurFlaeche(bildMitte, quelle, { ...grund, drehung });
+      expect(mit.x).toBeCloseTo(ohne.x, 9);
+      expect(mit.y).toBeCloseTo(ohne.y, 9);
+    }
+  });
+
+  it('dreht im Uhrzeigersinn, so wie die Leinwand es tut', () => {
+    // 90° im Uhrzeigersinn: Was rechts der Bildmitte lag, liegt danach
+    // darunter. (Die y-Achse zeigt auf einer Leinwand nach unten.)
+    const doc = { scale: 1, offsetX: 0, offsetY: 0, drehung: 90 };
+    const rechts = { x: quelle.width / 2 + 100, y: quelle.height / 2 };
+    const auf = zurFlaeche(rechts, quelle, doc);
+    expect(auf.x).toBeCloseTo(STICKER_SIZE / 2, 6);
+    expect(auf.y).toBeGreaterThan(STICKER_SIZE / 2 + 10);
+  });
+});
+
+describe('normGrad und rasten', () => {
+  it('bringt Winkel auf (−180, 180]', () => {
+    expect(normGrad(450)).toBe(90);
+    expect(normGrad(-270)).toBe(90);
+    expect(normGrad(180)).toBe(180);
+    expect(normGrad(-180)).toBe(180);
+    expect(normGrad(0)).toBe(0);
+  });
+
+  it('rastet nahe an einer Vierteldrehung ein, sonst nicht', () => {
+    expect(rasten(89)).toBe(90);
+    expect(rasten(-2)).toBe(0);
+    expect(rasten(1.5)).toBe(0);
+    expect(rasten(45)).toBe(45);
+    expect(rasten(84)).toBe(84);
+  });
+
+  it('rastet auch das Ergebnis von 3 × 90° sauber ein', () => {
+    expect(rasten(normGrad(270))).toBe(-90);
+  });
+});
+
+describe('zweiFingerZug', () => {
+  const start = {
+    mitte: { x: 150, y: 380 },
+    offsetX: 12,
+    offsetY: -8,
+    scale: 1.3,
+    drehung: 10,
+  };
+
+  /** Wo ein Quellpunkt landet – die Rechnung aus `quellLage`, nachgebaut. */
+  function auf(
+    p: { x: number; y: number },
+    doc: { scale: number; offsetX: number; offsetY: number; drehung: number },
+    quelle: { width: number; height: number },
+  ) {
+    return zurFlaeche(p, quelle, doc);
+  }
+
+  it('hält den Punkt unter der Fingermitte fest – beim Zoomen wie beim Drehen', () => {
+    const quelle = { width: 900, height: 1200 };
+    const vorher = { ...start, drehung: start.drehung };
+    // Welcher Bildpunkt liegt beim Aufsetzen unter der Fingermitte?
+    const unterDenFingern = toSourcePoint(start.mitte, quelle, vorher);
+
+    for (const [verhaeltnis, deltaGrad] of [
+      [1, 0],
+      [1.8, 0],
+      [1, 35],
+      [0.6, -70],
+    ] as const) {
+      const nachher = zweiFingerZug(start, {
+        mitte: start.mitte,
+        verhaeltnis,
+        deltaGrad,
+      });
+      const jetzt = auf(unterDenFingern, nachher, quelle);
+      expect(jetzt.x).toBeCloseTo(start.mitte.x, 4);
+      expect(jetzt.y).toBeCloseTo(start.mitte.y, 4);
+    }
+  });
+
+  it('folgt der Fingermitte, wenn sie wandert', () => {
+    const quelle = { width: 900, height: 1200 };
+    const unterDenFingern = toSourcePoint(start.mitte, quelle, start);
+    const nachher = zweiFingerZug(start, {
+      mitte: { x: 300, y: 200 },
+      verhaeltnis: 1.4,
+      deltaGrad: 22,
+    });
+    const jetzt = auf(unterDenFingern, nachher, quelle);
+    expect(jetzt.x).toBeCloseTo(300, 4);
+    expect(jetzt.y).toBeCloseTo(200, 4);
+  });
+
+  it('lässt den Versatz am Zoom-Anschlag stehen, statt weiterzuwandern', () => {
+    // Mit dem gewünschten statt dem erreichten Verhältnis rutschte das Motiv
+    // am Anschlag unter den Fingern weg.
+    const quelle = { width: 900, height: 1200 };
+    const amAnschlag = zweiFingerZug(start, {
+      mitte: start.mitte,
+      verhaeltnis: 100,
+      deltaGrad: 0,
+    });
+    expect(amAnschlag.scale).toBe(MAX_SCALE);
+    const unterDenFingern = toSourcePoint(start.mitte, quelle, amAnschlag);
+    const jetzt = auf(unterDenFingern, amAnschlag, quelle);
+    expect(jetzt.x).toBeCloseTo(start.mitte.x, 4);
+    expect(jetzt.y).toBeCloseTo(start.mitte.y, 4);
+  });
+
+  it('summiert die Drehung und hält sie im Bereich', () => {
+    expect(
+      zweiFingerZug(
+        { ...start, drehung: 170 },
+        { mitte: start.mitte, verhaeltnis: 1, deltaGrad: 30 },
+      ).drehung,
+    ).toBe(-160);
+  });
+});
+
+describe('motivFuellen mit Drehung', () => {
+  const B = 100;
+  const H = 100;
+  function maske(x0: number, y0: number, x1: number, y1: number): Uint8Array {
+    const alpha = new Uint8Array(B * H);
+    for (let y = y0; y <= y1; y += 1) for (let x = x0; x <= x1; x += 1) alpha[y * B + x] = 255;
+    return alpha;
+  }
+
+  it('zoomt bei 45° weniger heran – das gedrehte Rechteck braucht mehr Platz', () => {
+    const quelle = { width: 400, height: 400 };
+    const gerade = motivFuellen(maske(20, 20, 60, 60), B, H, quelle)!;
+    const schraeg = motivFuellen(maske(20, 20, 60, 60), B, H, quelle, 0.08, 45)!;
+    expect(schraeg.scale).toBeLessThan(gerade.scale);
+    // Ein Quadrat um 45° gedreht ist rund 1,41-mal so breit.
+    expect(gerade.scale / schraeg.scale).toBeCloseTo(Math.SQRT2, 2);
+  });
+
+  it('setzt die Motivmitte auch gedreht in die Mitte der Fläche', () => {
+    const quelle = { width: 400, height: 400 };
+    for (const drehung of [0, 30, 90, -120]) {
+      const passend = motivFuellen(maske(10, 10, 30, 30), B, H, quelle, 0.08, drehung)!;
+      const doc = { ...passend, drehung };
+      // Die Mitte der Maske in Quellpunkten – die Maske ist 100 Punkte breit,
+      // das Bild 400, also mal vier.
+      const mitte = { x: ((10 + 31) / 2) * 4, y: ((10 + 31) / 2) * 4 };
+      const auf = zurFlaeche(mitte, quelle, doc);
+      expect(auf.x).toBeCloseTo(STICKER_SIZE / 2, 4);
+      expect(auf.y).toBeCloseTo(STICKER_SIZE / 2, 4);
+    }
+  });
+});
+
+/*
+ * Die Formen – Stufe 2.
+ *
+ * Der eine Fehler, den man hier machen kann und der in keiner Rechnung
+ * auffällt: zwei Teilpfade mit entgegengesetztem Umlaufsinn. Die Vorgabe-
+ * Füllregel `nonzero` vereinigt gleichsinnige Pfade und LÖSCHT gegensinnige
+ * in ihrer Überschneidung. Beim ersten Wurf der Sprechblase war der Zipfel
+ * andersherum gewickelt – in Chromium nachgemessen war die Folge ein
+ * sauberes Loch quer durch den unteren Rand der Blase.
+ *
+ * Deshalb wird hier nicht gezeichnet, sondern mitgeschrieben: ein Stift, der
+ * nur festhält, wohin er ginge. Die Vorzeichen der Flächen sagen dann alles.
+ */
+interface Teilpfad {
+  punkte: { x: number; y: number }[];
+}
+
+function mitschrift() {
+  const teile: Teilpfad[] = [];
+  let offen: { x: number; y: number }[] = [];
+  const ablegen = () => {
+    if (offen.length >= 3) teile.push({ punkte: offen });
+    offen = [];
+  };
+  const stift = {
+    beginPath() {
+      teile.length = 0;
+      offen = [];
+    },
+    moveTo(x: number, y: number) {
+      ablegen();
+      offen = [{ x, y }];
+    },
+    lineTo(x: number, y: number) {
+      offen.push({ x, y });
+    },
+    // Die Rundung liegt im Dreieck aus Stützpunkt und Ziel – für die Frage
+    // nach dem Umlaufsinn genügt der Streckenzug darüber.
+    arcTo(x1: number, y1: number, x2: number, y2: number) {
+      offen.push({ x: x1, y: y1 }, { x: x2, y: y2 });
+    },
+    arc(cx: number, cy: number, r: number, von: number, bis: number) {
+      const schritte = 32;
+      for (let i = 0; i <= schritte; i += 1) {
+        const w = von + ((bis - von) * i) / schritte;
+        offen.push({ x: cx + Math.cos(w) * r, y: cy + Math.sin(w) * r });
+      }
+    },
+    closePath() {
+      ablegen();
+    },
+    fertig() {
+      ablegen();
+      return teile;
+    },
+  };
+  return stift;
+}
+
+/**
+ * Die vorzeichenbehaftete Fläche.
+ *
+ * Positiv heisst im Uhrzeigersinn – auf einer Leinwand, deren y-Achse nach
+ * unten zeigt. (In der Schulmathematik mit y nach oben wäre es umgekehrt;
+ * genau diese Verwechslung war der Fehler.)
+ */
+function flaecheMitVorzeichen(teil: Teilpfad): number {
+  let summe = 0;
+  const p = teil.punkte;
+  for (let i = 0; i < p.length; i += 1) {
+    const a = p[i];
+    const b = p[(i + 1) % p.length];
+    summe += a.x * b.y - b.x * a.y;
+  }
+  return summe / 2;
+}
+
+describe('formPfad', () => {
+  function zeichnen(shape: Parameters<typeof formPfad>[1]) {
+    const stift = mitschrift();
+    const gibtEs = formPfad(stift as unknown as CanvasRenderingContext2D, shape);
+    return { gibtEs, teile: stift.fertig() };
+  }
+
+  it('schneidet bei Quadrat und Frei nichts weg', () => {
+    expect(zeichnen('square').gibtEs).toBe(false);
+    expect(zeichnen('free').gibtEs).toBe(false);
+  });
+
+  it('legt für Karte, Kreis und Sprechblase einen Pfad an', () => {
+    for (const shape of ['rounded', 'circle', 'bubble'] as const) {
+      const { gibtEs, teile } = zeichnen(shape);
+      expect(gibtEs).toBe(true);
+      expect(teile.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('wickelt alle Teilpfade gleichsinnig – sonst frisst der Zipfel die Blase', () => {
+    for (const shape of ['rounded', 'circle', 'bubble'] as const) {
+      const vorzeichen = zeichnen(shape).teile.map((teil) => Math.sign(flaecheMitVorzeichen(teil)));
+      expect(vorzeichen.every((wert) => wert === vorzeichen[0])).toBe(true);
+      // Und zwar im Uhrzeigersinn, wie `abgerundet` es vorgibt.
+      expect(vorzeichen[0]).toBe(1);
+    }
+  });
+
+  it('gibt der Sprechblase einen Zipfel, der unter dem Körper hervorschaut', () => {
+    const { teile } = zeichnen('bubble');
+    expect(teile).toHaveLength(2);
+    const tiefsteR = Math.max(...teile[0].punkte.map((p) => p.y));
+    const tiefsteZ = Math.max(...teile[1].punkte.map((p) => p.y));
+    expect(tiefsteZ).toBeGreaterThan(tiefsteR + 40);
+    // Er greift zugleich in den Körper hinein, sonst klaffte an der
+    // Nahtstelle eine Kerbe.
+    expect(Math.min(...teile[1].punkte.map((p) => p.y))).toBeLessThan(tiefsteR);
+  });
+
+  it('bleibt bei jeder Form innerhalb der Fläche', () => {
+    for (const shape of ['rounded', 'circle', 'bubble'] as const) {
+      for (const teil of zeichnen(shape).teile) {
+        for (const punkt of teil.punkte) {
+          expect(punkt.x).toBeGreaterThanOrEqual(0);
+          expect(punkt.y).toBeGreaterThanOrEqual(0);
+          expect(punkt.x).toBeLessThanOrEqual(STICKER_SIZE);
+          expect(punkt.y).toBeLessThanOrEqual(STICKER_SIZE);
+        }
+      }
+    }
   });
 });

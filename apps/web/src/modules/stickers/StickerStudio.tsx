@@ -21,9 +21,12 @@ import {
   exportSticker,
   isEmptyDoc,
   lupeGrenzen,
+  normGrad,
+  rasten,
   renderSticker,
   toSourcePoint,
   vereinigeAlpha,
+  zweiFingerZug,
   type EditorSource,
   type ShapeKind,
   type StickerDoc,
@@ -69,14 +72,17 @@ const TABS: { key: Tab; icon: string; label: string }[] = [
 
 const SHAPES: { key: ShapeKind; label: string; icon: string }[] = [
   { key: 'square', label: 'Quadrat', icon: '⬜' },
+  { key: 'rounded', label: 'Karte', icon: '▢' },
   { key: 'circle', label: 'Kreis', icon: '⚪' },
+  { key: 'bubble', label: 'Sprechblase', icon: '💬' },
   { key: 'free', label: 'Frei', icon: '🧽' },
 ];
 
+/** Um wieviel Grad zwei Finger sich drehen dürfen, ohne dass etwas passiert. */
+const DREH_TOTGANG = 7;
+
 const START_EMOJI = ['😀', '😂', '😍', '🥳', '😎', '🤔', '🙈', '🔥', '✨', '💜', '🎉', '🚀'];
 const TEXT_COLORS = ['#ffffff', '#111111', '#ff3b30', '#ffcc00', '#34c759', '#0a84ff', '#af52de'];
-
-
 
 /**
  * Wie weit die Lupe vergrössert.
@@ -109,6 +115,10 @@ interface GestureState {
   startOffsetY: number;
   startDistance: number;
   startScale: number;
+  /** Der Winkel zwischen den Fingern beim Aufsetzen, in Grad. */
+  startWinkel: number;
+  /** Die Drehung des Bildes beim Aufsetzen, in Grad. */
+  startDrehung: number;
 }
 
 /**
@@ -183,9 +193,10 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
    * Vorlage je Tipp konnte der Zwischenspeicher nie greifen, und jeder Tipp
    * rechnete den Encoder von vorn (rund eine Sekunde statt eines Viertels).
    */
-  const vorlageRef = useRef<{ bild: HTMLImageElement; vorlage: ReturnType<typeof vorlageAus> } | null>(
-    null,
-  );
+  const vorlageRef = useRef<{
+    bild: HTMLImageElement;
+    vorlage: ReturnType<typeof vorlageAus>;
+  } | null>(null);
   const lupeRef = useRef(lupe);
   const history = useRef<StickerDoc[]>([]);
   const lastCommit = useRef<{ label: string; at: number }>({ label: '', at: 0 });
@@ -207,6 +218,8 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     startOffsetY: 0,
     startDistance: 0,
     startScale: 1,
+    startWinkel: 0,
+    startDrehung: 0,
   });
   /**
    * Der laufende Lupenzug – in Bildschirmpixeln, nicht in Sticker-Koordinaten.
@@ -592,7 +605,12 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
         // frisst der 3×3-Kern dort rund ein Zehntel der Struktur – also einen
         // guten Teil dessen, wofür man die 110 MB überhaupt geladen hat.
         // `kanteWeichzeichnen` gibt bei Radius unter 1 unverändert zurück.
-        const alpha = kanteWeichzeichnen(roh, image.width, image.height, key === 'birefnet' ? 0 : 1);
+        const alpha = kanteWeichzeichnen(
+          roh,
+          image.width,
+          image.height,
+          key === 'birefnet' ? 0 : 1,
+        );
         if (!maskeTraegt(alpha)) {
           throw new EngineError(
             `„${engineInfo(key).label}“ hat nichts gefunden, was sich freistellen lässt. Versuche ein anderes Verfahren oder tippe das Motiv an.`,
@@ -760,6 +778,22 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     };
   }
 
+  /**
+   * Der Winkel zwischen den Fingern, in Grad.
+   *
+   * In Bildschirmkoordinaten und nicht in Sticker-Koordinaten: Beide sind hier
+   * gleichmässig skaliert, der Winkel ist also derselbe – aber die
+   * Bildschirmwerte ändern sich nicht, wenn das Bild sich unter den Fingern
+   * dreht. Genau das wollte man beim Drehen nicht.
+   */
+  function clientWinkel(): number {
+    const list = [...pointers.current.values()];
+    const a = list[0];
+    const b = list[1];
+    if (!a || !b) return 0;
+    return (Math.atan2(b.cy - a.cy, b.cx - a.cx) * 180) / Math.PI;
+  }
+
   /** Der Fingerabstand auf dem Bildschirm – unabhaengig von der Lupe. */
   function clientDistance(): number {
     const list = [...pointers.current.values()];
@@ -780,6 +814,8 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       startOffsetY: current.offsetY,
       startDistance: mid.distance || 1,
       startScale: current.scale,
+      startWinkel: clientWinkel(),
+      startDrehung: current.drehung,
     };
   }
 
@@ -835,7 +871,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       const q = sourceRef.current;
       if (!q || q.kind !== 'image') return;
       const start = toSourcePoint(point, q, docRef.current);
-      const breite = brushRef.current * (q.width / STICKER_SIZE) / docRef.current.scale;
+      const breite = (brushRef.current * (q.width / STICKER_SIZE)) / docRef.current.scale;
       setDoc((value) => ({
         ...value,
         strokes: [
@@ -872,6 +908,8 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       startOffsetY: current.offsetY,
       startDistance: 0,
       startScale: current.scale,
+      startWinkel: 0,
+      startDrehung: current.drehung,
     };
   }
 
@@ -900,17 +938,34 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     if (state.mode === 'pinch' && pointers.current.size >= 2) {
       commitArmedGesture();
       const mid = midpoint();
-      const ratio = clamp(
-        (mid.distance || 1) / state.startDistance,
-        MIN_SCALE / state.startScale,
-        MAX_SCALE / state.startScale,
-      );
-      const centre = STICKER_SIZE / 2;
+      /*
+       * Zwei Finger machen jetzt dreierlei: zoomen, schieben und drehen.
+       *
+       * Der Totgang ist kein Schönheitsfehler, sondern nötig: Beim Zusammen-
+       * ziehen zweier Finger dreht sich die Verbindungslinie fast immer um
+       * ein paar Grad mit. Ohne ihn stünde nach jedem Zoomen ein leicht
+       * schiefes Bild da. Abgezogen wird er auch – sonst spränge das Bild in
+       * dem Moment, in dem er überschritten wird.
+       */
+      const roh = normGrad(clientWinkel() - state.startWinkel);
+      const ueber = Math.abs(roh) <= DREH_TOTGANG ? 0 : roh - Math.sign(roh) * DREH_TOTGANG;
+      const ziel = rasten(normGrad(state.startDrehung + ueber));
       setDoc((value) => ({
         ...value,
-        scale: state.startScale * ratio,
-        offsetX: mid.x - centre - (state.startX - centre - state.startOffsetX) * ratio,
-        offsetY: mid.y - centre - (state.startY - centre - state.startOffsetY) * ratio,
+        ...zweiFingerZug(
+          {
+            mitte: { x: state.startX, y: state.startY },
+            offsetX: state.startOffsetX,
+            offsetY: state.startOffsetY,
+            scale: state.startScale,
+            drehung: state.startDrehung,
+          },
+          {
+            mitte: { x: mid.x, y: mid.y },
+            verhaeltnis: (mid.distance || 1) / state.startDistance,
+            deltaGrad: ziel - state.startDrehung,
+          },
+        ),
       }));
       return;
     }
@@ -982,6 +1037,8 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
         startOffsetY: current.offsetY,
         startDistance: 0,
         startScale: current.scale,
+        startWinkel: 0,
+        startDrehung: current.drehung,
       };
       return;
     }
@@ -1045,6 +1102,23 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
         offsetY: value.offsetY * ratio,
       };
     });
+  }
+
+  /**
+   * Dreht das Bild um seine Mitte.
+   *
+   * `sofort` heisst „das war ein Knopfdruck“ und legt einen eigenen
+   * Rückgängig-Schritt an. Der Regler bündelt stattdessen, sonst stünden nach
+   * einmal Ziehen fünfzig Schritte im Verlauf und alles davor wäre fort.
+   *
+   * Das Zurechtrücken des Winkels steht NUR hier – die Knöpfe geben roh
+   * `drehung ± 90` weiter. Dreimal nach rechts sind sonst 270°, und der
+   * Regler reicht nur bis 180: Er stünde am Anschlag, während das Bild eine
+   * Vierteldrehung weiter ist.
+   */
+  function drehungSetzen(grad: number, sofort = false) {
+    commit(sofort ? undefined : 'drehen');
+    setDoc((value) => ({ ...value, drehung: rasten(grad) }));
   }
 
   function chooseShape(shape: ShapeKind) {
@@ -1290,13 +1364,56 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
               />
               <span className="stk-slider-value">{Math.round(doc.scale * 100)} %</span>
             </label>
+            <label className="stk-slider">
+              <span>Drehen</span>
+              <input
+                type="range"
+                min={-180}
+                max={180}
+                value={Math.round(doc.drehung)}
+                onChange={(event) => drehungSetzen(Number(event.target.value))}
+              />
+              <span className="stk-slider-value">{Math.round(doc.drehung)}°</span>
+            </label>
+            <div className="stk-btn-row">
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => drehungSetzen(doc.drehung - 90, true)}
+                aria-label="Eine Vierteldrehung nach links"
+              >
+                ↺ 90°
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => drehungSetzen(doc.drehung + 90, true)}
+                aria-label="Eine Vierteldrehung nach rechts"
+              >
+                ↻ 90°
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => drehungSetzen(0, true)}
+                disabled={doc.drehung === 0}
+              >
+                Gerade
+              </button>
+            </div>
             <div className="stk-btn-row">
               <button
                 type="button"
                 className="btn btn-sm"
                 onClick={() => {
                   commit();
-                  setDoc((value) => ({ ...value, offsetX: 0, offsetY: 0, scale: 1 }));
+                  setDoc((value) => ({
+                    ...value,
+                    offsetX: 0,
+                    offsetY: 0,
+                    scale: 1,
+                    drehung: 0,
+                  }));
                 }}
               >
                 Zentrieren
@@ -1317,7 +1434,8 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
               </button>
             </div>
             <p className="stk-hint">
-              Ein Finger verschiebt, zwei Finger zoomen. Mit der Maus: ziehen und scrollen.
+              Ein Finger verschiebt, zwei Finger zoomen und drehen. Nahe an einer Vierteldrehung
+              rastet es ein. Mit der Maus: ziehen und scrollen.
             </p>
           </>
         )}
@@ -1481,7 +1599,14 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                       const quelle = sourceRef.current;
                       const maske = doc.autoMask;
                       if (!quelle || quelle.kind !== 'image' || !maske) return;
-                      const passend = motivFuellen(maske.alpha, maske.width, maske.height, quelle);
+                      const passend = motivFuellen(
+                        maske.alpha,
+                        maske.width,
+                        maske.height,
+                        quelle,
+                        0.08,
+                        docRef.current.drehung,
+                      );
                       if (!passend) return;
                       commit();
                       setDoc((value) => ({ ...value, ...passend }));
@@ -1664,7 +1789,9 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                           keep: value.keep.slice(0, -1),
                           // Die Maske dieses Tipps muss mit weg, sonst bliebe
                           // seine Wirkung stehen.
-                          tippGruppen: value.tippGruppen.filter((g) => g.nummer !== letzter?.gruppe),
+                          tippGruppen: value.tippGruppen.filter(
+                            (g) => g.nummer !== letzter?.gruppe,
+                          ),
                         };
                       });
                     }}
@@ -1682,7 +1809,9 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                       setDoc((value) => ({ ...value, keep: [], tippGruppen: [] }));
                     }}
                     disabled={
-                      !hasImage || (doc.keep.length === 0 && doc.tippGruppen.length === 0) || tippRechnet
+                      !hasImage ||
+                      (doc.keep.length === 0 && doc.tippGruppen.length === 0) ||
+                      tippRechnet
                     }
                   >
                     Auswahl zurücksetzen

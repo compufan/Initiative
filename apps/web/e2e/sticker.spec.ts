@@ -77,7 +77,9 @@ test('das Menü führt weiterhin vollständig zu allem', async ({ browser }) => 
   // Ausdrücklich IM Blatt suchen: „Sticker“ gibt es jetzt zweimal – einmal als
   // Abkürzung in der Zeile, einmal hier. Das ist gewollt und darf den Test
   // nicht stolpern lassen.
-  const menue = page.getByRole('dialog').filter({ has: page.getByRole('heading', { name: 'Hinzufügen' }) });
+  const menue = page
+    .getByRole('dialog')
+    .filter({ has: page.getByRole('heading', { name: 'Hinzufügen' }) });
   for (const eintrag of ['Kamera', 'Foto/Video', 'Sprachnachricht', 'Datei', 'Sticker']) {
     await expect(menue.getByRole('button', { name: eintrag, exact: true })).toBeVisible();
   }
@@ -173,17 +175,67 @@ test('das Freistellen bietet genau fünf Knöpfe, und Antippen ist einer davon',
 
   const reihe = page.getByRole('group', { name: 'Freistellen' });
   await expect(reihe.getByRole('button')).toHaveCount(5);
-  for (const name of [
-    'Gesicht',
-    'Person',
-    'Niedrige Qualität',
-    'Hohe Qualität',
-    'Antippen',
-  ]) {
+  for (const name of ['Gesicht', 'Person', 'Niedrige Qualität', 'Hohe Qualität', 'Antippen']) {
     await expect(reihe.getByRole('button', { name: new RegExp(name) })).toHaveCount(1);
   }
   // „Antippen (genau)" darf es als eigenen Knopf nicht mehr geben.
   await expect(page.getByRole('button', { name: /Antippen \(genau\)/ })).toHaveCount(0);
+
+  await context.close();
+});
+
+test('Bewegen dreht das Bild, und die Formen umfassen Karte und Sprechblase', async ({
+  browser,
+}) => {
+  /*
+   * Stufe 2 der Sticker-Erstellung: Drehen und echte Formen.
+   *
+   * Beides fehlte, und beides gehört zum Handwerkszeug jeder Sticker-App.
+   * Der Test prüft, was der Anwender sieht – einen Regler, der wirkt, und
+   * fünf Formen statt drei.
+   */
+  const alice = credentials('dreh');
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto('/');
+  await page.getByRole('button', { name: /Noch kein Konto/ }).click();
+  await page.getByLabel('Benutzername').fill(alice.username);
+  await page.getByLabel('Anzeigename').fill(alice.displayName);
+  await page.getByLabel('Passwort', { exact: true }).fill(alice.password);
+  await page.getByRole('button', { name: 'Konto erstellen' }).click();
+  await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
+
+  const bob = credentials('dziel');
+  await signUp(browser, bob);
+  await page.getByRole('button', { name: 'Neuer Chat' }).click();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await page.getByText(bob.displayName).first().click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await page.getByRole('button', { name: 'Sticker', exact: true }).click();
+  await page.getByRole('button', { name: /Sticker erstellen/ }).click();
+
+  await page.getByRole('tab', { name: 'Bewegen' }).click();
+  const drehregler = page.getByRole('slider', { name: /Drehen/ });
+  await expect(drehregler).toBeVisible();
+  await expect(drehregler).toHaveValue('0');
+  // „Gerade" ist abgeblendet, solange nichts gedreht ist.
+  await expect(page.getByRole('button', { name: 'Gerade' })).toBeDisabled();
+
+  await page.getByRole('button', { name: 'Eine Vierteldrehung nach rechts' }).click();
+  await expect(drehregler).toHaveValue('90');
+  await page.getByRole('button', { name: 'Eine Vierteldrehung nach rechts' }).click();
+  await expect(drehregler).toHaveValue('180');
+  // Und weiter: 270° stünden nicht am Regler, −90° schon.
+  await page.getByRole('button', { name: 'Eine Vierteldrehung nach rechts' }).click();
+  await expect(drehregler).toHaveValue('-90');
+
+  await page.getByRole('button', { name: 'Gerade' }).click();
+  await expect(drehregler).toHaveValue('0');
+
+  await page.getByRole('tab', { name: 'Form' }).click();
+  for (const name of ['Quadrat', 'Karte', 'Kreis', 'Sprechblase', 'Frei']) {
+    await expect(page.getByRole('button', { name: new RegExp(name) })).toHaveCount(1);
+  }
 
   await context.close();
 });

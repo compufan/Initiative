@@ -20,7 +20,7 @@ export const MAX_SCALE = 5;
 const FONT_STACK =
   "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
 
-export type ShapeKind = 'square' | 'circle' | 'free';
+export type ShapeKind = 'square' | 'rounded' | 'circle' | 'bubble' | 'free';
 export type TextSlot = 'top' | 'bottom';
 
 export interface TextLayer {
@@ -141,6 +141,18 @@ export interface StickerDoc {
   offsetX: number;
   offsetY: number;
   scale: number;
+  /**
+   * Drehung des Quellbildes in Grad, im Uhrzeigersinn, um seine Mitte.
+   *
+   * Frei und nicht in Vierteln: Ein schief gehaltenes Handyfoto ist um drei
+   * Grad verkantet, nicht um neunzig. Die Vierteldrehungen gibt es als
+   * Knöpfe obendrauf, weil sie der häufigste Fall bleiben.
+   *
+   * Sie steckt in derselben Abbildung wie Zoom und Versatz (`quellLage`) –
+   * damit drehen Maske, Netz-Tipps und Pinselstriche mit, ohne dass eine
+   * einzige von ihnen davon wissen müsste.
+   */
+  drehung: number;
   shape: ShapeKind;
   removeBg: boolean;
   /** Angetippte Stellen, die im Sticker bleiben sollen. */
@@ -210,6 +222,7 @@ export function createDoc(): StickerDoc {
     offsetX: 0,
     offsetY: 0,
     scale: 1,
+    drehung: 0,
     shape: 'square',
     removeBg: false,
     keep: [],
@@ -628,11 +641,15 @@ function drawTextLayer(ctx: CanvasRenderingContext2D, layer: TextLayer, slot: Te
 /* ---------- pipeline ---------- */
 
 /**
- * Wohin das Quellbild auf der Sticker-Fläche gezeichnet wird.
+ * Wohin das Quellbild auf der Sticker-Fläche gezeichnet wird – OHNE Drehung.
  *
- * Steht hier allein, weil die Maske eines Modells **genau dieselbe** Geometrie
- * braucht: Bild und Maske müssen deckungsgleich landen, sonst sitzt der
- * Ausschnitt daneben.
+ * Seit es die Drehung gibt, ist ein achsenparalleles Rechteck nicht mehr die
+ * ganze Wahrheit; die vollständige Abbildung steht in `quellLage`. Das hier
+ * bleibt als deren Sonderfall bei 0° stehen: `motivFuellen` rechnet damit den
+ * nötigen Zoom aus, und die Prüfungen halten beide Wege gegeneinander.
+ *
+ * Wer eine Fläche bezeichnen will, auf der etwas landen soll, nimmt
+ * `lageSetzen` – nicht dieses Rechteck.
  */
 export function sourceRect(
   source: { width: number; height: number },
@@ -648,6 +665,79 @@ export function sourceRect(
     width,
     height,
   };
+}
+
+/** Die Lage des Quellbildes auf der Fläche – Massstab, Drehung, Mittelpunkt. */
+export interface Lage {
+  /** Flächenpunkte je Quellbildpunkt. */
+  g: number;
+  /** Die Drehung im Bogenmass, und ihr Sinus/Kosinus gleich mit. */
+  bogen: number;
+  cos: number;
+  sin: number;
+  /** Wo die Bildmitte auf der Fläche liegt. */
+  mx: number;
+  my: number;
+  /** Die halbe Quellbildgrösse – der Punkt, um den gedreht wird. */
+  hw: number;
+  hh: number;
+}
+
+/**
+ * Die eine Abbildung, die Quellbild und Fläche verbindet.
+ *
+ * Für einen Quellpunkt p gilt
+ *
+ *     q = mitte + versatz + R(θ) · g · (p − bildmitte)
+ *
+ * und sonst nichts. Alles Geometrische im Sticker – das Bild, die Maske
+ * eines Modells, die Netz-Tipps, die Pinselstriche, die Rückrechnung eines
+ * Fingertipps – geht durch genau diese Formel oder ihre Umkehrung. Das ist
+ * der Grund, warum die Drehung an einer einzigen Stelle eingebaut werden
+ * konnte, statt an sieben.
+ *
+ * Ohne Drehung fällt sie mit `sourceRect` zusammen; das ist nachgerechnet
+ * und geprüft.
+ */
+export function quellLage(
+  source: { width: number; height: number },
+  doc: Pick<StickerDoc, 'scale' | 'offsetX' | 'offsetY' | 'drehung'>,
+): Lage {
+  const cover = Math.max(STICKER_SIZE / source.width, STICKER_SIZE / source.height);
+  const bogen = ((doc.drehung ?? 0) * Math.PI) / 180;
+  return {
+    g: cover * doc.scale,
+    bogen,
+    cos: Math.cos(bogen),
+    sin: Math.sin(bogen),
+    mx: STICKER_SIZE / 2 + doc.offsetX,
+    my: STICKER_SIZE / 2 + doc.offsetY,
+    hw: source.width / 2,
+    hh: source.height / 2,
+  };
+}
+
+/**
+ * Setzt die Zeichenfläche in die Geometrie des Quellbildes.
+ *
+ * Danach zählt eine Einheit einen Quellbildpunkt: Ein `drawImage(bild, 0, 0,
+ * breite, hoehe)` landet richtig, und ein Strich, der in Quellpunkten abgelegt
+ * wurde, klebt am Motiv – samt Strichbreite, weil `lineWidth` durch dieselbe
+ * Abbildung geht.
+ *
+ * Rechnet relativ zur bestehenden Transformation, gehört also zwischen
+ * `save()` und `restore()`.
+ */
+export function lageSetzen(
+  ctx: CanvasRenderingContext2D,
+  source: { width: number; height: number },
+  doc: Pick<StickerDoc, 'scale' | 'offsetX' | 'offsetY' | 'drehung'>,
+): void {
+  const lage = quellLage(source, doc);
+  ctx.translate(lage.mx, lage.my);
+  if (lage.bogen !== 0) ctx.rotate(lage.bogen);
+  ctx.scale(lage.g, lage.g);
+  ctx.translate(-lage.hw, -lage.hh);
 }
 
 /**
@@ -674,6 +764,7 @@ export function motivFuellen(
   height: number,
   source: { width: number; height: number },
   luft = 0.08,
+  drehung = 0,
 ): { scale: number; offsetX: number; offsetY: number } | null {
   let x0 = width;
   let y0 = height;
@@ -699,37 +790,120 @@ export function motivFuellen(
   const mitteY = ((y0 + y1 + 1) / 2) * jeY;
 
   const cover = Math.max(STICKER_SIZE / source.width, STICKER_SIZE / source.height);
+  /*
+   * Ein gedrehtes Rechteck braucht mehr Platz als ein gerades: Um 45° gedreht
+   * ist ein Quadrat rund 1,41-mal so breit. Ohne diesen Schritt „füllte“ das
+   * Motiv die Fläche und ragte gleichzeitig darüber hinaus.
+   */
+  const bogen = (drehung * Math.PI) / 180;
+  const cs = Math.cos(bogen);
+  const sn = Math.sin(bogen);
+  const breitGedreht = breit * Math.abs(cs) + hoch * Math.abs(sn);
+  const hochGedreht = breit * Math.abs(sn) + hoch * Math.abs(cs);
   const noetig =
-    (Math.min(STICKER_SIZE / breit, STICKER_SIZE / hoch) / cover) * (1 - luft);
+    (Math.min(STICKER_SIZE / breitGedreht, STICKER_SIZE / hochGedreht) / cover) * (1 - luft);
   const scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, noetig));
 
   /*
    * Der Versatz, damit die Mitte des Motivs in der Mitte der Fläche liegt.
-   * Aus `sourceRect` hergeleitet: Ein Quellpunkt mx landet bei
+   * Aus `quellLage` hergeleitet: Ein Quellpunkt p landet bei
    *
-   *     sx = (STICKER_SIZE − sw·g)/2 + offsetX + mx·g       mit g = cover·scale
+   *     q = mitte + versatz + R(θ) · g · (p − bildmitte)      mit g = cover·scale
    *
-   * Setzt man sx = STICKER_SIZE/2 und löst nach offsetX auf, bleibt
+   * Setzt man q = mitte und löst nach dem Versatz auf, bleibt
    *
-   *     offsetX = g · (sw/2 − mx)
+   *     versatz = R(θ) · g · (bildmitte − p)
+   *
+   * was bei θ = 0 in die frühere Fassung zurückfällt.
    */
   const g = cover * scale;
+  const dx = g * (source.width / 2 - mitteX);
+  const dy = g * (source.height / 2 - mitteY);
   return {
     scale,
-    offsetX: g * (source.width / 2 - mitteX),
-    offsetY: g * (source.height / 2 - mitteY),
+    offsetX: dx * cs - dy * sn,
+    offsetY: dx * sn + dy * cs,
+  };
+}
+
+/**
+ * Bringt einen Winkel in Grad auf (−180, 180].
+ *
+ * Ohne das summierten sich Vierteldrehungen zu 450° auf, und der Regler
+ * stünde am Anschlag, obwohl das Bild aufrecht steht.
+ */
+export function normGrad(grad: number): number {
+  const rest = ((((grad + 180) % 360) + 360) % 360) - 180;
+  return rest === -180 ? 180 : rest;
+}
+
+/**
+ * Rastet nahe Vielfache von 90° ein.
+ *
+ * Mit zwei Fingern trifft niemand exakt 90°, und ein um 89,4° gedrehtes Bild
+ * sieht nicht gedreht aus, sondern schief.
+ */
+export function rasten(grad: number, toleranz = 3): number {
+  const viertel = Math.round(grad / 90) * 90;
+  return Math.abs(grad - viertel) <= toleranz ? normGrad(viertel) : normGrad(grad);
+}
+
+/**
+ * Zoom, Drehung und Versatz aus einer Zwei-Finger-Geste.
+ *
+ * Der Punkt unter der Fingermitte soll dort bleiben, wo er ist. Aus
+ * `quellLage` folgt: Der Zeiger vom Bildmittelpunkt zur Fingermitte ist
+ *
+ *     v = fingermitte − mitte − versatz,
+ *
+ * und er macht Zoom und Drehung mit. Also
+ *
+ *     versatz′ = fingermitte′ − mitte − R(Δθ) · verhältnis · v.
+ *
+ * Bei Δθ = 0 fällt das in die frühere, reine Zoomrechnung zurück.
+ *
+ * Gerechnet wird mit dem *erreichten* Verhältnis und nicht mit dem
+ * gewünschten: Am Zoom-Anschlag wanderte der Versatz sonst weiter, während
+ * das Bild stillsteht – das Motiv rutschte unter den Fingern weg.
+ */
+export function zweiFingerZug(
+  start: {
+    mitte: { x: number; y: number };
+    offsetX: number;
+    offsetY: number;
+    scale: number;
+    drehung: number;
+  },
+  jetzt: { mitte: { x: number; y: number }; verhaeltnis: number; deltaGrad: number },
+): { scale: number; offsetX: number; offsetY: number; drehung: number } {
+  const scale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, start.scale * jetzt.verhaeltnis));
+  const verhaeltnis = start.scale > 0 ? scale / start.scale : 1;
+  const bogen = (jetzt.deltaGrad * Math.PI) / 180;
+  const cs = Math.cos(bogen);
+  const sn = Math.sin(bogen);
+  const mitte = STICKER_SIZE / 2;
+  const vx = (start.mitte.x - mitte - start.offsetX) * verhaeltnis;
+  const vy = (start.mitte.y - mitte - start.offsetY) * verhaeltnis;
+  return {
+    scale,
+    offsetX: jetzt.mitte.x - mitte - (vx * cs - vy * sn),
+    offsetY: jetzt.mitte.y - mitte - (vx * sn + vy * cs),
+    drehung: normGrad(start.drehung + jetzt.deltaGrad),
   };
 }
 
 export function toSourcePoint(
   point: { x: number; y: number },
   source: { width: number; height: number },
-  doc: Pick<StickerDoc, 'scale' | 'offsetX' | 'offsetY'>,
+  doc: Pick<StickerDoc, 'scale' | 'offsetX' | 'offsetY' | 'drehung'>,
 ): { x: number; y: number } {
-  const rect = sourceRect(source, doc);
+  const lage = quellLage(source, doc);
+  const u = point.x - lage.mx;
+  const v = point.y - lage.my;
+  // Die Umkehrung der Drehung ist ihre Spiegelung am Vorzeichen des Sinus.
   return {
-    x: ((point.x - rect.x) / rect.width) * source.width,
-    y: ((point.y - rect.y) / rect.height) * source.height,
+    x: lage.hw + (u * lage.cos + v * lage.sin) / lage.g,
+    y: lage.hh + (-u * lage.sin + v * lage.cos) / lage.g,
   };
 }
 
@@ -747,12 +921,14 @@ export function toSourcePoint(
 export function zurFlaeche(
   point: { x: number; y: number },
   source: { width: number; height: number },
-  doc: Pick<StickerDoc, 'scale' | 'offsetX' | 'offsetY'>,
+  doc: Pick<StickerDoc, 'scale' | 'offsetX' | 'offsetY' | 'drehung'>,
 ): { x: number; y: number } {
-  const rect = sourceRect(source, doc);
+  const lage = quellLage(source, doc);
+  const dx = (point.x - lage.hw) * lage.g;
+  const dy = (point.y - lage.hh) * lage.g;
   return {
-    x: rect.x + (point.x / source.width) * rect.width,
-    y: rect.y + (point.y / source.height) * rect.height,
+    x: lage.mx + dx * lage.cos - dy * lage.sin,
+    y: lage.my + dx * lage.sin + dy * lage.cos,
   };
 }
 
@@ -769,39 +945,117 @@ export function zurFlaeche(
 export function saatAufFlaeche(
   seeds: KeepSeed[],
   source: { width: number; height: number },
-  doc: Pick<StickerDoc, 'scale' | 'offsetX' | 'offsetY'>,
+  doc: Pick<StickerDoc, 'scale' | 'offsetX' | 'offsetY' | 'drehung'>,
 ): KeepSeed[] {
   return seeds
     .map((seed) => ({ ...seed, ...zurFlaeche(seed, source, doc) }))
-    .filter(
-      (seed) =>
-        seed.x >= 0 && seed.y >= 0 && seed.x < STICKER_SIZE && seed.y < STICKER_SIZE,
-    );
+    .filter((seed) => seed.x >= 0 && seed.y >= 0 && seed.x < STICKER_SIZE && seed.y < STICKER_SIZE);
 }
 
 function drawSource(ctx: CanvasRenderingContext2D, source: EditorSource, doc: StickerDoc): void {
   if (source.kind === 'image') {
-    const rect = sourceRect(source, doc);
-    ctx.drawImage(source.image, rect.x, rect.y, rect.width, rect.height);
+    ctx.save();
+    lageSetzen(ctx, source, doc);
+    ctx.drawImage(source.image, 0, 0, source.width, source.height);
+    ctx.restore();
     return;
   }
   if (source.kind === 'emoji') {
+    ctx.save();
+    ctx.translate(STICKER_SIZE / 2 + doc.offsetX, STICKER_SIZE / 2 + doc.offsetY);
+    if (doc.drehung) ctx.rotate((doc.drehung * Math.PI) / 180);
     ctx.font = `${Math.round(340 * doc.scale)}px ${FONT_STACK}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = '#ffffff';
-    ctx.fillText(source.emoji, STICKER_SIZE / 2 + doc.offsetX, STICKER_SIZE / 2 + doc.offsetY);
+    ctx.fillText(source.emoji, 0, 0);
+    ctx.restore();
   }
 }
 
+/**
+ * Der Rand, den jede Form freilässt.
+ *
+ * Ohne ihn stiesse die Form an die Kante der Fläche, und die Kontur, die
+ * danach nach aussen wächst, hätte keinen Platz mehr – der Sticker bekäme
+ * eine an drei Seiten abgeschnittene Umrandung.
+ */
+const FORM_RAND = 6;
+
+/** Ein abgerundetes Rechteck als Pfad – ohne `roundRect`, das ist jünger. */
+function abgerundet(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+): void {
+  const rad = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.moveTo(x + rad, y);
+  ctx.lineTo(x + w - rad, y);
+  ctx.arcTo(x + w, y, x + w, y + rad, rad);
+  ctx.lineTo(x + w, y + h - rad);
+  ctx.arcTo(x + w, y + h, x + w - rad, y + h, rad);
+  ctx.lineTo(x + rad, y + h);
+  ctx.arcTo(x, y + h, x, y + h - rad, rad);
+  ctx.lineTo(x, y + rad);
+  ctx.arcTo(x, y, x + rad, y, rad);
+  ctx.closePath();
+}
+
+/**
+ * Legt den Pfad einer Form an. Rückgabe: ob es überhaupt eine gibt.
+ *
+ * `square` und `free` schneiden nichts weg – das eine ist die volle Fläche,
+ * das andere überlässt die Form dem Radiergummi.
+ *
+ * Alle Teilpfade laufen im selben Umlaufsinn (im Uhrzeigersinn bei nach unten
+ * zeigender y-Achse, so wie `abgerundet` es tut). Das ist bei der Sprechblase
+ * der Punkt: Körper und Zipfel überlappen sich, und die Vorgabe-Füllregel
+ * `nonzero` vereinigt sie nur bei gleichem Umlaufsinn – bei
+ * entgegengesetztem löschen sie sich in der Überschneidung gegenseitig aus.
+ * Genau so war der erste Wurf, nachgemessen in Chromium: ein sauberes Loch
+ * quer durch den unteren Rand der Blase, dort wo der Zipfel ansetzt.
+ */
+export function formPfad(ctx: CanvasRenderingContext2D, shape: ShapeKind): boolean {
+  const s = STICKER_SIZE;
+  const r = FORM_RAND;
+  if (shape === 'circle') {
+    ctx.beginPath();
+    ctx.arc(s / 2, s / 2, s / 2 - r, 0, Math.PI * 2);
+    return true;
+  }
+  if (shape === 'rounded') {
+    ctx.beginPath();
+    abgerundet(ctx, r, r, s - 2 * r, s - 2 * r, s * 0.16);
+    return true;
+  }
+  if (shape === 'bubble') {
+    // Körper oben, Zipfel unten links – die Blase, wie sie jeder Messenger
+    // zeichnet. Der Zipfel greift bewusst in den Körper hinein, damit an der
+    // Nahtstelle keine Kerbe entsteht.
+    const koerperH = s * 0.79;
+    ctx.beginPath();
+    abgerundet(ctx, r, r, s - 2 * r, koerperH - r, s * 0.15);
+    ctx.moveTo(s * 0.29, koerperH - s * 0.06);
+    ctx.lineTo(s * 0.49, koerperH - s * 0.02);
+    ctx.lineTo(s * 0.22, s - r);
+    ctx.closePath();
+    return true;
+  }
+  return false;
+}
+
 function applyShape(ctx: CanvasRenderingContext2D, shape: ShapeKind): void {
-  if (shape !== 'circle') return;
   ctx.save();
-  ctx.globalCompositeOperation = 'destination-in';
-  ctx.beginPath();
-  ctx.arc(STICKER_SIZE / 2, STICKER_SIZE / 2, STICKER_SIZE / 2 - 6, 0, Math.PI * 2);
-  ctx.fillStyle = '#000000';
-  ctx.fill();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  const gibtEs = formPfad(ctx, shape);
+  if (gibtEs) {
+    ctx.globalCompositeOperation = 'destination-in';
+    ctx.fillStyle = '#000000';
+    ctx.fill();
+  }
   ctx.restore();
 }
 
@@ -883,9 +1137,7 @@ function inQuellraum(
   doc: StickerDoc,
 ): boolean {
   if (source?.kind !== 'image') return false;
-  const rect = sourceRect(source, doc);
-  ctx.translate(rect.x, rect.y);
-  ctx.scale(rect.width / source.width, rect.height / source.height);
+  lageSetzen(ctx, source, doc);
   return true;
 }
 
@@ -1028,8 +1280,10 @@ function maskenflaeche(
   const flaecheCtx = flaeche.getContext('2d');
   if (!flaecheCtx) return null;
   flaecheCtx.imageSmoothingQuality = 'high';
-  const rect = sourceRect(source, doc);
-  flaecheCtx.drawImage(grau, rect.x, rect.y, rect.width, rect.height);
+  flaecheCtx.save();
+  lageSetzen(flaecheCtx, source, doc);
+  flaecheCtx.drawImage(grau, 0, 0, source.width, source.height);
+  flaecheCtx.restore();
 
   return flaeche;
 }
@@ -1089,7 +1343,10 @@ export function freistellMaske(
       : new Uint8Array(minus[0].length).fill(255);
   if (minus.length === 0) return positiv;
 
-  return abziehenAlpha(positiv, minus.reduce((a, b) => vereinigeAlpha(a, b)));
+  return abziehenAlpha(
+    positiv,
+    minus.reduce((a, b) => vereinigeAlpha(a, b)),
+  );
 }
 
 /**
@@ -1152,8 +1409,10 @@ function markiereAbgewaehltes(
 
   flaecheCtx.globalCompositeOperation = 'destination-in';
   flaecheCtx.imageSmoothingQuality = 'high';
-  const rect = sourceRect(source, doc);
-  flaecheCtx.drawImage(karte, rect.x, rect.y, rect.width, rect.height);
+  flaecheCtx.save();
+  lageSetzen(flaecheCtx, source, doc);
+  flaecheCtx.drawImage(karte, 0, 0, source.width, source.height);
+  flaecheCtx.restore();
 
   ctx.drawImage(flaeche, 0, 0);
 }
@@ -1281,11 +1540,7 @@ export function renderSticker(
         // „Ecken entfernen“ arbeitet weiterhin abziehend, aber ebenfalls auf
         // dem unbeschnittenen Bild – sonst sind die vier Ecken bereits
         // durchsichtig und der Knopf täte buchstäblich nichts.
-        const ecken = new ImageData(
-          new Uint8ClampedArray(roh.data),
-          STICKER_SIZE,
-          STICKER_SIZE,
-        );
+        const ecken = new ImageData(new Uint8ClampedArray(roh.data), STICKER_SIZE, STICKER_SIZE);
         removeBackground(ecken, doc.tolerance);
         const behalten = new Uint8Array(STICKER_SIZE * STICKER_SIZE);
         for (let i = 0; i < behalten.length; i += 1) behalten[i] = ecken.data[i * 4 + 3];
@@ -1348,7 +1603,7 @@ export function renderSticker(
 
   // Der Schleier zuletzt: nach der Kontur, damit er nicht umrandet wird, und
   // vor der Schrift, damit die lesbar bleibt.
-  if (schleier) schleierZeichnen(ctx, schleier);
+  if (schleier) schleierZeichnen(ctx, schleier, doc.shape);
 
   drawTextLayer(ctx, doc.top, 'top');
   drawTextLayer(ctx, doc.bottom, 'bottom');
@@ -1363,7 +1618,11 @@ export function renderSticker(
  * das noch drin oder schon weg“ –, und dafür ist ein gleichmässiger Schleier
  * ruhiger und zeigt die Kante genauer.
  */
-function schleierZeichnen(ctx: CanvasRenderingContext2D, weggenommen: ImageData): void {
+function schleierZeichnen(
+  ctx: CanvasRenderingContext2D,
+  weggenommen: ImageData,
+  shape: ShapeKind,
+): void {
   const flaeche = schleierflaeche();
   const sctx = flaeche.getContext('2d');
   if (!sctx) return;
@@ -1378,6 +1637,10 @@ function schleierZeichnen(ctx: CanvasRenderingContext2D, weggenommen: ImageData)
 
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // Der Schleier hält sich an die gewählte Form. Sonst füllte er bei Kreis
+  // oder Sprechblase genau die Ecken, die die Form eben weggeschnitten hat –
+  // der Sticker sähe wieder quadratisch aus, nur grau.
+  if (formPfad(ctx, shape)) ctx.clip();
   // `destination-over`: der Schleier legt sich UNTER das schon Gezeichnete.
   // So überdeckt er das Motiv nicht und füllt nur die Lücken.
   ctx.globalCompositeOperation = 'destination-over';
