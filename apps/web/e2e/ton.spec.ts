@@ -301,3 +301,63 @@ test('die Tonwerte kommen im fertigen Bild an – auch unter einem Verpixel-Stri
   ).toBeLessThanOrEqual(3);
   expect(ergebnis.mitNeben?.[0]).toBeGreaterThan(230);
 });
+
+test('das Foto geht einmal auf die Grafikeinheit, nicht bei jeder Reglerraste', async ({
+  page,
+}) => {
+  /*
+   * Ein Bestandsfehler, gefunden beim Entwurf von Stufe 4.
+   *
+   * `aufGpu` lud bei JEDEM Bild das ganze Foto neu in die Textur. Bei
+   * 4000 × 3000 sind das zwölf Megapixel, also rund 48 MB über den Bus – je
+   * Reglerraste, und ein Reglerzug macht davon Dutzende. Der Merkzettel eine
+   * Ebene darüber half nicht: Er verfehlt ja gerade dann, wenn sich der
+   * Regler bewegt.
+   *
+   * Gezählt statt gemessen: Eine Zeitmessung an dieser Stelle wäre auf einem
+   * ausgelasteten Bauserver launisch, ein Zähler ist es nie.
+   */
+  await page.goto('/');
+  const ergebnis = await page.evaluate(async () => {
+    const ladeTon = '/src/modules/bild/ton.ts';
+    const ladeGpu = '/src/modules/bild/tonGpu.ts';
+    const ton = (await import(
+      /* @vite-ignore */ ladeTon
+    )) as typeof import('../src/modules/bild/ton.js');
+    const gpu = (await import(
+      /* @vite-ignore */ ladeGpu
+    )) as typeof import('../src/modules/bild/tonGpu.js');
+
+    const quelle = document.createElement('canvas');
+    quelle.width = 4000;
+    quelle.height = 3000;
+    const qctx = quelle.getContext('2d');
+    if (!qctx) return { fehler: 'keine Leinwand' };
+    qctx.fillStyle = '#5a5a5a';
+    qctx.fillRect(0, 0, 4000, 3000);
+
+    // Arbeitsgrösse wie in der Ansicht: 1200 lange Kante.
+    const bw = 1200;
+    const bh = 900;
+    // Einmal vorweg, damit der Zähler nur den Reglerzug misst.
+    gpu.getoentesBild(quelle, bw, bh, { ...ton.NEUTRAL, belichtung: 0.01 });
+    const vorher = gpu.zaehler.quellHochladen;
+    for (let i = 1; i <= 20; i += 1) {
+      gpu.getoentesBild(quelle, bw, bh, { ...ton.NEUTRAL, belichtung: i / 20 });
+    }
+    const nachRegler = gpu.zaehler.quellHochladen - vorher;
+
+    // Eine andere Arbeitsgrösse (das Speichern) muss dagegen neu hochladen.
+    gpu.getoentesBild(quelle, 2560, 1920, { ...ton.NEUTRAL, belichtung: 0.5 });
+    const nachGroesse = gpu.zaehler.quellHochladen - vorher - nachRegler;
+
+    return { weg: gpu.letzterWeg, nachRegler, nachGroesse };
+  });
+
+  expect(ergebnis.fehler).toBeUndefined();
+  expect(ergebnis.weg, 'ohne Grafikeinheit zählt der Test nichts').toBe('gpu');
+  // Zwanzig Reglerrasten, ein Hochladen.
+  expect(ergebnis.nachRegler).toBe(0);
+  // Aber eine neue Arbeitsgrösse braucht wirklich eine neue Textur.
+  expect(ergebnis.nachGroesse).toBe(1);
+});

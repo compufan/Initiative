@@ -1,4 +1,11 @@
-import { expect, request, test, type APIRequestContext, type Browser, type Page } from '@playwright/test';
+import {
+  expect,
+  request,
+  test,
+  type APIRequestContext,
+  type Browser,
+  type Page,
+} from '@playwright/test';
 
 /**
  * Der schwerste Fehler in den Terminen, festgehalten.
@@ -37,14 +44,11 @@ async function registrieren(http: APIRequestContext, prefix: string): Promise<Si
 async function seiteFuer(browser: Browser, sitzung: Sitzung, wurzel: string): Promise<Page> {
   const page = await (await browser.newContext()).newPage();
   await page.goto(wurzel);
-  await page.evaluate(
-    (werte) => localStorage.setItem('initiative.tokens', JSON.stringify(werte)),
-    {
-      accessToken: sitzung.accessToken,
-      refreshToken: sitzung.refreshToken,
-      expiresAt: Date.now() + 3_600_000,
-    },
-  );
+  await page.evaluate((werte) => localStorage.setItem('initiative.tokens', JSON.stringify(werte)), {
+    accessToken: sitzung.accessToken,
+    refreshToken: sitzung.refreshToken,
+    expiresAt: Date.now() + 3_600_000,
+  });
   await page.goto(wurzel);
   await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible({ timeout: 15_000 });
   return page;
@@ -191,8 +195,7 @@ test('eine Packliste: jeder hakt für sich ab', async ({ browser, baseURL }) => 
     await expect(page.getByText('Packliste')).toBeVisible({ timeout: 15_000 });
   }
 
-  const zeile = (page: Page, text: string) =>
-    page.locator('.nl-punkt').filter({ hasText: text });
+  const zeile = (page: Page, text: string) => page.locator('.nl-punkt').filter({ hasText: text });
 
   // Anna hakt „Schlafsack“ ab – zwei müssen, also noch nicht fertig.
   await zeile(annaPage, 'Schlafsack').getByRole('checkbox').click();

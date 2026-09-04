@@ -525,6 +525,22 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
       return;
     }
 
+    /*
+     * Ab hier ist nur noch das Textwerkzeug zuständig – und das muss
+     * ausdrücklich dastehen.
+     *
+     * Vorher fiel jedes Werkzeug, das oben keinen eigenen Zweig hat, hier
+     * hindurch. Mit dem Reiter „Ton“ hiess das: Wer auf die Leinwand tippte,
+     * um zu sehen, was seine Belichtung macht, versetzte nebenbei den zuletzt
+     * gewählten Schriftzug quer durchs Bild. Der Fehler ist mit dem
+     * Ton-Reiter entstanden und wäre mit jedem weiteren Werkzeug wieder
+     * entstanden – deshalb ein Riegel und keine dritte Abfrage oben.
+     */
+    if (werkzeugRef.current !== 'text') {
+      zug.current = { ...zug.current, art: 'keiner', begonnen: false };
+      return;
+    }
+
     // Text: einen vorhandenen greifen, sonst den gewählten beim Loslassen
     // dorthin setzen. Ein leerer `griff` heisst „setzen“.
     const ctx = canvasRef.current?.getContext('2d');

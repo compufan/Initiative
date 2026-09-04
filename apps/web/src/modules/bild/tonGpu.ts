@@ -25,9 +25,11 @@ import {
   istNeutral,
   lutAnwenden,
   lutBauen,
+  farbSchluessel,
   tonSchluessel,
   vignetteFaktor,
   weissFaktoren,
+  type Farbanpassung,
   type Anpassung,
 } from './ton.js';
 
@@ -163,6 +165,15 @@ void main() {
 
 /* ---------- WebGL2 ---------- */
 
+/**
+ * Zählwerk für die Prüfungen.
+ *
+ * Ein Test, der „das Bild wird nur einmal hochgeladen" behauptet, muss das
+ * zählen können. Zeitmessungen an derselben Stelle wären auf einem
+ * ausgelasteten Bauserver launisch; ein Zähler ist es nie.
+ */
+export const zaehler = { quellHochladen: 0 };
+
 interface Werk {
   gl: WebGL2RenderingContext;
   programm: WebGLProgram;
@@ -172,6 +183,41 @@ interface Werk {
 }
 
 let werk: Werk | null | undefined;
+
+/**
+ * Was gerade in der Quelltextur liegt.
+ *
+ * Ohne diesen Zettel lud `aufGpu` bei **jedem** Bild das ganze Foto neu hoch.
+ * Bei 4000 × 3000 sind das zwölf Megapixel und rund 48 MB über den Bus – je
+ * Reglerraste, sechzigmal in der Sekunde gewünscht. Das war der grösste
+ * Einzelposten auf dem Reglerweg und hat mit den Reglern selbst nichts zu tun.
+ */
+let quellzettel: { quelle: CanvasImageSource; breite: number; hoehe: number } | null = null;
+
+/**
+ * Eine eigene Leinwand zum Vorverkleinern.
+ *
+ * Nicht die aus `zeichnen.ts`: die benutzt `unkenntlich` im selben Rahmen.
+ *
+ * Das Verkleinern hier statt beim Textur-Abtasten ist zugleich das bessere
+ * Bild: 4000 auf 1200 allein mit `LINEAR` ist Unterabtastung – vier von fünf
+ * Bildpunkten werden ungesehen weggeworfen, und feine Strukturen flimmern.
+ * `imageSmoothingQuality = 'high'` mittelt stattdessen über die Fläche.
+ */
+let verkleinerCanvas: HTMLCanvasElement | null = null;
+function verkleinern(bild: CanvasImageSource, breite: number, hoehe: number): CanvasImageSource {
+  if (!verkleinerCanvas) verkleinerCanvas = document.createElement('canvas');
+  const flaeche = verkleinerCanvas;
+  if (flaeche.width !== breite) flaeche.width = breite;
+  if (flaeche.height !== hoehe) flaeche.height = hoehe;
+  const ctx = flaeche.getContext('2d');
+  if (!ctx) return bild;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'copy';
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(bild, 0, 0, breite, hoehe);
+  return flaeche;
+}
 
 function uebersetzen(gl: WebGL2RenderingContext, art: number, quelle: string): WebGLShader | null {
   const shader = gl.createShader(art);
@@ -277,12 +323,32 @@ function aufGpu(
     gl.viewport(0, 0, breite, hoehe);
 
     gl.bindTexture(gl.TEXTURE_2D, w.textur);
-    // `UNPACK_FLIP_Y`: Eine Leinwand zählt von oben, eine Textur von unten.
-    // Ohne das stünde das Bild auf dem Kopf – und zwar nur mit Grafikeinheit,
-    // also genau dort, wo es niemand vermutet.
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bild as TexImageSource);
+    const passt =
+      quellzettel &&
+      quellzettel.quelle === bild &&
+      quellzettel.breite === breite &&
+      quellzettel.hoehe === hoehe;
+    if (!passt) {
+      // `UNPACK_FLIP_Y`: Eine Leinwand zählt von oben, eine Textur von unten.
+      // Ohne das stünde das Bild auf dem Kopf – und zwar nur mit
+      // Grafikeinheit, also genau dort, wo es niemand vermutet.
+      //
+      // Nachgemessen an einer Kette aus drei Durchgängen (Quelle → A → B →
+      // Bildschirm): Ein Zwischenziel dreht **nichts** um. Der Merker gehört
+      // also genau auf dieses eine Hochladen und auf keinen Durchgang danach.
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+      gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        verkleinern(bild, breite, hoehe) as TexImageSource,
+      );
+      quellzettel = { quelle: bild, breite, hoehe };
+      zaehler.quellHochladen += 1;
+    }
 
     const [wr, wg, wb] = weissFaktoren(a.waerme, a.toenung);
     gl.uniform1i(orte.uBild, 0);
@@ -303,20 +369,47 @@ function aufGpu(
     return w.leinwand;
   } catch {
     // Ein verlorener Kontext ist auf einem Telefon Alltag, kein Fehler.
+    // Der Quellzettel MUSS dabei mitfallen: Er behauptete sonst, in einer
+    // Textur aus einem toten Kontext liege noch das richtige Bild.
     werk = undefined;
+    quellzettel = null;
     return null;
   }
 }
 
 /* ---------- Leinwand als Rückfall ---------- */
 
-let tabelle: { schluessel: string; daten: Uint8Array } | null = null;
+/**
+ * Die zuletzt gebauten Farbtabellen.
+ *
+ * Mehrere Plätze und nicht einer: Sobald es örtliche Anpassungen gibt, laufen
+ * mehrere verschiedene Tabellen im selben Bilddurchgang. Mit einem Platz
+ * verdrängten sie einander bei jedem Bereich, und jeder Verdränger kostet
+ * 35 937 Aufrufe von `tonPunkt`.
+ *
+ * Der Schlüssel ist `farbSchluessel` und nicht `tonSchluessel`: `schaerfe`
+ * und `vignette` stehen gar nicht in der Tabelle, ihre Änderung darf sie
+ * also nicht wegwerfen.
+ */
+const TABELLEN_MAX = 6;
+const tabellen = new Map<string, Uint8Array>();
 
-function lutHolen(a: Anpassung): Uint8Array {
-  const schluessel = tonSchluessel(a);
-  if (tabelle && tabelle.schluessel === schluessel) return tabelle.daten;
+function lutHolen(a: Farbanpassung): Uint8Array {
+  const schluessel = farbSchluessel(a);
+  const da = tabellen.get(schluessel);
+  if (da) {
+    // Ans Ende schieben: Map behält die Einfügereihenfolge, damit ist der
+    // erste Eintrag immer der am längsten ungenutzte.
+    tabellen.delete(schluessel);
+    tabellen.set(schluessel, da);
+    return da;
+  }
   const daten = lutBauen(a);
-  tabelle = { schluessel, daten };
+  tabellen.set(schluessel, daten);
+  if (tabellen.size > TABELLEN_MAX) {
+    const aeltester = tabellen.keys().next().value;
+    if (aeltester !== undefined) tabellen.delete(aeltester);
+  }
   return daten;
 }
 

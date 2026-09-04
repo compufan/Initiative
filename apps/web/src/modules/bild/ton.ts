@@ -16,8 +16,16 @@
  * liegt in `tonGpu.ts` – vor beziehungsweise nach der Tabelle.
  */
 
-/** Alle Regler. 0 heisst überall „nichts tun“. */
-export interface Anpassung {
+/**
+ * Die neun Regler, die allein von der FARBE abhängen.
+ *
+ * Genau diese – und nur diese – kann `tonPunkt` rechnen, in eine Farbtabelle
+ * giessen und auf einen einzelnen Bildpunkt anwenden, ohne seine Nachbarn
+ * oder seinen Ort zu kennen. Das ist keine Sortierlaune: Eine örtliche
+ * Anpassung („nur hier heller“) braucht genau diese Eigenschaft, sonst gäbe
+ * es keine Maske, mit der man sie überblenden könnte.
+ */
+export interface Farbanpassung {
   /** Belichtung in Blendenstufen, −3 … 3. */
   belichtung: number;
   /** −1 … 1. */
@@ -36,13 +44,17 @@ export interface Anpassung {
   saettigung: number;
   /** Wie Sättigung, aber nur für blasse Farben – Hauttöne bleiben heil. */
   dynamik: number;
-  /** Unschärfemaske, 0 … 1. Ortsabhängig, deshalb nicht in der Tabelle. */
+}
+
+/** Alle Regler. 0 heisst überall „nichts tun“. */
+export interface Anpassung extends Farbanpassung {
+  /** Unschärfemaske, 0 … 1. Braucht die NACHBARN, deshalb nicht in der Tabelle. */
   schaerfe: number;
-  /** Positiv dunkelt die Ecken ab, negativ hellt sie auf. Ortsabhängig. */
+  /** Positiv dunkelt die Ecken ab, negativ hellt sie auf. Braucht den ORT. */
   vignette: number;
 }
 
-export const NEUTRAL: Anpassung = {
+export const FARB_NEUTRAL: Farbanpassung = {
   belichtung: 0,
   kontrast: 0,
   lichter: 0,
@@ -52,13 +64,38 @@ export const NEUTRAL: Anpassung = {
   toenung: 0,
   saettigung: 0,
   dynamik: 0,
-  schaerfe: 0,
-  vignette: 0,
 };
+
+/*
+ * Die Reihenfolge der Schlüssel bleibt damit Byte für Byte die heutige.
+ * `tonSchluessel` baut seinen String über `Object.keys(NEUTRAL)`; ein
+ * vertauschtes Feld machte jeden Merkzettel im Bestand ungültig, ohne dass
+ * irgendetwas kaputt aussähe – es würde nur alles neu gerechnet.
+ */
+export const NEUTRAL: Anpassung = { ...FARB_NEUTRAL, schaerfe: 0, vignette: 0 };
 
 /** Ob überhaupt etwas eingestellt ist – sonst wird die ganze Kette übersprungen. */
 export function istNeutral(a: Anpassung): boolean {
   return (Object.keys(NEUTRAL) as (keyof Anpassung)[]).every((schlüssel) => a[schlüssel] === 0);
+}
+
+/** Dasselbe für die neun Farbregler allein. */
+export function farbNeutral(a: Farbanpassung): boolean {
+  return (Object.keys(FARB_NEUTRAL) as (keyof Farbanpassung)[]).every(
+    (schlüssel) => a[schlüssel] === 0,
+  );
+}
+
+/**
+ * Eine Kennung über die neun Farbregler.
+ *
+ * Getrennt von `tonSchluessel`: Die Farbtabelle enthält `schaerfe` und
+ * `vignette` gar nicht, ihre Änderung darf sie also nicht wegwerfen.
+ */
+export function farbSchluessel(a: Farbanpassung): string {
+  return (Object.keys(FARB_NEUTRAL) as (keyof Farbanpassung)[])
+    .map((schlüssel) => `${schlüssel}:${a[schlüssel]}`)
+    .join('|');
 }
 
 /** Ob etwas eingestellt ist, das sich in eine Farbtabelle fassen lässt. */
@@ -105,8 +142,15 @@ function halten(wert: number): number {
   return wert < 0 ? 0 : wert > 1 ? 1 : wert;
 }
 
-/** Der weiche Übergang von 0 auf 1 – dieselbe Kurve, die GLSL `smoothstep` heisst. */
-function weich(von: number, bis: number, wert: number): number {
+/**
+ * Der weiche Übergang von 0 auf 1 – dieselbe Kurve, die GLSL `smoothstep`
+ * heisst.
+ *
+ * Ausgeführt, damit `maske.ts` sie benutzt statt eine zweite hinzuschreiben:
+ * Die Kanten einer Maske und die Kanten von Lichtern/Tiefen sollen sich
+ * gleich anfühlen, und zwei Fassungen derselben Kurve driften auseinander.
+ */
+export function weich(von: number, bis: number, wert: number): number {
   const t = halten((wert - von) / (bis - von || 1));
   return t * t * (3 - 2 * t);
 }
@@ -144,7 +188,7 @@ export function weissFaktoren(waerme: number, toenung: number): [number, number,
  */
 export function tonPunkt(
   eingabe: readonly [number, number, number],
-  a: Anpassung,
+  a: Farbanpassung,
 ): [number, number, number] {
   let r = eingabe[0];
   let g = eingabe[1];
@@ -221,6 +265,40 @@ export function tonPunkt(
   return [halten(r), halten(g), halten(b)];
 }
 
+/**
+ * Wie örtliche Anpassungen übereinanderliegen.
+ *
+ * Das Gegenstück zur Bereichsschleife im Schattierer, und der Grund, warum es
+ * diese Funktion überhaupt gibt: Die Reihenfolge ist eine Entscheidung, keine
+ * Selbstverständlichkeit, und sie muss auf beiden Wegen dieselbe sein.
+ *
+ * Jeder Bereich rechnet auf dem ERGEBNIS des vorigen, nicht auf der Rohfarbe.
+ * Das ist der Unterschied zwischen „hier zusätzlich wärmer“ und „hier statt
+ * dessen“: Ein Bereich mit lauter Nullen nähme sonst dort, wo seine Maske
+ * greift, die globale Anpassung wieder zurück.
+ *
+ * Überblendet wird mit dem Maskengewicht, nachdem gerechnet wurde – nicht
+ * umgekehrt. Die gemischte Farbe durch die Kette zu schicken wäre bei starken
+ * Kurven etwas ganz anderes, weil die Kette nicht linear ist.
+ */
+export function bereichePunkt(
+  farbe: readonly [number, number, number],
+  bereiche: readonly { gewicht: number; anpassung: Farbanpassung }[],
+): [number, number, number] {
+  let c: [number, number, number] = [farbe[0], farbe[1], farbe[2]];
+  for (const bereich of bereiche) {
+    const g = bereich.gewicht;
+    if (g <= 0) continue;
+    const voll = tonPunkt(c, bereich.anpassung);
+    if (g >= 1) {
+      c = voll;
+      continue;
+    }
+    c = [c[0] + (voll[0] - c[0]) * g, c[1] + (voll[1] - c[1]) * g, c[2] + (voll[2] - c[2]) * g];
+  }
+  return c;
+}
+
 /* ---------- die Farbtabelle ---------- */
 
 /**
@@ -261,7 +339,7 @@ export function formHer(u: number): number {
  * Anordnung: `index = ((b · KANTE) + g) · KANTE + r`, drei Bytes je Eintrag –
  * r läuft am schnellsten.
  */
-export function lutBauen(a: Anpassung): Uint8Array {
+export function lutBauen(a: Farbanpassung): Uint8Array {
   const n = LUT_KANTE;
   const daten = new Uint8Array(n * n * n * 3);
   const letzte = n - 1;

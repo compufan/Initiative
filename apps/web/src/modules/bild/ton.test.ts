@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  FARB_NEUTRAL,
   LUT_KANTE,
   NEUTRAL,
+  bereichePunkt,
+  farbNeutral,
+  farbSchluessel,
   formHer,
   autoAnpassung,
   brauchtTabelle,
@@ -366,5 +370,120 @@ describe('autoAnpassung', () => {
       expect(a.kontrast).toBeGreaterThanOrEqual(-1);
       expect(a.kontrast).toBeLessThanOrEqual(1);
     }
+  });
+});
+
+describe('Farbanpassung und bereichePunkt', () => {
+  it('trennt die neun Farbregler von den zwei ortsabhängigen', () => {
+    expect(Object.keys(FARB_NEUTRAL)).toHaveLength(9);
+    expect(Object.keys(FARB_NEUTRAL)).not.toContain('schaerfe');
+    expect(Object.keys(FARB_NEUTRAL)).not.toContain('vignette');
+    // Und `Anpassung` bleibt die Vereinigung, in genau dieser Reihenfolge.
+    expect(Object.keys(NEUTRAL)).toEqual([...Object.keys(FARB_NEUTRAL), 'schaerfe', 'vignette']);
+  });
+
+  it('nagelt die Schlüsselreihenfolge fest', () => {
+    /*
+     * Kein Selbstzweck: `tonSchluessel` ist ein String über `Object.keys`,
+     * und an ihm hängen alle Merkzettel. Eine vertauschte Feldreihenfolge
+     * sähe nirgends kaputt aus – es würde nur ab sofort alles bei jedem Bild
+     * neu gerechnet, und niemand fände heraus, warum.
+     */
+    expect(tonSchluessel(NEUTRAL)).toBe(
+      'belichtung:0|kontrast:0|lichter:0|tiefen:0|schwarz:0|waerme:0|toenung:0|' +
+        'saettigung:0|dynamik:0|schaerfe:0|vignette:0',
+    );
+    expect(farbSchluessel(NEUTRAL)).toBe(
+      'belichtung:0|kontrast:0|lichter:0|tiefen:0|schwarz:0|waerme:0|toenung:0|' +
+        'saettigung:0|dynamik:0',
+    );
+  });
+
+  it('lässt farbSchluessel Schärfe und Vignette links liegen', () => {
+    const a = mit({ kontrast: 0.3 });
+    const scharf = mit({ kontrast: 0.3, schaerfe: 1, vignette: -1 });
+    expect(farbSchluessel(scharf)).toBe(farbSchluessel(a));
+    expect(tonSchluessel(scharf)).not.toBe(tonSchluessel(a));
+  });
+
+  it('erkennt farbneutral unabhängig von Schärfe und Vignette', () => {
+    expect(farbNeutral(mit({ schaerfe: 1, vignette: 1 }))).toBe(true);
+    expect(farbNeutral(mit({ kontrast: 0.01 }))).toBe(false);
+  });
+
+  it('lässt ein Gewicht von 0 die Farbe unangetastet', () => {
+    const raus = bereichePunkt(GRAU, [{ gewicht: 0, anpassung: mit({ belichtung: 2 }) }]);
+    expect(raus[0]).toBe(0.5);
+  });
+
+  it('ist bei Gewicht 1 genau tonPunkt', () => {
+    const a = mit({ belichtung: 1, saettigung: 0.4 });
+    const ueber = bereichePunkt([0.3, 0.6, 0.2], [{ gewicht: 1, anpassung: a }]);
+    const direkt = tonPunkt([0.3, 0.6, 0.2], a);
+    for (let k = 0; k < 3; k += 1) expect(ueber[k]).toBeCloseTo(direkt[k], 12);
+  });
+
+  it('liegt bei Gewicht 0,5 genau in der Mitte', () => {
+    const a = mit({ belichtung: 1 });
+    const halb = bereichePunkt(GRAU, [{ gewicht: 0.5, anpassung: a }]);
+    const voll = tonPunkt(GRAU, a);
+    expect(halb[0]).toBeCloseTo((0.5 + voll[0]) / 2, 12);
+  });
+
+  it('legt Bereiche nacheinander übereinander, nicht gemittelt', () => {
+    /*
+     * Zweimal eine halbe Blende ist heller als einmal, aber NICHT dasselbe
+     * wie eine ganze: Zwischen den beiden Schritten steht das Zurückrechnen
+     * in den Anzeigeraum samt Begrenzung auf 0…1. Wer die Gewichte vorher
+     * addierte, bekäme genau den anderen Wert.
+     */
+    const halb = mit({ belichtung: 0.5 });
+    const einmal = bereichePunkt(GRAU, [{ gewicht: 1, anpassung: halb }])[0];
+    const zweimal = bereichePunkt(GRAU, [
+      { gewicht: 1, anpassung: halb },
+      { gewicht: 1, anpassung: halb },
+    ])[0];
+    const ganz = tonPunkt(GRAU, mit({ belichtung: 1 }))[0];
+    expect(zweimal).toBeGreaterThan(einmal);
+    expect(zweimal).toBeCloseTo(ganz, 6);
+  });
+
+  it('rechnet den zweiten Bereich auf dem Ergebnis des ersten', () => {
+    /*
+     * Vertauschen muss etwas ändern – sonst ist die Reihenfolge nur
+     * behauptet.
+     *
+     * Das deutlichste Paar ist zugleich das anschaulichste: eine Blende
+     * hinauf und danach wieder hinunter ist NICHT dasselbe wie umgekehrt.
+     * Zwischen den beiden Schritten steht die Begrenzung auf 0…1, und die
+     * ist nicht umkehrbar: Wer erst aufhellt, verliert die Lichter; wer erst
+     * abdunkelt, verliert die Tiefen. Gemessen an einem hellen Bildpunkt sind
+     * das 0,27 von 1 – ein Viertel des ganzen Bereichs.
+     *
+     * Ich habe die Paare durchgerechnet statt geraten: „Schwarzpunkt gegen
+     * Sättigung" liegt bei 0,006 und taugte als Prüfung nicht.
+     */
+    const hoch = mit({ belichtung: 1.5 });
+    const runter = mit({ belichtung: -1.5 });
+    const farbe: [number, number, number] = [0.85, 0.8, 0.6];
+    const abwaerts = bereichePunkt(farbe, [
+      { gewicht: 1, anpassung: hoch },
+      { gewicht: 1, anpassung: runter },
+    ]);
+    const aufwaerts = bereichePunkt(farbe, [
+      { gewicht: 1, anpassung: runter },
+      { gewicht: 1, anpassung: hoch },
+    ]);
+    const abstand = Math.max(...[0, 1, 2].map((k) => Math.abs(abwaerts[k] - aufwaerts[k])));
+    expect(abstand).toBeGreaterThan(0.2);
+    // Und wer erst aufhellt, kommt danach dunkler heraus – die Lichter sind fort.
+    expect(abwaerts[0]).toBeLessThan(aufwaerts[0]);
+  });
+
+  it('nimmt mit einem neutralen Bereich die globale Anpassung nicht zurück', () => {
+    // Der Fehler, den „auf der Rohfarbe rechnen“ machen würde.
+    const global = tonPunkt(GRAU, mit({ belichtung: 1 }));
+    const raus = bereichePunkt(global, [{ gewicht: 1, anpassung: { ...FARB_NEUTRAL } }]);
+    expect(raus[0]).toBeCloseTo(global[0], 12);
   });
 });

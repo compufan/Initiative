@@ -45,6 +45,27 @@ const GRAU_PNG = Buffer.from(
   'base64',
 );
 
+/**
+ * Dasselbe Grau, aber 320 × 240.
+ *
+ * Für alles, wo etwas AUF dem Bild sichtbar sein muss: Die Schriftgrösse
+ * leitet sich aus der Bildkante ab (`max(sicht)/12`), und auf einem
+ * 8 × 8-Bild wäre ein Schriftzug 0,67 Punkte hoch – im Bild nicht zu finden
+ * und im Test nicht zu messen.
+ */
+const GRAU_GROSS_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAUAAAADwCAIAAAD+Tyo8AAACCklEQVR42u3TQQkAAAwDseqsfyH1sN8gkXBwKfBW' +
+    'JAADAwYGDAwGBgwMGBgwMBgYMDBgYDAwYGDAwICBwcCAgQEDAwYGAwMGBgwMBgYMDBgYMDAYGDAwYGDAwGBgwMCA' +
+    'gcHAgIEBAwMGBgMDBgYMDAYGDAwYGDAwGBgwMGBgwMBgYMDAgIHBwICBAQMDBgYDAwYGDAwYGAwMGBgwMBgYMDBg' +
+    'YMDAYGDAwICBAQODgQEDAwYGAwMGBgwMGBgMDBgYMDAYGDAwYGDAwGBgwMCAgQEDg4EBAwMGBgMDBgYMDBgYDAwY' +
+    'GDAwYGAwMGBgwMBgYMDAgIEBA4OBAQMDBgYMDAYGDAwYGAwMGBgwMGBgMDBgYMDAYGDAwICBAQODgQEDAwYGDAwG' +
+    'BgwMGBgMDBgYMDBgYDAwYGDAwICBwcCAgQEDg4EBAwMGBgwMBgYMDBgYDAwYGDAwYGAwMGBgwMCAgcHAgIEBA4OB' +
+    'AQMDBgYMDAYGDAwYGDAwGBgwMGBgMDBgYMDAgIHBwICBAQMDBgYDAwYGDAwGBgwMGBgwMBgYMDBgYDAwYGDAwICB' +
+    'wcCAgQEDAwYGAwMGBgwMBgYMDBgYMDAYGDAwYGDAwGBgwMCAgcHAgIEBAwMGBgMDBgYMDBgYDAwYGDAwGBgwMGBg' +
+    'wMBgYMDAgIHBwICBAQMDBgYDAwYGDAwYGAwMGBi4G517eoUEiFhwAAAAAElFTkSuQmCC',
+  'base64',
+);
+
 /** Ein winziges, aber echtes PNG (2x2, rot) – kein Platzhalter-Byte. */
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFUlEQVR4nGP8z8Dwn4GBgYEJRMAAAA' +
@@ -281,6 +302,95 @@ test('der Ton-Reiter im Bildeditor verändert das Bild wirklich', async ({ brows
   await alicePage.getByRole('button', { name: 'Zurücksetzen' }).click();
   await expect(belichtung).toHaveValue('0');
   await expect.poll(helligkeit, { timeout: 5_000 }).toBeCloseTo(vorher, -0.5);
+
+  await alicePage.context().close();
+});
+
+test('im Ton-Reiter versetzt ein Tipp auf die Leinwand keinen Schriftzug', async ({ browser }) => {
+  /*
+   * Ein Fehler, den ich mit dem Ton-Reiter selbst eingebaut habe.
+   *
+   * `onPointerDown` hatte einen Zweig für „Zuschnitt“ und einen für „Malen“ –
+   * und liess ALLES ÜBRIGE in den Textzweig fallen. Mit dem neuen Reiter
+   * hiess das: Wer auf die Leinwand tippt, um zu sehen, was seine Belichtung
+   * macht, versetzt nebenbei den zuletzt gewählten Schriftzug quer durchs
+   * Bild. Beim Loslassen, ohne jede Rückmeldung.
+   *
+   * Der Riegel steht jetzt ausdrücklich da (`werkzeug !== 'text'`), damit es
+   * mit dem nächsten Werkzeug nicht wieder passiert.
+   */
+  const alice = credentials('riegel');
+  const bob = credentials('riegelb');
+  const alicePage = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await alicePage.getByRole('button', { name: 'Neuer Chat' }).click();
+  await alicePage.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await alicePage.getByText(bob.displayName).first().click();
+  await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'grau-gross.png',
+    mimeType: 'image/png',
+    buffer: GRAU_GROSS_PNG,
+  });
+  await alicePage.getByRole('button', { name: /^Senden \(/ }).click();
+  const bild = alicePage.locator('.media-image').first();
+  await expect(bild).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => bild.evaluate((el: HTMLImageElement) => el.naturalWidth), {
+      timeout: 30_000,
+    })
+    .toBeGreaterThan(0);
+  await bild.click();
+  await alicePage.getByRole('button', { name: 'Bild bearbeiten' }).click();
+  const leinwand = alicePage.locator('.bild-leinwand');
+  await expect(leinwand).toBeVisible({ timeout: 30_000 });
+
+  // Einen Schriftzug anlegen – er landet in der Bildmitte und ist gewählt.
+  await alicePage.getByRole('button', { name: /Text$/ }).click();
+  await alicePage.getByRole('button', { name: '＋ Schriftzug' }).click();
+  await expect(alicePage.locator('.bild-textfeld')).toBeVisible();
+
+  /** Wo der Schriftzug im Dokument steht – aus dem Bild gelesen. */
+  const schriftOrt = async () =>
+    leinwand.evaluate((el) => {
+      // Der Schriftzug ist weiss mit dunkler Kontur auf grauem Grund. Der
+      // Schwerpunkt der hellsten Punkte sagt, wo er sitzt.
+      const c = el as HTMLCanvasElement;
+      const ctx = c.getContext('2d');
+      const d = ctx?.getImageData(0, 0, c.width, c.height).data;
+      if (!d) return null;
+      let sx = 0;
+      let sy = 0;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i] > 200 && d[i + 1] > 200 && d[i + 2] > 200) {
+          const p = i / 4;
+          sx += p % c.width;
+          sy += Math.floor(p / c.width);
+          n += 1;
+        }
+      }
+      return n > 20 ? { x: sx / n / c.width, y: sy / n / c.height, n } : null;
+    });
+
+  const vorher = await schriftOrt();
+  expect(vorher, 'der Schriftzug ist nicht zu finden').not.toBeNull();
+
+  // In den Ton-Reiter und deutlich neben die Mitte tippen.
+  await alicePage.getByRole('button', { name: /Ton$/ }).click();
+  const kasten = await leinwand.boundingBox();
+  expect(kasten).not.toBeNull();
+  await alicePage.mouse.click(kasten!.x + kasten!.width * 0.2, kasten!.y + kasten!.height * 0.8);
+
+  const nachher = await schriftOrt();
+  expect(nachher).not.toBeNull();
+  expect(Math.abs(nachher!.x - vorher!.x)).toBeLessThan(0.02);
+  expect(Math.abs(nachher!.y - vorher!.y)).toBeLessThan(0.02);
+  // Und es ist auch kein Rückgängig-Schritt entstanden.
+  await expect(alicePage.getByRole('button', { name: 'Rückgängig' })).toBeEnabled();
 
   await alicePage.context().close();
 });

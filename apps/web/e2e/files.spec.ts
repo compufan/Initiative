@@ -1,4 +1,11 @@
-import { expect, request, test, type APIRequestContext, type Browser, type Page } from '@playwright/test';
+import {
+  expect,
+  request,
+  test,
+  type APIRequestContext,
+  type Browser,
+  type Page,
+} from '@playwright/test';
 
 /**
  * Dateien & Sammlungen durch die echte Oberfläche.
@@ -49,14 +56,11 @@ async function registrieren(http: APIRequestContext, prefix: string): Promise<Si
 async function seiteFuer(browser: Browser, sitzung: Sitzung, baseURL: string): Promise<Page> {
   const page = await (await browser.newContext()).newPage();
   await page.goto(baseURL);
-  await page.evaluate(
-    (werte) => localStorage.setItem('initiative.tokens', JSON.stringify(werte)),
-    {
-      accessToken: sitzung.accessToken,
-      refreshToken: sitzung.refreshToken,
-      expiresAt: Date.now() + 3_600_000,
-    },
-  );
+  await page.evaluate((werte) => localStorage.setItem('initiative.tokens', JSON.stringify(werte)), {
+    accessToken: sitzung.accessToken,
+    refreshToken: sitzung.refreshToken,
+    expiresAt: Date.now() + 3_600_000,
+  });
   await page.goto(baseURL);
   await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible({ timeout: 15_000 });
   return page;
