@@ -41,7 +41,18 @@ export interface Stroke {
 
 /** Ein Antippen im Bild: alles, was farblich daran hängt, bleibt erhalten. */
 export interface KeepSeed {
-  /** Position auf der Sticker-Fläche, 0 … STICKER_SIZE. */
+  /**
+   * Position im QUELLBILD, nicht auf der Sticker-Fläche.
+   *
+   * Hier stand einmal „Position auf der Sticker-Fläche“, und das war nach der
+   * Umstellung falsch – mit genau der Folge, die ein falscher Kommentar hat:
+   * Der Verbraucher (`flutmaske`, rechnet auf der Fläche) bekam ungeprüft
+   * Quellkoordinaten und verwarf die Saat. Wer sie dort braucht, nimmt
+   * `saatAufFlaeche`.
+   *
+   * Im Quellbild, weil nur so ein Tipp das Verschieben und Zoomen übersteht –
+   * genau wie die Masken der Modelle.
+   */
   x: number;
   y: number;
   /**
@@ -624,6 +635,38 @@ export function toSourcePoint(
   };
 }
 
+/**
+ * Die Gegenrichtung zu `toSourcePoint`: aus dem Quellbild auf die Fläche.
+ *
+ * Gebraucht, weil die Tipp-Punkte im QUELLBILD liegen (nur so überstehen sie
+ * Verschieben und Zoomen), die Farbflutung aber auf der 512er Sticker-Fläche
+ * rechnet. Ohne diese Umrechnung landete ein Tipp bei einem gewöhnlichen
+ * Handyfoto weit ausserhalb der Fläche – nachgerechnet: 3024×4032, Tipp auf
+ * die Mitte, gespeichert als (1512, 2016). `flutmaske` überspringt Saat
+ * ausserhalb des Bildes, die Maske blieb leer, und die Zeichenkette
+ * multiplizierte jeden Bildpunkt mit 0: schwarzer Sticker.
+ */
+export function zurFlaeche(
+  point: { x: number; y: number },
+  source: { width: number; height: number },
+  doc: Pick<StickerDoc, 'scale' | 'offsetX' | 'offsetY'>,
+): { x: number; y: number } {
+  const rect = sourceRect(source, doc);
+  return {
+    x: rect.x + (point.x / source.width) * rect.width,
+    y: rect.y + (point.y / source.height) * rect.height,
+  };
+}
+
+/** Alle Saatpunkte auf die Fläche bringen – die Form, die `flutmaske` braucht. */
+export function saatAufFlaeche(
+  seeds: KeepSeed[],
+  source: { width: number; height: number },
+  doc: Pick<StickerDoc, 'scale' | 'offsetX' | 'offsetY'>,
+): KeepSeed[] {
+  return seeds.map((seed) => ({ ...seed, ...zurFlaeche(seed, source, doc) }));
+}
+
 function drawSource(ctx: CanvasRenderingContext2D, source: EditorSource, doc: StickerDoc): void {
   if (source.kind === 'image') {
     const rect = sourceRect(source, doc);
@@ -1084,9 +1127,17 @@ export function renderSticker(
     if (roh) {
       // Je Vorzeichen eine eigene Flutung. `flutmaske` überspringt Minus-Tipps
       // von sich aus, deshalb werden sie hier als eigene Saat übergeben.
-      if (flutPlus.length > 0) dazu.push(flutmaske(roh, flutPlus, doc.tolerance));
+      if (flutPlus.length > 0) {
+        dazu.push(flutmaske(roh, saatAufFlaeche(flutPlus, source, doc), doc.tolerance));
+      }
       if (flutMinus.length > 0) {
-        weg.push(flutmaske(roh, flutMinus.map((s) => ({ ...s, mode: 'dazu' as const })), doc.tolerance));
+        weg.push(
+          flutmaske(
+            roh,
+            saatAufFlaeche(flutMinus, source, doc).map((s) => ({ ...s, mode: 'dazu' as const })),
+            doc.tolerance,
+          ),
+        );
       }
       if (flutPlus.length === 0 && doc.removeBg) {
         // „Ecken entfernen“ arbeitet weiterhin abziehend, aber ebenfalls auf

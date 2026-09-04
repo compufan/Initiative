@@ -10,7 +10,9 @@ import {
   keepAtSeeds,
   lupeGrenzen,
   removeBackground,
+  saatAufFlaeche,
   strichBloecke,
+  toSourcePoint,
   vereinigeAlpha,
 } from './render.js';
 import type { Stroke } from './render.js';
@@ -378,5 +380,72 @@ describe('Wegnehmen', () => {
     const v = abziehenAlpha(new Uint8Array([128]), new Uint8Array([128]));
     expect(v[0]).toBeGreaterThan(50);
     expect(v[0]).toBeLessThan(80);
+  });
+});
+
+/**
+ * Der Tipp muss dort ankommen, wo hingetippt wurde.
+ *
+ * Die Tipp-Punkte liegen im QUELLBILD – nur so überstehen sie Verschieben und
+ * Zoomen, genau wie die Masken der Modelle. Die Farbflutung rechnet aber auf
+ * der 512er Sticker-Fläche. Wer die Umrechnung dazwischen vergisst, bekommt
+ * keinen Fehler, sondern einen leeren Sticker: `flutmaske` überspringt Saat
+ * ausserhalb des Bildes, und die Zeichenkette multipliziert dann alles mit 0.
+ *
+ * Genau das ist passiert, und es traf ausgerechnet das einzige Verfahren, das
+ * ohne einen einzigen Megabyte Download auskommt.
+ */
+describe('Saatpunkte zwischen Quellbild und Fläche', () => {
+  const doc = { scale: 1, offsetX: 0, offsetY: 0 };
+
+  it('bringt einen Tipp aus einem Handyfoto zurück auf die Fläche', () => {
+    // Hochkant, wie es aus einer Telefonkamera kommt.
+    const quelle = { width: 3024, height: 4032 };
+    // Der Anwender hat die Mitte getroffen; abgelegt wird das im Quellbild.
+    const imBild = toSourcePoint({ x: 256, y: 256 }, quelle, doc);
+    expect(Math.round(imBild.x)).toBe(1512);
+
+    const [zurueck] = saatAufFlaeche([{ ...imBild }], quelle, doc);
+    expect(Math.round(zurueck.x)).toBe(256);
+    expect(Math.round(zurueck.y)).toBe(256);
+  });
+
+  it('bleibt auch bei Zoom und Verschiebung genau', () => {
+    const quelle = { width: 1200, height: 800 };
+    const verschoben = { scale: 2.4, offsetX: -70, offsetY: 35 };
+    for (const punkt of [
+      { x: 10, y: 10 },
+      { x: 256, y: 256 },
+      { x: 500, y: 300 },
+    ]) {
+      const imBild = toSourcePoint(punkt, quelle, verschoben);
+      const [zurueck] = saatAufFlaeche([imBild], quelle, verschoben);
+      expect(zurueck.x).toBeCloseTo(punkt.x, 6);
+      expect(zurueck.y).toBeCloseTo(punkt.y, 6);
+    }
+  });
+
+  it('reicht Vorzeichen und Gruppe unverändert durch', () => {
+    // Sonst verlöre die Flutung beim Umrechnen, ob ein Tipp dazu- oder
+    // wegnimmt – und das Wegnehmen wäre wieder wirkungslos.
+    const quelle = { width: 800, height: 600 };
+    const [raus] = saatAufFlaeche(
+      [{ x: 400, y: 300, mode: 'weg' as const, gruppe: 7, quelle: 'flutung' as const }],
+      quelle,
+      doc,
+    );
+    expect(raus.mode).toBe('weg');
+    expect(raus.gruppe).toBe(7);
+  });
+
+  it('so war es kaputt: die rohe Quellkoordinate liegt neben der Fläche', () => {
+    // Die Gegenprobe. 1512 ist weit ausserhalb von 0…511, die Saat wurde
+    // verworfen, und der Sticker blieb leer.
+    const quelle = { width: 3024, height: 4032 };
+    const imBild = toSourcePoint({ x: 256, y: 256 }, quelle, doc);
+    expect(imBild.x).toBeGreaterThan(STICKER_SIZE);
+    expect(flutmaske(makeImage(64, () => [10, 10, 10, 255]), [imBild], 40).some((v) => v > 0)).toBe(
+      false,
+    );
   });
 });
