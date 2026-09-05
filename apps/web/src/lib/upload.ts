@@ -1,6 +1,7 @@
 import type { AttachmentDto } from '@initiative/shared';
 import { api } from './api.js';
 import type { OutboxAttachment } from './db.js';
+import { videoBereinigen } from './videoMetadaten.js';
 
 /**
  * Two-step upload:
@@ -12,6 +13,34 @@ import type { OutboxAttachment } from './db.js';
 const UPLOAD_TIMEOUT_MS = 120_000;
 
 export async function uploadBlob(attachment: OutboxAttachment): Promise<AttachmentDto> {
+  /*
+   * Der Vorposten für Video-Metadaten – hier und nirgends sonst.
+   *
+   * In die App kommt ein Video auf sechs Wegen: Galerie, Aufnahme in der
+   * App, der Kamera-Rückfall über `capture`, das Teilen-Ziel, der
+   * Datei-Anhang und das Hochladen in eine Sammlung oder an einen Termin.
+   * Vier davon können Ortsdaten tragen – die Aufnahme im Browser nicht, ein
+   * Griff in die Kamerarolle sehr wohl. Sie alle laufen durch diese eine
+   * Funktion; jeden Weg einzeln zu behandeln hiesse, beim nächsten den
+   * Vorposten zu vergessen.
+   *
+   * Nur bei Video, nicht bei jedem Blob: Eine Sprachnachricht hat nichts zu
+   * verbergen, und die Suche nach dem Boxbaum liefe sonst über jede einzelne.
+   *
+   * Schlägt das Bereinigen fehl, geht die Datei UNVERÄNDERT hoch. Das ist
+   * eine bewusste Abwägung: Ein Anhang, der wegen eines unbekannten
+   * Containers gar nicht ankommt, ist ein Fehler, den der Anwender sofort
+   * bemerkt und nicht versteht.
+   */
+  if (attachment.kind === 'video' || attachment.mime.startsWith('video/')) {
+    try {
+      const { datei, befund } = await videoBereinigen(attachment.blob);
+      if (befund.geaendert) attachment = { ...attachment, blob: datei };
+    } catch {
+      /* unbekannter Container – dann eben unverändert */
+    }
+  }
+
   const target = await api.media.createUpload({
     kind: attachment.kind,
     mime: attachment.mime,
@@ -157,7 +186,11 @@ export async function prepareImage(
   const width = Math.round(naturalWidth * scale);
   const height = Math.round(naturalHeight * scale);
 
-  const mime = fertig ? file.type || 'image/webp' : (await supportsWebp()) ? 'image/webp' : 'image/jpeg';
+  const mime = fertig
+    ? file.type || 'image/webp'
+    : (await supportsWebp())
+      ? 'image/webp'
+      : 'image/jpeg';
   const full = fertig ? file : await toBlob(drawTo(source, width, height), mime, 0.82);
 
   const previewScale = Math.min(1, 48 / Math.max(width, height || 1));

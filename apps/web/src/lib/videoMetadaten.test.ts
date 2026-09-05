@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { boxenLesen, freiBox, metadatenBereiche } from './videoMetadaten.js';
+import { boxenLesen, freiBox, metadatenBereiche, videoBereinigen } from './videoMetadaten.js';
 
 /** Baut eine Box: vier Zeichen Typ, beliebiger Inhalt. */
 function box(typ: string, inhalt: Uint8Array | number[] = []): Uint8Array {
@@ -156,5 +156,150 @@ describe('freiBox', () => {
      */
     const frei = freiBox(64);
     expect(Array.from(frei.subarray(8)).every((wert) => wert === 0)).toBe(true);
+  });
+});
+
+/**
+ * Eine MP4-Datei von Hand - klein, vollstaendig und mit echten Koordinaten.
+ *
+ * Kein fremdes Video im Repo, kein Download beim Pruefen: Der Container ist
+ * ein Boxbaum, und den kann man hinschreiben. `faststart` legt `moov` VOR
+ * `mdat` - genau die Anordnung, bei der ein Herausschneiden alles kaputt
+ * macht, weil `stco` auf absolute Dateipositionen zeigt.
+ */
+function mp4Bauen(faststart: boolean): { datei: Blob; mdatAb: number; stcoWert: number } {
+  const gps = new TextEncoder().encode('+52.5200+013.4050/');
+  const xyz = box('\u00a9xyz', new Uint8Array([0, gps.length, 0x15, 0xc7, ...gps]));
+  const udta = box('udta', xyz);
+  const meta = box('meta', box('ilst', new TextEncoder().encode('com.apple.quicktime.location')));
+
+  // mvhd, Version 0: hinter dem Kopf ein Versionsbyte, drei Flag-Bytes,
+  // dann Erstellungs- und Aenderungszeit als je vier Byte.
+  const mvhdInhalt = new Uint8Array(100);
+  new DataView(mvhdInhalt.buffer).setUint32(4, 3871491607);
+  new DataView(mvhdInhalt.buffer).setUint32(8, 3871491607);
+  const mvhd = box('mvhd', mvhdInhalt);
+
+  const nutzdaten = new TextEncoder().encode('SAMPLE-AAAA-0001-BBBB-0002-CCCC-0003');
+  const stcoPlatz = box('stco', new Uint8Array(12));
+  const moovOhne = box('moov', zusammen(mvhd, udta, meta, stcoPlatz));
+  // Die Laenge ausrechnen statt sie zu raten: 'isom   ' sind sieben Zeichen,
+  // die Box also 15 Byte lang. Meine erste Fassung nahm 16 an und las danach
+  // ein Byte zu weit - 'AMPLE-AAAA-0001-' statt 'SAMPLE-AAAA-0001'.
+  const ftypVorab = box('ftyp', new TextEncoder().encode('isom   '));
+  const mdatAb = faststart ? ftypVorab.length + moovOhne.length : ftypVorab.length;
+  const stcoWert = mdatAb + 8;
+  const stcoInhalt = new Uint8Array(12);
+  const sicht = new DataView(stcoInhalt.buffer);
+  sicht.setUint32(4, 1);
+  sicht.setUint32(8, stcoWert);
+  const moov = box('moov', zusammen(mvhd, udta, meta, box('stco', stcoInhalt)));
+  const ftyp = ftypVorab;
+  const mdat = box('mdat', nutzdaten);
+
+  const datei = faststart ? zusammen(ftyp, moov, mdat) : zusammen(ftyp, mdat, moov);
+  return { datei: new Blob([new Uint8Array(datei)], { type: 'video/mp4' }), mdatAb, stcoWert };
+}
+
+async function bytes(blob: Blob): Promise<Uint8Array> {
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+describe('videoBereinigen', () => {
+  for (const faststart of [false, true]) {
+    const lage = faststart ? 'moov vorn (faststart)' : 'moov hinten (Kamera)';
+
+    it(`entfernt die Koordinaten - ${lage}`, async () => {
+      const { datei } = mp4Bauen(faststart);
+      const vorher = await bytes(datei);
+      expect(new TextDecoder('latin1').decode(vorher)).toContain('+52.5200+013.4050');
+
+      const { datei: sauber, befund } = await videoBereinigen(datei);
+      expect(befund.geaendert, befund.grund).toBe(true);
+      expect(befund.boxen).toBe(2);
+
+      const nachher = await bytes(sauber);
+      const text = new TextDecoder('latin1').decode(nachher);
+      expect(text, 'die Koordinaten stehen noch in der Datei').not.toContain('+52.5200');
+      expect(text).not.toContain('com.apple.quicktime.location');
+    });
+
+    it(`verschiebt nichts - ${lage}`, async () => {
+      /*
+       * Der wichtigste Test der Datei.
+       *
+       * `stco` nennt eine ABSOLUTE Dateiposition. Wer eine Box entfernt,
+       * statt sie zu ueberschreiben, verschiebt alles dahinter - und bei
+       * faststart liegt mdat dahinter. Die Datei spielt dann nicht mehr oder
+       * zeigt Muell, und zwar ohne jede Fehlermeldung.
+       */
+      const { datei, mdatAb, stcoWert } = mp4Bauen(faststart);
+      const { datei: sauber } = await videoBereinigen(datei);
+      expect(sauber.size, 'die Datei muss gleich lang bleiben').toBe(datei.size);
+
+      const nachher = await bytes(sauber);
+      const anDerStelle = new TextDecoder('latin1').decode(
+        nachher.subarray(stcoWert, stcoWert + 16),
+      );
+      expect(anDerStelle).toBe('SAMPLE-AAAA-0001');
+      expect(new TextDecoder('latin1').decode(nachher.subarray(mdatAb + 4, mdatAb + 8))).toBe(
+        'mdat',
+      );
+    });
+
+    it(`macht aus den Metadatenboxen gueltige free-Boxen - ${lage}`, async () => {
+      const { datei } = mp4Bauen(faststart);
+      const { datei: sauber } = await videoBereinigen(datei);
+      const nachher = await bytes(sauber);
+      const oben = boxenLesen(nachher).map((b) => b.typ);
+      expect(oben).toContain('ftyp');
+      expect(oben).toContain('moov');
+      expect(oben).toContain('mdat');
+      const moov = boxenLesen(nachher).find((b) => b.typ === 'moov')!;
+      const drin = boxenLesen(nachher.subarray(moov.inhalt, moov.ende)).map((b) => b.typ);
+      expect(drin).toEqual(['mvhd', 'free', 'free', 'stco']);
+    });
+  }
+
+  it('nullt die Aufnahmezeit', async () => {
+    /*
+     * Bei einer Aufnahme im Browser ist das der einzige Rest: Dort entsteht
+     * weder udta noch meta, aber mvhd traegt die Wanduhr auf die Sekunde
+     * genau. Nachgemessen an einem Chromium-Mitschnitt: 3871491607 Sekunden
+     * seit 1904, also 2026-09-05T22:20:07Z.
+     */
+    const { datei } = mp4Bauen(false);
+    const { datei: sauber, befund } = await videoBereinigen(datei);
+    expect(befund.zeiten).toBeGreaterThanOrEqual(1);
+    const nachher = await bytes(sauber);
+    const moov = boxenLesen(nachher).find((b) => b.typ === 'moov')!;
+    const mvhd = boxenLesen(nachher.subarray(moov.inhalt, moov.ende), moov.inhalt).find(
+      (b) => b.typ === 'mvhd',
+    )!;
+    const sicht = new DataView(nachher.buffer, nachher.byteOffset, nachher.byteLength);
+    expect(sicht.getUint32(mvhd.inhalt + 4), 'Erstellungszeit').toBe(0);
+    expect(sicht.getUint32(mvhd.inhalt + 8), 'Aenderungszeit').toBe(0);
+  });
+
+  it('laesst unbekannte Formate in Ruhe', async () => {
+    /*
+     * Ein Video, das nicht mehr abspielt, ist schlimmer als eines mit
+     * Zusatzdaten: Das eine bemerkt der Anwender, das andere nicht.
+     */
+    const webm = new Blob([new Uint8Array([0x1a, 0x45, 0xdf, 0xa3, 1, 2, 3, 4, 5, 6, 7, 8])], {
+      type: 'video/webm',
+    });
+    const { datei, befund } = await videoBereinigen(webm);
+    expect(befund.geaendert).toBe(false);
+    expect(datei).toBe(webm);
+  });
+
+  it('laesst eine Datei ohne Metadaten unveraendert', async () => {
+    const ohne = new Blob([
+      new Uint8Array(zusammen(box('ftyp', [1, 2, 3, 4]), box('moov', box('mdat', [9])))),
+    ]);
+    const { befund } = await videoBereinigen(ohne);
+    expect(befund.geaendert).toBe(false);
+    expect(befund.grund).toBe('nichts zu entfernen');
   });
 });

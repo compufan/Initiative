@@ -46,7 +46,11 @@ const tokenState = { access: 'gueltig-1', refreshed: 0 };
 
 vi.mock('./api.js', () => ({
   API_BASE: 'https://api.example.com',
-  getTokens: () => ({ accessToken: tokenState.access, refreshToken: 'r', expiresAt: Date.now() + 60_000 }),
+  getTokens: () => ({
+    accessToken: tokenState.access,
+    refreshToken: 'r',
+    expiresAt: Date.now() + 60_000,
+  }),
   onTokenChange: () => () => {},
   validAccessToken: async () => tokenState.access,
   forceRefresh: async () => {

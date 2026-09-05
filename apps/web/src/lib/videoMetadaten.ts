@@ -149,3 +149,174 @@ export function freiBox(laenge: number): Uint8Array {
   aus[7] = 0x65; // e
   return aus;
 }
+
+/** Ein Kopfstück lesen, ohne die ganze Datei anzufassen. */
+async function stueck(datei: Blob, von: number, bis: number): Promise<Uint8Array> {
+  return new Uint8Array(await datei.slice(von, bis).arrayBuffer());
+}
+
+/**
+ * Nullt die Zeitstempel in einer Kopfbox an Ort und Stelle.
+ *
+ * `mvhd`, `tkhd` und `mdhd` tragen Erstellungs- und Änderungszeit als
+ * Sekunden seit 1904 – auf die Sekunde genau der Moment der Aufnahme.
+ * Nachgemessen an einer Browser-Aufnahme: 3871491607, also
+ * 2026-09-05T22:20:07Z. Das ist bei einer Aufnahme im Browser der einzige
+ * Rest, weil dort weder `udta` noch `meta` entsteht.
+ *
+ * Die Lage hängt an der Version im ersten Byte hinter dem Kopf: Version 0
+ * hat zwei 4-Byte-Felder, Version 1 zwei 8-Byte-Felder. Alles danach –
+ * Zeitskala, Dauer, und bei `tkhd` die Drehmatrix – bleibt unberührt.
+ */
+function zeitenNullen(daten: Uint8Array, inhalt: number): void {
+  const version = daten[inhalt];
+  const breite = version === 1 ? 8 : 4;
+  const bis = inhalt + 4 + breite * 2;
+  if (bis > daten.length) return;
+  daten.fill(0, inhalt + 4, bis);
+}
+
+const ZEITBOXEN = new Set(['mvhd', 'tkhd', 'mdhd']);
+
+/** Findet die Zeitboxen unter `moov`, bis drei Ebenen tief. */
+function zeitBereiche(daten: Uint8Array, tiefe = 0): Box[] {
+  if (tiefe > 3) return [];
+  const treffer: Box[] = [];
+  for (const box of boxenLesen(daten)) {
+    if (ZEITBOXEN.has(box.typ)) treffer.push(box);
+    else if (box.typ === 'trak' || box.typ === 'mdia') {
+      for (const tiefer of zeitBereiche(daten.subarray(box.inhalt, box.ende), tiefe + 1)) {
+        treffer.push({
+          typ: tiefer.typ,
+          start: box.inhalt + tiefer.start,
+          inhalt: box.inhalt + tiefer.inhalt,
+          ende: box.inhalt + tiefer.ende,
+        });
+      }
+    }
+  }
+  return treffer;
+}
+
+/** Was ein Lauf gefunden und getan hat – für Protokoll und Test. */
+export interface Befund {
+  /** Ob überhaupt etwas geändert wurde. */
+  geaendert: boolean;
+  /** Wie viele Metadatenboxen genullt wurden. */
+  boxen: number;
+  /** Wie viele Zeitstempel genullt wurden. */
+  zeiten: number;
+  /** Warum nichts getan wurde, falls nichts getan wurde. */
+  grund?: string;
+}
+
+/**
+ * Entfernt die Metadaten aus einem MP4/MOV – ohne neu zu kodieren.
+ *
+ * Gibt die Datei unverändert zurück, wenn das Format nicht sicher zu
+ * behandeln ist. Das ist Absicht: Ein Video, das nicht mehr abspielt, ist
+ * schlimmer als eines mit Zusatzdaten, und der Anwender kann das eine
+ * bemerken und das andere nicht.
+ *
+ * # Was NICHT behandelt wird
+ *
+ * WebM und Matroska. Die Aufnahme im Browser erzeugt zwar WebM, aber ohne
+ * Ortsangabe: Nachgemessen enthält ein Chromium-Mitschnitt in `Info` nur
+ * TimestampScale, MuxingApp und WritingApp („Chrome“) – kein DateUTC, keine
+ * SegmentUID, keine Tags. Der Weg mit Ortsdaten ist die Kamerarolle, und die
+ * liefert MP4 oder MOV. Für WebM gäbe es mit dem Void-Element (0xEC) dasselbe
+ * Mittel; gebaut ist es nicht, weil es hier nichts zu entfernen gibt.
+ */
+export async function videoBereinigen(datei: Blob): Promise<{ datei: Blob; befund: Befund }> {
+  const unveraendert = (grund: string) => ({
+    datei,
+    befund: { geaendert: false, boxen: 0, zeiten: 0, grund },
+  });
+
+  if (datei.size < 16) return unveraendert('zu klein für einen Boxbaum');
+
+  /*
+   * Den Baum lesen, ohne die Datei zu laden.
+   *
+   * Ein Video aus der Kamerarolle hat leicht 200 MB; die in den
+   * Arbeitsspeicher zu ziehen, ist auf einem Telefon ein Absturz. Jede Box
+   * nennt aber ihre eigene Länge – es genügt also, je 16 Byte am Anfang
+   * jeder Box zu lesen und weiterzuspringen.
+   */
+  let at = 0;
+  let moov: Box | null = null;
+  let schritte = 0;
+  while (at + 8 <= datei.size && schritte < 1000) {
+    schritte += 1;
+    const kopf = await stueck(datei, at, Math.min(at + 16, datei.size));
+    const boxen = boxenLesen(kopf, at);
+    if (boxen.length === 0) {
+      // Der Kopf allein reicht nicht, wenn die Box länger ist als das Stück.
+      // `boxenLesen` bricht dann ab – wir lesen die Länge deshalb selbst.
+      if (kopf.length < 8) return unveraendert('unlesbarer Boxkopf');
+      const sicht = new DataView(kopf.buffer, kopf.byteOffset, kopf.byteLength);
+      let groesse = sicht.getUint32(0);
+      const typ = new TextDecoder('latin1').decode(kopf.subarray(4, 8));
+      if (!/^[\x20-\x7e]{4}$/.test(typ)) return unveraendert('kein MP4/MOV');
+      if (groesse === 1) {
+        if (kopf.length < 16) return unveraendert('unlesbarer Boxkopf');
+        const gross = sicht.getBigUint64(8);
+        if (gross > BigInt(Number.MAX_SAFE_INTEGER)) return unveraendert('Box zu gross');
+        groesse = Number(gross);
+        if (typ === 'moov') moov = { typ, start: at, inhalt: at + 16, ende: at + groesse };
+      } else if (groesse === 0) {
+        groesse = datei.size - at;
+        if (typ === 'moov') moov = { typ, start: at, inhalt: at + 8, ende: at + groesse };
+      } else if (typ === 'moov') {
+        moov = { typ, start: at, inhalt: at + 8, ende: at + groesse };
+      }
+      if (groesse < 8) return unveraendert('unsinnige Boxlänge');
+      at += groesse;
+      if (moov) break;
+      continue;
+    }
+    const box = boxen[0];
+    if (box.typ === 'moov') {
+      moov = box;
+      break;
+    }
+    at = box.ende;
+  }
+
+  if (!moov) return unveraendert('kein moov gefunden');
+  if (moov.ende - moov.start > 64 * 1024 * 1024) return unveraendert('moov unerwartet gross');
+
+  const moovDaten = await stueck(datei, moov.start, moov.ende);
+  const inhaltAb = moov.inhalt - moov.start;
+  const kern = moovDaten.subarray(inhaltAb);
+
+  const bereiche = metadatenBereiche(kern, inhaltAb);
+  const zeiten = zeitBereiche(kern);
+
+  if (bereiche.length === 0 && zeiten.length === 0) {
+    return unveraendert('nichts zu entfernen');
+  }
+
+  /*
+   * Ueberschreiben, nicht herausschneiden.
+   *
+   * `moovDaten` bleibt exakt so lang, wie es war. Damit verschiebt sich mdat
+   * nicht, und jeder absolute Versatz in stco, co64 und tfra bleibt gueltig.
+   */
+  for (const bereich of bereiche) {
+    moovDaten.set(freiBox(bereich.ende - bereich.start), bereich.start);
+  }
+  for (const box of zeiten) {
+    zeitenNullen(moovDaten, inhaltAb + box.inhalt);
+  }
+
+  return {
+    datei: new Blob(
+      [datei.slice(0, moov.start), new Uint8Array(moovDaten), datei.slice(moov.ende)],
+      {
+        type: datei.type,
+      },
+    ),
+    befund: { geaendert: true, boxen: bereiche.length, zeiten: zeiten.length },
+  };
+}
