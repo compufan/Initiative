@@ -1,6 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
 import { expect, test, type Browser, type Page } from '@playwright/test';
 
@@ -156,6 +153,79 @@ const PNG = Buffer.from(
     'PsAQVj3vJTAAAAAElFTkSuQmCC',
   'base64',
 );
+
+/**
+ * Eine Szene mit echten perspektivischen Tiefenhinweisen – gerechnet, nicht geliehen.
+ *
+ * # Warum nicht das Porträt, das hier stand
+ *
+ * Weil es uns nicht gehört. Es war das Beispielbild von MediaPipe, und in
+ * seinen EXIF-Feldern steht wörtlich „provided by THE WHITE HOUSE … for
+ * personal use only … may not be manipulated in any way and may not otherwise
+ * be reproduced, disseminated or broadcast“. Es lag unter `public/`, wanderte
+ * damit in jeden Build und wurde von der veröffentlichten App unter
+ * `/__test-portrait.jpg` an jeden ausgeliefert, der die Adresse kannte.
+ *
+ * # Warum das Modell hierauf überhaupt anspringt
+ *
+ * Ein Tiefenmodell schätzt aus dem, was ein Mensch auch benutzt: Perspektive,
+ * Verdeckung, bekannte Grössen. Ein Verlauf mit Streifen hat nichts davon –
+ * daran gemessen liefert das Modell 2,01 bis 2,22 bei einem Wertebereich von
+ * 0,66 bis 2,86, praktisch flach und die Reihenfolge sogar umgedreht.
+ *
+ * Diese Szene hat es: einen Fluchtpunkt, einen nach hinten dichter werdenden
+ * Schachbrettboden und drei Pfosten, die nach hinten kleiner werden.
+ * Nachgemessen liefert das Modell darauf 0 / 0,40 / 2,74 / 4,73 / 6,64 über
+ * fünf Bänder von oben nach unten – ein stärkeres und saubereres Gefälle als
+ * das Foto, das hier stand (0,96 bis 3,36).
+ *
+ * # Warum unbunt
+ *
+ * Aus demselben Grund wie bei `motivPng`: Der Maskenschleier wird über seinen
+ * Rotstich (r − b) gemessen. Die erste Fassung dieser Szene hatte einen blauen
+ * Himmel, und der bringt schon ohne jeden Schleier −80 mit. Gemessen wurde
+ * dann nicht die Maske, sondern der Himmel. Unbunt heisst: ohne Schleier ist
+ * r − b überall exakt null.
+ *
+ * Die Tiefenhinweise überleben das, denn sie sind geometrisch und nicht
+ * farbig – nachgemessen sind es unbunt 0 / 0,52 / 2,49 / 4,54 / 6,25 statt
+ * 0 / 0,40 / 2,74 / 4,73 / 6,64.
+ */
+function perspektivePng(breite: number, hoehe: number): Buffer {
+  const horizont = hoehe * 0.34;
+  const reihen = 26;
+  const spalten = 20;
+  // Naeher = groesser und weiter unten. `t` ist die Tiefe von 0 (hinten) bis 1.
+  const pfosten = [
+    { t: 0.18, x: 0.3 },
+    { t: 0.45, x: 0.68 },
+    { t: 0.82, x: 0.42 },
+  ].map((p) => {
+    const fuss = horizont + (hoehe - horizont) * p.t * p.t;
+    const hoch = (hoehe - horizont) * (0.12 + p.t * 0.5);
+    const dick = hoch * 0.28;
+    return { x0: breite * p.x - dick / 2, x1: breite * p.x + dick / 2, y0: fuss - hoch, y1: fuss };
+  });
+
+  return pngAus(breite, hoehe, (x, y) => {
+    for (const p of pfosten) {
+      if (x >= p.x0 && x < p.x1 && y >= p.y0 && y < p.y1) return [42, 42, 42];
+    }
+    if (y < horizont) {
+      // Himmel: von oben dunkel nach unten hell.
+      const t = y / horizont;
+      const wert = Math.round(74 + t * 120);
+      return [wert, wert, wert];
+    }
+    // Der Boden. `t` ist die Umkehrung von y = horizont + (hoehe − horizont)·t².
+    const t = Math.sqrt((y - horizont) / (hoehe - horizont));
+    const reihe = Math.floor(t * reihen);
+    // Die Spalten laufen zum Fluchtpunkt in der Bildmitte zusammen.
+    const weite = 0.5 + t * 2.2;
+    const spalte = Math.floor(((x - breite / 2) / (breite * weite)) * spalten + spalten / 2);
+    return (reihe + spalte) % 2 === 0 ? [132, 132, 132] : [88, 88, 88];
+  });
+}
 
 test('ein Foto im Chat wird wirklich angezeigt', async ({ browser }) => {
   const alice = credentials('foto');
@@ -1044,11 +1114,9 @@ test('die Tiefenkarte macht aus der Entfernung eine Maske', async ({ browser }) 
   await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
   await alicePage.getByText('Foto/Video').click();
   await alicePage.locator('input[type=file]').setInputFiles({
-    name: 'portrait.jpg',
-    mimeType: 'image/jpeg',
-    buffer: readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), '..', 'public', '__test-portrait.jpg'),
-    ),
+    name: 'szene.png',
+    mimeType: 'image/png',
+    buffer: perspektivePng(1024, 768),
   });
   await alicePage.getByRole('button', { name: /^Senden \(/ }).click();
   const bild = alicePage.locator('.media-image').first();
@@ -1121,32 +1189,54 @@ test('die Tiefenkarte macht aus der Entfernung eine Maske', async ({ browser }) 
    * BILDMITTE, und bei Fokus hinten wird das ganze Bild flach – weil dieses
    * Foto hinten wenig Tiefe hat.
    */
-  const vorn = await profil();
-  expect(mittel(vorn, 0, 3), 'oben ist fern und damit stark maskiert').toBeGreaterThan(
-    mittel(vorn, 6, 9) + 40,
-  );
-
-  await fokus.fill('0.5');
-  await expect.poll(async () => mittel(await profil(), 4, 6), { timeout: 10_000 }).toBeLessThan(45);
-  const mitte = await profil();
   /*
-   * Der eigentliche Beweis, dass hier eine Tiefenkarte am Werk ist und nicht
-   * irgendein Verlauf: Die scharfe Ebene wandert mit dem Regler NACH OBEN,
-   * weil weiter hinten im Bild weiter oben liegt. Ein fester Verlauf könnte
-   * heller und dunkler werden, aber seine schärfste Stelle nicht verschieben.
+   * Gemessen an dieser Szene, zehn Bänder von oben (fern) nach unten (nah).
+   * Die Zahl ist der Rotstich des Schleiers, 74 ist sein Anschlag:
+   *
+   *   Fokus 100 (vorn):   74 74 74 74 72 71 67 48 28  7
+   *   Fokus  50 (mitte):  74 74 73 64 41 21  9 26 46 67
+   *   Fokus   0 (hinten):  0  0  1 10 35 57 73 74 74 74
+   *
+   * Das ist eine Schärfeebene, wie eine Linse sie zeichnet: bei Fokus vorne
+   * fällt die Maske zum unteren Bildrand hin ab, bei Fokus hinten steigt sie
+   * dorthin an, und dazwischen entsteht ein V – scharf in der BILDMITTE,
+   * unscharf davor UND dahinter.
    */
-  expect(schaerfstes(mitte), 'die scharfe Ebene muss nach oben wandern').toBeLessThan(
-    schaerfstes(vorn),
-  );
-  expect(mittel(mitte, 4, 6), 'in der Bildmitte ist es jetzt am schärfsten').toBeLessThan(
-    mittel(mitte, 0, 3) - 40,
-  );
-  expect(mittel(mitte, 4, 6)).toBeLessThan(mittel(mitte, 7, 10) - 15);
-
+  const vorn = await profil();
+  await fokus.fill('0.5');
+  await expect.poll(async () => mittel(await profil(), 5, 7), { timeout: 10_000 }).toBeLessThan(30);
+  const mitte = await profil();
   await fokus.fill('0');
-  await expect
-    .poll(async () => mittel(await profil(), 0, 3), { timeout: 10_000 })
-    .toBeLessThan(mittel(vorn, 0, 3) - 25);
+  await expect.poll(async () => mittel(await profil(), 0, 2), { timeout: 10_000 }).toBeLessThan(15);
+  const hinten = await profil();
+
+  // Fokus vorne: fern ist maskiert, nah ist scharf.
+  expect(mittel(vorn, 0, 3), 'oben ist fern und damit voll maskiert').toBeGreaterThan(65);
+  expect(vorn[9], 'unten ist nah und damit scharf').toBeLessThan(20);
+
+  // Fokus hinten: genau umgekehrt.
+  expect(hinten[0], 'oben ist jetzt die Schärfeebene').toBeLessThan(10);
+  expect(mittel(hinten, 7, 10), 'unten ist jetzt weit von der Schärfeebene').toBeGreaterThan(65);
+
+  /*
+   * Fokus in der Mitte: ein V. Das kann kein Verlauf und keine Silhouette –
+   * dafür braucht es eine Entfernung je Bildpunkt, denn unscharf ist hier
+   * sowohl das Nähere als auch das Fernere.
+   */
+  const tiefstes = Math.min(...mitte);
+  expect(schaerfstes(mitte), 'die Schärfeebene liegt im Bild, nicht am Rand').toBeGreaterThan(1);
+  expect(schaerfstes(mitte)).toBeLessThan(8);
+  expect(mitte[0] - tiefstes, 'vor der Schärfeebene wird es wieder unscharf').toBeGreaterThan(50);
+  expect(mitte[9] - tiefstes, 'hinter der Schärfeebene ebenso').toBeGreaterThan(40);
+
+  /*
+   * Der eigentliche Beweis: Die scharfe Ebene WANDERT mit dem Regler, und
+   * zwar in der richtigen Richtung. Gemessen Band 9 -> 6 -> 0. Ein fester
+   * Verlauf könnte heller und dunkler werden, seine schärfste Stelle aber
+   * nicht verschieben.
+   */
+  expect(schaerfstes(vorn)).toBeGreaterThan(schaerfstes(mitte));
+  expect(schaerfstes(mitte)).toBeGreaterThan(schaerfstes(hinten));
 
   await alicePage.context().close();
 });

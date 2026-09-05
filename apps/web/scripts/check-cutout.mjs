@@ -15,7 +15,7 @@
  *   pnpm --filter @initiative/web run check:cutout
  */
 import { spawn } from 'node:child_process';
-import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,11 +25,24 @@ const PORT = 5199;
 const APP = `http://127.0.0.1:${PORT}`;
 
 /**
- * Ein Porträt von Google, mit dem MediaPipe selbst seine Beispiele zeigt.
- * Wird nur zum Prüfen geladen und liegt deshalb nicht im Git.
+ * Das Prüfbild – geliehen, nicht unser Eigentum.
+ *
+ * Es ist das Porträt, mit dem MediaPipe seine eigenen Beispiele zeigt. In
+ * seinen EXIF-Feldern steht wörtlich: „provided by THE WHITE HOUSE as a
+ * courtesy … for personal use only. The photograph may not be manipulated in
+ * any way and may not otherwise be reproduced, disseminated or broadcast“.
+ *
+ * Deshalb liegt es **nicht** mehr unter `public/`. Von dort wanderte es beim
+ * Bauen nach `dist/` und wurde von der veröffentlichten App unter
+ * `/__test-portrait.jpg` an jeden ausgeliefert, der die Adresse kannte – also
+ * genau das „disseminated“, das der Vermerk untersagt. Aufgefallen ist das
+ * erst bei der Durchsicht der Fremdlizenzen.
+ *
+ * Jetzt liegt es in einem Zwischenspeicher, der nie ausgeliefert wird, und
+ * geht als Datenadresse direkt in die Seite. Es verlässt diesen Rechner nicht.
  */
 const TESTBILD_URL = 'https://storage.googleapis.com/mediapipe-assets/portrait.jpg';
-const TESTBILD = join(webDir, 'public', '__test-portrait.jpg');
+const TESTBILD = join(webDir, 'node_modules', '.cache', 'initiative', 'pruefbild.jpg');
 
 /** Was jedes Verfahren am Porträt liefern muss. */
 const ERWARTUNG = {
@@ -117,60 +130,67 @@ try {
   await page.goto(APP, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(1500);
 
-  const bericht = await page.evaluate(async (verfahren) => {
-    const engines = await import('/src/modules/stickers/engines/index.ts');
-    const { vorlageAus, maskeTraegt } = await import('/src/modules/stickers/engines/prepare.ts');
+  // Das Bild als Datenadresse hineinreichen, statt es auszuliefern – siehe
+  // den Kommentar bei TESTBILD.
+  const bildAdresse = `data:image/jpeg;base64,${(await readFile(TESTBILD)).toString('base64')}`;
 
-    const img = new Image();
-    img.src = '/__test-portrait.jpg';
-    await img.decode();
-    const { image } = vorlageAus(img, img.naturalWidth, img.naturalHeight);
-    const w = image.width;
-    const h = image.height;
+  const bericht = await page.evaluate(
+    async ({ verfahren, bildAdresse }) => {
+      const engines = await import('/src/modules/stickers/engines/index.ts');
+      const { vorlageAus, maskeTraegt } = await import('/src/modules/stickers/engines/prepare.ts');
 
-    const ergebnis = {};
-    for (const key of verfahren) {
-      const start = performance.now();
-      try {
-        // Das grosse Modell ist von Haus aus aus – zum Prüfen einschalten.
-        engines.writeEngineSetting(key, true);
-        const alpha = await engines.runEngine(key, { image });
-        const bei = (x, y) => alpha[Math.floor(y) * w + Math.floor(x)];
+      const img = new Image();
+      img.src = bildAdresse;
+      await img.decode();
+      const { image } = vorlageAus(img, img.naturalWidth, img.naturalHeight);
+      const w = image.width;
+      const h = image.height;
 
-        let sx = 0;
-        let sy = 0;
-        let n = 0;
-        for (let y = 0; y < h; y += 1) {
-          for (let x = 0; x < w; x += 1) {
-            if (alpha[y * w + x] > 128) {
-              sx += x;
-              sy += y;
-              n += 1;
+      const ergebnis = {};
+      for (const key of verfahren) {
+        const start = performance.now();
+        try {
+          // Das grosse Modell ist von Haus aus aus – zum Prüfen einschalten.
+          engines.writeEngineSetting(key, true);
+          const alpha = await engines.runEngine(key, { image });
+          const bei = (x, y) => alpha[Math.floor(y) * w + Math.floor(x)];
+
+          let sx = 0;
+          let sy = 0;
+          let n = 0;
+          for (let y = 0; y < h; y += 1) {
+            for (let x = 0; x < w; x += 1) {
+              if (alpha[y * w + x] > 128) {
+                sx += x;
+                sy += y;
+                n += 1;
+              }
             }
           }
-        }
 
-        ergebnis[key] = {
-          ok: true,
-          laenge: alpha.length,
-          erwartet: w * h,
-          ecken: [bei(2, 2), bei(w - 3, 2), bei(2, h - 3), bei(w - 3, h - 3)],
-          anteil: n / (w * h),
-          schwerpunkt: n ? [sx / n / w, sy / n / h] : null,
-          amSchwerpunkt: n ? bei(sx / n, sy / n) : 0,
-          traegt: maskeTraegt(alpha),
-          ms: Math.round(performance.now() - start),
-        };
-      } catch (error) {
-        ergebnis[key] = {
-          ok: false,
-          fehler: String(error?.message ?? error),
-          ms: Math.round(performance.now() - start),
-        };
+          ergebnis[key] = {
+            ok: true,
+            laenge: alpha.length,
+            erwartet: w * h,
+            ecken: [bei(2, 2), bei(w - 3, 2), bei(2, h - 3), bei(w - 3, h - 3)],
+            anteil: n / (w * h),
+            schwerpunkt: n ? [sx / n / w, sy / n / h] : null,
+            amSchwerpunkt: n ? bei(sx / n, sy / n) : 0,
+            traegt: maskeTraegt(alpha),
+            ms: Math.round(performance.now() - start),
+          };
+        } catch (error) {
+          ergebnis[key] = {
+            ok: false,
+            fehler: String(error?.message ?? error),
+            ms: Math.round(performance.now() - start),
+          };
+        }
       }
-    }
-    return ergebnis;
-  }, NUR);
+      return ergebnis;
+    },
+    { verfahren: NUR, bildAdresse },
+  );
 
   await browser.close();
 

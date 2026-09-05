@@ -18,14 +18,14 @@ import { dirname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createGzip } from 'node:zlib';
 import { Readable } from 'node:stream';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const hier = dirname(fileURLToPath(import.meta.url));
 const publicDir = join(hier, '..', 'public');
 const require = createRequire(import.meta.url);
 
 /** Die WASM-Laufzeit von MediaPipe. Beide Varianten: mit und ohne SIMD. */
-const WASM_DATEIEN = [
+export const WASM_DATEIEN = [
   'vision_wasm_internal.js',
   'vision_wasm_internal.wasm',
   // Ohne diese beiden scheitert der Start auf iOS vor 16.4: MediaPipe fragt
@@ -38,7 +38,7 @@ const WASM_DATEIEN = [
  * Die Modelle. Feste Versionsnummer statt "latest", damit ein Build von
  * heute dieselben Dateien bekommt wie einer von naechster Woche.
  */
-const MODELLE = [
+export const MODELLE = [
   {
     name: 'selfie-segmenter.tflite',
     lizenz: 'Apache-2.0',
@@ -64,6 +64,13 @@ const MODELLE = [
     urheber: 'Xuebin Qin u. a., U^2-Net (github.com/xuebinqin/U-2-Net)',
     url: 'https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx',
     mindestGroesse: 4_000_000,
+    // Nachgetragen: Als einziges Modell hing dieses ohne Pruefsumme an einem
+    // GitHub-Release-Anhang, und Release-Anhaenge lassen sich austauschen,
+    // ohne dass sich die Adresse aendert. Die Summe stammt von der Datei, die
+    // wir tatsaechlich geprueft haben (opset 11, 1055 Knoten, Eingang
+    // [1,3,320,320], sieben Sigmoid-Ausgaenge – die d0..d6-Signatur von
+    // U^2-Net).
+    sha256: '309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8',
   },
   {
     // BiRefNet-lite, 512er-Fassung, halbe Genauigkeit. MIT-Lizenz, wie das
@@ -128,9 +135,31 @@ const MODELLE = [
     optional: true,
   },
   {
-    // NanoSAM: punktgefuehrtes Segmentieren. Apache-2.0 durchgehend – die
-    // ONNX-Fassung dragonSwing/nanosam, deren Vorlage binh234/nanosam und
-    // NVIDIA-AI-IOT/nanosam, der Decoder aus MobileSAM bzw. Segment Anything.
+    // Punktgefuehrtes Segmentieren, in zwei Teilen aus zwei Haeusern.
+    //
+    // # Berichtigt: das ist NICHT NVIDIAs Encoder
+    //
+    // Hier stand "NanoSAM, Apache-2.0 durchgehend" mit NVIDIA als Urheber.
+    // Beides war falsch, und es faellt erst auf, wenn man in die Datei sieht.
+    // In sam_hgv2_b1_ln_nonorm_image_encoder.onnx steht woertlich die
+    // Zeichenkette "Model from PaddlePaddle", und die Gewichte heissen
+    // batch_norm2d_0.w_0 – die Namensform von PaddlePaddle, nicht von
+    // PyTorch. Der Dateiname sagt es auch: "hgv2_b1" ist PP-HGNetV2-B1, ein
+    // Rueckgrat von Baidu. NVIDIAs NanoSAM benutzt ein ResNet18 aus PyTorch.
+    //
+    // Richtig ist also: Der ENCODER ist PP-HGNetV2-B1 (Baidu, Apache-2.0),
+    // auf SAM-Einbettungen destilliert nach dem Verfahren von NanoSAM bzw.
+    // EfficientViT-SAM; verpackt von dragonSwing. Der DECODER ist der
+    // unveraenderte Maskendecoder aus Segment Anything bzw. MobileSAM
+    // (Meta AI, Apache-2.0) – producer "pytorch", Graph "torch_jit".
+    //
+    // # Ein Vorbehalt, der nicht in der Lizenz steht
+    //
+    // Die Destillation benutzte 6 % von SA-1B, und dieses Datenset steht
+    // unter einer Forschungslizenz, nicht unter Apache-2.0. Das betrifft die
+    // Trainingsdaten, nicht die Gewichte – aber "Apache-2.0 durchgehend",
+    // wie es hier stand, war eine Beschoenigung. Wer das Modell in einem
+    // Produkt einsetzt, sollte diesen Punkt kennen.
     //
     // ACHTUNG beim Nachziehen: Im selben Repo liegt unter `op11/` ein fast
     // gleich benannter zweiter Satz OHNE `_ln_`, und die Download-Verweise im
@@ -138,7 +167,10 @@ const MODELLE = [
     // Namen und Pruefsummen statt irgendeinem Verweis zu folgen.
     name: 'nanosam-encoder.onnx',
     lizenz: 'Apache-2.0',
-    urheber: 'NVIDIA, NanoSAM; Decoder aus MobileSAM bzw. Segment Anything',
+    urheber:
+      'Bildencoder: PP-HGNetV2-B1 (Baidu/PaddlePaddle), destilliert nach dem Verfahren von NanoSAM (NVIDIA) bzw. EfficientViT-SAM; ONNX-Fassung von dragonSwing',
+    hinweis:
+      'Die Destillation nutzte 6 % des Datensets SA-1B, das unter einer Forschungslizenz steht. Das betrifft die Trainingsdaten, nicht die Gewichte.',
     url: 'https://huggingface.co/dragonSwing/nanosam/resolve/e49afdaee2078a826f542929996a14fb0b69a2fa/sam_hgv2_b1_ln_nonorm_image_encoder.onnx',
     mindestGroesse: 12_000_000,
     sha256: '0001b3349220a86ff6a41819ebdfd9f2a8c0707a90ef3e4f9726d46db09a9a32',
@@ -147,7 +179,7 @@ const MODELLE = [
   {
     name: 'nanosam-decoder.onnx',
     lizenz: 'Apache-2.0',
-    urheber: 'NVIDIA, NanoSAM; Decoder aus MobileSAM bzw. Segment Anything',
+    urheber: 'Maskendecoder aus Segment Anything bzw. MobileSAM (Meta AI)',
     url: 'https://huggingface.co/dragonSwing/nanosam/resolve/e49afdaee2078a826f542929996a14fb0b69a2fa/mobile_sam_mask_decoder.onnx',
     mindestGroesse: 16_000_000,
     sha256: '41e49a298099048186ce109a4518286b8972959898a02577414405efa5c3b247',
@@ -158,7 +190,9 @@ const MODELLE = [
     //
     // ###########################################################
     // # NUR die Small-Fassung. Im Wortlaut des Urhebers          #
-    // # (github.com/DepthAnything/Depth-Anything-V2, LICENSE):   #
+    // # (github.com/DepthAnything/Depth-Anything-V2, README,     #
+    // # Abschnitt LICENSE - NICHT in der Datei LICENSE, die   #
+    // # ist reiner Apache-Text):                              #
     // #                                                          #
     // #   "Depth-Anything-V2-Small model is under the            #
     // #    Apache-2.0 license. Depth-Anything-V2-Base/Large/     #
@@ -382,14 +416,24 @@ async function lizenzenSchreiben() {
  */
 const optional = process.argv.includes('--optional');
 
-console.log('Freistell-Bausteine bereitlegen …');
-try {
-  await wasmKopieren();
-  await modelleLaden();
-  await lizenzenSchreiben();
-  console.log('Fertig.');
-} catch (fehler) {
-  if (!optional) throw fehler;
-  console.warn(`  Uebersprungen: ${fehler.message}`);
-  console.warn('  Das Freistellen mit Modellen steht in dieser Sitzung nicht zur Verfuegung.');
+/*
+ * Nur laufen, wenn dieses Skript AUFGERUFEN wurde – nicht, wenn es jemand
+ * importiert.
+ *
+ * `scripts/lizenzen.mjs` holt sich von hier die Liste MODELLE, weil sie die
+ * einzige Wahrheit ueber Herkunft und Lizenz der Modelle ist. Ohne diese
+ * Abfrage loeste allein das Importieren 130 MB Download aus.
+ */
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  console.log('Freistell-Bausteine bereitlegen …');
+  try {
+    await wasmKopieren();
+    await modelleLaden();
+    await lizenzenSchreiben();
+    console.log('Fertig.');
+  } catch (fehler) {
+    if (!optional) throw fehler;
+    console.warn(`  Uebersprungen: ${fehler.message}`);
+    console.warn('  Das Freistellen mit Modellen steht in dieser Sitzung nicht zur Verfuegung.');
+  }
 }

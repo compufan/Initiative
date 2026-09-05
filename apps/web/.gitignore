@@ -3,5 +3,8 @@
 public/mediapipe/
 public/models/
 
-# Testbild fuer scripts/check-cutout.mjs – wird bei Bedarf geladen.
-public/__test-portrait.jpg
+# Das geliehene Pruefbild fuer scripts/check-cutout.mjs. Es liegt bewusst
+# NICHT unter public/ – von dort wanderte es beim Bauen nach dist/ und wurde
+# von der veroeffentlichten App an jeden ausgeliefert. Sein Rechtevermerk
+# untersagt genau das.
+node_modules/.cache/initiative/

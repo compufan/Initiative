@@ -400,3 +400,63 @@
   gap: var(--space-2);
   flex-wrap: wrap;
 }
+
+/* --- Verwendete Software ------------------------------------------------ */
+
+.lzn-liste {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.lzn-zeile + .lzn-zeile {
+  border-top: 1px solid var(--line);
+}
+
+.lzn-kopf {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.55rem 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.lzn-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lzn-inhalt {
+  padding: 0 0 0.75rem;
+}
+
+.lzn-urheber {
+  margin: 0;
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * Der Lizenztext ist vorformatiert und teils sehr breit (Apache-2.0 bricht
+ * bei 79 Zeichen um). Auf einem Telefon muss er trotzdem umbrechen, sonst
+ * schiebt er die ganze Seite seitwaerts.
+ */
+.lzn-text {
+  max-height: 22rem;
+  overflow: auto;
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  border-radius: 0.4rem;
+  background: var(--surface-2, rgba(127, 127, 127, 0.1));
+  font-size: 0.74rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { clearOfflineData } from '../../lib/db.js';
 import { nachUpdateSuchen } from '../../lib/aktualisieren.js';
 import { toast, useUi } from '../../state/ui.js';
@@ -19,7 +20,8 @@ export function AboutCard() {
   // von verschiedenen Diensten gebaut werden und kurz auseinanderlaufen koennen.
   useEffect(() => {
     let cancelled = false;
-    void api.health()
+    void api
+      .health()
       .then((value) => {
         if (!cancelled) setApiCommit(value.version ?? 'unbekannt');
       })
@@ -90,8 +92,8 @@ export function AboutCard() {
           API-Stand: <code>{apiCommit ?? '…'}</code>
         </span>
         <span className="prf-hint">
-          Das sind die kurzen Commit-Kennungen. Nach einem Push müssen sie zu dem passen, was
-          hier im Chat steht.
+          Das sind die kurzen Commit-Kennungen. Nach einem Push müssen sie zu dem passen, was hier
+          im Chat steht.
         </span>
       </div>
 
@@ -112,6 +114,14 @@ export function AboutCard() {
       <a className="btn btn-block" href={REPO_URL} target="_blank" rel="noreferrer noopener">
         ⌨️ Quellcode auf GitHub
       </a>
+
+      <Link className="btn btn-block" to="/profil/lizenzen">
+        ⚖️ Verwendete Software
+      </Link>
+      <p className="prf-hint">
+        Diese App steht auf fremder Arbeit – Bibliotheken, Rechenwerke und Modelle von anderen.
+        Deren Lizenzen verlangen, dass sie genannt werden. Hier stehen sie.
+      </p>
 
       <button
         type="button"

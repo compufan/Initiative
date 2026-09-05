@@ -129,3 +129,61 @@ test('Foto- und Videoblasen haben eine Fläche', async ({ browser }) => {
   // Und der Text bestimmt die Größe nicht.
   expect(masse.mitText.breite).toBe(masse.foto.breite);
 });
+
+test('die Seite „Verwendete Software“ nennt die fremden Bestandteile samt Lizenztext', async ({
+  browser,
+}) => {
+  /*
+   * Kein Beiwerk, sondern eine Auflage. Die MIT-Lizenz – unter der die
+   * meisten hier benutzten Pakete stehen – verlangt wörtlich: „The above
+   * copyright notice and this permission notice shall be included in all
+   * copies or substantial portions of the Software.“ Eine Web-App verteilt
+   * Kopien an jeden Besucher. Ohne diese Seite fehlte diese Nennung bei jedem
+   * einzelnen Paket.
+   *
+   * Geprüft wird deshalb nicht, dass „eine Liste da ist“, sondern dass die
+   * drei Dinge dastehen, die die Lizenzen verlangen: Name, Rechteinhaber und
+   * der Lizenztext selbst.
+   */
+  const nutzer = credentials('lizenz');
+  const seite = await signUp(browser, nutzer);
+
+  await seite.goto('/profil/lizenzen');
+  await expect(seite.getByRole('heading', { name: 'Verwendete Software' })).toBeVisible();
+
+  // Die Liste wird nachgeladen – erst wenn die Gruppen da sind, ist sie da.
+  const suche = seite.getByRole('searchbox', { name: 'Verwendete Software durchsuchen' });
+  await expect(suche).toBeVisible({ timeout: 20_000 });
+
+  // Alle vier Gruppen: Browser, Rechenwerke, Modelle, Server.
+  for (const titel of ['Im Browser', 'Fest in den Rechenwerken', 'Modelle', 'Auf dem Server']) {
+    await expect(seite.getByRole('heading', { name: new RegExp(titel) })).toBeVisible();
+  }
+
+  // Ein Paket, von dem wir sicher wissen, dass es ausgeliefert wird.
+  await suche.fill('react-dom');
+  const reactDom = seite.getByRole('button', { name: /^react-dom/ }).first();
+  await expect(reactDom).toBeVisible();
+  await reactDom.click();
+
+  // Rechteinhaber und Lizenztext – beides verlangt die MIT-Lizenz.
+  await expect(seite.getByText(/Copyright \(c\) Meta Platforms/).first()).toBeVisible();
+  await expect(
+    seite
+      .getByText(/The above copyright notice and this permission notice shall be included/)
+      .first(),
+  ).toBeVisible();
+
+  /*
+   * Und das Tiefenmodell mit seinem Vorbehalt: Nur die kleine Fassung ist
+   * Apache-2.0. Steht dieser Satz nicht in der App, kann ihn auch niemand
+   * lesen, der die App weitergibt.
+   */
+  await suche.fill('depth-anything');
+  const tiefe = seite.getByRole('button', { name: /^depth-anything/ }).first();
+  await expect(tiefe).toBeVisible();
+  await tiefe.click();
+  await expect(seite.getByText(/Apache License/).first()).toBeVisible();
+
+  await seite.context().close();
+});
