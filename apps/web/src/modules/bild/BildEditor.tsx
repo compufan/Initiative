@@ -698,9 +698,40 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
         if (pinselModusRef.current === 'weg') {
           const treffer = strichTreffer(teil.striche, amBild, fangBereich(massRef.current.faktor));
           if (treffer >= 0) {
+            /*
+             * Von Hand statt über `teilAendern` – aus zwei Gründen.
+             *
+             * Erstens merkt `teilAendern` selbst (über `merkenGebuendelt`);
+             * zusammen mit einem eigenen `merken()` entstünden ZWEI Schritte
+             * für eine Löschung, und der zweite Druck auf ↺ täte nichts.
+             *
+             * Zweitens bündelt es: Zwei Löschungen binnen einer Sekunde
+             * teilen sich denselben Schlüssel und würden zu einem Schritt
+             * verschmelzen. Bei einem Regler ist das richtig – wer ihn hin
+             * und her zieht, will einen Schritt. Beim Löschen ist es falsch:
+             * Jeder entfernte Strich soll einzeln zurückzuholen sein, und
+             * ob das geht, dürfte nicht von der Tippgeschwindigkeit abhängen.
+             */
             merken();
+            const bereich = aktiverBereich;
             const uebrig = teil.striche.filter((_strich, nummer) => nummer !== treffer);
-            teilAendern({ striche: uebrig } as Partial<Maskenteil>);
+            setDoc((wert) =>
+              wert && bereich
+                ? {
+                    ...wert,
+                    bereiche: wert.bereiche.map((b) =>
+                      b.id === bereich.id
+                        ? {
+                            ...b,
+                            teile: b.teile.map((t) =>
+                              t.id === teil.id ? { ...t, striche: uebrig } : t,
+                            ),
+                          }
+                        : b,
+                    ),
+                  }
+                : wert,
+            );
           }
           zug.current = { ...zug.current, art: 'keiner', begonnen: false };
           return;
@@ -2019,7 +2050,13 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
                         type="button"
                         className={`btn btn-sm ${pinselModus === 'weg' ? 'is-active' : ''}`}
                         aria-pressed={pinselModus === 'weg'}
-                        onClick={() => setPinselModus('weg')}
+                        onClick={() => {
+                          setPinselModus('weg');
+                          // Man kann nicht antippen, was man nicht sieht.
+                          // Ohne den Schleier zielt man auf unsichtbare
+                          // Striche und trifft nach Gefühl.
+                          setSchleier(true);
+                        }}
                         title="Einen einzelnen Strich antippen und entfernen"
                       >
                         ✂️ Strich löschen

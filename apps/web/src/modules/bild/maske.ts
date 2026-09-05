@@ -429,18 +429,28 @@ export function strichTreffer(
     const grenze = strich.breite / 2 + nah;
     let abstand = Infinity;
     const punkte = strich.punkte;
-    if (punkte.length === 2) {
-      // Ein Antipp-Strich ohne Bewegung ist ein Punkt, keine Strecke.
-      abstand = Math.hypot(punkt.x - punkte[0], punkt.y - punkte[1]);
-    }
-    for (let k = 0; k + 3 < punkte.length; k += 2) {
+    /*
+     * Der letzte Punkt zählt als Strecke auf sich selbst.
+     *
+     * `abstandZuStrecke` klemmt bei Länge null auf den Anfangspunkt und gibt
+     * dann schlicht den Abstand zu ihm zurück. Damit ist ein Strich aus einem
+     * einzigen Punkt kein Sonderfall mehr, sondern derselbe Rechenweg.
+     *
+     * Hier stand dafür eine eigene Abfrage `punkte.length === 2`. Sie war aus
+     * der App unerreichbar – ein Antippen ohne Bewegung legt beim
+     * Maskenpinsel gar keinen Strich an, jeder Strich beginnt mit vier
+     * Zahlen. Getesteter, aber toter Code ist schlimmer als keiner: Er sieht
+     * geprüft aus und deckt nichts ab.
+     */
+    for (let k = 0; k + 1 < punkte.length; k += 2) {
+      const weiter = k + 3 < punkte.length;
       const d = abstandZuStrecke(
         punkt.x,
         punkt.y,
         punkte[k],
         punkte[k + 1],
-        punkte[k + 2],
-        punkte[k + 3],
+        weiter ? punkte[k + 2] : punkte[k],
+        weiter ? punkte[k + 3] : punkte[k + 1],
       );
       if (d < abstand) abstand = d;
     }

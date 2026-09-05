@@ -1522,15 +1522,41 @@ test('ein einzelner Strich lässt sich entfernen, ohne alles danach zurückzuneh
     expect(await band(hoehe), `bei ${hoehe} muss ein Strich liegen`).toBeGreaterThan(5);
   }
 
-  // Den ERSTEN Strich antippen und entfernen.
+  /*
+   * Zwei Löschungen SCHNELL hintereinander – und zwar mit Absicht.
+   *
+   * `teilAendern` bündelt Änderungen desselben Feldes binnen einer Sekunde
+   * zu einem Rückgängig-Schritt. Bei einem Regler ist das richtig; beim
+   * Löschen wäre es falsch, denn dann hinge es an der Tippgeschwindigkeit,
+   * ob sich zwei Löschungen einzeln zurücknehmen lassen. Deshalb löscht
+   * dieser Test ohne Pause dazwischen.
+   */
   await alicePage.getByRole('button', { name: '✂️ Strich löschen' }).click();
   const kasten = await kastenJetzt();
-  await alicePage.mouse.click(kasten.x + kasten.width * 0.5, kasten.y + kasten.height * 0.25);
+  const tippen = async (anteilY: number) => {
+    await alicePage.mouse.click(kasten.x + kasten.width * 0.5, kasten.y + kasten.height * anteilY);
+  };
+  await tippen(0.25);
   await expect.poll(async () => band(0.25), { timeout: 5_000 }).toBeLessThan(2);
+  await tippen(0.5);
+  await expect.poll(async () => band(0.5), { timeout: 5_000 }).toBeLessThan(2);
 
-  // Und die beiden anderen stehen noch – genau das kann ↺ nicht.
-  expect(await band(0.5), 'der zweite Strich muss stehen bleiben').toBeGreaterThan(5);
+  // Der dritte steht noch – genau das kann ↺ nicht leisten.
   expect(await band(0.75), 'der dritte Strich muss stehen bleiben').toBeGreaterThan(5);
+
+  /*
+   * Jetzt rückwärts. Jede Löschung ist EIN Schritt:
+   *
+   * Ein Druck holt den zweiten Strich zurück, ein weiterer den ersten. Mit
+   * dem alten Doppel-Merken täte der zweite Druck nichts; mit Bündelung
+   * kämen beide auf einmal oder gar nicht.
+   */
+  await alicePage.getByRole('button', { name: 'Rückgängig' }).click();
+  await expect.poll(async () => band(0.5), { timeout: 5_000 }).toBeGreaterThan(5);
+  expect(await band(0.25), 'nach EINEM ↺ ist der erste noch fort').toBeLessThan(2);
+
+  await alicePage.getByRole('button', { name: 'Rückgängig' }).click();
+  await expect.poll(async () => band(0.25), { timeout: 5_000 }).toBeGreaterThan(5);
 
   await alicePage.context().close();
 });
