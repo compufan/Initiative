@@ -239,3 +239,69 @@ test('Bewegen dreht das Bild, und die Formen umfassen Karte und Sprechblase', as
 
   await context.close();
 });
+
+test('ein fertiger Sticker laesst sich auch wirklich speichern', async ({ browser }) => {
+  /*
+   * Der Anwender meldete: „Ich konnte meinen erstellten Sticker nicht
+   * speichern, weil die Schaltfläche weiter nichts tat und es auch keinen
+   * anderen Speicherbutton gab."
+   *
+   * Es war meine Regression. Für Stufe 2 habe ich `.stk-studio` von
+   * Stapelebene 55 auf 75 gehoben, damit das Studio über dem Bildbetrachter
+   * (70) liegt – und damit lag es auch über dem Blatt (`.sheet`, 61), das der
+   * Knopf „Weiter" öffnet. Das Blatt ging auf, war aber hinter dem Studio
+   * begraben: kein Fehler, keine Meldung, nichts.
+   *
+   * Der Test prüft deshalb beides: dass das Blatt kommt UND dass es oben
+   * liegt. Nur „ist im Baum" wäre genau die Prüfung, die hier grün geblieben
+   * wäre.
+   */
+  const alice = credentials('sichern');
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto('/');
+  await page.getByRole('button', { name: /Noch kein Konto/ }).click();
+  await page.getByLabel('Benutzername').fill(alice.username);
+  await page.getByLabel('Anzeigename').fill(alice.displayName);
+  await page.getByLabel('Passwort', { exact: true }).fill(alice.password);
+  await page.getByRole('button', { name: 'Konto erstellen' }).click();
+  await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
+
+  const bob = credentials('sziel');
+  await signUp(browser, bob);
+  await page.getByRole('button', { name: 'Neuer Chat' }).click();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await page.getByText(bob.displayName).first().click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await page.getByRole('button', { name: 'Sticker', exact: true }).click();
+  await page.getByRole('button', { name: /Sticker erstellen/ }).click();
+
+  // Ein Emoji ist die kürzeste Quelle – es geht hier nicht ums Freistellen.
+  await page.getByRole('button', { name: 'Emoji-Sticker 😀' }).click();
+  await expect(page.locator('.stk-canvas')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Weiter' }).click();
+
+  /*
+   * Das Blatt ist da – und zwar bedienbar.
+   *
+   * Geprüft wird mit einem echten Klick auf „Speichern“ und nicht mit
+   * `toBeVisible`: Sichtbar WAR das Blatt die ganze Zeit, es lag nur hinter
+   * dem Studio. Playwright bricht bei einem verdeckten Ziel mit „intercepts
+   * pointer events“ ab, und genau das ist der Fehler, den der Anwender
+   * gemeldet hat.
+   */
+  const blatt = page.locator('.sheet').last();
+  await expect(blatt.getByRole('heading', { name: 'Sticker speichern' })).toBeVisible({
+    timeout: 15_000,
+  });
+  await blatt.getByPlaceholder('z. B. Familie').fill('Prüfpaket');
+  await blatt.getByRole('button', { name: 'Speichern', exact: true }).click();
+
+  // Und der Sticker ist wirklich angelegt: Das Studio schliesst sich, und die
+  // Sammlung zeigt ihn.
+  await expect(page.locator('.stk-studio')).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.getByText('Prüfpaket').first()).toBeVisible({ timeout: 15_000 });
+
+  await context.close();
+});

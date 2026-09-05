@@ -62,6 +62,27 @@
   --safe-right: env(safe-area-inset-right, 0px);
 
   --transition: 160ms cubic-bezier(0.2, 0.8, 0.3, 1);
+
+  /* ---------- Stapelebenen ----------
+     Eine Leiter mit Namen statt zwanzig Zahlen in zwanzig Dateien.
+
+     Der Anlass: Für Stufe 2 habe ich das Sticker-Studio von 55 auf 75 gehoben,
+     damit es über dem Bildbetrachter liegt – und damit lag es auch über dem
+     Blatt, das sein eigener „Weiter"-Knopf öffnet. Der Anwender konnte seinen
+     fertigen Sticker nicht speichern: Das Blatt ging auf, war aber hinter dem
+     Studio begraben. Keine Fehlermeldung, kein Absturz, nur ein Knopf, der
+     scheinbar nichts tat.
+
+     Die Reihenfolge ist die Aussage, nicht die Zahl. Von unten nach oben:
+     Der Betrachter liegt über der Seite, die Werkstatt über dem Betrachter
+     (aus ihm heraus wird sie geöffnet), das Blatt über der Werkstatt (aus ihr
+     heraus wird es geöffnet) – und der Hinweis über allem, weil er auch dann
+     lesbar sein muss, wenn etwas schiefgegangen ist. */
+  --ebene-vollbild: 70;
+  --ebene-werkstatt: 75;
+  --ebene-schleier: 76;
+  --ebene-blatt: 77;
+  --ebene-hinweis: 80;
 }
 
 [data-theme='light'] {

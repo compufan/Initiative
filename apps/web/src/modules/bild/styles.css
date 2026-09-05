@@ -13,7 +13,7 @@
    * Foto heraus schlicht unbenutzbar. Nachgestellt und im Bild festgehalten;
    * `e2e/bilder.spec.ts` hält es fest.
    */
-  z-index: 75;
+  z-index: var(--ebene-werkstatt);
   display: flex;
   flex-direction: column;
   background: var(--bg);

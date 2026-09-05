@@ -322,7 +322,7 @@
   inset: 0;
   /* Über dem Bildbetrachter (70): „Sticker daraus machen“ führt aus dem Foto
      heraus hierher, und mit 55 lag das Studio unter dessen Grund. */
-  z-index: 75;
+  z-index: var(--ebene-werkstatt);
   display: flex;
   flex-direction: column;
   background: var(--bg);

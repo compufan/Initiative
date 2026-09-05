@@ -357,7 +357,7 @@
 .media-camera {
   position: fixed;
   inset: 0;
-  z-index: 70;
+  z-index: var(--ebene-vollbild);
   display: flex;
   flex-direction: column;
   background: #05070f;
@@ -691,7 +691,7 @@
 .media-lightbox {
   position: fixed;
   inset: 0;
-  z-index: 70;
+  z-index: var(--ebene-vollbild);
   display: flex;
   flex-direction: column;
   background: rgba(3, 5, 12, 0.96);
