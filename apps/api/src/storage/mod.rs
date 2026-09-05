@@ -5,6 +5,7 @@
 //! self-hosting. A new backend only has to implement [`Storage`].
 
 pub mod local;
+pub mod muell;
 pub mod s3;
 pub mod tresor;
 

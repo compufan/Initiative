@@ -87,6 +87,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     state.spawn_realtime_listener();
 
+    /*
+     * Der Aufräumdienst für gelöschte Dateien.
+     *
+     * Erst NACH den Migrationen: Vorher gibt es die Tabelle `storage_muell`
+     * beim allerersten Start noch nicht, und der Dienst schriebe eine
+     * Warnung je Durchgang ins Protokoll, ohne dass etwas kaputt wäre.
+     *
+     * Fünf Minuten Takt. Häufiger bringt nichts – wer eine Nachricht löscht,
+     * erwartet, dass sie weg ist, nicht dass die Bytes in derselben Sekunde
+     * vom Datenträger verschwinden.
+     */
+    initiative_api::storage::muell::starten(
+        state.pool.clone(),
+        state.storage.clone(),
+        std::time::Duration::from_secs(300),
+    );
+
     let router = app::build(state.clone());
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(
