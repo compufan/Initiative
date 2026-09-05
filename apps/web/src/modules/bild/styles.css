@@ -211,3 +211,8 @@
 .bild-fuss .bild-reihe .btn-primary {
   flex: 1;
 }
+
+/* Ein Hinweis, der auf ein Problem zeigt – sichtbar, nicht im Tooltip. */
+.bild-hinweis-warn {
+  color: var(--warn, #ff9500);
+}

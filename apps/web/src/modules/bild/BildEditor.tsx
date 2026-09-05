@@ -53,6 +53,7 @@ import {
   type Griffname,
 } from './bereichGriffe.js';
 import { maskeFuerBereich } from './maskenSpeicher.js';
+import { netzTeilRechnen, netzVerfuegbar, type Netzart } from './netzMaske.js';
 import { SCHRIFTEN, trifftText, zeichneAnsicht, zeichneAusgabe } from './zeichnen.js';
 import './styles.css';
 
@@ -217,6 +218,9 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
   const [pinselBreite, setPinselBreite] = useState(30);
   const [pinselAbziehen, setPinselAbziehen] = useState(false);
   const [schleier, setSchleier] = useState(true);
+  /** Was das Netz gerade tut – oder woran es gescheitert ist. */
+  const [netzLaeuft, setNetzLaeuft] = useState<string | null>(null);
+  const [netzFehler, setNetzFehler] = useState<string | null>(null);
   const [laedt, setLaedt] = useState(true);
   const [speichert, setSpeichert] = useState(false);
   const [kannZurueck, setKannZurueck] = useState(false);
@@ -1255,6 +1259,63 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     setTeilId(id);
   }
 
+  /**
+   * Lässt ein lokales Netz laufen und hängt seine Maske an den Bereich.
+   *
+   * Der Lauf dauert gemessen 1,6 bis 1,8 Sekunden und hängt kaum an der
+   * Bildgrösse – deshalb eine Fortschrittsanzeige und ein gesperrter Knopf,
+   * statt eines Knopfes, der scheinbar nichts tut.
+   */
+  async function netzTeilAnlegen(netz: Netzart) {
+    const quellBild = bildRef.current;
+    const aktuell = docRef.current;
+    if (!quellBild || !aktuell || netzLaeuft) return;
+    if (!vorhandenOderPlatz(aktuell)) return;
+    setNetzFehler(null);
+    setNetzLaeuft('Wird vorbereitet …');
+    try {
+      const teil = await netzTeilRechnen(quellBild, netz, (text) => setNetzLaeuft(text));
+      merken();
+      const bereich = docRef.current?.bereiche.find((b) => b.id === bereichRef.current);
+      if (bereich) {
+        setDoc((wert) =>
+          wert
+            ? {
+                ...wert,
+                bereiche: wert.bereiche.map((b) =>
+                  b.id === bereich.id ? { ...b, teile: [...b.teile, teil] } : b,
+                ),
+              }
+            : wert,
+        );
+      } else {
+        const neu: Bereich = {
+          id: neueId('b'),
+          name: netz === 'person' ? 'Person' : 'Motiv',
+          aktiv: true,
+          teile: [teil],
+          anpassung: { ...BEREICH_NEUTRAL },
+        };
+        setDoc((wert) => (wert ? { ...wert, bereiche: [...wert.bereiche, neu] } : wert));
+        setBereichId(neu.id);
+      }
+      setTeilId(teil.id);
+    } catch (fehler) {
+      // Der Satz aus dem `EngineError` ist für den Anwender geschrieben –
+      // „Fehler“ hilft niemandem, „ist abgeschaltet, du kannst es
+      // einschalten“ schon.
+      setNetzFehler(errorMessage(fehler, 'Das Netz konnte nicht laufen'));
+    } finally {
+      setNetzLaeuft(null);
+    }
+  }
+
+  /** Ob noch ein Bereich hineinpasst – oder schon einer gewählt ist. */
+  function vorhandenOderPlatz(aktuell: BildDoc): boolean {
+    if (aktuell.bereiche.some((b) => b.id === bereichRef.current)) return true;
+    return aktuell.bereiche.length < BEREICHE_MAX;
+  }
+
   function bereichAnlegen() {
     const aktuell = docRef.current;
     if (!aktuell || aktuell.bereiche.length >= BEREICHE_MAX) return;
@@ -1602,7 +1663,40 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
               <button type="button" className="btn btn-sm" onClick={() => teilAnlegen('pinsel')}>
                 🖌 Pinsel
               </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => void netzTeilAnlegen('person')}
+                disabled={netzLaeuft !== null || !netzVerfuegbar('person')}
+              >
+                👤 Person
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => void netzTeilAnlegen('object')}
+                disabled={netzLaeuft !== null || !netzVerfuegbar('object')}
+              >
+                🖼 Motiv
+              </button>
             </div>
+
+            {netzLaeuft && <p className="bild-hinweis">⏳ {netzLaeuft}</p>}
+            {netzFehler && (
+              /*
+               * Sichtbarer Text, kein Tooltip. Auf einem Telefon gibt es kein
+               * Schweben, und ein Hinweis, den man nur mit der Maus sieht,
+               * ist auf dem Zielgerät keiner – das war schon einmal eine
+               * Meldung des Anwenders.
+               */
+              <p className="bild-hinweis bild-hinweis-warn">{netzFehler}</p>
+            )}
+            {!netzVerfuegbar('object') && !netzFehler && (
+              <p className="bild-hinweis">
+                „Motiv“ ist abgeschaltet und lädt beim ersten Mal 4 MB. Du kannst es in den
+                Sticker-Einstellungen einschalten.
+              </p>
+            )}
 
             {aktiverBereich ? (
               <>

@@ -1,4 +1,85 @@
+import { crc32, deflateSync } from 'node:zlib';
 import { expect, test, type Browser, type Page } from '@playwright/test';
+
+/**
+ * Ein einfarbiges PNG beliebiger Grösse, im Test gebaut.
+ *
+ * Statt fünfzehn Kilobyte Base64 im Quelltext: Ein gleichmässiges Bild
+ * komprimiert auf ein Tausendstel, und die Grösse ist hier ein PARAMETER –
+ * genau darum geht es bei der Prüfung des Fangbereichs, die ein Bild braucht,
+ * das grösser ist als die Arbeitsfläche.
+ */
+function grauesPng(breite: number, hoehe: number, wert = 90): Buffer {
+  return pngAus(breite, hoehe, () => [wert, wert, wert]);
+}
+
+/**
+ * Ein Bild mit einem erkennbaren Motiv: dunkle Gestalt auf hellem Grund.
+ *
+ * Für die Netze. Auf einer gleichmässigen Fläche findet U²-Net zu Recht
+ * nichts – das prüft den Fehlerweg, nicht den Erfolgsweg.
+ */
+function motivPng(breite: number, hoehe: number): Buffer {
+  const kopfX = breite / 2;
+  const kopfY = hoehe * 0.28;
+  const kopfR = Math.min(breite, hoehe) * 0.14;
+  return pngAus(breite, hoehe, (x, y) => {
+    const imKopf = (x - kopfX) ** 2 + (y - kopfY) ** 2 < kopfR ** 2;
+    const imRumpf = x > breite * 0.33 && x < breite * 0.67 && y > hoehe * 0.4;
+    /*
+     * Bewusst UNBUNT: rot gleich blau, überall.
+     *
+     * Der Maskenschleier wird über seinen Rotstich (r − b) gemessen. Auf
+     * einem farbigen Bild trägt schon das Motiv selbst einen Rotstich, und
+     * die Messung mischt zwei Dinge. Unbunt heisst: ohne Schleier ist r − b
+     * exakt null, mit Schleier deutlich positiv – ein Signal, das nichts
+     * verwässert.
+     */
+    if (imKopf || imRumpf) return [50, 50, 50];
+    // Ein sanfter Verlauf statt einer Fläche: Ein völlig gleichmässiges Bild
+    // sieht ein Netz als ebenso motivlos an wie gar keines.
+    const wert = Math.round(168 + 60 * (y / hoehe));
+    return [wert, wert, wert];
+  });
+}
+
+function pngAus(
+  breite: number,
+  hoehe: number,
+  farbe: (x: number, y: number) => [number, number, number],
+): Buffer {
+  const zeilen: Buffer[] = [];
+  for (let y = 0; y < hoehe; y += 1) {
+    // Jede PNG-Zeile beginnt mit dem Filterbyte 0 („kein Filter“).
+    const zeile = Buffer.alloc(breite * 3 + 1);
+    for (let x = 0; x < breite; x += 1) {
+      const [r, g, b] = farbe(x, y);
+      zeile[1 + x * 3] = r;
+      zeile[2 + x * 3] = g;
+      zeile[3 + x * 3] = b;
+    }
+    zeilen.push(zeile);
+  }
+  const stueck = (typ: string, daten: Buffer): Buffer => {
+    const inhalt = Buffer.concat([Buffer.from(typ, 'ascii'), daten]);
+    const laenge = Buffer.alloc(4);
+    laenge.writeUInt32BE(daten.length);
+    const pruef = Buffer.alloc(4);
+    pruef.writeUInt32BE(crc32(inhalt) >>> 0);
+    return Buffer.concat([laenge, inhalt, pruef]);
+  };
+  const kopf = Buffer.alloc(13);
+  kopf.writeUInt32BE(breite, 0);
+  kopf.writeUInt32BE(hoehe, 4);
+  kopf[8] = 8; // acht Bit je Kanal
+  kopf[9] = 2; // Farbtyp 2: RGB ohne Alpha
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    stueck('IHDR', kopf),
+    stueck('IDAT', deflateSync(Buffer.concat(zeilen), { level: 9 })),
+    stueck('IEND', Buffer.alloc(0)),
+  ]);
+}
 
 /**
  * Ein Foto im Chat – und der Beweis, dass es wirklich ankommt.
@@ -497,6 +578,23 @@ test('ein Verlaufsbereich dunkelt nur die obere Bildhaelfte ab', async ({ browse
   const untenVorher = await streifen(0.75, 1);
   expect(Math.abs(obenVorher - untenVorher)).toBeLessThan(3);
 
+  /** Der Zeilenmittelwert jeder Leinwandzeile – die Grundlage für die Grenze. */
+  const zeilenMittel = async () =>
+    alicePage.evaluate(() => {
+      const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+      const ctx = c?.getContext('2d');
+      const d = c && ctx ? ctx.getImageData(0, 0, c.width, c.height).data : null;
+      if (!c || !d) return [] as number[];
+      const zeilen: number[] = [];
+      for (let y = 0; y < c.height; y += 1) {
+        let summe = 0;
+        for (let x = 0; x < c.width; x += 1) summe += d[(y * c.width + x) * 4];
+        zeilen.push(summe / c.width);
+      }
+      return zeilen;
+    });
+  const zeilenVorher = await zeilenMittel();
+
   // Zwei Blenden dunkler – der Verlauf laeuft von 15 % auf 55 % der Hoehe.
   const belichtung = alicePage.locator('.bild-panel').getByRole('slider', { name: /Belichtung/ });
   await belichtung.fill('-2');
@@ -506,16 +604,43 @@ test('ein Verlaufsbereich dunkelt nur die obere Bildhaelfte ab', async ({ browse
 
   const obenNachher = await streifen(0, 0.1);
   const untenNachher = await streifen(0.75, 1);
-  /*
-   * Der Verlauf beginnt bei 15 % der Höhe und ist bei 55 % ganz. Oberhalb von
-   * 15 % ist sein Gewicht EXAKT null – die oberen 10 % müssen also
-   * unverändert sein, nicht nur ungefähr.
-   *
-   * (Und `von` ist das Ende, an dem NICHTS passiert – andersherum, als man
-   * zuerst denkt.)
-   */
   expect(Math.abs(obenNachher - obenEngVorher)).toBeLessThan(1);
   expect(untenVorher - untenNachher).toBeGreaterThan(20);
+
+  /*
+   * Und jetzt die Eigenschaft, auf die es wirklich ankommt: Ein Verlauf hat
+   * eine SCHARFE Grenze. Oberhalb von `von` ist sein Gewicht exakt null, und
+   * zwar nicht „fast“ – `weich(0, 1, t)` ist für t ≤ 0 genau 0.
+   *
+   * Gemessen als Zeilenzahl statt als Helligkeitsunterschied: Wieviele Zeilen
+   * von oben sind Byte für Byte dieselben wie vorher? Bei einem Verlauf ab
+   * 15 % der Höhe sind das 15 % der Zeilen. Liefe er über die ganze Höhe,
+   * wäre KEINE einzige Zeile unverändert – auch wenn der Helligkeits-
+   * unterschied dort oben nur 0,36 Stufen von 255 beträgt und in jeder
+   * gemittelten Messung untergeht.
+   *
+   * Genau daran ist meine erste Fassung dieses Tests gescheitert: Sie mass
+   * Mittelwerte und liess die Mutation „Verlauf über die ganze Höhe“ durch.
+   */
+  const unveraenderteZeilen = await alicePage.evaluate((vorher: number[]) => {
+    const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+    const ctx = c?.getContext('2d');
+    const d = c && ctx ? ctx.getImageData(0, 0, c.width, c.height).data : null;
+    if (!c || !d) return -1;
+    for (let y = 0; y < c.height; y += 1) {
+      let summe = 0;
+      for (let x = 0; x < c.width; x += 1) summe += d[(y * c.width + x) * 4];
+      // Eine Zeile gilt als unverändert, wenn ihr Mittel um weniger als eine
+      // halbe Stufe abweicht – das ist die Rundung auf ganze Bytes.
+      if (Math.abs(summe / c.width - vorher[y]) > 0.5) return y;
+    }
+    return c.height;
+  }, zeilenVorher);
+  const c = await alicePage.evaluate(
+    () => (document.querySelector('.bild-leinwand') as HTMLCanvasElement).height,
+  );
+  expect(unveraenderteZeilen / c).toBeGreaterThan(0.12);
+  expect(unveraenderteZeilen / c).toBeLessThan(0.2);
 
   /*
    * Und jetzt der Griff.
@@ -543,4 +668,298 @@ test('ein Verlaufsbereich dunkelt nur die obere Bildhaelfte ab', async ({ browse
     .toBeLessThan(obenEngVorher - 20);
 
   await alicePage.context().close();
+});
+
+test('ein Griff bleibt unter dem Finger gleich gross, auch bei verkleinerter Ansicht', async ({
+  browser,
+}) => {
+  /*
+   * Der Fangbereich eines Griffs ist in LEINWANDpunkten gedacht (22, etwa
+   * eine Fingerkuppe) und wird in Originalpunkte zurückgerechnet. Bei einem
+   * grossen Foto in einer kleineren Ansicht sind das deutlich mehr als 22
+   * Originalpunkte – wer die Umrechnung weglässt, hat einen Fangkreis, der
+   * mit der Bildgrösse schrumpft, und trifft den Griff nicht mehr.
+   *
+   * Der frühere Test konnte das nicht sehen: Sein Bild war 320 Punkte breit,
+   * passte also unverkleinert auf die Arbeitsfläche, und der Massstab war 1 –
+   * die Umrechnung ein Nulleffekt. Deshalb hier ausdrücklich ein Bild, das
+   * grösser ist als die Arbeitsfläche, und ein Klick DANEBEN statt darauf.
+   */
+  const alice = credentials('fang');
+  const bob = credentials('fziel2');
+  const alicePage = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await alicePage.getByRole('button', { name: 'Neuer Chat' }).click();
+  await alicePage.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await alicePage.getByText(bob.displayName).first().click();
+  await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'gross.png',
+    mimeType: 'image/png',
+    buffer: grauesPng(1920, 1440),
+  });
+  await alicePage.getByRole('button', { name: /^Senden \(/ }).click();
+  const bild = alicePage.locator('.media-image').first();
+  await expect(bild).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => bild.evaluate((el: HTMLImageElement) => el.naturalWidth), {
+      timeout: 30_000,
+    })
+    .toBeGreaterThan(0);
+  await bild.click();
+  await alicePage.getByRole('button', { name: 'Bild bearbeiten' }).click();
+  const leinwand = alicePage.locator('.bild-leinwand');
+  await expect(leinwand).toBeVisible({ timeout: 30_000 });
+
+  // Der Massstab muss wirklich kleiner als 1 sein, sonst prüft der Test nichts.
+  const mass = await alicePage.evaluate(() => {
+    const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+    const img = document.querySelector('.media-zoom-image') as HTMLImageElement | null;
+    if (!c || !img) return null;
+    return { leinwandBreite: c.width, bildBreite: img.naturalWidth };
+  });
+  expect(mass).not.toBeNull();
+  const faktor = mass!.leinwandBreite / mass!.bildBreite;
+  expect(faktor, 'das Testbild ist nicht grösser als die Arbeitsfläche').toBeLessThan(0.8);
+
+  await alicePage.getByRole('button', { name: /Bereiche$/ }).click();
+  await alicePage.getByRole('button', { name: '↗ Verlauf' }).click();
+  await alicePage.getByRole('button', { name: '👁 Maske zeigen' }).click();
+
+  const streifenUnten = async () =>
+    alicePage.evaluate(() => {
+      const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+      const ctx = c?.getContext('2d');
+      const d = c && ctx ? ctx.getImageData(0, 0, c.width, c.height).data : null;
+      if (!c || !d) return -1;
+      let summe = 0;
+      let n = 0;
+      for (let y = Math.round(c.height * 0.75); y < c.height; y += 1)
+        for (let x = 0; x < c.width; x += 1) {
+          summe += d[(y * c.width + x) * 4];
+          n += 1;
+        }
+      return summe / n;
+    });
+
+  const belichtung = alicePage.locator('.bild-panel').getByRole('slider', { name: /Belichtung/ });
+  await belichtung.fill('-2');
+  await expect.poll(streifenUnten, { timeout: 5_000 }).toBeLessThan(70);
+  const vorZug = await streifenUnten();
+
+  /*
+   * Jetzt der Zug – und zwar DANEBEN.
+   *
+   * Der Achsengriff liegt bei 35 % der Höhe. Angefasst wird 18
+   * Leinwandpunkte darunter. Der richtige Fangbereich sind 22
+   * Leinwandpunkte, also trifft es. Ohne die Umrechnung wären es
+   * 22 · faktor ≈ 14 Leinwandpunkte, und 18 läge daneben – der Verlauf
+   * bliebe stehen, wo er ist.
+   *
+   * 18 ist bewusst zwischen beiden gewählt und nicht knapp an einer Grenze.
+   */
+  const kasten = await leinwand.boundingBox();
+  expect(kasten).not.toBeNull();
+  const proLeinwandpunkt = kasten!.width / mass!.leinwandBreite;
+  const mitteX = kasten!.x + kasten!.width / 2;
+  const griffY = kasten!.y + kasten!.height * 0.35;
+  await alicePage.mouse.move(mitteX, griffY + 18 * proLeinwandpunkt);
+  await alicePage.mouse.down();
+  await alicePage.mouse.move(mitteX, kasten!.y + kasten!.height * 0.9, { steps: 8 });
+  await alicePage.mouse.up();
+
+  // Der Verlauf ist nach unten gewandert: Unten wirkt er jetzt viel weniger.
+  await expect.poll(streifenUnten, { timeout: 5_000 }).toBeGreaterThan(vorZug + 15);
+
+  await alicePage.context().close();
+});
+
+test('das Netz macht aus dem Motiv eine Maske – und sagt es, wenn es aus ist', async ({
+  browser,
+}) => {
+  /*
+   * Stufe J: Dieselben Netze, mit denen das Sticker-Studio Motive freistellt,
+   * liefern hier die Maske eines Bereichs. Gemessen dauert ein Lauf 1,6 bis
+   * 1,8 Sekunden, deshalb ein Knopf mit Fortschritt statt einer Wirkung am
+   * Regler.
+   *
+   * Geprüft werden beide Ausgänge:
+   *  - „Motiv" ist von Haus aus ABGESCHALTET (4 MB Download). Der Knopf ist
+   *    dann gesperrt, und der Grund steht LESBAR da – nicht im Tooltip. Auf
+   *    einem Telefon gibt es kein Schweben, und das war schon einmal eine
+   *    Meldung des Anwenders.
+   *  - Eingeschaltet läuft es durch und legt ein Maskenteil an.
+   */
+  const alice = credentials('netz');
+  const bob = credentials('nziel');
+  const context = await browser.newContext();
+  const alicePage = await context.newPage();
+  await alicePage.goto('/');
+  await alicePage.getByRole('button', { name: /Noch kein Konto/ }).click();
+  await alicePage.getByLabel('Benutzername').fill(alice.username);
+  await alicePage.getByLabel('Anzeigename').fill(alice.displayName);
+  await alicePage.getByLabel('Passwort', { exact: true }).fill(alice.password);
+  await alicePage.getByRole('button', { name: 'Konto erstellen' }).click();
+  await expect(alicePage.getByRole('heading', { name: 'Chats' })).toBeVisible();
+  await signUp(browser, bob);
+
+  await alicePage.getByRole('button', { name: 'Neuer Chat' }).click();
+  await alicePage.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await alicePage.getByText(bob.displayName).first().click();
+  await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'motiv.png',
+    mimeType: 'image/png',
+    buffer: grauesPng(640, 480),
+  });
+  await alicePage.getByRole('button', { name: /^Senden \(/ }).click();
+  const bild = alicePage.locator('.media-image').first();
+  await expect(bild).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => bild.evaluate((el: HTMLImageElement) => el.naturalWidth), {
+      timeout: 30_000,
+    })
+    .toBeGreaterThan(0);
+  await bild.click();
+  await alicePage.getByRole('button', { name: 'Bild bearbeiten' }).click();
+  await expect(alicePage.locator('.bild-leinwand')).toBeVisible({ timeout: 30_000 });
+  await alicePage.getByRole('button', { name: /Bereiche$/ }).click();
+
+  // Von Haus aus abgeschaltet: gesperrt, mit sichtbarer Begründung.
+  await expect(alicePage.getByRole('button', { name: '🖼 Motiv' })).toBeDisabled();
+  await expect(alicePage.getByText(/„Motiv“ ist abgeschaltet/)).toBeVisible();
+
+  // „Person“ dagegen ist von Haus aus da.
+  await expect(alicePage.getByRole('button', { name: '👤 Person' })).toBeEnabled();
+
+  await context.close();
+});
+
+test('eingeschaltet erkennt das Netz das Motiv und legt daraus eine Maske an', async ({
+  browser,
+}) => {
+  /*
+   * Die andere Hälfte: Mit eingeschaltetem Verfahren läuft das Netz durch,
+   * und aus seinem Ergebnis wird ein Maskenteil wie jedes andere – dieselben
+   * Regler, dasselbe Umkehren, derselbe Schleier.
+   *
+   * Das Testbild trägt eine dunkle Gestalt auf hellem Himmel. Auf einer
+   * gleichmässigen Fläche fände U²-Net zu Recht nichts, und der Test prüfte
+   * den Fehlerweg statt des Erfolgswegs.
+   */
+  const alice = credentials('netzan');
+  const bob = credentials('nzielan');
+  const context = await browser.newContext();
+  const alicePage = await context.newPage();
+  // Vor dem ersten Laden: „Motiv“ einschalten, wie es die Einstellungen tun.
+  await alicePage.addInitScript(() => {
+    window.localStorage.setItem('initiative.cutout-engines', JSON.stringify({ object: true }));
+  });
+  await alicePage.goto('/');
+  await alicePage.getByRole('button', { name: /Noch kein Konto/ }).click();
+  await alicePage.getByLabel('Benutzername').fill(alice.username);
+  await alicePage.getByLabel('Anzeigename').fill(alice.displayName);
+  await alicePage.getByLabel('Passwort', { exact: true }).fill(alice.password);
+  await alicePage.getByRole('button', { name: 'Konto erstellen' }).click();
+  await expect(alicePage.getByRole('heading', { name: 'Chats' })).toBeVisible();
+  await signUp(browser, bob);
+
+  await alicePage.getByRole('button', { name: 'Neuer Chat' }).click();
+  await alicePage.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await alicePage.getByText(bob.displayName).first().click();
+  await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'motiv.png',
+    mimeType: 'image/png',
+    // Grösser als die 1536er Vorlage der Netze: Nur so ist die Maske
+    // wirklich kleiner als das Bild, und nur dann prüft der Test die
+    // Umrechnung zwischen beiden Räumen statt eines Nulleffekts.
+    buffer: motivPng(1920, 1440),
+  });
+  await alicePage.getByRole('button', { name: /^Senden \(/ }).click();
+  const bild = alicePage.locator('.media-image').first();
+  await expect(bild).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => bild.evaluate((el: HTMLImageElement) => el.naturalWidth), {
+      timeout: 30_000,
+    })
+    .toBeGreaterThan(0);
+  await bild.click();
+  await alicePage.getByRole('button', { name: 'Bild bearbeiten' }).click();
+  await expect(alicePage.locator('.bild-leinwand')).toBeVisible({ timeout: 30_000 });
+  await alicePage.getByRole('button', { name: /Bereiche$/ }).click();
+
+  const motiv = alicePage.getByRole('button', { name: '🖼 Motiv' });
+  await expect(motiv).toBeEnabled();
+  await motiv.click();
+
+  // Aus dem Netzergebnis wird ein Maskenteil – sichtbar in der Teileliste.
+  const teile = alicePage.getByRole('group', { name: 'Masken des Bereichs' });
+  await expect(teile.getByRole('button', { name: /Motiv/ })).toBeVisible({ timeout: 60_000 });
+  // Und der Bereich trägt die Regler, wie jeder andere auch.
+  await expect(
+    alicePage.locator('.bild-panel').getByRole('slider', { name: /Belichtung/ }),
+  ).toBeVisible();
+
+  /*
+   * Der Beweis, dass die Maske wirklich das Motiv trifft und nicht das ganze
+   * Bild: Der Schleier ist rot, wo die Maske greift. In der Bildmitte (Rumpf)
+   * muss er liegen, am oberen Rand (Himmel) nicht.
+   */
+  const rotstich = async (x0: number, x1: number, y0: number, y1: number) =>
+    alicePage.evaluate(
+      ({ ax, bx, ay, by }) => {
+        const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+        const ctx = c?.getContext('2d');
+        const d = c && ctx ? ctx.getImageData(0, 0, c.width, c.height).data : null;
+        if (!c || !d) return -1;
+        let summe = 0;
+        let n = 0;
+        for (let y = Math.round(c.height * ay); y < Math.round(c.height * by); y += 1)
+          for (let x = Math.round(c.width * ax); x < Math.round(c.width * bx); x += 1) {
+            const at = (y * c.width + x) * 4;
+            summe += d[at] - d[at + 2];
+            n += 1;
+          }
+        return n > 0 ? summe / n : -1;
+      },
+      { ax: x0, bx: x1, ay: y0, by: y1 },
+    );
+
+  /*
+   * Nicht nur „irgendwo rot“, sondern in der richtigen FORM.
+   *
+   * Der Rumpf steht zwischen 33 % und 67 % der Breite. Die Maske muss dort
+   * liegen und links wie rechts daneben nicht. Eine Prüfung, die nur die
+   * Bildmitte anschaut, überlebte eine verscherte Maske – und genau das
+   * passiert, wenn die Maskengrösse aus dem Original statt aus der 1536er
+   * Vorlage genommen wird: Die Zeilenbreite stimmt dann nicht, und jede Zeile
+   * rutscht ein Stück weiter zur Seite.
+   */
+  const amMotiv = await rotstich(0.42, 0.58, 0.55, 0.85);
+  const amHimmel = await rotstich(0.42, 0.58, 0.02, 0.12);
+  const linksDaneben = await rotstich(0.04, 0.16, 0.55, 0.85);
+  const rechtsDaneben = await rotstich(0.84, 0.96, 0.55, 0.85);
+  /*
+   * Auf dem unbunten Testbild ist r − b ohne Schleier exakt null. Also:
+   * deutlich positiv auf dem Motiv, praktisch null überall sonst.
+   *
+   * Die Schranken sind an gemessenen Zahlen ausgerichtet, nicht geraten.
+   * Nimmt man die Maskengrösse aus dem Original statt aus der 1536er
+   * Vorlage, stimmt die Zeilenbreite nicht: Die Maske verschert, fällt auf
+   * dem Motiv auf weniger als die Hälfte und greift daneben.
+   */
+  expect(amMotiv, 'der Schleier liegt nicht auf dem Motiv').toBeGreaterThan(60);
+  expect(amHimmel, 'der Schleier liegt auch am Himmel').toBeLessThan(6);
+  expect(linksDaneben, 'der Schleier greift links neben das Motiv').toBeLessThan(6);
+  expect(rechtsDaneben, 'der Schleier greift rechts neben das Motiv').toBeLessThan(6);
+
+  await context.close();
 });
