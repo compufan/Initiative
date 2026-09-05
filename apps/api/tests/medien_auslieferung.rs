@@ -243,6 +243,31 @@ async fn gefaehrliche_dateien_werden_nicht_angezeigt_harmlose_schon() {
         "die zweite Verteidigungslinie fehlt: {csp:?}"
     );
 
+    /*
+     * Nicht in einen Suchindex.
+     *
+     * Eine Anhangsadresse traegt ihre Berechtigung in sich: Wer sie kennt,
+     * bekommt die Datei. Das ist gewollt und ohne Umbau nicht zu aendern -
+     * Bilder kommen ueber `<img src>`, und dort kann kein Token mitfahren.
+     * Wogegen diese Kopfzeile hilft, ist der zweite Schritt: dass eine
+     * versehentlich oeffentlich gewordene Adresse auch noch AUFFINDBAR wird.
+     */
+    let robots = kopfzeile(&kopf, "x-robots-tag");
+    assert!(
+        robots.contains("noindex") && robots.contains("noimageindex"),
+        "Anhaenge duerfen nicht in einem Suchindex landen - hier stand: {robots:?}"
+    );
+
+    /*
+     * Und nicht in einem fremden Zwischenspeicher: `private` verbietet jedem
+     * Vermittler auf dem Weg, die Antwort fuer andere aufzubewahren.
+     */
+    let cache = kopfzeile(&kopf, "cache-control");
+    assert!(
+        cache.contains("private"),
+        "die Antwort darf nur im Geraet des Empfaengers liegen - hier stand: {cache:?}"
+    );
+
     // --- Dasselbe als SVG -------------------------------------------------
     // Ein Bild und gleichzeitig ein Dokument, in dem Skript läuft. Wer
     // `image/*` erlaubt hätte, wäre hier hereingefallen.

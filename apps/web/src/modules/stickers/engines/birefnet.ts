@@ -58,16 +58,16 @@ let ladend: Promise<InferenceSession> | null = null;
 /**
  * Wie lange der letzte Lauf gedauert hat, in Millisekunden.
  *
- * Steht in der Fehlermeldung, wenn es zu lange war, und beantwortet damit aus
- * der Ferne die einzige Frage, die zählt: Lief es wirklich auf der
- * Grafikeinheit? Vorher gab es dazu nur Vermutungen – der Wert war zwar da,
- * wurde aber nirgends angezeigt.
+ * Hier stand ein `birefnetDauer()`, dessen Kommentar versprach, die Dauer
+ * stehe „in der Fehlermeldung“ – und der im selben Atemzug tadelte, vorher
+ * sei der Wert „zwar da, wurde aber nirgends angezeigt“ gewesen. Genau das
+ * war er weiterhin: Im ganzen Baum rief die Abfrage niemand auf.
+ *
+ * Jetzt steht die Dauer wirklich in der Abbruchmeldung, und die Abfrage ist
+ * fort. Sie beantwortet aus der Ferne die einzige Frage, die zählt: Lief es
+ * wirklich auf der Grafikeinheit? Ein Lauf von zwei Sekunden lief dort,
+ * einer von sechs Minuten nicht.
  */
-let letzteDauer = 0;
-
-export function birefnetDauer(): number {
-  return letzteDauer;
-}
 
 /**
  * Holt die Modelldatei und sagt dabei, wie weit sie ist.
@@ -219,12 +219,11 @@ export async function birefnetMask(image: ImageData, melden?: Fortschritt): Prom
     grafikAufgeben(text);
     await releaseBirefnet();
     throw new Error(
-      `Die Grafikeinheit hat mitten im Rechnen abgebrochen (${text}). ` +
+      `Die Grafikeinheit hat nach ${Math.round((Date.now() - begonnen) / 1000)} s mitten im ` +
+        `Rechnen abgebrochen (${text}). ` +
         'Nimm „Niedrige Qualität“ – das rechnet auf jedem Gerät in Sekunden.',
     );
   }
-  letzteDauer = Date.now() - begonnen;
-
   // Erst die Kurve über die Modellwerte, dann daraus abtasten. Vorher lief
   // `Math.exp` je AUSGABEpunkt statt je Modellpunkt – dasselbe Ergebnis, nur
   // ein Vielfaches der Arbeit.

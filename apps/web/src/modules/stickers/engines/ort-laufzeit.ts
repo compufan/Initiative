@@ -207,7 +207,7 @@ async function geraetPruefen(): Promise<Laufzeit> {
     if (!adapter) return { taugt: false, grund: 'Es war keine Grafikeinheit zu bekommen.' };
 
     if (!adapter.features.has(NOETIGE_FAEHIGKEIT)) {
-      // Ehrlich sein, bevor 78 MB geladen sind. Ohne halbe Genauigkeit auf der
+      // Ehrlich sein, bevor 94 MB geladen sind. Ohne halbe Genauigkeit auf der
       // Grafikeinheit bricht der erste Shader ab, und ein Ausweichen auf den
       // Prozessor dauert bei diesem Format eine Viertelstunde.
       return {
@@ -272,7 +272,7 @@ export async function ortVorbereiten(
   // nicht per `postMessage` hinüberreichen) ist mit dem Einschleusen zwar
   // entfallen, und der Arbeiter wäre besser – er hielte die Oberfläche
   // während des Rechnens am Leben und nähme ihr die 25,7 MB Laufzeit und die
-  // 78 MB Modellbytes ab. Aber das ist eine zweite, unabhängige Annahme, und
+  // 94 MB Modellbytes ab. Aber das ist eine zweite, unabhängige Annahme, und
   // zwei Änderungen auf einmal heissen bei einem Fehlschlag zwei Verdächtige.
   // Erst soll der f16-Fehler nachweislich weg sein.
   env.wasm.proxy = false;

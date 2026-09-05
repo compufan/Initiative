@@ -424,7 +424,23 @@ async fn serve(
             "private, max-age=31536000, immutable",
         )
         .header(header::ACCEPT_RANGES, "bytes")
-        .header("x-content-type-options", "nosniff");
+        .header("x-content-type-options", "nosniff")
+        /*
+         * Nicht in einen Suchindex.
+         *
+         * Diese Adressen tragen ihre Berechtigung in sich: Wer sie kennt,
+         * bekommt die Datei (siehe der Kommentar weiter oben). Das ist
+         * gewollt – nur so lassen sich Bilder über `<img src>` anzeigen,
+         * ohne dass ein Token mitfahren müsste. Die Kehrseite: Eine einmal
+         * weitergegebene Adresse bleibt gültig.
+         *
+         * Wenigstens soll sie nicht auch noch auffindbar werden. Landet ein
+         * Link versehentlich in einem öffentlichen Beitrag, sagt diese
+         * Kopfzeile jedem Suchdienst, dass er ihn weder aufnehmen noch
+         * archivieren soll. Das schützt nicht vor dem, der die Adresse hat –
+         * aber davor, dass sie jemand FINDET, ohne sie zu haben.
+         */
+        .header("x-robots-tag", "noindex, nofollow, noarchive, noimageindex");
 
     // `sandbox` steckt die Antwort in einen eigenen, leeren Ursprung: Selbst
     // wenn ein Browser sie doch als Dokument darstellt, läuft darin kein

@@ -259,7 +259,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   /*
    * Warum „Hohe Qualität“ auf diesem Gerät nicht geht – oder `null`.
    *
-   * Wird beim Öffnen geprüft, nicht erst beim Drücken. Vorher lud man 78 MB
+   * Wird beim Öffnen geprüft, nicht erst beim Drücken. Vorher lud man 94 MB
    * und bekam danach die Absage; jetzt steht sie am Knopf, bevor irgendetwas
    * übertragen wird. Die Prüfung selbst lädt kein Modell und keine Laufzeit,
    * sie fragt nur die Grafikeinheit nach ihren Grenzen.
