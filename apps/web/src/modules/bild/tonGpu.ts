@@ -19,6 +19,9 @@
  * das Quellbild stünde. Der Rest der Bildbearbeitung merkt nichts davon.
  */
 
+import { BEREICHE_MAX } from './doc.js';
+import type { Szene } from './maskenSpeicher.js';
+import { maskeUmrastern } from './maske.js';
 import {
   LUT_KANTE,
   formHin,
@@ -75,6 +78,26 @@ uniform float uDynamik;
 uniform float uSchaerfe;
 uniform float uVignette;
 
+/*
+ * Die örtlichen Anpassungen.
+ *
+ * EIN Atlas mit vier Kanälen statt vier Abtaster: In GLSL ES 3.00 lässt sich
+ * ein Feld von „sampler2D“ nicht mit einer Laufvariablen indizieren. Kanal i
+ * gehört zu Bereich i, ausgewählt per Skalarprodukt mit „uKanal[i]“.
+ */
+#define BEREICHE 4
+uniform sampler2D uMasken;
+uniform vec4 uKanal[BEREICHE];
+uniform int uAnzahl;
+uniform float uBelichtungB[BEREICHE];
+uniform float uKontrastB[BEREICHE];
+uniform float uLichterB[BEREICHE];
+uniform float uTiefenB[BEREICHE];
+uniform float uSchwarzB[BEREICHE];
+uniform vec3 uWeissB[BEREICHE];
+uniform float uSaettigungB[BEREICHE];
+uniform float uDynamikB[BEREICHE];
+
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 
 float zuLinear1(float c) {
@@ -98,6 +121,70 @@ vec3 biegen(vec3 wert, float staerke, float maske) {
   return wert * (1.0 - anteil) + ziel * anteil;
 }
 
+/**
+ * Die Farbkette – Wort für Wort „tonPunkt“ aus „ton.ts“.
+ *
+ * Als Funktion und nicht im Rumpf, weil ein Bereich sie noch einmal braucht.
+ * Genau diese neun Regler und keinen mehr: „schaerfe“ bräuchte die Nachbarn
+ * und „vignette“ den Ort – beides hat ein Bereich nicht.
+ */
+vec3 kette(vec3 c, float belichtung, vec3 weiss, float schwarz, float lichter,
+           float tiefen, float kontrast, float saettigung, float dynamik) {
+  // 1. Im linearen Licht: Belichtung und Weissabgleich.
+  if (belichtung != 0.0 || weiss != vec3(1.0)) {
+    c = zuSrgb(clamp(zuLinear(c) * exp2(belichtung) * weiss, 0.0, 1.0));
+  }
+
+  // 2. Im Anzeigeraum: Schwarzpunkt.
+  if (schwarz != 0.0) {
+    float s = schwarz * 0.25;
+    if (s > 0.0) c = clamp((c - s) / (1.0 - s), 0.0, 1.0);
+    else c = c * (1.0 + s) - s;
+  }
+
+  // 3. Tiefen und Lichter, über zwei weiche Masken.
+  if (lichter != 0.0 || tiefen != 0.0) {
+    float l = dot(c, LUMA);
+    float maskeL = smoothstep(0.45, 1.0, l);
+    float maskeT = 1.0 - smoothstep(0.0, 0.55, l);
+    c = biegen(biegen(c, lichter, maskeL), tiefen, maskeT);
+  }
+
+  // 4. Kontrast.
+  if (kontrast > 0.0) {
+    c = c * (1.0 - kontrast) + (c * c * (3.0 - 2.0 * c)) * kontrast;
+  } else if (kontrast < 0.0) {
+    c = c * (1.0 + kontrast) + (c * 0.5 + 0.25) * (-kontrast);
+  }
+
+  // 5. Sättigung und Dynamik.
+  if (saettigung != 0.0 || dynamik != 0.0) {
+    float y = dot(c, LUMA);
+    float faktor = 1.0 + saettigung;
+    if (dynamik != 0.0) {
+      float spanne = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+      faktor *= 1.0 + dynamik * (1.0 - spanne);
+    }
+    faktor = max(0.0, faktor);
+    c = vec3(y) + (c - vec3(y)) * faktor;
+  }
+
+  return clamp(c, 0.0, 1.0);
+}
+
+/**
+ * Der Maskenwert eines Bereichs an dieser Stelle.
+ *
+ * „1.0 − y“, weil das BILD beim Hochladen gespiegelt wird (eine Leinwand
+ * zählt von oben, eine Textur von unten) und der Atlas nicht: Er kommt als
+ * roher Puffer, für den der Spiegel-Merker nachweislich uneinheitlich
+ * gehandhabt wird. Statt uns auf eine Lesart zu verlassen, klemmen wir ihn
+ * beim Hochladen ausdrücklich ab und drehen hier von Hand.
+ */
+float maskeAn(vec2 uv, vec4 kanal) {
+  return clamp(dot(texture(uMasken, vec2(uv.x, 1.0 - uv.y)), kanal), 0.0, 1.0);
+}
+
 void main() {
   vec3 c = texture(uBild, vUv).rgb;
 
@@ -112,48 +199,31 @@ void main() {
     c = clamp(c + (c - weich) * uSchaerfe * 1.5, 0.0, 1.0);
   }
 
-  // 1. Im linearen Licht: Belichtung und Weissabgleich.
-  if (uBelichtung != 0.0 || uWeiss != vec3(1.0)) {
-    c = zuSrgb(clamp(zuLinear(c) * exp2(uBelichtung) * uWeiss, 0.0, 1.0));
+  // Die globale Anpassung.
+  c = kette(c, uBelichtung, uWeiss, uSchwarz, uLichter, uTiefen, uKontrast,
+            uSaettigung, uDynamik);
+
+  /*
+   * Die Bereiche, der Reihe nach – jeder auf dem ERGEBNIS des vorigen.
+   *
+   * Dieselbe Vorschrift wie „bereichePunkt“ in „ton.ts“, und der
+   * Vergleichstest hält beide gegeneinander. Nicht aus der Rohfarbe zu
+   * rechnen ist der Punkt: Ein Bereich mit lauter Nullen nähme sonst dort,
+   * wo seine Maske greift, die globale Anpassung wieder zurück.
+   */
+  for (int i = 0; i < BEREICHE; i++) {
+    if (i >= uAnzahl) break;
+    float w = maskeAn(vUv, uKanal[i]);
+    // Die grosse Mehrheit der Bildpunkte liegt bei einem Verlauf oder einer
+    // Ellipse ausserhalb; die Kette dort trotzdem zu rechnen wäre die
+    // teuerste Zeile des Schattierers.
+    if (w <= 0.002) continue;
+    vec3 voll = kette(c, uBelichtungB[i], uWeissB[i], uSchwarzB[i], uLichterB[i],
+                      uTiefenB[i], uKontrastB[i], uSaettigungB[i], uDynamikB[i]);
+    c = mix(c, voll, w);
   }
 
-  // 2. Im Anzeigeraum: Schwarzpunkt.
-  if (uSchwarz != 0.0) {
-    float s = uSchwarz * 0.25;
-    if (s > 0.0) c = clamp((c - s) / (1.0 - s), 0.0, 1.0);
-    else c = c * (1.0 + s) - s;
-  }
-
-  // 3. Tiefen und Lichter, über zwei weiche Masken.
-  if (uLichter != 0.0 || uTiefen != 0.0) {
-    float l = dot(c, LUMA);
-    float maskeL = smoothstep(0.45, 1.0, l);
-    float maskeT = 1.0 - smoothstep(0.0, 0.55, l);
-    c = biegen(biegen(c, uLichter, maskeL), uTiefen, maskeT);
-  }
-
-  // 4. Kontrast.
-  if (uKontrast > 0.0) {
-    c = c * (1.0 - uKontrast) + (c * c * (3.0 - 2.0 * c)) * uKontrast;
-  } else if (uKontrast < 0.0) {
-    c = c * (1.0 + uKontrast) + (c * 0.5 + 0.25) * (-uKontrast);
-  }
-
-  // 5. Sättigung und Dynamik.
-  if (uSaettigung != 0.0 || uDynamik != 0.0) {
-    float y = dot(c, LUMA);
-    float faktor = 1.0 + uSaettigung;
-    if (uDynamik != 0.0) {
-      float spanne = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
-      faktor *= 1.0 + uDynamik * (1.0 - spanne);
-    }
-    faktor = max(0.0, faktor);
-    c = vec3(y) + (c - vec3(y)) * faktor;
-  }
-
-  c = clamp(c, 0.0, 1.0);
-
-  // 6. Vignette – als Letztes, weil sie vom Ort abhängt und nicht von der Farbe.
+  // Vignette – als Letztes, weil sie vom Ort abhängt und nicht von der Farbe.
   if (uVignette != 0.0) {
     vec2 d = vUv - 0.5;
     float abstand = min(1.0, length(d) / 0.70710678);
@@ -172,12 +242,25 @@ void main() {
  * zählen können. Zeitmessungen an derselben Stelle wären auf einem
  * ausgelasteten Bauserver launisch; ein Zähler ist es nie.
  */
-export const zaehler = { quellHochladen: 0 };
+export const zaehler = { quellHochladen: 0, maskenHochladen: 0 };
+
+/**
+ * Von aussen die Grafikeinheit abschalten – nur für Prüfungen.
+ *
+ * Der Rückfallweg lässt sich sonst auf keinem Gerät auslösen, das WebGL2
+ * kann, und wäre damit genau der Weg, den nie jemand prüft.
+ */
+let gpuVerboten = false;
+export function gpuAbschalten(an: boolean): void {
+  gpuVerboten = an;
+}
 
 interface Werk {
   gl: WebGL2RenderingContext;
   programm: WebGLProgram;
   textur: WebGLTexture;
+  /** Der Maskenatlas: ein Kanal je Bereich, in Rastergrösse. */
+  masken: WebGLTexture;
   orte: Record<string, WebGLUniformLocation | null>;
   leinwand: HTMLCanvasElement;
 }
@@ -193,6 +276,14 @@ let werk: Werk | null | undefined;
  * Einzelposten auf dem Reglerweg und hat mit den Reglern selbst nichts zu tun.
  */
 let quellzettel: { quelle: CanvasImageSource; breite: number; hoehe: number } | null = null;
+
+/**
+ * Was gerade im Maskenatlas liegt.
+ *
+ * Ein Reglerzug ändert die Masken nicht – ohne diesen Zettel gingen 3,1 MB
+ * je Bild über den Bus, für ein Ergebnis, das sich nicht geändert hat.
+ */
+let atlasZettel: string | null = null;
 
 /**
  * Eine eigene Leinwand zum Vorverkleinern.
@@ -277,11 +368,25 @@ function werkzeug(): Werk | null {
 
     const textur = gl.createTexture();
     if (!textur) return null;
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, textur);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+    // Der Maskenatlas auf Einheit 1. LINEAR ist hier keine Kosmetik: Das
+    // Raster ist rund viermal gröber als das Bild, und mit dem nächsten
+    // Nachbarn bekäme jede Maskenkante eine sichtbare Treppe.
+    const masken = gl.createTexture();
+    if (!masken) return null;
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, masken);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.activeTexture(gl.TEXTURE0);
 
     const namen = [
       'uBild',
@@ -296,11 +401,26 @@ function werkzeug(): Werk | null {
       'uDynamik',
       'uSchaerfe',
       'uVignette',
+      'uMasken',
+      'uAnzahl',
     ];
+    for (let i = 0; i < BEREICHE_MAX; i += 1) {
+      namen.push(
+        `uKanal[${i}]`,
+        `uBelichtungB[${i}]`,
+        `uKontrastB[${i}]`,
+        `uLichterB[${i}]`,
+        `uTiefenB[${i}]`,
+        `uSchwarzB[${i}]`,
+        `uWeissB[${i}]`,
+        `uSaettigungB[${i}]`,
+        `uDynamikB[${i}]`,
+      );
+    }
     const orte: Record<string, WebGLUniformLocation | null> = {};
     for (const name of namen) orte[name] = gl.getUniformLocation(programm, name);
 
-    werk = { gl, programm, textur, orte, leinwand };
+    werk = { gl, programm, textur, masken, orte, leinwand };
     return werk;
   } catch {
     return null;
@@ -313,7 +433,9 @@ function aufGpu(
   breite: number,
   hoehe: number,
   a: Anpassung,
+  szene: Szene,
 ): HTMLCanvasElement | null {
+  if (gpuVerboten) return null;
   const w = werkzeug();
   if (!w) return null;
   const { gl, orte } = w;
@@ -322,6 +444,7 @@ function aufGpu(
     if (w.leinwand.height !== hoehe) w.leinwand.height = hoehe;
     gl.viewport(0, 0, breite, hoehe);
 
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, w.textur);
     const passt =
       quellzettel &&
@@ -350,8 +473,34 @@ function aufGpu(
       zaehler.quellHochladen += 1;
     }
 
+    atlasHochladen(w, szene);
+
     const [wr, wg, wb] = weissFaktoren(a.waerme, a.toenung);
     gl.uniform1i(orte.uBild, 0);
+    gl.uniform1i(orte.uMasken, 1);
+    gl.uniform1i(orte.uAnzahl, szene.bereiche.length);
+    for (let i = 0; i < BEREICHE_MAX; i += 1) {
+      const b = szene.bereiche[i];
+      // Der Kanalwähler: ein 1 an der Stelle dieses Bereichs, sonst 0. Das
+      // Skalarprodukt im Schattierer greift damit genau einen Kanal heraus.
+      gl.uniform4f(
+        orte[`uKanal[${i}]`],
+        i === 0 ? 1 : 0,
+        i === 1 ? 1 : 0,
+        i === 2 ? 1 : 0,
+        i === 3 ? 1 : 0,
+      );
+      const t = b ? b.anpassung : null;
+      gl.uniform1f(orte[`uBelichtungB[${i}]`], t ? t.belichtung : 0);
+      gl.uniform1f(orte[`uKontrastB[${i}]`], t ? t.kontrast : 0);
+      gl.uniform1f(orte[`uLichterB[${i}]`], t ? t.lichter : 0);
+      gl.uniform1f(orte[`uTiefenB[${i}]`], t ? t.tiefen : 0);
+      gl.uniform1f(orte[`uSchwarzB[${i}]`], t ? t.schwarz : 0);
+      const [br, bg, bb] = t ? weissFaktoren(t.waerme, t.toenung) : [1, 1, 1];
+      gl.uniform3f(orte[`uWeissB[${i}]`], br, bg, bb);
+      gl.uniform1f(orte[`uSaettigungB[${i}]`], t ? t.saettigung : 0);
+      gl.uniform1f(orte[`uDynamikB[${i}]`], t ? t.dynamik : 0);
+    }
     gl.uniform2f(orte.uTexel, 1 / breite, 1 / hoehe);
     gl.uniform1f(orte.uBelichtung, a.belichtung);
     gl.uniform1f(orte.uKontrast, a.kontrast);
@@ -373,8 +522,58 @@ function aufGpu(
     // Textur aus einem toten Kontext liege noch das richtige Bild.
     werk = undefined;
     quellzettel = null;
+    atlasZettel = null;
     return null;
   }
+}
+
+/**
+ * Legt die Masken aller Bereiche als einen RGBA-Atlas ab.
+ *
+ * Kanal 0 ist Bereich 0 und so fort. Alle Bereiche teilen sich dasselbe
+ * Raster (`szeneBauen` sorgt dafür), sonst gäbe es keinen gemeinsamen Atlas.
+ */
+function atlasHochladen(w: Werk, szene: Szene): void {
+  const { gl } = w;
+  const schluessel = szene.bereiche.map((b) => `${b.id}@${b.maske.stand}`).join('#');
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, w.masken);
+  if (atlasZettel === schluessel) {
+    gl.activeTexture(gl.TEXTURE0);
+    return;
+  }
+
+  const erste = szene.bereiche[0];
+  const rb = erste ? erste.maske.raster.breite : 1;
+  const rh = erste ? erste.maske.raster.hoehe : 1;
+  const atlas = new Uint8Array(rb * rh * 4);
+  for (let i = 0; i < szene.bereiche.length && i < BEREICHE_MAX; i += 1) {
+    const feld = szene.bereiche[i].maske.feld;
+    for (let at = 0; at < feld.length; at += 1) atlas[at * 4 + i] = feld[at];
+  }
+
+  /*
+   * Zwei Merker, die hier ausdrücklich gesetzt werden müssen:
+   *
+   * `UNPACK_ALIGNMENT` steht auf 4, und eine Rasterzeile ist selten durch
+   * vier teilbar – bei einem Hochformat etwa 768 breit ist sie es, bei 769
+   * nicht, und die Maske stünde geschert statt kaputt. (Bei RGBA ist die
+   * Zeile immer durch vier teilbar; der Merker steht trotzdem, weil ein
+   * späterer Wechsel auf einkanalig ihn sonst still bräuchte.)
+   *
+   * `UNPACK_FLIP_Y` ist Modulzustand: Das Bild-Hochladen setzt ihn auf
+   * `true` und stellt ihn nicht zurück. Ob er auf einen rohen Puffer wirkt,
+   * wird uneinheitlich gehandhabt – wir verlassen uns auf keine Lesart,
+   * klemmen ihn hier ab und drehen im Schattierer von Hand.
+   */
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, rb, rh, 0, gl.RGBA, gl.UNSIGNED_BYTE, atlas);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.activeTexture(gl.TEXTURE0);
+  atlasZettel = schluessel;
+  zaehler.maskenHochladen += 1;
 }
 
 /* ---------- Leinwand als Rückfall ---------- */
@@ -436,6 +635,7 @@ function aufLeinwand(
   breite: number,
   hoehe: number,
   a: Anpassung,
+  szene: Szene,
 ): HTMLCanvasElement | null {
   const flaeche = document.createElement('canvas');
   flaeche.width = breite;
@@ -449,11 +649,53 @@ function aufLeinwand(
   if (a.schaerfe > 0) schaerfen(daten, breite, hoehe, a.schaerfe);
 
   const lut = lutHolen(a);
+  /*
+   * Je Bereich EINE Farbtabelle und EIN auf Bildgrösse gezogenes Gewicht.
+   *
+   * Das Ausdehnen ist bilinear und damit dasselbe, was die Grafikeinheit mit
+   * `LINEAR` tut – mit dem nächsten Nachbarn zeigte der Rückfallweg an jeder
+   * Maskenkante eine Treppe, wo die Grafikeinheit weich ist, und der
+   * Vergleichstest zwischen beiden Wegen fiele zu Recht.
+   */
+  const bereiche = szene.bereiche.map((b) => ({
+    lut: lutHolen(b.anpassung),
+    gewicht: maskeUmrastern(
+      b.maske.feld,
+      b.maske.raster.breite,
+      b.maske.raster.hoehe,
+      breite,
+      hoehe,
+    ),
+  }));
+
   for (let y = 0; y < hoehe; y += 1) {
     const v = (y + 0.5) / hoehe;
     for (let x = 0; x < breite; x += 1) {
       const at = (y * breite + x) * 4;
-      const [r, g, b] = lutAnwenden(lut, daten[at], daten[at + 1], daten[at + 2]);
+      let [r, g, b] = lutAnwenden(lut, daten[at], daten[at + 1], daten[at + 2]);
+      for (const bereich of bereiche) {
+        const w = bereich.gewicht[y * breite + x];
+        if (w === 0) continue;
+        const [vr, vg, vb] = lutAnwenden(bereich.lut, r, g, b);
+        if (w === 255) {
+          r = vr;
+          g = vg;
+          b = vb;
+          continue;
+        }
+        /*
+         * Erst rechnen, dann mischen – nicht umgekehrt.
+         *
+         * Die gemischte Farbe durch die Tabelle zu schicken wäre etwas
+         * anderes: Die Kette ist nicht linear, und bei kräftigen Kurven
+         * liegen die beiden Wege über zehn Stufen auseinander. Der
+         * Schattierer mischt ebenfalls hinterher (`mix(c, voll, w)`).
+         */
+        const t = w / 255;
+        r += (vr - r) * t;
+        g += (vg - g) * t;
+        b += (vb - b) * t;
+      }
       const faktor = a.vignette === 0 ? 1 : vignetteFaktor((x + 0.5) / breite, v, a.vignette);
       daten[at] = r * faktor;
       daten[at + 1] = g * faktor;
@@ -506,8 +748,38 @@ export function getoentesBild(
   hoehe: number,
   a: Anpassung,
 ): CanvasImageSource {
-  if (istNeutral(a) || breite <= 0 || hoehe <= 0) return bild;
-  const schluessel = tonSchluessel(a);
+  return bildRechnen(bild, breite, hoehe, a, LEERE_SZENE);
+}
+
+/** Eine Szene ohne örtliche Anpassungen – der Normalfall. */
+const LEERE_SZENE: Szene = { bereiche: [], schluessel: '' };
+
+/**
+ * Dasselbe, aber mit örtlichen Anpassungen.
+ *
+ * `getoentesBild` ist der Sonderfall ohne Bereiche und bleibt bestehen, damit
+ * der Vergleichstest gegen `tonPunkt` unverändert gilt.
+ */
+export function bildRechnen(
+  bild: CanvasImageSource,
+  breite: number,
+  hoehe: number,
+  a: Anpassung,
+  szene: Szene,
+): CanvasImageSource {
+  /*
+   * Der Kurzschluss prüft BEIDES.
+   *
+   * Daran hängt mehr als eine gesparte Rechnung: Bei „nichts zu tun“ kommt
+   * das Quellbild SELBST zurück, und eine Ebene darüber hängt an genau
+   * dieser Objektidentität die Umrechnung der Verpixel-Ausschnitte
+   * (`quellSkala` in `zeichnen.ts`). Käme hier bei neutraler globaler
+   * Anpassung, aber vorhandenen Bereichen weiterhin das Original zurück,
+   * läse jeder Verpixelungsbalken bei halbem Massstab an der doppelten
+   * Stelle.
+   */
+  if ((istNeutral(a) && szene.bereiche.length === 0) || breite <= 0 || hoehe <= 0) return bild;
+  const schluessel = szene.bereiche.length > 0 ? szene.schluessel : tonSchluessel(a);
   if (
     gemerkt &&
     gemerkt.schluessel === schluessel &&
@@ -517,9 +789,9 @@ export function getoentesBild(
   ) {
     return gemerkt.flaeche;
   }
-  const aufDerGpu = aufGpu(bild, breite, hoehe, a);
+  const aufDerGpu = aufGpu(bild, breite, hoehe, a, szene);
   letzterWeg = aufDerGpu ? 'gpu' : 'leinwand';
-  const fertig = aufDerGpu ?? aufLeinwand(bild, breite, hoehe, a);
+  const fertig = aufDerGpu ?? aufLeinwand(bild, breite, hoehe, a, szene);
   if (!fertig) {
     letzterWeg = 'keiner';
     return bild;

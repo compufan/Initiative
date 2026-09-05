@@ -17,7 +17,8 @@ import {
   type Schriftzug,
   type Zuschnitt,
 } from './doc.js';
-import { getoentesBild } from './tonGpu.js';
+import { bildRechnen } from './tonGpu.js';
+import { szeneBauen } from './maskenSpeicher.js';
 
 /**
  * Die Schriftarten zur Auswahl.
@@ -230,7 +231,8 @@ function unkenntlich(
   width: number,
   height: number,
   skala: number,
-  quellSkala: number,
+  quellSkalaX: number,
+  quellSkalaY: number,
 ): void {
   const alt = gemerkt.get(strich);
   if (alt && alt.skala === skala && alt.punkte === strich.punkte.length && alt.quelle === bild) {
@@ -288,10 +290,10 @@ function unkenntlich(
   // Stelle, also meist neben dem Bild.
   hctx.drawImage(
     bild,
-    x0 * quellSkala,
-    y0 * quellSkala,
-    bw * quellSkala,
-    bh * quellSkala,
+    x0 * quellSkalaX,
+    y0 * quellSkalaY,
+    bw * quellSkalaX,
+    bh * quellSkalaY,
     0,
     0,
     pw,
@@ -451,15 +453,20 @@ function malen(
    * und dann hochskalierte Vignette sässe in der Ausgabe falsch.
    */
   const skala = Math.min(1, optionen.faktor);
-  const bild = getoentesBild(
-    roh,
-    Math.max(1, Math.round(width * skala)),
-    Math.max(1, Math.round(height * skala)),
-    doc.anpassung,
-  );
-  // Wieviele Bildpunkte des gelieferten Bildes auf einen Quellbildpunkt
-  // kommen: eins, wenn nichts eingestellt ist und das Original zurückkam.
-  const quellSkala = bild === roh ? 1 : skala;
+  const bw = Math.max(1, Math.round(width * skala));
+  const bh = Math.max(1, Math.round(height * skala));
+  const szene = szeneBauen(doc, width, height);
+  const bild = bildRechnen(roh, bw, bh, doc.anpassung, szene);
+  /*
+   * Wieviele Bildpunkte des gelieferten Bildes auf einen Quellbildpunkt
+   * kommen: eins, wenn nichts eingestellt ist und das Original zurückkam.
+   *
+   * Zweiachsig und aus den TATSÄCHLICHEN Massen, nicht aus `skala`: Das
+   * Runden auf ganze Bildpunkte weicht bis zu einen halben Punkt ab, und an
+   * einer harten Maskenkante wird genau das sichtbar.
+   */
+  const quellSkalaX = bild === roh ? 1 : bw / width;
+  const quellSkalaY = bild === roh ? 1 : bh / height;
 
   ansichtsRaum(ctx, optionen.faktor, optionen.versatz);
   ctx.save();
@@ -484,7 +491,7 @@ function malen(
   for (const strich of doc.striche) {
     if (strich.punkte.length < 2) continue;
     if (strich.art === 'pixel' || strich.art === 'weich') {
-      unkenntlich(ctx, bild, strich, width, height, skala, quellSkala);
+      unkenntlich(ctx, bild, strich, width, height, skala, quellSkalaX, quellSkalaY);
     }
   }
   for (const strich of doc.striche) {
