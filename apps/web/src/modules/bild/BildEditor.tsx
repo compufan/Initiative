@@ -23,17 +23,40 @@ import {
   weiterdrehen,
   zuschnittHalten,
   zuschnittInAnsicht,
+  BEREICHE_MAX,
+  BEREICH_NEUTRAL,
+  type Bereich,
+  type Bereichston,
   type BildDoc,
   type Malstrich,
+  type Maskenteil,
+  type Pinselstrich,
+  type RadialTeil,
   type Schriftzug,
+  type VerlaufTeil,
   type Zuschnitt,
 } from './doc.js';
 import { basisAus, lupeHalten, zoomAusSpanne } from './lupe.js';
-import { NEUTRAL, autoAnpassung, istNeutral, type Anpassung } from './ton.js';
+import {
+  FARB_NEUTRAL,
+  NEUTRAL,
+  autoAnpassung,
+  istNeutral,
+  type Anpassung,
+  type Farbanpassung,
+} from './ton.js';
+import {
+  fangBereich,
+  griffTreffer,
+  griffZiehen,
+  griffeVon,
+  type Griffname,
+} from './bereichGriffe.js';
+import { maskeFuerBereich } from './maskenSpeicher.js';
 import { SCHRIFTEN, trifftText, zeichneAnsicht, zeichneAusgabe } from './zeichnen.js';
 import './styles.css';
 
-type Werkzeug = 'zuschnitt' | 'ton' | 'malen' | 'text';
+type Werkzeug = 'zuschnitt' | 'ton' | 'bereich' | 'malen' | 'text';
 
 /**
  * Die Tonwert-Regler, in der Reihenfolge, in der man sie benutzt.
@@ -43,6 +66,31 @@ type Werkzeug = 'zuschnitt' | 'ton' | 'malen' | 'text';
  * Dunkelkammer und jedes Bearbeitungsprogramm benutzt – und sie ist nicht
  * dieselbe wie die Reihenfolge, in der gerechnet wird.
  */
+/**
+ * Die Regler eines Bereichs.
+ *
+ * Dieselben neun Farbregler wie global, plus die Tiefenschärfe – und
+ * ausdrücklich OHNE Schärfe und Vignette: Die eine braucht die Nachbarn eines
+ * noch ungetönten Bildpunkts, die andere den Bildrand, und einen eigenen
+ * Rand hat ein Bereich nicht.
+ */
+const BEREICHSREGLER: { key: keyof Bereichston; label: string; min: number; max: number }[] = [
+  { key: 'belichtung', label: 'Belichtung', min: -3, max: 3 },
+  { key: 'kontrast', label: 'Kontrast', min: -1, max: 1 },
+  { key: 'lichter', label: 'Lichter', min: -1, max: 1 },
+  { key: 'tiefen', label: 'Tiefen', min: -1, max: 1 },
+  { key: 'schwarz', label: 'Schwarz', min: -1, max: 1 },
+  { key: 'waerme', label: 'Wärme', min: -1, max: 1 },
+  { key: 'toenung', label: 'Tönung', min: -1, max: 1 },
+  { key: 'saettigung', label: 'Sättigung', min: -1, max: 1 },
+  { key: 'dynamik', label: 'Dynamik', min: -1, max: 1 },
+];
+
+/** Eine Kennung, die sich nicht wiederholt. */
+function neueId(vorsatz: string): string {
+  return `${vorsatz}${Date.now().toString(36)}${Math.round(Math.random() * 1e6).toString(36)}`;
+}
+
 const TONREGLER: {
   key: keyof Anpassung;
   label: string;
@@ -163,6 +211,12 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
   const [farbe, setFarbe] = useState('#ff3b30');
   const [breite, setBreite] = useState(14);
   const [gewaehlterText, setGewaehlterText] = useState<string | null>(null);
+  /** Der gewählte Bereich und das gewählte Maskenteil darin. */
+  const [bereichId, setBereichId] = useState<string | null>(null);
+  const [teilId, setTeilId] = useState<string | null>(null);
+  const [pinselBreite, setPinselBreite] = useState(30);
+  const [pinselAbziehen, setPinselAbziehen] = useState(false);
+  const [schleier, setSchleier] = useState(true);
   const [laedt, setLaedt] = useState(true);
   const [speichert, setSpeichert] = useState(false);
   const [kannZurueck, setKannZurueck] = useState(false);
@@ -174,14 +228,26 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
   const farbeRef = useRef(farbe);
   const breiteRef = useRef(breite);
   const gewaehltRef = useRef<string | null>(null);
+  /*
+   * Jeder Zustand, den ein Zeigerbehandler liest, braucht seinen Spiegel.
+   * Die Behandler hängen nicht an React – sie sehen sonst den Stand vom
+   * ersten Bild und nicht den von jetzt.
+   */
+  const bereichRef = useRef<string | null>(null);
+  const teilRef = useRef<string | null>(null);
+  const pinselBreiteRef = useRef(pinselBreite);
+  const pinselAbziehenRef = useRef(pinselAbziehen);
+  const schleierRef = useRef(schleier);
   const verlauf = useRef<BildDoc[]>([]);
   /** Der Vor-Stapel: was zurückgenommen wurde und wiederkommen kann. */
   const vor = useRef<BildDoc[]>([]);
   const massRef = useRef({ faktor: 1, breite: 1, hoehe: 1, versatz: { x: 0, y: 0 } });
   const rahmen = useRef<number | null>(null);
   const zug = useRef<{
-    art: 'keiner' | 'zuschnitt' | 'malen' | 'text';
+    art: 'keiner' | 'zuschnitt' | 'malen' | 'text' | 'bereich' | 'pinsel';
     griff: string;
+    /** Das Maskenteil, wie es beim Aufsetzen aussah – Griffe rechnen daraus. */
+    startTeil: VerlaufTeil | RadialTeil | null;
     start: { x: number; y: number };
     startZ: Zuschnitt;
     startText: { x: number; y: number };
@@ -196,6 +262,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
   }>({
     art: 'keiner',
     griff: '',
+    startTeil: null,
     start: { x: 0, y: 0 },
     startZ: { x: 0, y: 0, w: 0, h: 0 },
     startText: { x: 0, y: 0 },
@@ -216,6 +283,22 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
   useEffect(() => {
     gewaehltRef.current = gewaehlterText;
   }, [gewaehlterText]);
+  useEffect(() => {
+    bereichRef.current = bereichId;
+  }, [bereichId]);
+  useEffect(() => {
+    teilRef.current = teilId;
+  }, [teilId]);
+  useEffect(() => {
+    pinselBreiteRef.current = pinselBreite;
+  }, [pinselBreite]);
+  useEffect(() => {
+    pinselAbziehenRef.current = pinselAbziehen;
+  }, [pinselAbziehen]);
+  useEffect(() => {
+    schleierRef.current = schleier;
+    planenRef.current?.();
+  }, [schleier]);
 
   /**
    * Wieviele Bildpunkte die Arbeitsfläche wirklich braucht.
@@ -269,10 +352,25 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
         zuschnittZeigen: werkzeugRef.current === 'zuschnitt',
         zoom: lupeRef.current.zoom,
         versatz: { x: lupeRef.current.x, y: lupeRef.current.y },
+        bereichZeigen:
+          werkzeugRef.current === 'bereich'
+            ? {
+                maske: bereichMaske(aktuell, quellBild.naturalWidth, quellBild.naturalHeight),
+                teil: teilFinden(aktuell),
+                schleier: schleierRef.current,
+              }
+            : undefined,
       },
     );
     if (mass) massRef.current = mass;
   }, []);
+
+  /** Die Maske des gewählten Bereichs – für den Schleier. */
+  function bereichMaske(aktuell: BildDoc, breite: number, hoehe: number) {
+    const bereich = aktuell.bereiche.find((b) => b.id === bereichRef.current);
+    if (!bereich) return null;
+    return maskeFuerBereich(bereich, breite, hoehe);
+  }
 
   const planen = useCallback(() => {
     if (rahmen.current != null) cancelAnimationFrame(rahmen.current);
@@ -294,7 +392,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
 
   useEffect(() => {
     planen();
-  }, [werkzeug, planen]);
+  }, [werkzeug, bereichId, teilId, planen]);
 
   // Zurück-Taste schliesst den Editor, statt aus der App zu fallen.
   useEffect(() => dialogAnmelden(onClose), [onClose]);
@@ -437,6 +535,35 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     };
   }
 
+  /** Das gerade gewählte Maskenteil, oder nichts. */
+  function teilFinden(aktuell: BildDoc): Maskenteil | null {
+    const bereich = aktuell.bereiche.find((b) => b.id === bereichRef.current);
+    return bereich?.teile.find((t) => t.id === teilRef.current) ?? null;
+  }
+
+  /**
+   * Ersetzt ein Maskenteil – und legt dabei ein NEUES `teile`-Feld an.
+   *
+   * Daran hängt der Zwischenspeicher: Ist das Feld dasselbe Objekt, gilt die
+   * gerasterte Maske weiter. Wer hier an Ort und Stelle änderte, bekäme eine
+   * Maske, die sich nicht mehr bewegt – und einen Rückgängig-Verlauf, dessen
+   * ältere Schritte stillschweigend mitwandern.
+   */
+  function teilErsetzen(teilNeu: Maskenteil) {
+    setDoc((wert) =>
+      wert
+        ? {
+            ...wert,
+            bereiche: wert.bereiche.map((b) =>
+              b.id === bereichRef.current
+                ? { ...b, teile: b.teile.map((t) => (t.id === teilNeu.id ? teilNeu : t)) }
+                : b,
+            ),
+          }
+        : wert,
+    );
+  }
+
   /** Ein neuer Strich mit den gerade eingestellten Werten. */
   function neuerStrich(quellBild: HTMLImageElement, punkte: number[]): Malstrich {
     return {
@@ -508,8 +635,45 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
         start: punkt,
         startZ: inAnsicht,
         startText: { x: 0, y: 0 },
+        startTeil: null,
         begonnen: false,
       };
+      return;
+    }
+
+    if (werkzeugRef.current === 'bereich') {
+      const teil = teilFinden(aktuell);
+      const amBild = nachOriginal(punkt, W, H, aktuell);
+      if (teil && (teil.art === 'verlauf' || teil.art === 'radial')) {
+        const griff = griffTreffer(griffeVon(teil), amBild, fangBereich(massRef.current.faktor));
+        if (griff) {
+          zug.current = {
+            art: 'bereich',
+            griff,
+            startTeil: teil,
+            start: amBild,
+            startZ: leer,
+            startText: { x: 0, y: 0 },
+            begonnen: false,
+          };
+          return;
+        }
+      }
+      if (teil && teil.art === 'pinsel') {
+        zug.current = {
+          art: 'pinsel',
+          griff: teil.id,
+          startTeil: null,
+          start: amBild,
+          startZ: leer,
+          startText: { x: 0, y: 0 },
+          begonnen: false,
+        };
+        return;
+      }
+      // Kein Griff getroffen und kein Pinsel gewählt: Der Tipp bleibt ohne
+      // Wirkung. Ausdrücklich, damit er nicht in den Textzweig fällt.
+      zug.current = { ...zug.current, art: 'keiner', begonnen: false };
       return;
     }
 
@@ -520,6 +684,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
         start: punkt,
         startZ: leer,
         startText: { x: 0, y: 0 },
+        startTeil: null,
         begonnen: false,
       };
       return;
@@ -559,6 +724,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
         start: punkt,
         startZ: leer,
         startText: { x: getroffen.x, y: getroffen.y },
+        startTeil: null,
         begonnen: false,
       };
       return;
@@ -569,6 +735,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
       start: punkt,
       startZ: leer,
       startText: { x: 0, y: 0 },
+      startTeil: null,
       begonnen: false,
     };
   }
@@ -674,6 +841,48 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
       const amBild = ansichtAlsZuschnitt(gehalten, W, H, aktuell);
       zug.current = { ...zug.current, begonnen: true };
       setDoc((wert) => (wert ? { ...wert, zuschnitt: amBild } : wert));
+      return;
+    }
+
+    if (art === 'bereich') {
+      const start = zug.current.startTeil;
+      if (!start) return;
+      zug.current = { ...zug.current, begonnen: true };
+      const amBild = nachOriginal(punkt, W, H, aktuell);
+      const gezogen = griffZiehen(start, zug.current.griff as Griffname, amBild, zug.current.start);
+      const alt = teilFinden(aktuell);
+      if (alt) teilErsetzen({ ...alt, ...gezogen } as Maskenteil);
+      return;
+    }
+
+    if (art === 'pinsel') {
+      const amBild = nachOriginal(punkt, W, H, aktuell);
+      const teil = teilFinden(aktuell);
+      if (!teil || teil.art !== 'pinsel') return;
+      if (!zug.current.begonnen) {
+        // Der Strich beginnt beim Aufsetzpunkt, nicht erst hier.
+        zug.current = { ...zug.current, begonnen: true };
+        const neu: Pinselstrich = {
+          punkte: [zug.current.start.x, zug.current.start.y, amBild.x, amBild.y],
+          // Wie beim Malstrich relativ zur Bildkante: Ein Pinsel, der auf
+          // einem 1920er Bild fein ist, deckt auf einem 600er alles zu.
+          breite:
+            (pinselBreiteRef.current / 100) *
+            (Math.max(quellBild.naturalWidth, quellBild.naturalHeight) / 6),
+          haerte: 0.6,
+          abziehen: pinselAbziehenRef.current,
+        };
+        teilErsetzen({ ...teil, striche: [...teil.striche, neu] });
+        return;
+      }
+      const letzter = teil.striche[teil.striche.length - 1];
+      if (!letzter) return;
+      const striche = teil.striche.slice();
+      striche[striche.length - 1] = {
+        ...letzter,
+        punkte: [...letzter.punkte, amBild.x, amBild.y],
+      };
+      teilErsetzen({ ...teil, striche });
       return;
     }
 
@@ -963,6 +1172,173 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     );
   }, [merken]);
 
+  /* ---------- örtliche Anpassungen ---------- */
+
+  const aktiverBereich = useMemo(
+    () => doc?.bereiche.find((b) => b.id === bereichId) ?? null,
+    [doc, bereichId],
+  );
+  const aktivesTeil = useMemo(
+    () => aktiverBereich?.teile.find((t) => t.id === teilId) ?? null,
+    [aktiverBereich, teilId],
+  );
+
+  /**
+   * Legt ein Maskenteil an – und mit ihm bei Bedarf einen neuen Bereich.
+   *
+   * Die Anfangslage wird im ANSICHTSRAUM gedacht und über `nachOriginal`
+   * abgelegt: Ein Verlauf von oben nach unten soll auch auf einem gedrehten
+   * Foto von oben nach unten laufen, und nicht plötzlich quer.
+   */
+  function teilAnlegen(art: 'verlauf' | 'radial' | 'pinsel') {
+    const quellBild = bildRef.current;
+    const aktuell = docRef.current;
+    if (!quellBild || !aktuell) return;
+    const W = quellBild.naturalWidth;
+    const H = quellBild.naturalHeight;
+    const sicht = ansichtGroesse(W, H, aktuell.drehung);
+    const id = neueId('t');
+
+    let teil: Maskenteil;
+    if (art === 'verlauf') {
+      teil = {
+        id,
+        modus: 'dazu',
+        umkehren: false,
+        art: 'verlauf',
+        von: nachOriginal({ x: sicht.w / 2, y: sicht.h * 0.15 }, W, H, aktuell),
+        bis: nachOriginal({ x: sicht.w / 2, y: sicht.h * 0.55 }, W, H, aktuell),
+      };
+    } else if (art === 'radial') {
+      const mitte = nachOriginal({ x: sicht.w / 2, y: sicht.h / 2 }, W, H, aktuell);
+      const kante = Math.min(W, H);
+      teil = {
+        id,
+        modus: 'dazu',
+        umkehren: false,
+        art: 'radial',
+        mitte,
+        rx: kante * 0.3,
+        ry: kante * 0.22,
+        winkel: 0,
+        weichheit: 0.5,
+      };
+    } else {
+      teil = { id, modus: 'dazu', umkehren: false, art: 'pinsel', striche: [] };
+    }
+
+    merken();
+    const vorhanden = aktuell.bereiche.find((b) => b.id === bereichRef.current);
+    if (vorhanden) {
+      setDoc((wert) =>
+        wert
+          ? {
+              ...wert,
+              bereiche: wert.bereiche.map((b) =>
+                b.id === vorhanden.id ? { ...b, teile: [...b.teile, teil] } : b,
+              ),
+            }
+          : wert,
+      );
+    } else {
+      if (aktuell.bereiche.length >= BEREICHE_MAX) return;
+      const neu: Bereich = {
+        id: neueId('b'),
+        name: `Bereich ${aktuell.bereiche.length + 1}`,
+        aktiv: true,
+        teile: [teil],
+        anpassung: { ...BEREICH_NEUTRAL },
+      };
+      setDoc((wert) => (wert ? { ...wert, bereiche: [...wert.bereiche, neu] } : wert));
+      setBereichId(neu.id);
+    }
+    setTeilId(id);
+  }
+
+  function bereichAnlegen() {
+    const aktuell = docRef.current;
+    if (!aktuell || aktuell.bereiche.length >= BEREICHE_MAX) return;
+    merken();
+    const neu: Bereich = {
+      id: neueId('b'),
+      name: `Bereich ${aktuell.bereiche.length + 1}`,
+      aktiv: true,
+      teile: [],
+      anpassung: { ...BEREICH_NEUTRAL },
+    };
+    setDoc((wert) => (wert ? { ...wert, bereiche: [...wert.bereiche, neu] } : wert));
+    setBereichId(neu.id);
+    setTeilId(null);
+  }
+
+  function bereichLoeschen(id: string) {
+    merken();
+    setDoc((wert) =>
+      wert ? { ...wert, bereiche: wert.bereiche.filter((b) => b.id !== id) } : wert,
+    );
+    if (bereichId === id) {
+      setBereichId(null);
+      setTeilId(null);
+    }
+  }
+
+  function teilLoeschen(id: string) {
+    if (!aktiverBereich) return;
+    merken();
+    setDoc((wert) =>
+      wert
+        ? {
+            ...wert,
+            bereiche: wert.bereiche.map((b) =>
+              b.id === aktiverBereich.id ? { ...b, teile: b.teile.filter((t) => t.id !== id) } : b,
+            ),
+          }
+        : wert,
+    );
+    if (teilId === id) setTeilId(null);
+  }
+
+  function teilAendern(patch: Partial<Maskenteil>) {
+    if (!aktivesTeil || !aktiverBereich) return;
+    merkenGebuendelt(`teil-${aktivesTeil.id}-${Object.keys(patch).join(',')}`);
+    setDoc((wert) =>
+      wert
+        ? {
+            ...wert,
+            bereiche: wert.bereiche.map((b) =>
+              b.id === aktiverBereich.id
+                ? {
+                    ...b,
+                    teile: b.teile.map((t) =>
+                      t.id === aktivesTeil.id ? ({ ...t, ...patch } as Maskenteil) : t,
+                    ),
+                  }
+                : b,
+            ),
+          }
+        : wert,
+    );
+  }
+
+  function bereichRegler(welcher: keyof Bereichston, wert: number) {
+    if (!aktiverBereich) return;
+    // Die Kennung MUSS den Bereich enthalten: Sonst fielen zwei Bereiche,
+    // kurz nacheinander verstellt, in einen Rückgängig-Schritt.
+    merkenGebuendelt(`bereich-${aktiverBereich.id}-${welcher}`);
+    setDoc((wert2) =>
+      wert2
+        ? {
+            ...wert2,
+            bereiche: wert2.bereiche.map((b) =>
+              b.id === aktiverBereich.id
+                ? { ...b, anpassung: { ...b.anpassung, [welcher]: wert } }
+                : b,
+            ),
+          }
+        : wert2,
+    );
+  }
+
   const tonZuruecksetzen = useCallback(() => {
     merken();
     setDoc((alt) => (alt ? { ...alt, anpassung: { ...NEUTRAL } } : alt));
@@ -1101,7 +1477,9 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
         />
       </div>
 
-      <div className={`bild-panel ${werkzeug === 'ton' ? 'ist-ton' : ''}`}>
+      <div
+        className={`bild-panel ${werkzeug === 'ton' || werkzeug === 'bereich' ? 'ist-ton' : ''}`}
+      >
         {werkzeug === 'zuschnitt' && (
           <>
             <div className="bild-reihe">
@@ -1186,6 +1564,238 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
               Doppeltippen auf einen Regler stellt ihn zurück. Die Regler wirken auf das Foto, nicht
               auf das Gemalte oder die Schrift.
             </p>
+          </>
+        )}
+
+        {werkzeug === 'bereich' && doc && (
+          <>
+            <div className="bild-reihe" role="group" aria-label="Bereiche">
+              {doc.bereiche.map((bereich) => (
+                <button
+                  key={bereich.id}
+                  type="button"
+                  className={`btn btn-sm ${bereich.id === bereichId ? 'is-active' : ''}`}
+                  aria-pressed={bereich.id === bereichId}
+                  onClick={() => {
+                    setBereichId(bereich.id);
+                    setTeilId(bereich.teile[0]?.id ?? null);
+                  }}
+                >
+                  {bereich.aktiv ? '' : '✗ '}
+                  {bereich.name}
+                </button>
+              ))}
+              {doc.bereiche.length < BEREICHE_MAX && (
+                <button type="button" className="btn btn-sm" onClick={bereichAnlegen}>
+                  ＋ Bereich
+                </button>
+              )}
+            </div>
+
+            <div className="bild-reihe" role="group" aria-label="Maske hinzufügen">
+              <button type="button" className="btn btn-sm" onClick={() => teilAnlegen('verlauf')}>
+                ↗ Verlauf
+              </button>
+              <button type="button" className="btn btn-sm" onClick={() => teilAnlegen('radial')}>
+                ◎ Radial
+              </button>
+              <button type="button" className="btn btn-sm" onClick={() => teilAnlegen('pinsel')}>
+                🖌 Pinsel
+              </button>
+            </div>
+
+            {aktiverBereich ? (
+              <>
+                <div className="bild-reihe" role="group" aria-label="Masken des Bereichs">
+                  {aktiverBereich.teile.map((teil, nummer) => (
+                    <button
+                      key={teil.id}
+                      type="button"
+                      className={`btn btn-sm ${teil.id === teilId ? 'is-active' : ''}`}
+                      aria-pressed={teil.id === teilId}
+                      onClick={() => setTeilId(teil.id)}
+                    >
+                      {teil.modus === 'weg' ? '−' : teil.modus === 'nur' ? '∩' : '+'}{' '}
+                      {teil.art === 'verlauf'
+                        ? 'Verlauf'
+                        : teil.art === 'radial'
+                          ? 'Radial'
+                          : teil.art === 'pinsel'
+                            ? 'Pinsel'
+                            : 'Motiv'}{' '}
+                      {nummer + 1}
+                    </button>
+                  ))}
+                  {aktiverBereich.teile.length === 0 && (
+                    <span className="bild-hinweis">Noch keine Maske – wähle oben eine Form.</span>
+                  )}
+                </div>
+
+                {aktivesTeil && (
+                  <div className="bild-reihe">
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() =>
+                        teilAendern({
+                          modus:
+                            aktivesTeil.modus === 'dazu'
+                              ? 'weg'
+                              : aktivesTeil.modus === 'weg'
+                                ? 'nur'
+                                : 'dazu',
+                        })
+                      }
+                      title="Dazunehmen, wegnehmen oder schneiden"
+                    >
+                      {aktivesTeil.modus === 'dazu'
+                        ? '+ Dazu'
+                        : aktivesTeil.modus === 'weg'
+                          ? '− Weg'
+                          : '∩ Nur'}
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn btn-sm ${aktivesTeil.umkehren ? 'is-active' : ''}`}
+                      aria-pressed={aktivesTeil.umkehren}
+                      onClick={() => teilAendern({ umkehren: !aktivesTeil.umkehren })}
+                    >
+                      ⇄ Umkehren
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => teilLoeschen(aktivesTeil.id)}
+                    >
+                      🗑 Maske
+                    </button>
+                  </div>
+                )}
+
+                {aktivesTeil?.art === 'radial' && (
+                  <label className="bild-schieber">
+                    <span>Weichheit</span>
+                    <input
+                      type="range"
+                      min={0.02}
+                      max={1}
+                      step={0.01}
+                      value={aktivesTeil.weichheit}
+                      onChange={(event) =>
+                        teilAendern({
+                          weichheit: Number(event.target.value),
+                        } as Partial<Maskenteil>)
+                      }
+                    />
+                    <span className="bild-wert">{Math.round(aktivesTeil.weichheit * 100)}</span>
+                  </label>
+                )}
+
+                {aktivesTeil?.art === 'pinsel' && (
+                  <>
+                    <div className="bild-reihe">
+                      <button
+                        type="button"
+                        className={`btn btn-sm ${!pinselAbziehen ? 'is-active' : ''}`}
+                        aria-pressed={!pinselAbziehen}
+                        onClick={() => setPinselAbziehen(false)}
+                      >
+                        🖌 Malen
+                      </button>
+                      <button
+                        type="button"
+                        className={`btn btn-sm ${pinselAbziehen ? 'is-active' : ''}`}
+                        aria-pressed={pinselAbziehen}
+                        onClick={() => setPinselAbziehen(true)}
+                      >
+                        🧽 Radieren
+                      </button>
+                    </div>
+                    <label className="bild-schieber">
+                      <span>Pinsel</span>
+                      <input
+                        type="range"
+                        min={4}
+                        max={100}
+                        value={pinselBreite}
+                        onChange={(event) => setPinselBreite(Number(event.target.value))}
+                      />
+                      <span className="bild-wert">{pinselBreite}</span>
+                    </label>
+                  </>
+                )}
+
+                <div className="bild-reihe">
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${schleier ? 'is-active' : ''}`}
+                    aria-pressed={schleier}
+                    onClick={() => setSchleier((wert) => !wert)}
+                  >
+                    👁 Maske zeigen
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${aktiverBereich.aktiv ? 'is-active' : ''}`}
+                    aria-pressed={aktiverBereich.aktiv}
+                    onClick={() => {
+                      merken();
+                      setDoc((wert) =>
+                        wert
+                          ? {
+                              ...wert,
+                              bereiche: wert.bereiche.map((b) =>
+                                b.id === aktiverBereich.id ? { ...b, aktiv: !b.aktiv } : b,
+                              ),
+                            }
+                          : wert,
+                      );
+                    }}
+                  >
+                    {aktiverBereich.aktiv ? 'An' : 'Aus'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => bereichLoeschen(aktiverBereich.id)}
+                  >
+                    🗑 Bereich
+                  </button>
+                </div>
+
+                {BEREICHSREGLER.map((regler) => {
+                  const wert = aktiverBereich.anpassung[regler.key];
+                  return (
+                    <label className="bild-schieber" key={regler.key}>
+                      <span>{regler.label}</span>
+                      <input
+                        type="range"
+                        min={regler.min}
+                        max={regler.max}
+                        step={regler.key === 'belichtung' ? 0.05 : 0.01}
+                        value={wert}
+                        onChange={(event) => bereichRegler(regler.key, Number(event.target.value))}
+                        onDoubleClick={() => bereichRegler(regler.key, 0)}
+                      />
+                      <span className="bild-wert">
+                        {regler.key === 'belichtung'
+                          ? `${wert > 0 ? '+' : ''}${wert.toFixed(2)} EV`
+                          : `${wert > 0 ? '+' : ''}${Math.round(wert * 100)}`}
+                      </span>
+                    </label>
+                  );
+                })}
+                <p className="bild-hinweis">
+                  Der Bereich wirkt nur dort, wo seine Maske greift – rot eingefärbt, solange „Maske
+                  zeigen“ an ist. Zieh an den weissen Griffen im Bild.
+                </p>
+              </>
+            ) : (
+              <p className="bild-hinweis">
+                Ein Bereich ist eine Anpassung, die nur an einer Stelle wirkt: der Himmel dunkler,
+                das Gesicht heller. Leg oben eine Form an.
+              </p>
+            )}
           </>
         )}
 
@@ -1409,6 +2019,13 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
             onClick={() => setWerkzeug('ton')}
           >
             <span aria-hidden="true">🎚️</span> Ton
+          </button>
+          <button
+            type="button"
+            className={`bild-reiter-knopf ${werkzeug === 'bereich' ? 'is-active' : ''}`}
+            onClick={() => setWerkzeug('bereich')}
+          >
+            <span aria-hidden="true">🎯</span> Bereiche
           </button>
           <button
             type="button"

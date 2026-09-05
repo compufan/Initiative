@@ -14,10 +14,14 @@ import {
   zuschnittInAnsicht,
   type BildDoc,
   type Malstrich,
+  type Maskenteil,
+  type Punkt,
   type Schriftzug,
   type Zuschnitt,
 } from './doc.js';
 import { bildRechnen } from './tonGpu.js';
+import { griffeVon, radialRand, verlaufLinien } from './bereichGriffe.js';
+import type { Raster } from './maske.js';
 import { szeneBauen } from './maskenSpeicher.js';
 
 /**
@@ -559,6 +563,12 @@ export function zeichneAnsicht(
     zoom?: number;
     /** Linke obere Ecke des sichtbaren Ausschnitts, in Ansichtspunkten. */
     versatz?: { x: number; y: number };
+    /** Der gewählte Bereich: Maskenschleier und Griffe darüberlegen. */
+    bereichZeigen?: {
+      maske: { feld: Uint8Array; raster: Raster } | null;
+      teil: Maskenteil | null;
+      schleier: boolean;
+    };
   },
 ): AnsichtMass | null {
   const sicht = ansichtGroesse(width, height, doc.drehung);
@@ -596,8 +606,132 @@ export function zeichneAnsicht(
       versatz,
     );
   }
+  if (optionen.bereichZeigen) {
+    zeichneBereich(ctx, width, height, doc, optionen.bereichZeigen, { faktor, versatz });
+  }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   return { faktor, breite, hoehe, versatz };
+}
+
+/** Eine eigene Fläche für den Maskenschleier – `arbeitsCanvas` ist belegt. */
+let maskenCanvas: HTMLCanvasElement | null = null;
+function maskenflaeche(w: number, h: number): HTMLCanvasElement {
+  if (!maskenCanvas) maskenCanvas = document.createElement('canvas');
+  if (maskenCanvas.width !== w) maskenCanvas.width = w;
+  if (maskenCanvas.height !== h) maskenCanvas.height = h;
+  return maskenCanvas;
+}
+
+/**
+ * Zeigt, wo ein Bereich greift, und wo man ihn anfassen kann.
+ *
+ * Zwei verschiedene Räume, und das ist der Kern dieser Funktion:
+ *
+ * - Der **Schleier** liegt im BILDRAUM. Er klebt am Motiv und macht Drehung,
+ *   Spiegelung und Verschiebung mit – täte er das nicht, zeigte er beim
+ *   ersten Drehen auf eine andere Stelle als die, an der die Maske wirkt.
+ * - Die **Griffe** liegen in LEINWANDPUNKTEN, wie schon der Zuschnittrahmen.
+ *   Ein Griff soll unter dem Finger immer gleich gross sein, egal wie weit
+ *   man hineingezoomt hat.
+ *
+ * Beides gehört nur in die Ansicht. `zeichneAusgabe` ruft es gar nicht erst
+ * auf – ein Bild mit eingebackenen Griffen wäre der teuerste denkbare Fehler
+ * dieser Datei.
+ */
+function zeichneBereich(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  doc: BildDoc,
+  zeigen: {
+    maske: { feld: Uint8Array; raster: Raster } | null;
+    teil: Maskenteil | null;
+    schleier: boolean;
+  },
+  optionen: MalOptionen,
+): void {
+  const { maske, teil, schleier } = zeigen;
+
+  if (schleier && maske && maske.feld.length > 0) {
+    const { breite: rb, hoehe: rh } = maske.raster;
+    const flaeche = maskenflaeche(rb, rh);
+    const mctx = flaeche.getContext('2d');
+    if (mctx) {
+      const bild = mctx.createImageData(rb, rh);
+      for (let i = 0; i < maske.feld.length; i += 1) {
+        const w = maske.feld[i];
+        if (w === 0) continue;
+        const at = i * 4;
+        // Rot, halbdurchsichtig, mit dem Maskengewicht als Deckung: So sieht
+        // man nicht nur DASS die Maske greift, sondern auch wie stark – bei
+        // einem Verlauf ist genau das die Information.
+        bild.data[at] = 255;
+        bild.data[at + 1] = 60;
+        bild.data[at + 2] = 90;
+        bild.data[at + 3] = Math.round(w * 0.45);
+      }
+      mctx.putImageData(bild, 0, 0);
+      ctx.save();
+      ansichtsRaum(ctx, optionen.faktor, optionen.versatz);
+      bildRaum(ctx, width, height, doc);
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(flaeche, 0, 0, width, height);
+      ctx.restore();
+    }
+  }
+
+  if (!teil) return;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  /** Originalpunkt → Leinwandpunkt. */
+  const auf = (p: Punkt) => {
+    const a = nachAnsicht(p, width, height, doc);
+    return {
+      x: (a.x - optionen.versatz.x) * optionen.faktor,
+      y: (a.y - optionen.versatz.y) * optionen.faktor,
+    };
+  };
+  const kette = (punkte: Punkt[], geschlossen: boolean) => {
+    if (punkte.length === 0) return;
+    ctx.beginPath();
+    const erster = auf(punkte[0]);
+    ctx.moveTo(erster.x, erster.y);
+    for (let i = 1; i < punkte.length; i += 1) {
+      const q = auf(punkte[i]);
+      ctx.lineTo(q.x, q.y);
+    }
+    if (geschlossen) ctx.closePath();
+    // Zweimal gezeichnet: dunkel und breit darunter, hell und schmal darauf.
+    // Eine einfarbige Linie verschwindet je nach Bild mal im Hellen, mal im
+    // Dunklen – und ein Griff, den man nicht sieht, ist keiner.
+    ctx.strokeStyle = 'rgba(4, 8, 20, 0.55)';
+    ctx.lineWidth = 4;
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  };
+
+  if (teil.art === 'radial') kette(radialRand(teil), true);
+  if (teil.art === 'verlauf') for (const [a, b] of verlaufLinien(teil)) kette([a, b], false);
+
+  if (teil.art === 'radial' || teil.art === 'verlauf') {
+    for (const griff of griffeVon(teil)) {
+      const q = auf(griff);
+      ctx.beginPath();
+      ctx.arc(q.x, q.y, 9, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(4, 8, 20, 0.55)';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(q.x, q.y, 6, 0, Math.PI * 2);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+    }
+  }
+  ctx.restore();
 }
 
 /** Der abgedunkelte Rand mit Rahmen, Ecken und Drittellinien. */

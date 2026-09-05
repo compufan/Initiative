@@ -8,6 +8,7 @@ import {
   verlaufLinien,
   type Griff,
   type Griffname,
+  fangBereich,
 } from './bereichGriffe.js';
 
 /** Ein Verlauf quer über ein Bild, absichtlich schräg – Achsenparallel deckt zu wenig ab. */
@@ -450,5 +451,23 @@ describe('nachgereicht: Griffe', () => {
     for (const [a, b] of linien) {
       for (const wert of [a.x, a.y, b.x, b.y]) expect(Number.isFinite(wert)).toBe(true);
     }
+  });
+});
+
+describe('fangBereich', () => {
+  it('hält den Fangkreis unter dem Finger gleich gross', () => {
+    // 22 Leinwandpunkte, in Originalpunkte umgerechnet. Bei einem 4000er
+    // Foto in einer 1200er Ansicht (Faktor 0,3) sind das 73 Originalpunkte,
+    // bei achtfacher Lupe (Faktor 2,4) noch gut 9.
+    expect(fangBereich(1)).toBeCloseTo(22, 9);
+    expect(fangBereich(0.3)).toBeCloseTo(73.33, 2);
+    expect(fangBereich(2.4)).toBeCloseTo(9.17, 2);
+    // Und er wird mit wachsendem Zoom kleiner, nicht grösser.
+    expect(fangBereich(4)).toBeLessThan(fangBereich(1));
+  });
+
+  it('teilt nicht durch null', () => {
+    expect(Number.isFinite(fangBereich(0))).toBe(true);
+    expect(fangBereich(0)).toBeGreaterThan(0);
   });
 });

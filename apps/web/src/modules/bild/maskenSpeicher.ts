@@ -174,6 +174,25 @@ function bereichWirkt(bereich: Bereich): boolean {
 }
 
 /**
+ * Die Maske eines einzelnen Bereichs – auch wenn er gerade nichts bewirkt.
+ *
+ * `szeneBauen` sortiert Bereiche aus, deren Regler alle auf null stehen; für
+ * den Renderer ist das richtig. Für den Maskenschleier wäre es falsch: Wer
+ * gerade einen Verlauf aufzieht, hat noch an keinem Regler gedreht und will
+ * trotzdem sehen, wo er greift.
+ *
+ * Geht über dieselben zwei Ebenen, kostet also nach dem ersten Mal nichts.
+ */
+export function maskeFuerBereich(
+  bereich: Bereich,
+  breite: number,
+  hoehe: number,
+): Maskenfeld | null {
+  if (bereich.teile.length === 0) return null;
+  return maskeFuer(bereich, rasterFuer(breite, hoehe, MASKEN_KANTE));
+}
+
+/**
  * Übersetzt das Dokument in das, was der Renderer braucht.
  *
  * Die **einzige** Stelle, an der aussortiert und normiert wird. Beide

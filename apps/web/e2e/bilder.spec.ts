@@ -394,3 +394,153 @@ test('im Ton-Reiter versetzt ein Tipp auf die Leinwand keinen Schriftzug', async
 
   await alicePage.context().close();
 });
+
+test('ein Verlaufsbereich dunkelt nur die obere Bildhaelfte ab', async ({ browser }) => {
+  /*
+   * Stufe 4 von der Bedienseite: Kommt eine örtliche Anpassung vom Knopf bis
+   * auf die Leinwand, und wirkt sie NUR dort, wo ihre Maske greift?
+   *
+   * Das ist der ganze Unterschied zur globalen Anpassung, und er lässt sich
+   * nur am Bild messen: obere Hälfte dunkler, untere unverändert.
+   */
+  const alice = credentials('bereich');
+  const bob = credentials('bziel');
+  const alicePage = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await alicePage.getByRole('button', { name: 'Neuer Chat' }).click();
+  await alicePage.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await alicePage.getByText(bob.displayName).first().click();
+  await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'grau-gross.png',
+    mimeType: 'image/png',
+    buffer: GRAU_GROSS_PNG,
+  });
+  await alicePage.getByRole('button', { name: /^Senden \(/ }).click();
+  const bild = alicePage.locator('.media-image').first();
+  await expect(bild).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => bild.evaluate((el: HTMLImageElement) => el.naturalWidth), {
+      timeout: 30_000,
+    })
+    .toBeGreaterThan(0);
+  await bild.click();
+  await alicePage.getByRole('button', { name: 'Bild bearbeiten' }).click();
+  const leinwand = alicePage.locator('.bild-leinwand');
+  await expect(leinwand).toBeVisible({ timeout: 30_000 });
+
+  /** Die mittlere Helligkeit eines waagerechten Streifens der Leinwand. */
+  const streifen = async (vonAnteil: number, bisAnteil: number) =>
+    alicePage.evaluate(
+      ({ von, bis }) => {
+        const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+        const ctx = c?.getContext('2d');
+        const d = c && ctx ? ctx.getImageData(0, 0, c.width, c.height).data : null;
+        if (!c || !d) return -1;
+        let summe = 0;
+        let n = 0;
+        for (let y = Math.round(c.height * von); y < Math.round(c.height * bis); y += 1)
+          for (let x = 0; x < c.width; x += 1) {
+            summe += d[(y * c.width + x) * 4];
+            n += 1;
+          }
+        return n > 0 ? summe / n : -1;
+      },
+      { von: vonAnteil, bis: bisAnteil },
+    );
+
+  await alicePage.getByRole('button', { name: /Bereiche$/ }).click();
+  // Ohne Bereich sagt der Reiter, wozu er da ist.
+  await expect(alicePage.getByText(/Ein Bereich ist eine Anpassung/)).toBeVisible();
+
+  await alicePage.getByRole('button', { name: '↗ Verlauf' }).click();
+  await expect(alicePage.getByRole('button', { name: '👁 Maske zeigen' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+
+  /*
+   * Der Schleier zeigt, WO die Maske greift – und zwar rot. Ohne ihn zöge man
+   * an unsichtbaren Griffen. Gemessen wird die Rotverschiebung: Auf grauem
+   * Grund ist Rot minus Grün null, unter dem Schleier deutlich positiv.
+   */
+  const rotstich = async (vonAnteil: number, bisAnteil: number) =>
+    alicePage.evaluate(
+      ({ von, bis }) => {
+        const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+        const ctx = c?.getContext('2d');
+        const d = c && ctx ? ctx.getImageData(0, 0, c.width, c.height).data : null;
+        if (!c || !d) return -1;
+        let summe = 0;
+        let n = 0;
+        for (let y = Math.round(c.height * von); y < Math.round(c.height * bis); y += 1)
+          for (let x = 0; x < c.width; x += 1) {
+            const at = (y * c.width + x) * 4;
+            summe += d[at] - d[at + 1];
+            n += 1;
+          }
+        return n > 0 ? summe / n : -1;
+      },
+      { von: vonAnteil, bis: bisAnteil },
+    );
+  // Unten greift die Maske ganz, oben gar nicht.
+  expect(await rotstich(0.75, 1)).toBeGreaterThan(25);
+  expect(await rotstich(0, 0.1)).toBeLessThan(3);
+
+  // Schleier aus, damit die Messung das Bild misst und nicht die Anzeige.
+  await alicePage.getByRole('button', { name: '👁 Maske zeigen' }).click();
+  const obenVorher = await streifen(0, 0.25);
+  const obenEngVorher = await streifen(0, 0.1);
+  const untenVorher = await streifen(0.75, 1);
+  expect(Math.abs(obenVorher - untenVorher)).toBeLessThan(3);
+
+  // Zwei Blenden dunkler – der Verlauf laeuft von 15 % auf 55 % der Hoehe.
+  const belichtung = alicePage.locator('.bild-panel').getByRole('slider', { name: /Belichtung/ });
+  await belichtung.fill('-2');
+  await expect
+    .poll(async () => streifen(0.75, 1), { timeout: 5_000 })
+    .toBeLessThan(untenVorher - 20);
+
+  const obenNachher = await streifen(0, 0.1);
+  const untenNachher = await streifen(0.75, 1);
+  /*
+   * Der Verlauf beginnt bei 15 % der Höhe und ist bei 55 % ganz. Oberhalb von
+   * 15 % ist sein Gewicht EXAKT null – die oberen 10 % müssen also
+   * unverändert sein, nicht nur ungefähr.
+   *
+   * (Und `von` ist das Ende, an dem NICHTS passiert – andersherum, als man
+   * zuerst denkt.)
+   */
+  expect(Math.abs(obenNachher - obenEngVorher)).toBeLessThan(1);
+  expect(untenVorher - untenNachher).toBeGreaterThan(20);
+
+  /*
+   * Und jetzt der Griff.
+   *
+   * Die Achse liegt zwischen `von` (15 %) und `bis` (55 %), ihr Griff also
+   * bei 35 % der Höhe in der Mitte. Zieht man ihn nach oben auf 5 %, wandert
+   * der ganze Verlauf mit: `bis` liegt dann bei 25 %, und alles darunter –
+   * einschliesslich der oberen Messzone – bekommt volles Gewicht.
+   *
+   * Das ist die eigentliche Prüfung dieser Stufe. Die Ausgangslage eines
+   * neuen Verlaufs ist eine Gestaltungsentscheidung; DASS man ihn bewegen
+   * kann, ist die Funktion. Ohne diesen Zug zöge man an unsichtbaren Griffen
+   * in einem Bild, das sich nicht rührt.
+   */
+  const kasten = await leinwand.boundingBox();
+  expect(kasten).not.toBeNull();
+  const mitteX = kasten!.x + kasten!.width / 2;
+  await alicePage.mouse.move(mitteX, kasten!.y + kasten!.height * 0.35);
+  await alicePage.mouse.down();
+  await alicePage.mouse.move(mitteX, kasten!.y + kasten!.height * 0.05, { steps: 8 });
+  await alicePage.mouse.up();
+
+  await expect
+    .poll(async () => streifen(0, 0.1), { timeout: 5_000 })
+    .toBeLessThan(obenEngVorher - 20);
+
+  await alicePage.context().close();
+});

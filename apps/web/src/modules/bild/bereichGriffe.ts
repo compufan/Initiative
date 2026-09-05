@@ -106,6 +106,24 @@ export function griffeVon(teil: VerlaufTeil | RadialTeil): Griff[] {
  *
  * Verglichen wird im Quadrat; die Wurzel ändert an der Reihenfolge nichts.
  */
+/**
+ * Wie nah ein Finger einem Griff kommen muss, in ORIGINALpunkten.
+ *
+ * Ein Griff soll unter dem Finger immer gleich gross sein, egal wie weit man
+ * hineingezoomt hat – also 22 Leinwandpunkte, umgerechnet. Bei einem
+ * 4000er Foto in einer 1200er Ansicht ist `faktor` 0,3, der Fangbereich also
+ * 73 Originalpunkte; bei achtfacher Lupe sind es 9. Ein fester Wert in
+ * Originalpunkten wäre bei herangezoomter Ansicht ein Fangkreis über die
+ * halbe Bildschirmbreite und bei herausgezoomter unerreichbar klein.
+ *
+ * Genau dieser Fehler steckte einmal im Zuschnittrahmen; dort schrumpfte der
+ * Fangbereich nicht mit, und bei dreifacher Lupe war „innen“ nicht mehr
+ * erreichbar.
+ */
+export function fangBereich(faktor: number): number {
+  return 22 / Math.max(0.0001, faktor);
+}
+
 export function griffTreffer(griffe: Griff[], punkt: Punkt, nah: number): Griffname | null {
   /*
    * Positiv abfragen statt negativ ausschliessen.

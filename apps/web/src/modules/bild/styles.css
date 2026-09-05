@@ -186,10 +186,26 @@
   }
 }
 
-/* Der Tonwert-Reiter bringt elf Regler mit – ihm etwas mehr Platz geben,
-   sonst scrollt man bei jedem Griff. */
+/* Der Tonwert- und der Bereichsreiter bringen viele Regler mit – ihnen etwas
+   mehr Platz geben, sonst scrollt man bei jedem Griff. */
 .bild-panel.ist-ton {
   max-height: 56vh;
+}
+
+/* Fünf Reiter passen auf einem schmalen Telefon nicht mehr mit ganzen Wörtern
+   nebeneinander. Statt zu kürzen darf die Leiste rollen – ein abgeschnittenes
+   Wort ist schlimmer als ein Wisch. */
+.bild-reiter {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.bild-reiter::-webkit-scrollbar {
+  display: none;
+}
+
+.bild-reiter-knopf {
+  flex: 1 0 auto;
 }
 
 .bild-fuss .bild-reihe .btn-primary {
