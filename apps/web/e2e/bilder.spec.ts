@@ -191,7 +191,7 @@ const PNG = Buffer.from(
  * farbig – nachgemessen sind es unbunt 0 / 0,52 / 2,49 / 4,54 / 6,25 statt
  * 0 / 0,40 / 2,74 / 4,73 / 6,64.
  */
-function perspektivePng(breite: number, hoehe: number): Buffer {
+function perspektivePng(breite: number, hoehe: number, mitMotiv = false): Buffer {
   const horizont = hoehe * 0.34;
   const reihen = 26;
   const spalten = 20;
@@ -207,7 +207,28 @@ function perspektivePng(breite: number, hoehe: number): Buffer {
     return { x0: breite * p.x - dick / 2, x1: breite * p.x + dick / 2, y0: fuss - hoch, y1: fuss };
   });
 
+  /*
+   * Ein grosses, deutlich abgesetztes Motiv im Vordergrund – nur für den
+   * Kombinationstest.
+   *
+   * Ohne das findet der Freisteller auf dieser Szene fast nichts: gemessen
+   * 0,2 % der Fläche. Ein Test mit einem praktisch leeren Freistellteil sieht
+   * grün aus, prüft aber nur, dass zwei Teile im Bereich stehen – und blieb
+   * grün, als ich den Modus von „weg“ auf „dazu“ drehte. U²-Net sucht das
+   * AUFFÄLLIGSTE Ding; drei dünne Pfosten auf einem gemusterten Boden sind
+   * das nicht.
+   */
+  const motivX = breite * 0.5;
+  const motivY = hoehe * 0.82;
+  const motivBreit = breite * 0.17;
+  const motivHoch = hoehe * 0.34;
+
   return pngAus(breite, hoehe, (x, y) => {
+    if (mitMotiv) {
+      const dx = (x - motivX) / motivBreit;
+      const dy = (y - motivY) / motivHoch;
+      if (dx * dx + dy * dy < 1) return [20, 20, 20];
+    }
     for (const p of pfosten) {
       if (x >= p.x0 && x < p.x1 && y >= p.y0 && y < p.y1) return [42, 42, 42];
     }
@@ -1237,6 +1258,146 @@ test('die Tiefenkarte macht aus der Entfernung eine Maske', async ({ browser }) 
    */
   expect(schaerfstes(vorn)).toBeGreaterThan(schaerfstes(mitte));
   expect(schaerfstes(mitte)).toBeGreaterThan(schaerfstes(hinten));
+
+  await alicePage.context().close();
+});
+
+test('„Motiv + Tiefe“ macht die Kante hart und die Unschärfe entfernungsabhängig', async ({
+  browser,
+}) => {
+  /*
+   * Die Kombination, um die es geht: die SILHOUETTE vom Freistellmodell, die
+   * ENTFERNUNG vom Tiefenmodell.
+   *
+   * Beide allein können es nicht. Eine Freistellmaske kennt keine Entfernung
+   * – hinter dem Motiv wird alles gleich weich, der Busch einen Meter
+   * dahinter wie der Berg. Eine Tiefenkarte kennt keine Silhouette; ihre
+   * Kante am Motiv ist weich, weil kein monokulares Modell so scharf trennt
+   * wie ein Freisteller.
+   *
+   * Zusammengesetzt wird über die vorhandene Faltung: Tiefe „dazu“,
+   * Freisteller „weg“. Nachgerechnet an der Vorschrift mit
+   * Netz = [255,255,255,255,0,0,0,0] und Tiefe = [0,20,60,90,150,200,240,255]
+   * ergibt das [0,0,0,0,150,200,240,255] – im Motiv exakt null, dahinter der
+   * Tiefenverlauf.
+   *
+   * Gemessen wird deshalb zweierlei: dass im Motiv wirklich NICHTS steht
+   * (nicht bloss wenig), und dass es dahinter ein Gefälle GIBT.
+   */
+  test.setTimeout(180_000);
+  const alice = credentials('kombi');
+  const bob = credentials('kziel');
+  const alicePage = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  const da = await alicePage.request.head('/models/depth-anything-v2-small-uint8.onnx');
+  test.skip(!da.ok(), 'Das Tiefenmodell ist in diesem Baum nicht abgelegt.');
+
+  // Tiefe UND Freisteller einschalten – beide sind von Haus aus aus.
+  await alicePage.evaluate(() =>
+    localStorage.setItem(
+      'initiative.cutout-engines',
+      JSON.stringify({ tiefe: true, object: true }),
+    ),
+  );
+
+  await alicePage.getByRole('button', { name: 'Neuer Chat' }).click();
+  await alicePage.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await alicePage.getByText(bob.displayName).first().click();
+  await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'szene.png',
+    mimeType: 'image/png',
+    buffer: perspektivePng(1024, 768, true),
+  });
+  await alicePage.getByRole('button', { name: /^Senden \(/ }).click();
+  const bild = alicePage.locator('.media-image').first();
+  await expect(bild).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => bild.evaluate((el: HTMLImageElement) => el.naturalWidth), { timeout: 30_000 })
+    .toBeGreaterThan(0);
+  await bild.click();
+  await alicePage.getByRole('button', { name: 'Bild bearbeiten' }).click();
+  await expect(alicePage.locator('.bild-leinwand')).toBeVisible({ timeout: 30_000 });
+
+  await alicePage.getByRole('button', { name: /Bereiche$/ }).click();
+  await alicePage.getByRole('button', { name: '🎯 Motiv + Tiefe' }).click();
+
+  // Zwei Modelle nacheinander – das dauert. Fertig ist es, wenn beide Teile stehen.
+  await expect(alicePage.getByRole('button', { name: /Tiefe 1$/ })).toBeVisible({
+    timeout: 150_000,
+  });
+  await expect(alicePage.getByRole('button', { name: /Motiv 2$/ })).toBeVisible({
+    timeout: 150_000,
+  });
+
+  const schleier = async (vonAnteil: number, bisAnteil: number) =>
+    alicePage.evaluate(
+      ([von, bis]) => {
+        const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+        const ctx = c?.getContext('2d');
+        const d = c && ctx ? ctx.getImageData(0, 0, c.width, c.height).data : null;
+        if (!c || !d) return -1;
+        let summe = 0;
+        let n = 0;
+        for (let y = Math.round(c.height * von); y < Math.round(c.height * bis); y += 1)
+          for (let x = 0; x < c.width; x += 1) {
+            const at = (y * c.width + x) * 4;
+            summe += d[at] - d[at + 2];
+            n += 1;
+          }
+        return n > 0 ? summe / n : -1;
+      },
+      [vonAnteil, bisAnteil],
+    );
+
+  // Der Freisteller hat auf dieser Szene etwas gefunden – sonst prüft der
+  // Test die Kombination gar nicht, sondern nur die Tiefe.
+  const teile = await alicePage.getByRole('button', { name: /(Tiefe|Motiv) \d+$/ }).count();
+  expect(teile, 'es müssen zwei Teile im Bereich stehen').toBe(2);
+
+  /*
+   * Das Gefälle über das Bild: Bei Fokus vorne (Vorgabe) ist oben fern und
+   * damit stark maskiert, unten nah und damit schwach.
+   */
+  const oben = await schleier(0, 0.2);
+  const unten = await schleier(0.8, 1);
+  // Gemessen: oben 74,0 (Anschlag des Schleiers) gegen unten 49,6.
+  expect(oben, 'die Unschärfe muss mit der Entfernung wachsen').toBeGreaterThan(unten + 15);
+
+  /*
+   * Und die Gegenprobe zur Faltung: Der Freisteller nimmt weg, also darf die
+   * Maske dort, wo er ein Motiv gefunden hat, NICHT stärker sein als im
+   * schwächsten Band. „weg“ klemmt auf null – wäre es ein „dazu“, läge über
+   * dem Motiv die volle Maske.
+   */
+  /*
+   * Der eigentliche Beweis der Faltung: AUF dem Motiv steht keine Maske.
+   * Gemessen wird ein kleines Feld in seiner Mitte, nicht ein ganzes Band –
+   * ein Band mittelt das Motiv mit dem Boden daneben und wird deshalb auch
+   * dann klein, wenn auf dem Motiv die volle Maske läge.
+   */
+  const aufDemMotiv = await alicePage.evaluate(() => {
+    const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+    const ctx = c?.getContext('2d');
+    const d = c && ctx ? ctx.getImageData(0, 0, c.width, c.height).data : null;
+    if (!c || !d) return -1;
+    let summe = 0;
+    let n = 0;
+    for (let y = Math.round(c.height * 0.72); y < Math.round(c.height * 0.88); y += 1)
+      for (let x = Math.round(c.width * 0.44); x < Math.round(c.width * 0.56); x += 1) {
+        const at = (y * c.width + x) * 4;
+        summe += d[at] - d[at + 2];
+        n += 1;
+      }
+    return n > 0 ? summe / n : -1;
+  });
+  // Gemessen: exakt 0,0. Mit „dazu“ statt „weg“ stünde hier der Anschlag.
+  expect(aufDemMotiv, 'auf dem freigestellten Motiv darf keine Maske stehen').toBeLessThan(
+    oben / 3,
+  );
 
   await alicePage.context().close();
 });

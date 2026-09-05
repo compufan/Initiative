@@ -777,3 +777,105 @@ test('die Maske bestimmt die Grösse der Zerstreuung, nicht ihre Durchsichtigkei
   // Und zwar deutlich: Bei einer Überblendung wären es 0,20 : 0,81 = 0,24.
   expect(schmal).toBeLessThan(breit * 0.1);
 });
+
+test('ein scharfer Punkt streut nicht in unscharfe Nachbarn hinein', async ({ page }) => {
+  /*
+   * Wir SAMMELN ein, was eine Linse VERSTREUT. Das geht nur dann richtig,
+   * wenn ein eingesammelter Bildpunkt auch wirklich bis hierher streut: Ein
+   * Punkt im Abstand 8 mit einer eigenen Scheibe vom Radius 3 erreicht uns
+   * nicht und darf nicht mitzählen.
+   *
+   * Vorher stand in der Gewichtung ein fester Mindestwert von 0,02 statt
+   * dieser Prüfung. Bei einer Freistellmaske fiel das nie auf – das Motiv ist
+   * innen überall gleich scharf, es gibt kein Gefälle. Mit einer Tiefenkarte
+   * gibt es das sehr wohl, und dann leiht sich ein unscharfer Teil des Motivs
+   * Farbe von einem scharfen Teil desselben Motivs.
+   *
+   * Aufbau: ein heller Punkt auf Schwarz, links im Bild, wo die Maske 0,3
+   * sagt (Radius 3,1). Gemessen wird 8 Punkte weiter rechts, wo die Maske 1
+   * sagt (Radius 10,2). Die dortige Scheibe REICHT bis zum Punkt – aber die
+   * Scheibe des Punktes reicht nicht zurück.
+   *
+   * Der Gegenprobe wegen steht derselbe Aufbau ein zweites Mal da, nur mit
+   * Maske 1 auch beim Punkt: Dann MUSS er ankommen. Ohne diese zweite Hälfte
+   * würde der Test auch dann grün, wenn die Prüfung einfach alles verwirft.
+   */
+  await page.goto('/');
+  const ergebnis = await page.evaluate(async () => {
+    const ladeTon = '/src/modules/bild/ton.ts';
+    const ladeGpu = '/src/modules/bild/tonGpu.ts';
+    const ton = (await import(
+      /* @vite-ignore */ ladeTon
+    )) as typeof import('../src/modules/bild/ton.js');
+    const gpu = (await import(
+      /* @vite-ignore */ ladeGpu
+    )) as typeof import('../src/modules/bild/tonGpu.js');
+
+    const kante = 512;
+    const punktX = 248;
+    const messX = 256;
+
+    /** Rechnet das Bild mit einer Maske, die links `links` und rechts 1 ist. */
+    const lauf = (links: number, marke: number) => {
+      const quelle = document.createElement('canvas');
+      quelle.width = kante;
+      quelle.height = kante;
+      const q = quelle.getContext('2d');
+      if (!q) return -1;
+      q.fillStyle = '#000000';
+      q.fillRect(0, 0, kante, kante);
+      q.fillStyle = '#ffffff';
+      q.fillRect(punktX - 1, kante / 2 - 1, 3, 3);
+
+      /*
+       * Ein Raster mit einem Feld je Bildpunkt. Beim üblichen groben Raster
+       * (64) wäre die Stufe acht Punkte breit verschmiert – und genau diese
+       * acht Punkte sind hier die Messstrecke.
+       */
+      const feld = new Uint8Array(kante * kante);
+      for (let y = 0; y < kante; y += 1)
+        for (let x = 0; x < kante; x += 1)
+          feld[y * kante + x] = x < messX ? Math.round(links * 255) : 255;
+
+      const szene = {
+        bereiche: [
+          {
+            id: 'stufe',
+            maske: { raster: { breite: kante, hoehe: kante, faktor: 1 }, feld, stand: marke },
+            anpassung: { ...ton.FARB_NEUTRAL, unschaerfe: 1 },
+          },
+        ],
+        schluessel: `stufe${marke}`,
+      };
+      const flaeche = gpu.bildRechnen(quelle, kante, kante, ton.NEUTRAL, szene);
+      const z = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+      if (!z) return -1;
+      z.canvas.width = kante;
+      z.canvas.height = kante;
+      z.drawImage(flaeche as CanvasImageSource, 0, 0);
+      const d = z.getImageData(0, 0, kante, kante).data;
+      // Mittel über eine kurze senkrechte Strecke an der Messstelle.
+      let summe = 0;
+      for (let y = kante / 2 - 3; y <= kante / 2 + 3; y += 1)
+        summe += d[(y * kante + messX + 1) * 4];
+      return summe / 7;
+    };
+
+    // Reihenfolge beachten: In einem Objektliteral werden die Eigenschaften
+    // der Reihe nach ausgewertet. Stünde `weg` vorn, läse es den Weg VOR den
+    // beiden Läufen – also den Anfangswert.
+    const schwach = lauf(0.3, 1);
+    const voll = lauf(1, 2);
+    return { schwach, voll, weg: gpu.letzterWeg };
+  });
+
+  expect(ergebnis.weg).toBe('gpu');
+  /*
+   * Gemessen: mit der Prüfung 0,0 gegen 12,9 – ohne sie 4,0 gegen 12,9.
+   * Der scharfe Punkt kommt also nur noch an, wenn er wirklich streut.
+   */
+  expect(ergebnis.voll, 'ein streuender Punkt muss ankommen').toBeGreaterThan(6);
+  expect(ergebnis.schwach, 'ein kaum streuender Punkt darf nicht ankommen').toBeLessThan(
+    ergebnis.voll! * 0.25,
+  );
+});

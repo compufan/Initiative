@@ -1284,7 +1284,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     setNetzLaeuft('Wird vorbereitet …');
     try {
       const teil = await netzTeilRechnen(quellBild, netz, (text) => setNetzLaeuft(text));
-      teilEinsetzen(teil, netz === 'person' ? 'Person' : 'Motiv');
+      teilEinsetzen([teil], netz === 'person' ? 'Person' : 'Motiv');
     } catch (fehler) {
       // Der Satz aus dem `EngineError` ist für den Anwender geschrieben –
       // „Fehler“ hilft niemandem, „ist abgeschaltet, du kannst es
@@ -1311,7 +1311,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     setNetzLaeuft('Wird vorbereitet …');
     try {
       const teil = await tiefenTeilRechnen(quellBild, (text) => setNetzLaeuft(text));
-      teilEinsetzen(teil, 'Tiefe');
+      teilEinsetzen([teil], 'Tiefe');
     } catch (fehler) {
       setNetzFehler(errorMessage(fehler, 'Die Tiefenkarte konnte nicht gerechnet werden'));
     } finally {
@@ -1323,7 +1323,8 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
    * Setzt ein fertig gerechnetes Maskenteil in den gewählten Bereich – oder
    * legt einen neuen an, wenn keiner gewählt ist.
    */
-  function teilEinsetzen(teil: Maskenteil, standardName: string) {
+  function teilEinsetzen(teile: Maskenteil[], standardName: string, unschaerfe = 0) {
+    if (teile.length === 0) return;
     merken();
     const bereich = docRef.current?.bereiche.find((b) => b.id === bereichRef.current);
     if (bereich) {
@@ -1332,7 +1333,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
           ? {
               ...wert,
               bereiche: wert.bereiche.map((b) =>
-                b.id === bereich.id ? { ...b, teile: [...b.teile, teil] } : b,
+                b.id === bereich.id ? { ...b, teile: [...b.teile, ...teile] } : b,
               ),
             }
           : wert,
@@ -1342,13 +1343,74 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
         id: neueId('b'),
         name: standardName,
         aktiv: true,
-        teile: [teil],
-        anpassung: { ...BEREICH_NEUTRAL },
+        teile,
+        anpassung: { ...BEREICH_NEUTRAL, unschaerfe },
       };
       setDoc((wert) => (wert ? { ...wert, bereiche: [...wert.bereiche, neu] } : wert));
       setBereichId(neu.id);
     }
-    setTeilId(teil.id);
+    setTeilId(teile[teile.length - 1].id);
+  }
+
+  /**
+   * Freistellkante UND Tiefe in einem Schritt.
+   *
+   * # Was hier zusammengesetzt wird
+   *
+   * Ein Tiefenteil `dazu` und ein Freistellteil `weg`. Die Faltung macht
+   * daraus genau das, wonach man bei „Porträtmodus“ sucht: Im Motiv ist die
+   * Maske null – es bleibt scharf, und zwar mit der Kante des
+   * Freistellmodells, nicht mit der weichen Kante der Tiefenkarte.
+   * Ausserhalb bleibt der Tiefenwert stehen, die Unschärfe WÄCHST also mit
+   * der Entfernung, statt hinter dem Motiv überall gleich zu sein.
+   *
+   * Nachgerechnet an der Faltungsvorschrift mit Netz = [255,255,255,255,0,0,0,0]
+   * und Tiefe = [0,20,60,90,150,200,240,255]: „dazu“ ergibt die Tiefe,
+   * „weg“ danach [0,0,0,0,150,200,240,255].
+   *
+   * # Warum kein gefilterter Zwischenweg
+   *
+   * Naheliegend wäre, die Tiefenkarte mit der Freistellmaske als Führung
+   * kantentreu zu machen – dann bliebe die Tiefe auch INNERHALB des Motivs
+   * erhalten. Das setzt aber voraus, dass die Freistellmaske eine scharfe
+   * Kante hat. Nachgemessen ist sie das nicht: Der Übergangsbereich von
+   * „Motiv“ (U²-Net) auf einer 1024er Vorlage ist im Mittel 55 Punkte breit
+   * – weicher als die Tiefenkarte selbst, die man damit schärfen wollte.
+   * Eine um wenige Punkte danebenliegende Führung macht eine richtige
+   * Tiefenkarte schlechter, nicht besser.
+   *
+   * Wer die Tiefe im Motiv haben will, nimmt „🔭 Tiefe“ allein: Sie wirkt
+   * überall, auch im Motiv – nur eben mit ihrer eigenen weichen Silhouette.
+   */
+  async function kombiAnlegen() {
+    const quellBild = bildRef.current;
+    const aktuell = docRef.current;
+    if (!quellBild || !aktuell || netzLaeuft) return;
+    if (!vorhandenOderPlatz(aktuell)) return;
+    // Das beste verfügbare Freistellverfahren – die Kante ist der ganze Zweck.
+    const kante: Netzart | null = netzVerfuegbar('object')
+      ? 'object'
+      : netzVerfuegbar('person')
+        ? 'person'
+        : null;
+    setNetzFehler(null);
+    setNetzLaeuft('Wird vorbereitet …');
+    try {
+      const tiefe = await tiefenTeilRechnen(quellBild, (text) => setNetzLaeuft(text));
+      if (!kante) {
+        teilEinsetzen([tiefe], 'Tiefe', 0.6);
+        setNetzFehler(
+          'Kein Freistellverfahren eingeschaltet – es wurde nur die Tiefe gerechnet. Die Kante am Motiv bleibt damit weich.',
+        );
+        return;
+      }
+      const silhouette = await netzTeilRechnen(quellBild, kante, (text) => setNetzLaeuft(text));
+      teilEinsetzen([tiefe, { ...silhouette, modus: 'weg' }], 'Motiv + Tiefe', 0.6);
+    } catch (fehler) {
+      setNetzFehler(errorMessage(fehler, 'Motiv und Tiefe konnten nicht gerechnet werden'));
+    } finally {
+      setNetzLaeuft(null);
+    }
   }
 
   /** Ob noch ein Bereich hineinpasst – oder schon einer gewählt ist. */
@@ -1729,6 +1791,15 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
               >
                 🔭 Tiefe
               </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => void kombiAnlegen()}
+                disabled={netzLaeuft !== null || !tiefeVerfuegbar()}
+                title="Kante vom Freisteller, Entfernung vom Tiefenmodell"
+              >
+                🎯 Motiv + Tiefe
+              </button>
             </div>
 
             {netzLaeuft && <p className="bild-hinweis">⏳ {netzLaeuft}</p>}
@@ -1745,6 +1816,18 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
               <p className="bild-hinweis">
                 „Motiv“ ist abgeschaltet und lädt beim ersten Mal 4 MB. Du kannst es in den
                 Sticker-Einstellungen einschalten.
+              </p>
+            )}
+            {tiefeVerfuegbar() && !netzFehler && (
+              /*
+               * Der Unterschied zwischen den beiden Tiefenknöpfen ist der
+               * ganze Punkt und lässt sich nicht erraten – also steht er da.
+               */
+              <p className="bild-hinweis">
+                „🎯 Motiv + Tiefe“ nimmt die Kante vom Freisteller und die Entfernung vom
+                Tiefenmodell: Das Motiv bleibt scharf, dahinter wächst die Unschärfe mit der
+                Entfernung. „🔭 Tiefe“ allein wirkt auch IM Motiv – gut für Bilder ohne
+                freistellbares Motiv, dafür mit weicher Silhouette.
               </p>
             )}
 

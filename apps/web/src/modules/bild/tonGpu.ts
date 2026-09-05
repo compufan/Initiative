@@ -243,11 +243,30 @@ vec3 zerstreuen(vec2 uv, float weite) {
     float a = float(i) * 2.39996323 + dreh;
     vec2 p = uv + vec2(cos(a), sin(a)) * r * uBokeh * weite;
     vec3 f = texture(uBild, p).rgb;
-    float g = max(bokehAn(p), 0.02) * (1.0 + GLANZ * pow(dot(f, LUMA), 4.0));
+    /*
+     * Ein Tupfen zaehlt nur, wenn SEINE eigene Scheibe bis hierher reicht.
+     *
+     * Wir sammeln ein, was eine Linse verstreut. Ein Bildpunkt bei Abstand
+     * „r · weite“ landet nur dann auf uns, wenn er selbst mindestens so weit
+     * streut – also wenn sein eigener Radiusanteil groesser ist als der
+     * Abstand. Vorher stand hier ein fester Mindestwert von 0,02, und damit
+     * lieh sich ein unscharfer Punkt Farbe von einem scharfen Nachbarn.
+     *
+     * Bei einer harten Freistellmaske faellt das nicht auf: Dort ist das
+     * Motiv innen ueberall gleich scharf, es gibt kein Innen-Gefaelle. Sobald
+     * eine Tiefenkarte im Spiel ist, gibt es das sehr wohl – ein unscharfer
+     * Teil des Motivs saugte dann Farbe aus einem scharfen Teil desselben
+     * Motivs.
+     */
+    float wp = bokehAn(p);
+    float g = (wp >= r * weite ? wp : 0.0) * (1.0 + GLANZ * pow(dot(f, LUMA), 4.0));
     summe += f * g;
     gewicht += g;
   }
-  return summe / max(gewicht, 1e-4);
+  // Faellt jeder Tupfen durch die Pruefung, bleibt der Punkt, wie er war -
+  // sonst stuende hier Schwarz.
+  if (gewicht <= 1e-4) return texture(uBild, uv).rgb;
+  return summe / gewicht;
 }
 
 void main() {
