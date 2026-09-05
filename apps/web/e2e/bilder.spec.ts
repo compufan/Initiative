@@ -714,17 +714,6 @@ test('ein Griff bleibt unter dem Finger gleich gross, auch bei verkleinerter Ans
   const leinwand = alicePage.locator('.bild-leinwand');
   await expect(leinwand).toBeVisible({ timeout: 30_000 });
 
-  // Der Massstab muss wirklich kleiner als 1 sein, sonst prüft der Test nichts.
-  const mass = await alicePage.evaluate(() => {
-    const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
-    const img = document.querySelector('.media-zoom-image') as HTMLImageElement | null;
-    if (!c || !img) return null;
-    return { leinwandBreite: c.width, bildBreite: img.naturalWidth };
-  });
-  expect(mass).not.toBeNull();
-  const faktor = mass!.leinwandBreite / mass!.bildBreite;
-  expect(faktor, 'das Testbild ist nicht grösser als die Arbeitsfläche').toBeLessThan(0.8);
-
   await alicePage.getByRole('button', { name: /Bereiche$/ }).click();
   await alicePage.getByRole('button', { name: '↗ Verlauf' }).click();
   await alicePage.getByRole('button', { name: '👁 Maske zeigen' }).click();
@@ -759,8 +748,47 @@ test('ein Griff bleibt unter dem Finger gleich gross, auch bei verkleinerter Ans
    * 22 · faktor ≈ 14 Leinwandpunkte, und 18 läge daneben – der Verlauf
    * bliebe stehen, wo er ist.
    *
-   * 18 ist bewusst zwischen beiden gewählt und nicht knapp an einer Grenze.
+   * Nachgemessen wurde die Grenze mit einer Reihe von Zügen bei 0, 8, 14, 18,
+   * 22 und 30 Leinwandpunkten Abstand, jeder auf einer frischen Seite: bis
+   * einschliesslich 22 fasst der Griff, bei 30 nicht mehr. Das ist genau der
+   * umgerechnete Fangbereich. 18 liegt darin und zugleich oberhalb der 14,7,
+   * die ohne Umrechnung übrig blieben.
    */
+  /*
+   * Erst JETZT messen, kurz vor dem Zug – und nicht beim Öffnen des Editors.
+   *
+   * Die Leinwand bekommt ihre Grösse erst, wenn das Bild geladen und die
+   * Fläche vermessen ist; bis dahin steht sie auf den 300 × 150 Punkten, die
+   * HTML einer Leinwand ohne Angabe gibt. Und sobald der Bereichsreiter
+   * aufgeht, schrumpft sie noch einmal, weil das Bedienfeld Platz braucht.
+   *
+   * Ein früher gelesener Wert ist also gleich doppelt falsch. Mit den 300
+   * statt 1280 Punkten wurde aus dem gewollten Abstand von 18 Leinwandpunkten
+   * einer von 77 – weit ausserhalb jedes Fangbereichs. Der Test schlug fehl,
+   * ohne dass am Fangbereich etwas falsch war, und je nach Ladezeit mal so
+   * und mal so.
+   */
+  await expect
+    .poll(
+      async () =>
+        alicePage.evaluate(() => {
+          const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+          return c ? c.width : 0;
+        }),
+      { timeout: 10_000 },
+    )
+    .toBeGreaterThan(300);
+  const mass = await alicePage.evaluate(() => {
+    const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+    const img = document.querySelector('.media-zoom-image') as HTMLImageElement | null;
+    if (!c || !img) return null;
+    return { leinwandBreite: c.width, bildBreite: img.naturalWidth };
+  });
+  expect(mass).not.toBeNull();
+  // Der Massstab muss wirklich kleiner als 1 sein, sonst prüft der Test nichts.
+  const faktor = mass!.leinwandBreite / mass!.bildBreite;
+  expect(faktor, 'das Testbild ist nicht grösser als die Arbeitsfläche').toBeLessThan(0.8);
+
   const kasten = await leinwand.boundingBox();
   expect(kasten).not.toBeNull();
   const proLeinwandpunkt = kasten!.width / mass!.leinwandBreite;

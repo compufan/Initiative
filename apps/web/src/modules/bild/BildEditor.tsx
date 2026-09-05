@@ -85,6 +85,14 @@ const BEREICHSREGLER: { key: keyof Bereichston; label: string; min: number; max:
   { key: 'toenung', label: 'Tönung', min: -1, max: 1 },
   { key: 'saettigung', label: 'Sättigung', min: -1, max: 1 },
   { key: 'dynamik', label: 'Dynamik', min: -1, max: 1 },
+  /*
+   * Die Tiefenschärfe steht als Einzige NICHT im globalen Ton-Reiter.
+   *
+   * Sie ergibt dort keinen Sinn: Ein Bild gleichmässig unscharf zu machen ist
+   * kein Effekt, sondern ein Fehler. Erst mit einer Maske wird daraus das,
+   * was ein Objektiv tut – scharf hier, weich dort.
+   */
+  { key: 'unschaerfe', label: 'Weichzeichnen', min: 0, max: 1 },
 ];
 
 /** Eine Kennung, die sich nicht wiederholt. */

@@ -393,3 +393,283 @@ test('ohne Bereiche verhält sich alles wie vorher', async ({ page }) => {
   expect(ergebnis.neutral).toBe(true);
   expect(ergebnis.mitTon).toBe(false);
 });
+
+test('das Bokeh verwischt nur hinter der Maske und blutet nicht heraus', async ({ page }) => {
+  /*
+   * Stufe K: Tiefenschärfe auf derselben Maske.
+   *
+   * Das Testbild trägt SENKRECHTE STREIFEN über die ganze Fläche – ein
+   * einfarbiger Hintergrund könnte Unschärfe gar nicht zeigen. Gemessen wird
+   * die Schwankung innerhalb einer Zeile: Streifen haben eine hohe,
+   * verwischte Streifen eine niedrige.
+   *
+   * Zwei Eigenschaften, und die zweite ist die schwerere:
+   *
+   * 1. Wo die Maske greift, verschwinden die Streifen.
+   * 2. Wo sie NICHT greift, bleibt alles Bildpunkt für Bildpunkt, wie es war.
+   *    Das ist der Heiligenschein, den ein Porträtmodus bekommt, wenn er die
+   *    Tupfen nicht mit der Maske gewichtet: Die Farbe des scharfen Motivs
+   *    blutet in den weichen Hintergrund und legt einen Saum um die Person.
+   */
+  await page.goto('/');
+  const ergebnis = await page.evaluate(async () => {
+    const ladeTon = '/src/modules/bild/ton.ts';
+    const ladeGpu = '/src/modules/bild/tonGpu.ts';
+    const ton = (await import(
+      /* @vite-ignore */ ladeTon
+    )) as typeof import('../src/modules/bild/ton.js');
+    const gpu = (await import(
+      /* @vite-ignore */ ladeGpu
+    )) as typeof import('../src/modules/bild/tonGpu.js');
+
+    const kante = 256;
+    const quelle = document.createElement('canvas');
+    quelle.width = kante;
+    quelle.height = kante;
+    const qctx = quelle.getContext('2d');
+    if (!qctx) return { fehler: 'keine Leinwand' };
+    const bild = qctx.createImageData(kante, kante);
+    for (let y = 0; y < kante; y += 1)
+      for (let x = 0; x < kante; x += 1) {
+        /*
+         * Streifen mit Periode 6 – gut sichtbar für einen Radius von 5. Und
+         * die beiden Hälften liegen bei GANZ verschiedenen Helligkeiten:
+         * links dunkel (0/90), rechts hell (165/255) – gleicher Hub, ganz
+         * verschiedene Mittelwerte.
+         *
+         * Das ist Bedingung, nicht Zierde. Sähen beide Hälften gleich aus,
+         * könnte man nicht messen, ob Farbe von links nach rechts blutet –
+         * und genau das ist der Heiligenschein, den die Gewichtung der Tupfen
+         * verhindert. Meine erste Fassung dieses Tests hatte überall dieselben
+         * Streifen und liess die Mutation durch.
+         */
+        const hell = Math.floor(x / 3) % 2 === 0;
+        const links = x < kante / 2;
+        const wert = links ? (hell ? 0 : 90) : hell ? 165 : 255;
+        const at = (y * kante + x) * 4;
+        bild.data[at] = wert;
+        bild.data[at + 1] = wert;
+        bild.data[at + 2] = wert;
+        bild.data[at + 3] = 255;
+      }
+    qctx.putImageData(bild, 0, 0);
+
+    // Die Maske deckt GENAU die rechte Hälfte.
+    const rb = 128;
+    const feld = new Uint8Array(rb * rb);
+    for (let y = 0; y < rb; y += 1)
+      for (let x = 0; x < rb; x += 1) feld[y * rb + x] = x >= rb / 2 ? 255 : 0;
+
+    const szene = {
+      bereiche: [
+        {
+          id: 'weich',
+          maske: { raster: { breite: rb, hoehe: rb, faktor: rb / kante }, feld, stand: 1 },
+          anpassung: { ...ton.FARB_NEUTRAL, unschaerfe: 1 },
+        },
+      ],
+      schluessel: 'bokeh',
+    };
+
+    const lesen = (flaeche: CanvasImageSource) => {
+      const z = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+      if (!z) return null;
+      z.canvas.width = kante;
+      z.canvas.height = kante;
+      z.drawImage(flaeche, 0, 0);
+      return z.getImageData(0, 0, kante, kante).data;
+    };
+
+    const ohne = lesen(quelle);
+    const mit = lesen(gpu.bildRechnen(quelle, kante, kante, ton.NEUTRAL, szene));
+    if (!ohne || !mit) return { fehler: 'keine Leinwand' };
+
+    /** Die mittlere Schwankung zwischen Nachbarn in einem Streifen. */
+    const schwankung = (d: Uint8ClampedArray, x0: number, x1: number) => {
+      let summe = 0;
+      let n = 0;
+      const y = Math.floor(kante / 2);
+      for (let x = x0; x < x1 - 1; x += 1) {
+        summe += Math.abs(d[(y * kante + x) * 4] - d[(y * kante + x + 1) * 4]);
+        n += 1;
+      }
+      return n > 0 ? summe / n : -1;
+    };
+
+    // Wieviele Bildpunkte links der Maske haben sich ueberhaupt geaendert?
+    let linksVeraendert = 0;
+    for (let y = 0; y < kante; y += 1)
+      for (let x = 0; x < kante / 2 - 8; x += 1) {
+        const at = (y * kante + x) * 4;
+        if (Math.abs(mit[at] - ohne[at]) > 2) linksVeraendert += 1;
+      }
+
+    /** Der Mittelwert eines senkrechten Bandes. */
+    const mittel = (d: Uint8ClampedArray, x0: number, x1: number) => {
+      let summe = 0;
+      let n = 0;
+      for (let y = 0; y < kante; y += 1)
+        for (let x = x0; x < x1; x += 1) {
+          summe += d[(y * kante + x) * 4];
+          n += 1;
+        }
+      return n > 0 ? summe / n : -1;
+    };
+
+    return {
+      weg: gpu.letzterWeg,
+      // Das Band rechts DIREKT an der Grenze – dorthin blutet es, wenn es
+      // blutet. Der Radius ist 5, also reicht die Scheibe 5 Punkte weit.
+      randVorher: mittel(ohne, kante / 2, kante / 2 + 6),
+      randNachher: mittel(mit, kante / 2, kante / 2 + 6),
+      linksVorher: schwankung(ohne, 8, kante / 2 - 8),
+      linksNachher: schwankung(mit, 8, kante / 2 - 8),
+      rechtsVorher: schwankung(ohne, kante / 2 + 8, kante - 8),
+      rechtsNachher: schwankung(mit, kante / 2 + 8, kante - 8),
+      linksVeraendert,
+    };
+  });
+
+  expect(ergebnis.fehler).toBeUndefined();
+  expect(ergebnis.weg).toBe('gpu');
+
+  /*
+   * Beide Hälften tragen vorher gleich harte Streifen. Bei Streifen der
+   * Breite 3 und einem Hub von 90 ist der Abstand zweier Nachbarn zweimal
+   * null und einmal 90, im Mittel also 30.
+   */
+  expect(ergebnis.linksVorher).toBeGreaterThan(25);
+  expect(ergebnis.rechtsVorher).toBeGreaterThan(25);
+
+  // 1. Rechts sind sie fort.
+  expect(ergebnis.rechtsNachher).toBeLessThan(ergebnis.rechtsVorher! / 4);
+
+  /*
+   * Das Band direkt rechts der Grenze verwischt nur mit den Bildpunkten
+   * SEINER EIGENEN Seite.
+   *
+   * Nachgemessen: Es wird dabei heller, von 210 auf 225. Das ist kein
+   * Zufall, sondern das Aufblühen der Lichter (`GLANZ`) unter lauter hellen
+   * Nachbarn – so sieht eine Zerstreuungsscheibe aus.
+   *
+   * Ohne die Gewichtung der Tupfen mischt sich die dunkle linke Hälfte ein
+   * und verwässert genau das: gemessen 211,9, also praktisch unverändert.
+   * Das ist der Heiligenschein – hier als Ausbleiben des Blühens sichtbar,
+   * im echten Bild als Saum um das Motiv.
+   *
+   * Meine erste Erwartung war „bleibt gleich“, und sie war verkehrt herum.
+   */
+  expect(ergebnis.randNachher! - ergebnis.randVorher!).toBeGreaterThan(10);
+
+  // 2. Links stehen sie unangetastet – und zwar Bildpunkt für Bildpunkt.
+  expect(ergebnis.linksNachher).toBeCloseTo(ergebnis.linksVorher!, 0);
+  expect(ergebnis.linksVeraendert, 'die Unschärfe blutet in die scharfe Hälfte').toBe(0);
+});
+
+test('die Zerstreuung ist eine Scheibe und keine Glocke', async ({ page }) => {
+  /*
+   * Woran man Bokeh erkennt: Ein Lichtpunkt wird zu einem KREIS mit
+   * gleichmaessiger Helligkeit, nicht zu einem verwaschenen Fleck, der zur
+   * Mitte hin heller wird. Das ist der Unterschied zwischen einer Linse und
+   * einem Weichzeichner.
+   *
+   * Dafuer sorgt eine einzige Zeile: `r = sqrt(t)` bei der Verteilung der
+   * Tupfen. Die Wurzel legt die Tupfen flaechengleich auf die Scheibe; ohne
+   * sie haeufen sie sich in der Mitte, und aus der Scheibe wird eine Glocke.
+   *
+   * Gemessen wird deshalb das Verhaeltnis KERN zu SCHEIBE. Beide Fassungen
+   * erzeugen naemlich einen aehnlich grossen und aehnlich hellen Fleck – der
+   * Unterschied steckt ausschliesslich in seinem Querschnitt:
+   *
+   *            Mitte   r=4   r=8   r=10  r=12
+   *   richtig    23     20    19     10    0     flach, dann Kante
+   *   ohne sqrt 100     24    14      6    0     Spitze, dann Ausklang
+   *
+   * Ein frueherer Anlauf mass nur Scheibe gegen Rand und blieb deshalb gruen,
+   * obwohl die Wurzel fehlte: an dieser Stelle unterscheiden sich die beiden
+   * Fassungen kaum. Gemessen wird jetzt dort, wo der Unterschied sitzt.
+   *
+   * Gemittelt wird ueber ganze Ringe und nicht ueber einzelne Punkte, weil
+   * jeder Bildpunkt seine eigene Zufallsdrehung bekommt.
+   */
+  await page.goto('/');
+  const ergebnis = await page.evaluate(async () => {
+    const ladeTon = '/src/modules/bild/ton.ts';
+    const ladeGpu = '/src/modules/bild/tonGpu.ts';
+    const ton = (await import(
+      /* @vite-ignore */ ladeTon
+    )) as typeof import('../src/modules/bild/ton.js');
+    const gpu = (await import(
+      /* @vite-ignore */ ladeGpu
+    )) as typeof import('../src/modules/bild/tonGpu.js');
+
+    // Ein einzelner heller Punkt auf schwarzem Grund.
+    const kante = 512;
+    const quelle = document.createElement('canvas');
+    quelle.width = kante;
+    quelle.height = kante;
+    const qctx = quelle.getContext('2d');
+    if (!qctx) return { fehler: 'keine Leinwand' };
+    qctx.fillStyle = '#000000';
+    qctx.fillRect(0, 0, kante, kante);
+    qctx.fillStyle = '#ffffff';
+    qctx.fillRect(kante / 2 - 1, kante / 2 - 1, 3, 3);
+
+    // Die Maske deckt alles – der ganze Punkt soll zerstreut werden.
+    const rb = 64;
+    const feld = new Uint8Array(rb * rb).fill(255);
+    const szene = {
+      bereiche: [
+        {
+          id: 'alles',
+          maske: { raster: { breite: rb, hoehe: rb, faktor: rb / kante }, feld, stand: 1 },
+          anpassung: { ...ton.FARB_NEUTRAL, unschaerfe: 1 },
+        },
+      ],
+      schluessel: 'scheibe',
+    };
+
+    const flaeche = gpu.bildRechnen(quelle, kante, kante, ton.NEUTRAL, szene);
+    const z = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+    if (!z) return { fehler: 'keine Leinwand' };
+    z.canvas.width = kante;
+    z.canvas.height = kante;
+    z.drawImage(flaeche as CanvasImageSource, 0, 0);
+    const d = z.getImageData(0, 0, kante, kante).data;
+
+    /** Mittlere Helligkeit aller Bildpunkte im Abstandsband [von, bis]. */
+    const band = (von: number, bis: number) => {
+      const m = kante / 2;
+      let summe = 0;
+      let n = 0;
+      for (let y = Math.floor(m - bis) - 1; y <= Math.ceil(m + bis) + 1; y += 1) {
+        for (let x = Math.floor(m - bis) - 1; x <= Math.ceil(m + bis) + 1; x += 1) {
+          if (x < 0 || y < 0 || x >= kante || y >= kante) continue;
+          const abstand = Math.hypot(x - m, y - m);
+          if (abstand < von || abstand > bis) continue;
+          summe += d[(y * kante + x) * 4];
+          n += 1;
+        }
+      }
+      return n > 0 ? summe / n : -1;
+    };
+
+    // Der Radius ist `unschaerfe · 0,02 · kante` = 10 Punkte.
+    return {
+      weg: gpu.letzterWeg,
+      kern: band(0, 2.5),
+      scheibe: band(6, 9),
+      draussen: band(12, 15),
+    };
+  });
+
+  expect(ergebnis.fehler).toBeUndefined();
+  expect(ergebnis.weg).toBe('gpu');
+  // Es gibt ueberhaupt einen Fleck.
+  expect(ergebnis.scheibe).toBeGreaterThan(5);
+  // Die Mitte ragt nicht heraus: Scheibe, keine Glocke.
+  // Gemessen: richtig 1,2 – ohne Wurzel 5,3.
+  expect(ergebnis.kern).toBeLessThan(ergebnis.scheibe! * 2);
+  // Und die Scheibe hat eine Kante.
+  expect(ergebnis.draussen).toBeLessThan(ergebnis.scheibe! * 0.15);
+});

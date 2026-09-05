@@ -22,6 +22,7 @@
 import { BEREICHE_MAX } from './doc.js';
 import type { Szene } from './maskenSpeicher.js';
 import { maskeUmrastern } from './maske.js';
+import { bokehRadius, kastenWeichRgba } from './weich.js';
 import {
   LUT_KANTE,
   formHin,
@@ -97,6 +98,9 @@ uniform float uSchwarzB[BEREICHE];
 uniform vec3 uWeissB[BEREICHE];
 uniform float uSaettigungB[BEREICHE];
 uniform float uDynamikB[BEREICHE];
+uniform float uUnschaerfeB[BEREICHE];
+/** Der Bokeh-Radius in Texturkoordinaten. Null heisst: kein Bokeh. */
+uniform vec2 uBokeh;
 
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 
@@ -185,10 +189,78 @@ float maskeAn(vec2 uv, vec4 kanal) {
   return clamp(dot(texture(uMasken, vec2(uv.x, 1.0 - uv.y)), kanal), 0.0, 1.0);
 }
 
-void main() {
-  vec3 c = texture(uBild, vUv).rgb;
+/** Wieviel Unschaerfe an dieser Stelle gilt – es gewinnt der staerkste Bereich. */
+float bokehAn(vec2 uv) {
+  float w = 0.0;
+  for (int i = 0; i < BEREICHE; i++) {
+    if (i >= uAnzahl) break;
+    if (uUnschaerfeB[i] <= 0.0) continue;
+    w = max(w, maskeAn(uv, uKanal[i]) * uUnschaerfeB[i]);
+  }
+  return clamp(w, 0.0, 1.0);
+}
 
-  // Unschärfemaske: die Differenz zum Mittel der vier Nachbarn, verstärkt.
+const int TUPFEN = 48;
+/** Wie stark ein Lichtpunkt im Unscharfen aufblueht. */
+const float GLANZ = 3.0;
+
+/**
+ * Die Zerstreuungsscheibe.
+ *
+ * Eine Scheibe und keine Glocke: Ein Gauss macht aus einem Lichtpunkt einen
+ * verwaschenen Fleck, eine echte Linse einen KREIS. Genau daran erkennt man
+ * Bokeh, und genau das ist der Unterschied zwischen "unscharf" und "schoen
+ * unscharf".
+ *
+ * Zwei Feinheiten, ohne die es nicht aussieht:
+ *
+ * 1. Die Tupfen liegen auf einer Spirale im goldenen Winkel, mit „sqrt“ im
+ *    Radius – sonst haeuft sich alles in der Mitte und der Rand der Scheibe
+ *    bleibt duenn. Und sie wird je Bildpunkt verdreht: Feste Tupfen zeichnen
+ *    Ringe, und Ringe sieht man in einem Himmel sofort. Rauschen sieht man
+ *    nicht.
+ * 2. Jeder Tupfen wird mit der Maske AM ORT DES TUPFENS gewichtet. Punkte des
+ *    scharfen Motivs wiegen damit fast nichts, und seine Farbe blutet nicht
+ *    nach aussen. Ohne das bekaeme jedes freigestellte Motiv einen
+ *    Heiligenschein – den Fehler sieht man auf jedem Portraetmodus, der ihn
+ *    nicht vermeidet.
+ */
+vec3 zerstreuen(vec2 uv) {
+  float dreh = fract(sin(dot(uv, vec2(12.9898, 78.233))) * 43758.5453) * 6.2831853;
+  vec3 summe = vec3(0.0);
+  float gewicht = 0.0;
+  for (int i = 0; i < TUPFEN; i++) {
+    float t = (float(i) + 0.5) / float(TUPFEN);
+    float r = sqrt(t);
+    float a = float(i) * 2.39996323 + dreh;
+    vec2 p = uv + vec2(cos(a), sin(a)) * r * uBokeh;
+    vec3 f = texture(uBild, p).rgb;
+    float g = max(bokehAn(p), 0.02) * (1.0 + GLANZ * pow(dot(f, LUMA), 4.0));
+    summe += f * g;
+    gewicht += g;
+  }
+  return summe / max(gewicht, 1e-4);
+}
+
+void main() {
+  vec3 scharf = texture(uBild, vUv).rgb;
+  vec3 c = scharf;
+
+  /*
+   * Die Tiefenschaerfe ganz am Anfang: Eine Linse zeichnet unscharf, die
+   * Entwicklung kommt danach. Waere es umgekehrt, verteilte die Scheibe
+   * bereits getoente Farben und der Kontrast wuerde zweimal angefasst.
+   */
+  float bokeh = uBokeh.x > 0.0 ? bokehAn(vUv) : 0.0;
+  if (bokeh > 0.0) c = mix(scharf, zerstreuen(vUv), bokeh);
+
+  /*
+   * Unschärfemaske: die Differenz zum Mittel der vier Nachbarn, verstärkt.
+   *
+   * Mit „(1 − bokeh)“ gedaempft. Ohne das holte die Schaerfe genau die
+   * Hochfrequenz aus dem scharfen Quellbild zurueck, die das Bokeh gerade
+   * entfernt hat – der Hintergrund waere unscharf UND kantig.
+   */
   if (uSchaerfe > 0.0) {
     vec3 weich = (
       texture(uBild, vUv + vec2(uTexel.x, 0.0)).rgb +
@@ -196,7 +268,7 @@ void main() {
       texture(uBild, vUv + vec2(0.0, uTexel.y)).rgb +
       texture(uBild, vUv - vec2(0.0, uTexel.y)).rgb
     ) * 0.25;
-    c = clamp(c + (c - weich) * uSchaerfe * 1.5, 0.0, 1.0);
+    c = clamp(c + (scharf - weich) * uSchaerfe * 1.5 * (1.0 - bokeh), 0.0, 1.0);
   }
 
   // Die globale Anpassung.
@@ -403,6 +475,7 @@ function werkzeug(): Werk | null {
       'uVignette',
       'uMasken',
       'uAnzahl',
+      'uBokeh',
     ];
     for (let i = 0; i < BEREICHE_MAX; i += 1) {
       namen.push(
@@ -415,6 +488,7 @@ function werkzeug(): Werk | null {
         `uWeissB[${i}]`,
         `uSaettigungB[${i}]`,
         `uDynamikB[${i}]`,
+        `uUnschaerfeB[${i}]`,
       );
     }
     const orte: Record<string, WebGLUniformLocation | null> = {};
@@ -500,7 +574,24 @@ function aufGpu(
       gl.uniform3f(orte[`uWeissB[${i}]`], br, bg, bb);
       gl.uniform1f(orte[`uSaettigungB[${i}]`], t ? t.saettigung : 0);
       gl.uniform1f(orte[`uDynamikB[${i}]`], t ? t.dynamik : 0);
+      gl.uniform1f(orte[`uUnschaerfeB[${i}]`], t ? t.unschaerfe : 0);
     }
+
+    /*
+     * Der Bokeh-Radius, in Texturkoordinaten.
+     *
+     * EIN Radius für alle Bereiche, aus der stärksten Einstellung – ein
+     * schwächer eingestellter Bereich bekommt stattdessen ein kleineres
+     * Mischgewicht. Das ist nicht dasselbe wie ein eigener Radius je Bereich,
+     * sieht aber genauso aus und spart einen zweiten Durchgang über 48
+     * Tupfen. Wer das ändern will, sollte vorher messen, ob es jemand sieht.
+     *
+     * Als Anteil der Bildkante, damit die 1200er Vorschau aussieht wie die
+     * 2560er Ausgabe.
+     */
+    const stärkste = szene.bereiche.reduce((max, b) => Math.max(max, b.anpassung.unschaerfe), 0);
+    const r = bokehRadius(stärkste, Math.max(breite, hoehe));
+    gl.uniform2f(orte.uBokeh, r / breite, r / hoehe);
     gl.uniform2f(orte.uTexel, 1 / breite, 1 / hoehe);
     gl.uniform1f(orte.uBelichtung, a.belichtung);
     gl.uniform1f(orte.uKontrast, a.kontrast);
@@ -613,8 +704,24 @@ function lutHolen(a: Farbanpassung): Uint8Array {
 }
 
 /** Die Unschärfemaske auf dem Prozessor – vier Nachbarn, wie im Schattierer. */
-function schaerfen(daten: Uint8ClampedArray, breite: number, hoehe: number, staerke: number): void {
-  const kopie = new Uint8ClampedArray(daten);
+/**
+ * Die Unschärfemaske – vier Nachbarn, wie im Schattierer.
+ *
+ * `quelle` ist das Bild, aus dem die Kanten kommen, und das ist ausdrücklich
+ * das UNVERWISCHTE: Der Schattierer rechnet `c + (scharf − nachbar_scharf)`,
+ * nicht `c + (c − nachbar_c)`. Nähme man hier das schon weichgezeichnete
+ * Bild, liefen die beiden Wege bei eingeschalteter Tiefenschärfe
+ * auseinander – und zwar leise, weil beide für sich plausibel aussehen.
+ */
+function schaerfen(
+  daten: Uint8ClampedArray,
+  breite: number,
+  hoehe: number,
+  staerke: number,
+  daempfung: Uint8Array | null,
+  quelle: Uint8ClampedArray,
+): void {
+  const kopie = quelle;
   for (let y = 0; y < hoehe; y += 1) {
     for (let x = 0; x < breite; x += 1) {
       const at = (y * breite + x) * 4;
@@ -624,7 +731,11 @@ function schaerfen(daten: Uint8ClampedArray, breite: number, hoehe: number, stae
         const oben = kopie[(Math.max(0, y - 1) * breite + x) * 4 + k];
         const unten = kopie[(Math.min(hoehe - 1, y + 1) * breite + x) * 4 + k];
         const weich = (links + rechts + oben + unten) * 0.25;
-        daten[at + k] = kopie[at + k] + (kopie[at + k] - weich) * staerke * 1.5;
+        // Mit `(1 − bokeh)` gedämpft, wie im Schattierer: Ohne das holte die
+        // Schärfe genau die Hochfrequenz zurück, die das Bokeh gerade
+        // entfernt hat – der Hintergrund wäre unscharf UND kantig.
+        const daempf = daempfung ? 1 - daempfung[y * breite + x] / 255 : 1;
+        daten[at + k] = kopie[at + k] + (kopie[at + k] - weich) * staerke * 1.5 * daempf;
       }
     }
   }
@@ -646,7 +757,50 @@ function aufLeinwand(
   const bilddaten = ctx.getImageData(0, 0, breite, hoehe);
   const daten = bilddaten.data;
 
-  if (a.schaerfe > 0) schaerfen(daten, breite, hoehe, a.schaerfe);
+  /*
+   * Die Tiefenschärfe auf dem Prozessor: EIN Kastenweichzeichner über das
+   * ganze Bild, dann punktweise dahin gemischt, wo die Maske es sagt.
+   *
+   * Ehrlich ungleich zur Grafikeinheit: Dort ist es eine Scheibe mit 48
+   * Tupfen und Glanzlichtern, hier ein Kasten. Ein Lichtpunkt wird also nicht
+   * zum Kreis. Das steht so auch im Vergleichstest, der Bereiche mit
+   * Unschärfe ausdrücklich AUSNIMMT – eine Gleichheit zu behaupten, die nicht
+   * gilt, wäre schlimmer als der Unterschied.
+   */
+  const staerkste = szene.bereiche.reduce((max, b) => Math.max(max, b.anpassung.unschaerfe), 0);
+  // Das Bild, wie es vor der Tiefenschärfe war – die Schärfe liest daraus.
+  const unverwischt = a.schaerfe > 0 ? new Uint8ClampedArray(daten) : daten;
+  let bokehGewicht: Uint8Array | null = null;
+  if (staerkste > 0) {
+    bokehGewicht = new Uint8Array(breite * hoehe);
+    for (const b of szene.bereiche) {
+      if (b.anpassung.unschaerfe <= 0) continue;
+      const w = maskeUmrastern(
+        b.maske.feld,
+        b.maske.raster.breite,
+        b.maske.raster.hoehe,
+        breite,
+        hoehe,
+      );
+      for (let i = 0; i < bokehGewicht.length; i += 1) {
+        const wert = Math.round(w[i] * b.anpassung.unschaerfe);
+        if (wert > bokehGewicht[i]) bokehGewicht[i] = wert;
+      }
+    }
+    const weich = new Uint8ClampedArray(daten);
+    kastenWeichRgba(weich, breite, hoehe, bokehRadius(staerkste, Math.max(breite, hoehe)));
+    for (let i = 0; i < bokehGewicht.length; i += 1) {
+      const g = bokehGewicht[i];
+      if (g === 0) continue;
+      const at = i * 4;
+      const t = g / 255;
+      daten[at] += (weich[at] - daten[at]) * t;
+      daten[at + 1] += (weich[at + 1] - daten[at + 1]) * t;
+      daten[at + 2] += (weich[at + 2] - daten[at + 2]) * t;
+    }
+  }
+
+  if (a.schaerfe > 0) schaerfen(daten, breite, hoehe, a.schaerfe, bokehGewicht, unverwischt);
 
   const lut = lutHolen(a);
   /*
