@@ -48,6 +48,16 @@ pub struct Operator {
     pub name: String,
     pub email: String,
     pub address: Option<String>,
+    /// Wer den Server betreibt, auf dem das hier läuft.
+    ///
+    /// Steht bewusst in der Umgebung und nicht im Quelltext: Das Repo
+    /// enthält zwei vollständige Betriebsarten – einen eigenen Server mit
+    /// Docker und Caddy sowie den älteren Weg über fremde Dienste. Welche
+    /// davon läuft, weiß nur die Installation selbst. Eine fest
+    /// einkompilierte Anbieterliste war hier schon einmal falsch: Sie nannte
+    /// vier Anbieter weiter, nachdem der Umzug auf den eigenen Server
+    /// längst vollzogen war.
+    pub hosting: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -348,6 +358,7 @@ impl Config {
                     name,
                     email,
                     address: var("OPERATOR_ADDRESS"),
+                    hosting: var("OPERATOR_HOSTING"),
                 }),
             run_migrations: var("RUN_MIGRATIONS").as_deref() != Some("false"),
             repair_migrations: flag("MIGRATIONS_REPAIR", false),

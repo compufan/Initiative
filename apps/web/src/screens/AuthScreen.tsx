@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { ApiError } from '../lib/api.js';
+import { ApiError, API_BASE } from '../lib/api.js';
 import { loginWithPasskey, passkeysUsable } from '../lib/passkeys.js';
 import { useSession } from '../state/session.js';
 
@@ -194,6 +194,24 @@ export function AuthScreen() {
         >
           {mode === 'login' ? 'Noch kein Konto? Registrieren' : 'Schon registriert? Anmelden'}
         </button>
+
+        {/*
+          Impressum und Datenschutz gehören VOR die Anmeldung.
+          § 5 DDG verlangt „leicht erkennbar, unmittelbar erreichbar und
+          ständig verfügbar“, und Art. 13 DSGVO will informieren, BEVOR
+          Daten erhoben werden. Beides stand bisher nur unter Profil →
+          Einstellungen – also erst hinter der Registrierung, bei der schon
+          Benutzername und Passwort erhoben werden.
+        */}
+        <p className="muted" style={{ textAlign: 'center', fontSize: '0.82rem', margin: 0 }}>
+          <a href={`${API_BASE}/impressum`} target="_blank" rel="noreferrer noopener">
+            Impressum
+          </a>
+          {' · '}
+          <a href={`${API_BASE}/datenschutz`} target="_blank" rel="noreferrer noopener">
+            Datenschutz
+          </a>
+        </p>
       </div>
     </div>
   );

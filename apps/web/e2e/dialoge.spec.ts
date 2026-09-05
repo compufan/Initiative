@@ -187,3 +187,66 @@ test('die Seite „Verwendete Software“ nennt die fremden Bestandteile samt Li
 
   await seite.context().close();
 });
+
+test('Impressum und Datenschutz sind ohne Anmeldung erreichbar und beschreiben den echten Stand', async ({
+  page,
+}) => {
+  /*
+   * Zwei getrennte Anforderungen, die beide vor der Anmeldung gelten.
+   *
+   * § 5 DDG verlangt für das Impressum „leicht erkennbar, unmittelbar
+   * erreichbar und ständig verfügbar“. Art. 13 DSGVO will informieren, BEVOR
+   * Daten erhoben werden – und bei der Registrierung werden Benutzername und
+   * Passwort erhoben. Beide Seiten lagen bisher nur hinter der Anmeldung
+   * unter Profil → Einstellungen, standen also genau dort nicht, wo sie
+   * hingehören.
+   */
+  await page.goto('/');
+
+  // Vor der Anmeldung, in der Fusszeile des Anmeldebildschirms.
+  await expect(page.getByRole('link', { name: 'Impressum' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Datenschutz' })).toBeVisible();
+
+  const api = process.env.E2E_API_URL ?? 'http://localhost:8080';
+
+  const impressum = await page.request.get(`${api}/impressum`);
+  expect(impressum.ok()).toBe(true);
+  const impressumText = await impressum.text();
+  expect(impressumText).toContain('Angaben nach § 5 DDG');
+  expect(impressumText).toContain('Verantwortlich für den Inhalt');
+
+  const datenschutz = await page.request.get(`${api}/datenschutz`);
+  expect(datenschutz.ok()).toBe(true);
+  const text = await datenschutz.text();
+
+  /*
+   * Die Abschnitte, die vorher fehlten – jeder steht für einen eigenen
+   * Befund aus der Durchsicht:
+   */
+  for (const stueck of [
+    'Worauf sich das stützt', // Art. 6 kam kein einziges Mal vor
+    'Art. 6 Abs. 1 lit. b DSGVO',
+    'Wer was von dir zu sehen bekommt', // Verzeichnis, Online-Status, Lesestand
+    'Widerspruchsrecht (Art. 21 DSGVO)',
+    'Beschwerderecht (Art. 77 DSGVO)',
+    'Der Hessische Beauftragte für Datenschutz', // Behörde war nicht genannt
+    'Automatisierte Entscheidungen', // Art. 22 fehlte
+    'Was andere über dich eintragen', // Art. 14 fehlte
+    'Was der Server mitschreibt', // Zugriffsprotokolle fehlten
+    'IBAN', // Zahlungsdaten kamen nicht vor
+    'Die Modelle für Bildbearbeitung', // neu seit den Netzen
+    'Verwendete fremde Software',
+  ]) {
+    expect(text, `„${stueck}“ fehlt in der Datenschutzerklärung`).toContain(stueck);
+  }
+
+  /*
+   * Und die Behauptung, die falsch geworden war: vier fremde Anbieter, die
+   * fest im Quelltext standen, obwohl der Umzug auf den eigenen Server
+   * längst vollzogen war. Was jetzt dort steht, kommt aus der Konfiguration
+   * oder gar nicht.
+   */
+  for (const veraltet of ['Fly.io', 'Neon', 'Vercel']) {
+    expect(text, `„${veraltet}“ steht wieder fest im Text`).not.toContain(veraltet);
+  }
+});

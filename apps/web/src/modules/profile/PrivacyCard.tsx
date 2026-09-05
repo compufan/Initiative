@@ -52,6 +52,10 @@ export function PrivacyCard() {
         Datenschutzerklärung lesen
       </a>
 
+      <a className="btn btn-block" href={`${API_BASE}/impressum`} target="_blank" rel="noreferrer">
+        Impressum
+      </a>
+
       <button
         type="button"
         className="btn btn-block"
