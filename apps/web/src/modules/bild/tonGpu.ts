@@ -76,6 +76,8 @@ uniform float uSchwarz;
 uniform vec3 uWeiss;
 uniform float uSaettigung;
 uniform float uDynamik;
+uniform float uSwRot;
+uniform float uSwGruen;
 uniform float uSchaerfe;
 uniform float uVignette;
 
@@ -98,6 +100,8 @@ uniform float uSchwarzB[BEREICHE];
 uniform vec3 uWeissB[BEREICHE];
 uniform float uSaettigungB[BEREICHE];
 uniform float uDynamikB[BEREICHE];
+uniform float uSwRotB[BEREICHE];
+uniform float uSwGruenB[BEREICHE];
 uniform float uUnschaerfeB[BEREICHE];
 /** Der Bokeh-Radius in Texturkoordinaten. Null heisst: kein Bokeh. */
 uniform vec2 uBokeh;
@@ -132,8 +136,27 @@ vec3 biegen(vec3 wert, float staerke, float maske) {
  * Genau diese neun Regler und keinen mehr: „schaerfe“ bräuchte die Nachbarn
  * und „vignette“ den Ort – beides hat ein Bereich nicht.
  */
+/*
+ * Die gewichtete Helligkeit - der Farbfilter fuers Schwarz-Weiss.
+ *
+ * „swRot“ und „swGruen“ sind ABWEICHUNGEN von Rec.709; bei 0/0 kommt exakt
+ * dot(c, LUMA) heraus. Muss Zeile fuer Zeile dasselbe rechnen wie
+ * „gewichteteLuminanz“ in ton.ts - der Paritaetstest vergleicht beide
+ * Bildpunkt fuer Bildpunkt.
+ */
+float grau(vec3 c, float swRot, float swGruen) {
+  if (swRot == 0.0 && swGruen == 0.0) return dot(c, LUMA);
+  float wr = max(0.0, 0.2126 + swRot * 0.6);
+  float wg = max(0.0, 0.7152 + swGruen * 0.6);
+  float wb = max(0.0, 0.0722 - (swRot + swGruen) * 0.6);
+  float summe = wr + wg + wb;
+  if (summe == 0.0) summe = 1.0;
+  return (wr * c.r + wg * c.g + wb * c.b) / summe;
+}
+
 vec3 kette(vec3 c, float belichtung, vec3 weiss, float schwarz, float lichter,
-           float tiefen, float kontrast, float saettigung, float dynamik) {
+           float tiefen, float kontrast, float saettigung, float dynamik,
+           float swRot, float swGruen) {
   // 1. Im linearen Licht: Belichtung und Weissabgleich.
   if (belichtung != 0.0 || weiss != vec3(1.0)) {
     c = zuSrgb(clamp(zuLinear(c) * exp2(belichtung) * weiss, 0.0, 1.0));
@@ -163,7 +186,7 @@ vec3 kette(vec3 c, float belichtung, vec3 weiss, float schwarz, float lichter,
 
   // 5. Sättigung und Dynamik.
   if (saettigung != 0.0 || dynamik != 0.0) {
-    float y = dot(c, LUMA);
+    float y = grau(c, swRot, swGruen);
     float faktor = 1.0 + saettigung;
     if (dynamik != 0.0) {
       float spanne = max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
@@ -305,7 +328,7 @@ void main() {
 
   // Die globale Anpassung.
   c = kette(c, uBelichtung, uWeiss, uSchwarz, uLichter, uTiefen, uKontrast,
-            uSaettigung, uDynamik);
+            uSaettigung, uDynamik, uSwRot, uSwGruen);
 
   /*
    * Die Bereiche, der Reihe nach – jeder auf dem ERGEBNIS des vorigen.
@@ -323,7 +346,8 @@ void main() {
     // teuerste Zeile des Schattierers.
     if (w <= 0.002) continue;
     vec3 voll = kette(c, uBelichtungB[i], uWeissB[i], uSchwarzB[i], uLichterB[i],
-                      uTiefenB[i], uKontrastB[i], uSaettigungB[i], uDynamikB[i]);
+                      uTiefenB[i], uKontrastB[i], uSaettigungB[i], uDynamikB[i],
+                      uSwRotB[i], uSwGruenB[i]);
     c = mix(c, voll, w);
   }
 
@@ -503,6 +527,8 @@ function werkzeug(): Werk | null {
       'uWeiss',
       'uSaettigung',
       'uDynamik',
+      'uSwRot',
+      'uSwGruen',
       'uSchaerfe',
       'uVignette',
       'uMasken',
@@ -520,6 +546,8 @@ function werkzeug(): Werk | null {
         `uWeissB[${i}]`,
         `uSaettigungB[${i}]`,
         `uDynamikB[${i}]`,
+        `uSwRotB[${i}]`,
+        `uSwGruenB[${i}]`,
         `uUnschaerfeB[${i}]`,
       );
     }
@@ -606,6 +634,8 @@ function aufGpu(
       gl.uniform3f(orte[`uWeissB[${i}]`], br, bg, bb);
       gl.uniform1f(orte[`uSaettigungB[${i}]`], t ? t.saettigung : 0);
       gl.uniform1f(orte[`uDynamikB[${i}]`], t ? t.dynamik : 0);
+      gl.uniform1f(orte[`uSwRotB[${i}]`], t ? t.swRot : 0);
+      gl.uniform1f(orte[`uSwGruenB[${i}]`], t ? t.swGruen : 0);
       gl.uniform1f(orte[`uUnschaerfeB[${i}]`], t ? t.unschaerfe : 0);
     }
 
@@ -633,6 +663,8 @@ function aufGpu(
     gl.uniform3f(orte.uWeiss, wr, wg, wb);
     gl.uniform1f(orte.uSaettigung, a.saettigung);
     gl.uniform1f(orte.uDynamik, a.dynamik);
+    gl.uniform1f(orte.uSwRot, a.swRot);
+    gl.uniform1f(orte.uSwGruen, a.swGruen);
     gl.uniform1f(orte.uSchaerfe, a.schaerfe);
     gl.uniform1f(orte.uVignette, a.vignette);
 

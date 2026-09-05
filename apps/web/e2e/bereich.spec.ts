@@ -77,6 +77,13 @@ test('GLSL und TypeScript rechnen auch mit Bereichen dieselben Farben', async ({
               toenung: -0.3,
               saettigung: 0.4,
               dynamik: 0.6,
+              // Der Kanalmischer gehört ausdrücklich mit in den Fall „alles“:
+              // Der Paritätstest baut seine übrigen Fälle aus NEUTRAL plus
+              // EINEM Regler, und neue Felder blieben dort stumm auf null –
+              // Grafikeinheit und Prozessor könnten auseinanderlaufen, ohne
+              // dass hier etwas rot wird.
+              swRot: 0.6,
+              swGruen: -0.3,
             },
           },
         ],
@@ -95,6 +102,13 @@ test('GLSL und TypeScript rechnen auch mit Bereichen dieselben Farben', async ({
           { feld: feldB, a: { ...ton.FARB_NEUTRAL, waerme: 0.7 } },
           { feld: feldA, a: { ...ton.FARB_NEUTRAL, tiefen: 0.9 } },
           { feld: feldB, a: { ...ton.FARB_NEUTRAL, saettigung: -1 } },
+        ],
+      },
+      {
+        name: 'Schwarz-Weiss mit Rotfilter',
+        bereiche: [
+          { feld: feldA, a: { ...ton.FARB_NEUTRAL, saettigung: -1, swRot: 0.85 } },
+          { feld: feldB, a: { ...ton.FARB_NEUTRAL, saettigung: -1, swGruen: 0.7 } },
         ],
       },
     ];
@@ -167,7 +181,7 @@ test('GLSL und TypeScript rechnen auch mit Bereichen dieselben Farben', async ({
   });
 
   expect(ergebnis.fehler).toBeUndefined();
-  expect(ergebnis.berichte).toHaveLength(4);
+  expect(ergebnis.berichte).toHaveLength(5);
   for (const b of ergebnis.berichte ?? []) {
     expect(b.weg, `${b.name}: es hat nicht die Grafikeinheit gerechnet`).toBe('gpu');
     // Wie bei der globalen Anpassung: zwei Stufen von 255 sind der

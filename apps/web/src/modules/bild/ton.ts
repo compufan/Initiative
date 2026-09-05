@@ -44,6 +44,31 @@ export interface Farbanpassung {
   saettigung: number;
   /** Wie Sättigung, aber nur für blasse Farben – Hauttöne bleiben heil. */
   dynamik: number;
+  /**
+   * Der Farbfilter fürs Schwarz-Weiss – als ABWEICHUNG, nicht als Gewicht.
+   *
+   * Ein Schwarz-Weiss-Film ohne Filter macht aus einer roten Rose und einem
+   * blauen Himmel gleicher Helligkeit denselben Grauton. Nachgerechnet mit
+   * Rec.709: beide landen auf 73 von 255, ununterscheidbar. Genau dafür gab
+   * es in der Dunkelkammer die Farbfilter – ein Orangefilter trennt dieselben
+   * beiden um 93 Stufen, ein Rotfilter um 134.
+   *
+   * Der Weissabgleich kann das nicht ersetzen: `weissFaktoren` ist auf
+   * Luminanz 1 normiert, und genau das Helligkeitsverhältnis zu verschieben
+   * ist die einzige Aufgabe eines Farbfilters. Erschöpfend nachgemessen über
+   * 1681 Stellungen von Wärme und Tönung: höchstens 12 Stufen Trennung.
+   *
+   * # Warum Abweichung und nicht Gewicht
+   *
+   * Weil `istNeutral` und `farbNeutral` jedes Feld auf `=== 0` prüfen. Ein
+   * Feld mit Vorbelegung 0,2126 wäre NIE null – und damit fiele der
+   * Kurzschluss für jedes unbearbeitete Foto weg: Jedes Bild liefe durch die
+   * ganze Kette, `docUnberuehrt` hielte jedes Dokument für verändert, und
+   * „Zurücksetzen“ stünde immer bereit. Null heisst hier deshalb: Rec.709,
+   * also genau das Verhalten von heute.
+   */
+  swRot: number;
+  swGruen: number;
 }
 
 /** Alle Regler. 0 heisst überall „nichts tun“. */
@@ -64,6 +89,8 @@ export const FARB_NEUTRAL: Farbanpassung = {
   toenung: 0,
   saettigung: 0,
   dynamik: 0,
+  swRot: 0,
+  swGruen: 0,
 };
 
 /*
@@ -79,7 +106,7 @@ export function istNeutral(a: Anpassung): boolean {
   return (Object.keys(NEUTRAL) as (keyof Anpassung)[]).every((schlüssel) => a[schlüssel] === 0);
 }
 
-/** Dasselbe für die neun Farbregler allein. */
+/** Dasselbe für die elf Farbregler allein. */
 export function farbNeutral(a: Farbanpassung): boolean {
   return (Object.keys(FARB_NEUTRAL) as (keyof Farbanpassung)[]).every(
     (schlüssel) => a[schlüssel] === 0,
@@ -87,7 +114,7 @@ export function farbNeutral(a: Farbanpassung): boolean {
 }
 
 /**
- * Eine Kennung über die neun Farbregler.
+ * Eine Kennung über die elf Farbregler.
  *
  * Getrennt von `tonSchluessel`: Die Farbtabelle enthält `schaerfe` und
  * `vignette` gar nicht, ihre Änderung darf sie also nicht wegwerfen.
@@ -136,6 +163,40 @@ export function zuSrgb(c: number): number {
 /** Die Helligkeit, wie das Auge sie wiegt (Rec. 709). */
 export function luminanz(r: number, g: number, b: number): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/**
+ * Helligkeit mit verschobenen Kanalgewichten – der Farbfilter fürs
+ * Schwarz-Weiss.
+ *
+ * `swRot` und `swGruen` sind ABWEICHUNGEN von Rec.709; bei 0/0 kommt exakt
+ * `luminanz` heraus. Die Summe wird danach wieder auf 1 gebracht, damit ein
+ * mittleres Grau ein mittleres Grau bleibt – ohne das würde jeder Filter das
+ * ganze Bild heller oder dunkler machen, und man drehte hinterher an der
+ * Belichtung, um nichts zu gewinnen.
+ *
+ * Angewandt wird sie an genau EINER Stelle: dort, wo die Sättigung zur
+ * Helligkeit hin mischt. Damit wirkt der Filter stufenlos mit dem
+ * Sättigungsregler und springt nicht erst bei −1 an. Ein Entwurf sah das
+ * anders vor („nur wenn saettigung = −1“); nachgemessen wäre die Buntheit
+ * einer roten Rose bei Stärke 0,99 noch 79 und bei 1,00 plötzlich 179 – ein
+ * Sprung von hundert Stufen an der letzten Raste.
+ */
+export function gewichteteLuminanz(
+  r: number,
+  g: number,
+  b: number,
+  swRot: number,
+  swGruen: number,
+): number {
+  if (swRot === 0 && swGruen === 0) return luminanz(r, g, b);
+  // Blau gibt ab, was Rot und Grün bekommen – und wird bei null gehalten,
+  // damit ein voller Rotfilter den Himmel wirklich schwarz zeichnet.
+  const wr = Math.max(0, 0.2126 + swRot * 0.6);
+  const wg = Math.max(0, 0.7152 + swGruen * 0.6);
+  const wb = Math.max(0, 0.0722 - (swRot + swGruen) * 0.6);
+  const summe = wr + wg + wb || 1;
+  return (wr * r + wg * g + wb * b) / summe;
 }
 
 function halten(wert: number): number {
@@ -248,7 +309,7 @@ export function tonPunkt(
   }
 
   if (a.saettigung !== 0 || a.dynamik !== 0) {
-    const y = luminanz(r, g, b);
+    const y = gewichteteLuminanz(r, g, b, a.swRot, a.swGruen);
     let faktor = 1 + a.saettigung;
     if (a.dynamik !== 0) {
       // Wie bunt ist die Stelle schon? Blasses bekommt viel, Kräftiges wenig

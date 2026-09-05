@@ -53,6 +53,7 @@ import {
   type Griffname,
 } from './bereichGriffe.js';
 import { strichTreffer } from './maske.js';
+import { VORLAGEN, vorlageAnwenden } from './vorlagen.js';
 import { maskeFuerBereich } from './maskenSpeicher.js';
 import { netzTeilRechnen, netzVerfuegbar, type Netzart } from './netzMaske.js';
 import { tiefeVerfuegbar, tiefenTeilRechnen } from './tiefeNetz.js';
@@ -87,6 +88,14 @@ const BEREICHSREGLER: { key: keyof Bereichston; label: string; min: number; max:
   { key: 'toenung', label: 'Tönung', min: -1, max: 1 },
   { key: 'saettigung', label: 'Sättigung', min: -1, max: 1 },
   { key: 'dynamik', label: 'Dynamik', min: -1, max: 1 },
+  /*
+   * Die zwei Farbfilter fürs Schwarz-Weiss stehen NICHT hier.
+   *
+   * Sie tun nichts, solange nicht entsättigt wird – ein Regler, der bei jeder
+   * normalen Einstellung wirkungslos ist, gehört nicht zwischen die, die
+   * immer wirken. Sie erscheinen weiter unten, sobald die Sättigung im Minus
+   * ist.
+   */
   /*
    * Die Tiefenschärfe steht als Einzige NICHT im globalen Ton-Reiter.
    *
@@ -238,6 +247,17 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
    * an, kann das also schon. Ein zweiter Knopf daneben wäre derselbe Knopf.
    */
   const [pinselModus, setPinselModus] = useState<'malen' | 'radieren' | 'weg'>('malen');
+  /**
+   * Welche Vorlage gewählt ist und wie stark.
+   *
+   * Nur Bedienzustand, nicht Teil des Dokuments: Was die Vorlage bewirkt,
+   * steht danach vollständig in `doc.anpassung`. Wer hinterher einen
+   * einzelnen Regler verstellt, hat kein „halb gültiges“ Vorbild mehr – die
+   * Auswahl fällt dann weg, und das ist ehrlicher, als eine Vorlage
+   * anzuzeigen, die längst nicht mehr das ist, was im Bild steht.
+   */
+  const [vorlageId, setVorlageId] = useState<string | null>(null);
+  const [vorlageStaerke, setVorlageStaerke] = useState(1);
   const pinselAbziehen = pinselModus === 'radieren';
   const [schleier, setSchleier] = useState(true);
   /** Was das Netz gerade tut – oder woran es gescheitert ist. */
@@ -1191,6 +1211,19 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     [merken],
   );
 
+  /** Eine Vorlage aufs Bild legen – oder ihre Stärke ändern. */
+  function vorlageSetzen(id: string, staerke: number) {
+    const vorlage = VORLAGEN.find((v) => v.id === id);
+    if (!vorlage) return;
+    // Gebündelt wie ein Regler: Wer die Stärke hin und her zieht, will einen
+    // Rückgängig-Schritt, nicht dreissig.
+    merkenGebuendelt(`vorlage-${id}`);
+    setVorlageId(id);
+    setVorlageStaerke(staerke);
+    const anpassung = vorlageAnwenden(vorlage, staerke);
+    setDoc((wert) => (wert ? { ...wert, anpassung } : wert));
+  }
+
   /**
    * Einen Tonwert-Regler setzen.
    *
@@ -1201,6 +1234,9 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
   const tonSetzen = useCallback(
     (welcher: keyof Anpassung, wert: number) => {
       merkenGebuendelt(`ton-${welcher}`);
+      // Ein einzelner Regler löst die Vorlage ab: Was jetzt im Bild steht,
+      // ist nicht mehr das, was auf dem Knopf steht.
+      setVorlageId(null);
       setDoc((alt) => (alt ? { ...alt, anpassung: { ...alt.anpassung, [welcher]: wert } } : alt));
     },
     [merkenGebuendelt],
@@ -1762,6 +1798,81 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
                 Zurücksetzen
               </button>
             </div>
+            {/*
+              Vorlagen: eine Reglerstellung mit Namen, kein eigener Rechenweg.
+              Der Stärkeregler mischt linear von neutral zur Vorlage – das
+              geht, weil alle Regler bei null nichts tun und in dieselbe
+              Richtung stärker werden.
+            */}
+            <div className="bild-reihe" role="group" aria-label="Vorlagen">
+              {VORLAGEN.map((vorlage) => (
+                <button
+                  key={vorlage.id}
+                  type="button"
+                  className={`btn btn-sm ${vorlageId === vorlage.id ? 'is-active' : ''}`}
+                  aria-pressed={vorlageId === vorlage.id}
+                  title={vorlage.beschreibung}
+                  onClick={() => vorlageSetzen(vorlage.id, vorlageStaerke)}
+                >
+                  {vorlage.name}
+                </button>
+              ))}
+            </div>
+            {vorlageId && (
+              <label className="bild-schieber">
+                <span>Stärke</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={vorlageStaerke}
+                  onChange={(event) => vorlageSetzen(vorlageId, Number(event.target.value))}
+                />
+                <span className="bild-wert">{Math.round(vorlageStaerke * 100)}</span>
+              </label>
+            )}
+
+            {doc.anpassung.saettigung < 0 && (
+              <>
+                {/*
+                  Nur sichtbar, wenn entsättigt wird – vorher tun sie nichts.
+                  Ein Farbfilter im Schwarz-Weiss verschiebt die HELLIGKEITEN
+                  beim Entsättigen; bei voller Farbe wird der Block gar nicht
+                  betreten.
+                */}
+                <label className="bild-schieber">
+                  <span>S/W-Filter Rot</span>
+                  <input
+                    type="range"
+                    min={-1}
+                    max={1}
+                    step={0.01}
+                    value={doc.anpassung.swRot}
+                    onChange={(event) => tonSetzen('swRot', Number(event.target.value))}
+                  />
+                  <span className="bild-wert">{Math.round(doc.anpassung.swRot * 100)}</span>
+                </label>
+                <label className="bild-schieber">
+                  <span>S/W-Filter Grün</span>
+                  <input
+                    type="range"
+                    min={-1}
+                    max={1}
+                    step={0.01}
+                    value={doc.anpassung.swGruen}
+                    onChange={(event) => tonSetzen('swGruen', Number(event.target.value))}
+                  />
+                  <span className="bild-wert">{Math.round(doc.anpassung.swGruen * 100)}</span>
+                </label>
+                <p className="bild-hinweis">
+                  Wie ein Filter vor dem Objektiv: Rot macht Himmel und Laub dunkel, Grün hebt Laub
+                  und senkt Rot. Ohne Filter bekommen eine rote Rose und ein blauer Himmel gleicher
+                  Helligkeit denselben Grauton.
+                </p>
+              </>
+            )}
+
             {TONREGLER.map((regler) => {
               const wert = doc.anpassung[regler.key];
               return (

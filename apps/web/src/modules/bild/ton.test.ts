@@ -374,8 +374,8 @@ describe('autoAnpassung', () => {
 });
 
 describe('Farbanpassung und bereichePunkt', () => {
-  it('trennt die neun Farbregler von den zwei ortsabhängigen', () => {
-    expect(Object.keys(FARB_NEUTRAL)).toHaveLength(9);
+  it('trennt die elf Farbregler von den zwei ortsabhängigen', () => {
+    expect(Object.keys(FARB_NEUTRAL)).toHaveLength(11);
     expect(Object.keys(FARB_NEUTRAL)).not.toContain('schaerfe');
     expect(Object.keys(FARB_NEUTRAL)).not.toContain('vignette');
     // Und `Anpassung` bleibt die Vereinigung, in genau dieser Reihenfolge.
@@ -391,11 +391,11 @@ describe('Farbanpassung und bereichePunkt', () => {
      */
     expect(tonSchluessel(NEUTRAL)).toBe(
       'belichtung:0|kontrast:0|lichter:0|tiefen:0|schwarz:0|waerme:0|toenung:0|' +
-        'saettigung:0|dynamik:0|schaerfe:0|vignette:0',
+        'saettigung:0|dynamik:0|swRot:0|swGruen:0|schaerfe:0|vignette:0',
     );
     expect(farbSchluessel(NEUTRAL)).toBe(
       'belichtung:0|kontrast:0|lichter:0|tiefen:0|schwarz:0|waerme:0|toenung:0|' +
-        'saettigung:0|dynamik:0',
+        'saettigung:0|dynamik:0|swRot:0|swGruen:0',
     );
   });
 
