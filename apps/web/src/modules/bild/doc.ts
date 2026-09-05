@@ -161,8 +161,36 @@ export interface NetzTeil {
   readonly marke: number;
 }
 
+/**
+ * Eine Tiefenkarte als Maskenteil.
+ *
+ * Anders als alle anderen Teile beschreibt `karte` nicht die Maske selbst,
+ * sondern die ENTFERNUNG je Bildpunkt (0 = fern, 255 = nah). Die Maske
+ * entsteht erst daraus: `fokus` sagt, welche Entfernung scharf bleibt,
+ * `spanne`, wie schnell es davor und dahinter unscharf wird.
+ *
+ * Der Umweg lohnt sich, weil man dann an den beiden Reglern ziehen kann, ohne
+ * das Modell noch einmal laufen zu lassen – und der Lauf dauert rund drei
+ * Sekunden. Die Karte gehört zum Foto, die beiden Regler zum Bildwunsch.
+ *
+ * Wie beim Netzteil ist die Grösse die der VORLAGE, nicht die des Originals.
+ */
+export interface TiefenTeil {
+  art: 'tiefe';
+  readonly breite: number;
+  readonly hoehe: number;
+  /** Entfernung je Bildpunkt: 0 = fern, 255 = nah. */
+  readonly karte: Uint8Array;
+  /** Welche Entfernung scharf bleibt, 0 … 1. */
+  fokus: number;
+  /** Ab welchem Abstand davon es voll unscharf ist, 0 … 1. */
+  spanne: number;
+  /** Ersatzidentität – wie bei `NetzTeil`, aus demselben Grund. */
+  readonly marke: number;
+}
+
 export type Maskenteil = { id: string; modus: Maskenmodus; umkehren: boolean } & (
-  VerlaufTeil | RadialTeil | PinselTeil | NetzTeil
+  VerlaufTeil | RadialTeil | PinselTeil | NetzTeil | TiefenTeil
 );
 
 /**

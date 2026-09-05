@@ -6,6 +6,7 @@ import { AccountCard } from './AccountCard.js';
 import { PrivacyCard } from './PrivacyCard.js';
 import { AdminCard } from './AdminCard.js';
 import { CutoutCard } from './CutoutCard.js';
+import { TiefeCard } from './TiefeCard.js';
 import { PaymentProfileCard } from '../expenses/PaymentProfileCard.js';
 import { PasskeyCard } from './PasskeyCard.js';
 import { AppearanceCard } from './AppearanceCard.js';
@@ -35,6 +36,7 @@ export function SettingsScreen() {
       <InstallCard />
       <CalendarCard />
       <CutoutCard />
+      <TiefeCard />
       <PaymentProfileCard />
       <PasskeyCard />
       <AdminCard />

@@ -10,7 +10,18 @@
  * es entstehen keine laufenden Kosten.
  */
 
-export type EngineKey = 'tap' | 'tippen' | 'person' | 'face' | 'object' | 'birefnet';
+export type EngineKey = 'tap' | 'tippen' | 'person' | 'face' | 'object' | 'birefnet' | 'tiefe';
+
+/**
+ * Wozu ein Modell da ist.
+ *
+ * Bis auf eines liefern hier alle eine Silhouette. „tiefe“ liefert
+ * stattdessen eine Entfernung je Bildpunkt und gehört deshalb nicht in die
+ * Liste der Freisteller – wohl aber in dieselbe Verwaltung: Es ist ein
+ * Modell, das im Gerät läuft, einen Download kostet und einen Schalter
+ * braucht, und diese drei Dinge stehen hier an einer Stelle statt an zweien.
+ */
+export type Zweck = 'freistellen' | 'tiefe';
 
 /**
  * Welche Laufzeit ein Verfahren braucht.
@@ -66,6 +77,8 @@ export interface EngineInfo {
   runtime: RuntimeKind;
   /** Ob es standardmäßig zur Verfügung steht. */
   defaultEnabled: boolean;
+  /** Wofür es da ist. Ohne Angabe: freistellen. */
+  zweck?: Zweck;
 }
 
 export interface CutoutEngine extends EngineInfo {
@@ -136,6 +149,20 @@ export const ENGINE_INFO: EngineInfo[] = [
     modelMb: 78.3,
     runtime: 'onnx-gpu',
     defaultEnabled: false,
+  },
+  {
+    key: 'tiefe',
+    label: 'Tiefenschärfe',
+    description:
+      'Schätzt für jeden Bildpunkt die Entfernung und lässt die Unschärfe damit WACHSEN, statt alles hinter dem Motiv gleich weich zu machen. Der Gewinn steckt in Bildern ohne freistellbares Motiv – Strasse, Tisch von schräg oben, Landschaft, eine Gruppe in mehreren Ebenen. Bei einem Porträt bleibt „Person“ die bessere Maske: Die Kante kann kein Tiefenmodell.',
+    // Nachgemessen an der Datei, die ausgeliefert wird: 26,0 MiB roh,
+    // 20,6 MiB als .gz – und die .gz reicht Caddy durch. (Nicht `gzip -9`
+    // von Hand nehmen; prepare-models.mjs komprimiert mit einer anderen
+    // Stufe und kommt auf ein paar Zehntel mehr.)
+    modelMb: 20.6,
+    runtime: 'onnx',
+    defaultEnabled: false,
+    zweck: 'tiefe',
   },
 ];
 

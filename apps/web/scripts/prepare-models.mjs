@@ -13,7 +13,7 @@
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, copyFile, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, copyFile, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createGzip } from 'node:zlib';
@@ -41,11 +41,15 @@ const WASM_DATEIEN = [
 const MODELLE = [
   {
     name: 'selfie-segmenter.tflite',
+    lizenz: 'Apache-2.0',
+    urheber: 'Google, MediaPipe Selfie Segmentation',
     url: 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/selfie_segmenter.tflite',
     mindestGroesse: 200_000,
   },
   {
     name: 'blaze-face-short-range.tflite',
+    lizenz: 'Apache-2.0',
+    urheber: 'Google, MediaPipe BlazeFace',
     url: 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite',
     mindestGroesse: 150_000,
   },
@@ -56,6 +60,8 @@ const MODELLE = [
     // steht unter AGPL – bei einer ausgelieferten Web-App hiesse das, den
     // gesamten Quelltext offenlegen zu muessen.
     name: 'u2netp.onnx',
+    lizenz: 'Apache-2.0',
+    urheber: 'Xuebin Qin u. a., U^2-Net (github.com/xuebinqin/U-2-Net)',
     url: 'https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx',
     mindestGroesse: 4_000_000,
   },
@@ -111,6 +117,8 @@ const MODELLE = [
     // Die Auslieferungsgroesse ist praktisch dieselbe: 82,03 MB gzip gegen
     // 82,11 MB. Der Rueckweg kostet also keinen Download, nur die 4,4 %.
     name: 'birefnet-lite-512.onnx',
+    lizenz: 'MIT',
+    urheber: 'Peng Zheng u. a., BiRefNet (github.com/ZhengPeng7/BiRefNet)',
     url: 'https://huggingface.co/studioludens/birefnet-lite-512/resolve/4a3c40c36c94093cc1e724d9ea428b8fa4b57dc7/onnx/model_fp16.onnx',
     mindestGroesse: 90_000_000,
     sha256: 'eff9216bb2f9d3f023d9c2b7196845a7485739ab1f231593633e4d2344ffc516',
@@ -129,6 +137,8 @@ const MODELLE = [
     // README zeigen fuer B2 und B4 beide auf die B1-Datei. Deshalb feste
     // Namen und Pruefsummen statt irgendeinem Verweis zu folgen.
     name: 'nanosam-encoder.onnx',
+    lizenz: 'Apache-2.0',
+    urheber: 'NVIDIA, NanoSAM; Decoder aus MobileSAM bzw. Segment Anything',
     url: 'https://huggingface.co/dragonSwing/nanosam/resolve/e49afdaee2078a826f542929996a14fb0b69a2fa/sam_hgv2_b1_ln_nonorm_image_encoder.onnx',
     mindestGroesse: 12_000_000,
     sha256: '0001b3349220a86ff6a41819ebdfd9f2a8c0707a90ef3e4f9726d46db09a9a32',
@@ -136,9 +146,54 @@ const MODELLE = [
   },
   {
     name: 'nanosam-decoder.onnx',
+    lizenz: 'Apache-2.0',
+    urheber: 'NVIDIA, NanoSAM; Decoder aus MobileSAM bzw. Segment Anything',
     url: 'https://huggingface.co/dragonSwing/nanosam/resolve/e49afdaee2078a826f542929996a14fb0b69a2fa/mobile_sam_mask_decoder.onnx',
     mindestGroesse: 16_000_000,
     sha256: '41e49a298099048186ce109a4518286b8972959898a02577414405efa5c3b247',
+    optional: true,
+  },
+  {
+    // Depth Anything V2 SMALL – die Tiefenkarte im Foto-Editor.
+    //
+    // ###########################################################
+    // # NUR die Small-Fassung. Im Wortlaut des Urhebers          #
+    // # (github.com/DepthAnything/Depth-Anything-V2, LICENSE):   #
+    // #                                                          #
+    // #   "Depth-Anything-V2-Small model is under the            #
+    // #    Apache-2.0 license. Depth-Anything-V2-Base/Large/     #
+    // #    Giant models are under the CC-BY-NC-4.0 license."     #
+    // #                                                          #
+    // # Zwischen benutzbar und rechtswidrig liegt hier ein       #
+    // # Zeichen im Dateinamen. Also NIEMALS auf vitb oder vitl   #
+    // # hochziehen, auch nicht "nur zum Vergleich".              #
+    // ###########################################################
+    //
+    // Der Ruecken ist DINOv2 ViT-S, heute ebenfalls Apache-2.0 (die aeltere
+    // CC-BY-NC-Angabe kursiert noch). Zur Laufzeit wird vom Repo nichts
+    // gebraucht, nur onnxruntime-web (MIT), die ohnehin da ist.
+    //
+    // uint8 und nicht fp16: Der Graph rechnet mit MatMulInteger,
+    // ConvInteger und DynamicQuantizeLinear, und dafuer hat der
+    // Prozessorpfad Rechenwerke. Genau daran ist BiRefNet gescheitert – die
+    // fp16-Fassung fiel auf den Prozessor zurueck und brauchte Minuten je
+    // Bild. Auch nicht q4f16 (18,2 MiB): MatMulNBits ist auf WASM gemessen
+    // dreimal langsamer als fp32.
+    //
+    // ACHTUNG beim Nachziehen: Im selben Verzeichnis liegt
+    // `model_int8.onnx` – gleiche Groesse, ANDERE Datei. Deshalb die
+    // Pruefsumme.
+    name: 'depth-anything-v2-small-uint8.onnx',
+    lizenz: 'Apache-2.0',
+    urheber: 'Lihe Yang u. a., Depth Anything V2 (Small); Ruecken DINOv2 ViT-S, Meta AI',
+    hinweis:
+      'Nur die Small-Fassung ist Apache-2.0. Base, Large und Giant stehen unter CC-BY-NC-4.0 und duerfen hier nicht verwendet werden.',
+    url: 'https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/4472b7362082ad9968fee890ca0f1e5aca36b93d/onnx/model_quantized.onnx',
+    mindestGroesse: 26_000_000,
+    sha256: 'fcf51f1b230362b28690bb9d1809bf0431f29cad20534e3f589bd7285547f20d',
+    // Ein fremder Server, der gerade nicht erreichbar ist, darf keine
+    // Veroeffentlichung verhindern. Fehlt die Datei, meldet die App das
+    // Verfahren schlicht als nicht verfuegbar.
     optional: true,
   },
 ];
@@ -214,7 +269,11 @@ async function vorkomprimieren(pfad, groesse) {
   // von MediaPipe sind ohnehin schon dicht gepackt.
   if (groesse < 1024 * 1024) return;
   try {
-    await pipeline(createReadStream(pfad), createGzip({ level: 9 }), createWriteStream(`${pfad}.gz`));
+    await pipeline(
+      createReadStream(pfad),
+      createGzip({ level: 9 }),
+      createWriteStream(`${pfad}.gz`),
+    );
     const klein = (await stat(`${pfad}.gz`)).size;
     console.log(
       `    vorkomprimiert: ${(klein / 1024 / 1024).toFixed(1)} MB` +
@@ -275,6 +334,45 @@ async function modelleLaden() {
 }
 
 /**
+ * Legt die Lizenzhinweise zu den Modellen neben die Modelle.
+ *
+ * Kein Beiwerk, sondern eine Auflage: Apache-2.0 verlangt in Abschnitt 4,
+ * dass jeder, der die Datei bekommt, eine Kopie der Lizenz und die Hinweise
+ * des Urhebers mitbekommt. Wir liefern die Modelle von der eigenen Domain
+ * aus, sind also Weitergebende im Sinne der Lizenz.
+ *
+ * Der Volltext liegt als `scripts/apache-2.0.txt` im Verzeichnis und wird
+ * nicht geladen: Eine Lizenz, die von einem fremden Server abhaengt, ist
+ * genau dann nicht da, wenn man sie braucht.
+ */
+async function lizenzenSchreiben() {
+  const ziel = join(publicDir, 'models');
+  await mkdir(ziel, { recursive: true });
+  await copyFile(join(hier, 'apache-2.0.txt'), join(ziel, 'APACHE-2.0.txt'));
+
+  const zeilen = [
+    'Lizenzen der Modelle in diesem Verzeichnis',
+    '=========================================',
+    '',
+    'Die App selbst steht unter der MIT-Lizenz (siehe LICENSE im Wurzelverzeichnis).',
+    'Die folgenden Modelldateien stammen von Dritten und behalten ihre eigene Lizenz.',
+    'Der Volltext der Apache-Lizenz 2.0 liegt daneben als APACHE-2.0.txt.',
+    '',
+  ];
+  for (const modell of MODELLE) {
+    if (!modell.lizenz) continue;
+    zeilen.push(`${modell.name}`);
+    zeilen.push(`  Lizenz:  ${modell.lizenz}`);
+    zeilen.push(`  Urheber: ${modell.urheber}`);
+    zeilen.push(`  Quelle:  ${modell.url}`);
+    if (modell.hinweis) zeilen.push(`  Hinweis: ${modell.hinweis}`);
+    zeilen.push('');
+  }
+  await writeFile(join(ziel, 'LIZENZEN.txt'), zeilen.join('\n'), 'utf8');
+  console.log('  LIZENZEN.txt und APACHE-2.0.txt abgelegt');
+}
+
+/**
  * Mit `--optional` ist ein Fehlschlag kein Abbruch.
  *
  * Beim Entwickeln und in den Browser-Tests wird das Freistellen nicht
@@ -288,6 +386,7 @@ console.log('Freistell-Bausteine bereitlegen …');
 try {
   await wasmKopieren();
   await modelleLaden();
+  await lizenzenSchreiben();
   console.log('Fertig.');
 } catch (fehler) {
   if (!optional) throw fehler;

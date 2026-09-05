@@ -20,6 +20,7 @@
 
 import { weich } from './ton.js';
 import type { Maskenteil, Pinselstrich, RadialTeil, VerlaufTeil } from './doc.js';
+import { tiefenFeld } from './tiefe.js';
 
 function klemmen(wert: number, unten: number, oben: number): number {
   return wert < unten ? unten : wert > oben ? oben : wert;
@@ -406,6 +407,22 @@ export function teilBauen(teil: Maskenteil, raster: Raster): Uint8Array {
     case 'netz':
       feld = maskeUmrastern(teil.alpha, teil.breite, teil.hoehe, raster.breite, raster.hoehe);
       break;
+    case 'tiefe':
+      /*
+       * Nicht `maskeUmrastern`: Die Karte ist keine Maske, sondern eine
+       * Entfernung. Erst muss sie auf das Raster, DANN wird daraus die
+       * Unschärfe – umgekehrt würde über den Knick an der Fokusebene
+       * gemittelt, und mitten im Verlauf stünde ein scharfer Streifen.
+       * `tiefenFeld` macht genau diese Reihenfolge.
+       */
+      feld = tiefenFeld(
+        { breite: teil.breite, hoehe: teil.hoehe, feld: teil.karte },
+        teil.fokus,
+        teil.spanne,
+        raster.breite,
+        raster.hoehe,
+      );
+      break;
   }
   if (teil.umkehren) {
     for (let i = 0; i < feld.length; i += 1) feld[i] = 255 - feld[i];
@@ -533,6 +550,11 @@ export function teilSchluessel(teil: Maskenteil): string {
     }
     case 'netz':
       return `${kopf}|${teil.netz}|${teil.breite}x${teil.hoehe}|${teil.marke}`;
+    // Fokus und Spanne MÜSSEN hinein: Sie ändern die Maske, ohne die Karte
+    // anzufassen – das ist ja gerade der Sinn des Umwegs über die Entfernung.
+    // Die Karte selbst geht wie beim Netzteil nur über die Marke ein.
+    case 'tiefe':
+      return `${kopf}|${teil.breite}x${teil.hoehe}|${teil.marke}|${teil.fokus},${teil.spanne}`;
   }
 }
 

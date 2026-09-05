@@ -54,6 +54,7 @@ import {
 } from './bereichGriffe.js';
 import { maskeFuerBereich } from './maskenSpeicher.js';
 import { netzTeilRechnen, netzVerfuegbar, type Netzart } from './netzMaske.js';
+import { tiefeVerfuegbar, tiefenTeilRechnen } from './tiefeNetz.js';
 import { SCHRIFTEN, trifftText, zeichneAnsicht, zeichneAusgabe } from './zeichnen.js';
 import './styles.css';
 
@@ -1283,31 +1284,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     setNetzLaeuft('Wird vorbereitet …');
     try {
       const teil = await netzTeilRechnen(quellBild, netz, (text) => setNetzLaeuft(text));
-      merken();
-      const bereich = docRef.current?.bereiche.find((b) => b.id === bereichRef.current);
-      if (bereich) {
-        setDoc((wert) =>
-          wert
-            ? {
-                ...wert,
-                bereiche: wert.bereiche.map((b) =>
-                  b.id === bereich.id ? { ...b, teile: [...b.teile, teil] } : b,
-                ),
-              }
-            : wert,
-        );
-      } else {
-        const neu: Bereich = {
-          id: neueId('b'),
-          name: netz === 'person' ? 'Person' : 'Motiv',
-          aktiv: true,
-          teile: [teil],
-          anpassung: { ...BEREICH_NEUTRAL },
-        };
-        setDoc((wert) => (wert ? { ...wert, bereiche: [...wert.bereiche, neu] } : wert));
-        setBereichId(neu.id);
-      }
-      setTeilId(teil.id);
+      teilEinsetzen(teil, netz === 'person' ? 'Person' : 'Motiv');
     } catch (fehler) {
       // Der Satz aus dem `EngineError` ist für den Anwender geschrieben –
       // „Fehler“ hilft niemandem, „ist abgeschaltet, du kannst es
@@ -1316,6 +1293,62 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     } finally {
       setNetzLaeuft(null);
     }
+  }
+
+  /**
+   * Lässt das Tiefenmodell laufen und legt daraus ein Maskenteil an.
+   *
+   * Derselbe Ablauf wie bei den Freistellern, nur dauert er länger (rund drei
+   * Sekunden auf dem Telefon) – deshalb dieselbe Fortschrittsanzeige und
+   * derselbe Riegel gegen einen zweiten Lauf.
+   */
+  async function tiefeTeilAnlegen() {
+    const quellBild = bildRef.current;
+    const aktuell = docRef.current;
+    if (!quellBild || !aktuell || netzLaeuft) return;
+    if (!vorhandenOderPlatz(aktuell)) return;
+    setNetzFehler(null);
+    setNetzLaeuft('Wird vorbereitet …');
+    try {
+      const teil = await tiefenTeilRechnen(quellBild, (text) => setNetzLaeuft(text));
+      teilEinsetzen(teil, 'Tiefe');
+    } catch (fehler) {
+      setNetzFehler(errorMessage(fehler, 'Die Tiefenkarte konnte nicht gerechnet werden'));
+    } finally {
+      setNetzLaeuft(null);
+    }
+  }
+
+  /**
+   * Setzt ein fertig gerechnetes Maskenteil in den gewählten Bereich – oder
+   * legt einen neuen an, wenn keiner gewählt ist.
+   */
+  function teilEinsetzen(teil: Maskenteil, standardName: string) {
+    merken();
+    const bereich = docRef.current?.bereiche.find((b) => b.id === bereichRef.current);
+    if (bereich) {
+      setDoc((wert) =>
+        wert
+          ? {
+              ...wert,
+              bereiche: wert.bereiche.map((b) =>
+                b.id === bereich.id ? { ...b, teile: [...b.teile, teil] } : b,
+              ),
+            }
+          : wert,
+      );
+    } else {
+      const neu: Bereich = {
+        id: neueId('b'),
+        name: standardName,
+        aktiv: true,
+        teile: [teil],
+        anpassung: { ...BEREICH_NEUTRAL },
+      };
+      setDoc((wert) => (wert ? { ...wert, bereiche: [...wert.bereiche, neu] } : wert));
+      setBereichId(neu.id);
+    }
+    setTeilId(teil.id);
   }
 
   /** Ob noch ein Bereich hineinpasst – oder schon einer gewählt ist. */
@@ -1687,6 +1720,15 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
               >
                 🖼 Motiv
               </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => void tiefeTeilAnlegen()}
+                disabled={netzLaeuft !== null || !tiefeVerfuegbar()}
+                title="Schätzt die Entfernung je Bildpunkt"
+              >
+                🔭 Tiefe
+              </button>
             </div>
 
             {netzLaeuft && <p className="bild-hinweis">⏳ {netzLaeuft}</p>}
@@ -1724,7 +1766,9 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
                           ? 'Radial'
                           : teil.art === 'pinsel'
                             ? 'Pinsel'
-                            : 'Motiv'}{' '}
+                            : teil.art === 'tiefe'
+                              ? 'Tiefe'
+                              : 'Motiv'}{' '}
                       {nummer + 1}
                     </button>
                   ))}
@@ -1791,6 +1835,50 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
                     />
                     <span className="bild-wert">{Math.round(aktivesTeil.weichheit * 100)}</span>
                   </label>
+                )}
+
+                {aktivesTeil?.art === 'tiefe' && (
+                  <>
+                    {/*
+                     * Beide Regler ändern nur, WIE die vorhandene Karte
+                     * gelesen wird – das Modell läuft dabei nicht noch
+                     * einmal. Deshalb dürfen sie ganz normale Schieber sein
+                     * und müssen kein Knopf mit Fortschrittsanzeige werden.
+                     */}
+                    <label className="bild-schieber">
+                      <span>Fokus</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={aktivesTeil.fokus}
+                        onChange={(event) =>
+                          teilAendern({ fokus: Number(event.target.value) } as Partial<Maskenteil>)
+                        }
+                      />
+                      <span className="bild-wert">{Math.round(aktivesTeil.fokus * 100)}</span>
+                    </label>
+                    <label className="bild-schieber">
+                      <span>Tiefenbereich</span>
+                      <input
+                        type="range"
+                        min={0.02}
+                        max={1}
+                        step={0.01}
+                        value={aktivesTeil.spanne}
+                        onChange={(event) =>
+                          teilAendern({ spanne: Number(event.target.value) } as Partial<Maskenteil>)
+                        }
+                      />
+                      <span className="bild-wert">{Math.round(aktivesTeil.spanne * 100)}</span>
+                    </label>
+                    <p className="bild-hinweis">
+                      „Fokus“ ist die Entfernung, die scharf bleibt – 100 ist ganz vorne, 0 ganz
+                      hinten. „Tiefenbereich“ sagt, wie schnell es davor und dahinter unscharf wird.
+                      Die Unschärfe selbst stellst du unten am Regler „Weichzeichnen“ ein.
+                    </p>
+                  </>
                 )}
 
                 {aktivesTeil?.art === 'pinsel' && (

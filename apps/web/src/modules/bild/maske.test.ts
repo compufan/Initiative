@@ -111,6 +111,35 @@ function netzTeil(
   };
 }
 
+function tiefenTeil(
+  werte: {
+    id?: string;
+    modus?: Maskenmodus;
+    umkehren?: boolean;
+    breite?: number;
+    hoehe?: number;
+    karte?: Uint8Array;
+    fokus?: number;
+    spanne?: number;
+    marke?: number;
+  } = {},
+): Maskenteil {
+  return {
+    id: werte.id ?? 'd1',
+    modus: werte.modus ?? 'dazu',
+    umkehren: werte.umkehren ?? false,
+    art: 'tiefe',
+    breite: werte.breite ?? 4,
+    hoehe: werte.hoehe ?? 4,
+    // Vorgabe: von hinten (0) nach vorne (255) über die Breite.
+    karte:
+      werte.karte ?? Uint8Array.from({ length: 16 }, (_wert, i) => Math.round(((i % 4) / 3) * 255)),
+    fokus: werte.fokus ?? 1,
+    spanne: werte.spanne ?? 0.5,
+    marke: werte.marke ?? 11,
+  };
+}
+
 /** Eine harte Scheibe mit Radius 8 um (x, 20) – im Raster mit Faktor 1. */
 function scheibe(id: string, modus: Maskenmodus, x: number): Maskenteil {
   return pinselTeil({ id, modus, punkte: [x, 20], breite: 16, haerte: 1 });
@@ -825,5 +854,75 @@ describe('nachgereicht: der weiche Radierer', () => {
     const rand = feld[30 * 60 + 15];
     expect(rand).toBeGreaterThan(0);
     expect(rand).toBeLessThan(255);
+  });
+});
+
+describe('das Tiefenteil', () => {
+  it('wird über Fokus und Spanne zur Maske, nicht direkt übernommen', () => {
+    /*
+     * Die Karte ist die ENTFERNUNG, nicht die Maske. Bei Fokus ganz vorne
+     * (1) bleibt der nahe Rand (255) scharf und der ferne (0) wird unscharf –
+     * die Maske ist also die UMKEHRUNG der Karte. Wer die Karte direkt als
+     * Maske nimmt, bekommt genau das Gegenteil, und zwar ohne Fehlermeldung.
+     */
+    const raster = { breite: 8, hoehe: 8, faktor: 1, versatzX: 0, versatzY: 0 };
+    const feld = teilBauen(tiefenTeil({ fokus: 1, spanne: 1 }), raster);
+    const links = feld[0];
+    const rechts = feld[7];
+    expect(links).toBeGreaterThan(200);
+    expect(rechts).toBeLessThan(55);
+  });
+
+  it('dreht sich mit dem Fokus um', () => {
+    const raster = { breite: 8, hoehe: 8, faktor: 1, versatzX: 0, versatzY: 0 };
+    const vorn = teilBauen(tiefenTeil({ fokus: 1, spanne: 1 }), raster);
+    const hinten = teilBauen(tiefenTeil({ fokus: 0, spanne: 1 }), raster);
+    expect(vorn[0]).toBeGreaterThan(vorn[7]);
+    expect(hinten[0]).toBeLessThan(hinten[7]);
+  });
+
+  it('lässt bei kleiner Spanne mehr unscharf werden', () => {
+    const raster = { breite: 8, hoehe: 8, faktor: 1, versatzX: 0, versatzY: 0 };
+    const weit = teilBauen(tiefenTeil({ fokus: 1, spanne: 1 }), raster);
+    const eng = teilBauen(tiefenTeil({ fokus: 1, spanne: 0.25 }), raster);
+    // In der Mitte des Bildes: mit enger Spanne schon voll unscharf.
+    expect(eng[4]).toBeGreaterThan(weit[4]);
+  });
+
+  it('achtet auf „umkehren“ wie jedes andere Teil', () => {
+    const raster = { breite: 8, hoehe: 8, faktor: 1, versatzX: 0, versatzY: 0 };
+    const normal = teilBauen(tiefenTeil({ fokus: 1, spanne: 1 }), raster);
+    const gekehrt = teilBauen(tiefenTeil({ fokus: 1, spanne: 1, umkehren: true }), raster);
+    expect(gekehrt[0]).toBe(255 - normal[0]);
+  });
+});
+
+describe('teilSchluessel für das Tiefenteil', () => {
+  it('ändert sich, wenn der Fokus wandert', () => {
+    /*
+     * Der eigentliche Grund für diesen Test: Fokus und Spanne ändern die
+     * Maske, ohne die Karte anzufassen. Stünden sie nicht im Schlüssel,
+     * bliebe der Zwischenspeicher am alten Bild kleben – der Regler sähe aus,
+     * als täte er nichts.
+     */
+    const a = teilSchluessel(tiefenTeil({ fokus: 0.5 }));
+    const b = teilSchluessel(tiefenTeil({ fokus: 0.6 }));
+    expect(a).not.toBe(b);
+  });
+
+  it('ändert sich, wenn die Spanne wandert', () => {
+    const a = teilSchluessel(tiefenTeil({ spanne: 0.5 }));
+    const b = teilSchluessel(tiefenTeil({ spanne: 0.4 }));
+    expect(a).not.toBe(b);
+  });
+
+  it('unterscheidet zwei Karten über die Marke', () => {
+    const a = teilSchluessel(tiefenTeil({ marke: 1 }));
+    const b = teilSchluessel(tiefenTeil({ marke: 2 }));
+    expect(a).not.toBe(b);
+  });
+
+  it('enthält die Karte selbst nicht – sie würde zu [object Uint8Array]', () => {
+    expect(teilSchluessel(tiefenTeil())).not.toContain('object');
   });
 });

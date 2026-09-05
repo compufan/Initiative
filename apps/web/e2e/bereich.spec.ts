@@ -673,3 +673,107 @@ test('die Zerstreuung ist eine Scheibe und keine Glocke', async ({ page }) => {
   // Und die Scheibe hat eine Kante.
   expect(ergebnis.draussen).toBeLessThan(ergebnis.scheibe! * 0.15);
 });
+
+test('die Maske bestimmt die Grösse der Zerstreuung, nicht ihre Durchsichtigkeit', async ({
+  page,
+}) => {
+  /*
+   * Der Unterschied zwischen einer Linse und einer Überblendung.
+   *
+   * Bei halbem Maskengewicht kann man zweierlei tun: eine halb so grosse
+   * Zerstreuung zeichnen (was eine Linse tut), oder eine volle Zerstreuung
+   * halb durchsichtig darüberlegen. Beim harten Rand einer Freistellmaske
+   * sieht beides fast gleich aus – deshalb ist es lange niemandem
+   * aufgefallen. Sobald die Maske aber ein Verlauf über die Tiefe einer Szene
+   * ist, ist es der ganze Effekt: Nur die erste Fassung lässt die Unschärfe
+   * mit der Entfernung WACHSEN.
+   *
+   * Gemessen wird an drei Lichtpunkten unter einem waagerechten
+   * Maskenverlauf. Bei voller Unschärfe ist der Radius 0,02 · 512 = 10,2
+   * Punkte; die drei Punkte liegen bei Gewicht 0,20 / 0,50 / 0,81, also bei
+   * Radius 2,0 / 5,1 / 8,3. Ein Ring im Abstand 7 liegt damit ausserhalb der
+   * ersten Scheibe und innerhalb der dritten.
+   *
+   * Mit einer Überblendung hätten alle drei denselben Radius 10,2 und der
+   * Ring wäre überall hell, nur verschieden stark – das Verhältnis von erstem
+   * zu drittem Punkt wäre dann ihr Gewichtsverhältnis, 0,20 : 0,81.
+   */
+  await page.goto('/');
+  const ergebnis = await page.evaluate(async () => {
+    const ladeTon = '/src/modules/bild/ton.ts';
+    const ladeGpu = '/src/modules/bild/tonGpu.ts';
+    const ton = (await import(
+      /* @vite-ignore */ ladeTon
+    )) as typeof import('../src/modules/bild/ton.js');
+    const gpu = (await import(
+      /* @vite-ignore */ ladeGpu
+    )) as typeof import('../src/modules/bild/tonGpu.js');
+
+    const kante = 512;
+    const orte = [100, 256, 412];
+    const quelle = document.createElement('canvas');
+    quelle.width = kante;
+    quelle.height = kante;
+    const qctx = quelle.getContext('2d');
+    if (!qctx) return { fehler: 'keine Leinwand' };
+    qctx.fillStyle = '#000000';
+    qctx.fillRect(0, 0, kante, kante);
+    qctx.fillStyle = '#ffffff';
+    for (const x of orte) qctx.fillRect(x - 1, kante / 2 - 1, 3, 3);
+
+    // Waagerechter Verlauf: links 0, rechts 255.
+    const rb = 64;
+    const feld = new Uint8Array(rb * rb);
+    for (let y = 0; y < rb; y += 1)
+      for (let x = 0; x < rb; x += 1) feld[y * rb + x] = Math.round((x / (rb - 1)) * 255);
+    const szene = {
+      bereiche: [
+        {
+          id: 'verlauf',
+          maske: { raster: { breite: rb, hoehe: rb, faktor: rb / kante }, feld, stand: 1 },
+          anpassung: { ...ton.FARB_NEUTRAL, unschaerfe: 1 },
+        },
+      ],
+      schluessel: 'wachsend',
+    };
+
+    const flaeche = gpu.bildRechnen(quelle, kante, kante, ton.NEUTRAL, szene);
+    const z = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+    if (!z) return { fehler: 'keine Leinwand' };
+    z.canvas.width = kante;
+    z.canvas.height = kante;
+    z.drawImage(flaeche as CanvasImageSource, 0, 0);
+    const d = z.getImageData(0, 0, kante, kante).data;
+
+    /** Mittlere Helligkeit auf einem Ring um einen der Lichtpunkte. */
+    const ring = (mx: number, radius: number) => {
+      let summe = 0;
+      let n = 0;
+      for (let i = 0; i < 120; i += 1) {
+        const w = (i / 120) * Math.PI * 2;
+        const x = Math.round(mx + Math.cos(w) * radius);
+        const y = Math.round(kante / 2 + Math.sin(w) * radius);
+        if (x < 0 || y < 0 || x >= kante || y >= kante) continue;
+        summe += d[(y * kante + x) * 4];
+        n += 1;
+      }
+      return n > 0 ? summe / n : -1;
+    };
+
+    return {
+      weg: gpu.letzterWeg,
+      ring7: orte.map((x) => ring(x, 7)),
+      kern: orte.map((x) => ring(x, 0)),
+    };
+  });
+
+  expect(ergebnis.fehler).toBeUndefined();
+  expect(ergebnis.weg).toBe('gpu');
+  const [schmal, mittel, breit] = ergebnis.ring7!;
+  // Die dritte Scheibe reicht über den Ring hinaus, die erste nicht.
+  expect(breit).toBeGreaterThan(2);
+  expect(mittel).toBeGreaterThan(schmal);
+  expect(breit).toBeGreaterThan(mittel);
+  // Und zwar deutlich: Bei einer Überblendung wären es 0,20 : 0,81 = 0,24.
+  expect(schmal).toBeLessThan(breit * 0.1);
+});

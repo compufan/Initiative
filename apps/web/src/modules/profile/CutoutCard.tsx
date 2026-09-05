@@ -27,7 +27,9 @@ export function CutoutCard() {
         irgendwohin geschickt, und es entstehen keine laufenden Kosten.
       </p>
 
-      {ENGINE_INFO.filter((engine) => engine.key !== 'tap').map((engine) => (
+      {ENGINE_INFO.filter(
+        (engine) => engine.key !== 'tap' && (engine.zweck ?? 'freistellen') === 'freistellen',
+      ).map((engine) => (
         <Toggle
           key={engine.key}
           label={engine.label}

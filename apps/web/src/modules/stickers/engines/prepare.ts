@@ -76,17 +76,27 @@ export interface Bildpunkte {
  *
  * Das Flächenmittel sieht jeden Quellpunkt genau einmal. Es kostet nichts
  * Nennenswertes und ist die beste Investition an dieser Stelle.
+ *
+ * `zielHoehe` ist neu und steht standardmässig auf `zielBreite` – für die
+ * Freisteller, die alle quadratisch rechnen, ändert sich damit nichts. Das
+ * Tiefenmodell dagegen darf seitenrichtig rechnen: Ein gestauchtes Bild
+ * ergibt eine gestauchte Tiefe, und ein Quadrat kostet bei 4:3 ein Drittel
+ * mehr Rechenzeit, ohne dass mehr Bild darin steckt.
  */
-export function flaechenMittel(image: Bildpunkte, ziel: number): Bildpunkte {
+export function flaechenMittel(
+  image: Bildpunkte,
+  zielBreite: number,
+  zielHoehe: number = zielBreite,
+): Bildpunkte {
   const { width, height, data } = image;
-  const out = new Uint8ClampedArray(ziel * ziel * 4);
+  const out = new Uint8ClampedArray(zielBreite * zielHoehe * 4);
 
-  for (let ty = 0; ty < ziel; ty += 1) {
-    const y0 = Math.floor((ty * height) / ziel);
-    const y1 = Math.max(y0 + 1, Math.ceil(((ty + 1) * height) / ziel));
-    for (let tx = 0; tx < ziel; tx += 1) {
-      const x0 = Math.floor((tx * width) / ziel);
-      const x1 = Math.max(x0 + 1, Math.ceil(((tx + 1) * width) / ziel));
+  for (let ty = 0; ty < zielHoehe; ty += 1) {
+    const y0 = Math.floor((ty * height) / zielHoehe);
+    const y1 = Math.max(y0 + 1, Math.ceil(((ty + 1) * height) / zielHoehe));
+    for (let tx = 0; tx < zielBreite; tx += 1) {
+      const x0 = Math.floor((tx * width) / zielBreite);
+      const x1 = Math.max(x0 + 1, Math.ceil(((tx + 1) * width) / zielBreite));
 
       let r = 0;
       let g = 0;
@@ -104,7 +114,7 @@ export function flaechenMittel(image: Bildpunkte, ziel: number): Bildpunkte {
         }
       }
       if (n === 0) n = 1;
-      const zielAt = (ty * ziel + tx) * 4;
+      const zielAt = (ty * zielBreite + tx) * 4;
       out[zielAt] = r / n;
       out[zielAt + 1] = g / n;
       out[zielAt + 2] = b / n;
@@ -112,7 +122,7 @@ export function flaechenMittel(image: Bildpunkte, ziel: number): Bildpunkte {
     }
   }
 
-  return { width: ziel, height: ziel, data: out };
+  return { width: zielBreite, height: zielHoehe, data: out };
 }
 
 /**

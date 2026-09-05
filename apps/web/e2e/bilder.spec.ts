@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
 import { expect, test, type Browser, type Page } from '@playwright/test';
 
@@ -990,4 +993,160 @@ test('eingeschaltet erkennt das Netz das Motiv und legt daraus eine Maske an', a
   expect(rechtsDaneben, 'der Schleier greift rechts neben das Motiv').toBeLessThan(6);
 
   await context.close();
+});
+
+test('die Tiefenkarte macht aus der Entfernung eine Maske', async ({ browser }) => {
+  /*
+   * Der ganze Weg auf einmal: Modell laden, Tiefe schätzen, daraus ein
+   * Maskenteil bauen, es über die beiden Regler lesen.
+   *
+   * # Warum ein echtes Foto und kein gerechnetes
+   *
+   * Weil ein gerechnetes hier nichts prüfte. Nachgemessen an einem
+   * senkrechten Verlauf mit feinen Streifen – dem naheliegenden Testbild –
+   * liefert das Modell Werte zwischen 2,01 und 2,22 bei einem Wertebereich
+   * von 0,66 bis 2,86: praktisch flach, und die Reihenfolge sogar
+   * umgedreht. Es gibt in einem gerechneten Bild keine Perspektive, keine
+   * Verdeckung und keine bekannten Gegenstände, also auch nichts zu schätzen.
+   *
+   * Am echten Foto derselbe Lauf: 0,96 im oberen Fünftel, 3,36 im unteren,
+   * Wertebereich 0,17 bis 4,98. Erst damit ist überhaupt etwas zu messen.
+   *
+   * # Was gemessen wird
+   *
+   * Der Maskenschleier über seinen Rotstich (r − b), oben gegen unten – und
+   * zwar zweimal: einmal mit dem Fokus vorne und einmal hinten. Die blosse
+   * Feststellung „die Maske ist nicht überall gleich“ liesse sich mit jedem
+   * Verlauf erfüllen. Dass sich das Verhältnis UMDREHT, wenn man die
+   * Fokusebene von vorne nach hinten schiebt, kann nur eine echte Karte.
+   */
+  test.setTimeout(180_000);
+  const alice = credentials('tief');
+  const bob = credentials('tziel');
+  const alicePage = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  // Ohne Modell im `public/`-Verzeichnis gibt es nichts zu prüfen. Das
+  // Modell ist in `prepare-models.mjs` als „optional“ eingetragen, damit ein
+  // Bauen ohne Netz nicht scheitert – dann fehlt es hier eben.
+  const da = await alicePage.request.head('/models/depth-anything-v2-small-uint8.onnx');
+  test.skip(!da.ok(), 'Das Tiefenmodell ist in diesem Baum nicht abgelegt.');
+
+  // Der Schalter steht von Haus aus auf AUS – 26 MB lädt niemand ungefragt.
+  await alicePage.evaluate(() =>
+    localStorage.setItem('initiative.cutout-engines', JSON.stringify({ tiefe: true })),
+  );
+
+  await alicePage.getByRole('button', { name: 'Neuer Chat' }).click();
+  await alicePage.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await alicePage.getByText(bob.displayName).first().click();
+  await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'portrait.jpg',
+    mimeType: 'image/jpeg',
+    buffer: readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', 'public', '__test-portrait.jpg'),
+    ),
+  });
+  await alicePage.getByRole('button', { name: /^Senden \(/ }).click();
+  const bild = alicePage.locator('.media-image').first();
+  await expect(bild).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => bild.evaluate((el: HTMLImageElement) => el.naturalWidth), { timeout: 30_000 })
+    .toBeGreaterThan(0);
+  await bild.click();
+  await alicePage.getByRole('button', { name: 'Bild bearbeiten' }).click();
+  await expect(alicePage.locator('.bild-leinwand')).toBeVisible({ timeout: 30_000 });
+
+  await alicePage.getByRole('button', { name: /Bereiche$/ }).click();
+  await alicePage.getByRole('button', { name: '🔭 Tiefe' }).click();
+
+  // Der Lauf dauert Sekunden und meldet sich unterwegs. Fertig ist er, wenn
+  // das Teil im Streifen steht.
+  await expect(alicePage.getByRole('button', { name: /Tiefe 1$/ })).toBeVisible({
+    timeout: 150_000,
+  });
+  await expect(alicePage.getByRole('button', { name: '👁 Maske zeigen' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+
+  /** Der Rotstich des Schleiers in einem waagerechten Band der Leinwand. */
+  const rotstich = async (vonAnteil: number, bisAnteil: number) =>
+    alicePage.evaluate(
+      ([von, bis]) => {
+        const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+        const ctx = c?.getContext('2d');
+        const d = c && ctx ? ctx.getImageData(0, 0, c.width, c.height).data : null;
+        if (!c || !d) return -1;
+        let summe = 0;
+        let n = 0;
+        for (let y = Math.round(c.height * von); y < Math.round(c.height * bis); y += 1)
+          for (let x = 0; x < c.width; x += 1) {
+            const at = (y * c.width + x) * 4;
+            summe += d[at] - d[at + 2];
+            n += 1;
+          }
+        return n > 0 ? summe / n : -1;
+      },
+      [vonAnteil, bisAnteil],
+    );
+
+  // Fokus steht in der Vorgabe auf 100 – ganz vorne ist scharf. Oben im Bild
+  // ist es weit weg, also unscharf, also viel Schleier.
+  const fokus = alicePage.locator('.bild-panel').getByRole('slider', { name: /Fokus/ });
+  await expect(fokus).toHaveValue('1');
+
+  /** Der Schleier über zehn waagerechte Bänder, von oben nach unten. */
+  const profil = async () => {
+    const werte: number[] = [];
+    for (let i = 0; i < 10; i += 1) werte.push(await rotstich(i / 10, (i + 1) / 10));
+    return werte;
+  };
+  const mittel = (werte: number[], von: number, bis: number) =>
+    werte.slice(von, bis).reduce((a, b) => a + b, 0) / (bis - von);
+  const schaerfstes = (werte: number[]) => werte.indexOf(Math.min(...werte));
+
+  /*
+   * Gemessen an diesem Foto, zehn Bänder von oben nach unten:
+   *
+   *   Fokus 100 (vorn):  104 108 104  89  59  50  46  31  31  53
+   *   Fokus  50 (mitte):  96  96  93  65  23  27  36  56  54  54
+   *   Fokus   0 (hinten): 68  79  69  58  56  58  59  61  63  80
+   *
+   * Daran ist alles abzulesen, was diese Prüfung braucht: Bei Fokus vorne
+   * liegt die Schärfe unten (nah), bei Fokus in der Mitte wandert sie in die
+   * BILDMITTE, und bei Fokus hinten wird das ganze Bild flach – weil dieses
+   * Foto hinten wenig Tiefe hat.
+   */
+  const vorn = await profil();
+  expect(mittel(vorn, 0, 3), 'oben ist fern und damit stark maskiert').toBeGreaterThan(
+    mittel(vorn, 6, 9) + 40,
+  );
+
+  await fokus.fill('0.5');
+  await expect.poll(async () => mittel(await profil(), 4, 6), { timeout: 10_000 }).toBeLessThan(45);
+  const mitte = await profil();
+  /*
+   * Der eigentliche Beweis, dass hier eine Tiefenkarte am Werk ist und nicht
+   * irgendein Verlauf: Die scharfe Ebene wandert mit dem Regler NACH OBEN,
+   * weil weiter hinten im Bild weiter oben liegt. Ein fester Verlauf könnte
+   * heller und dunkler werden, aber seine schärfste Stelle nicht verschieben.
+   */
+  expect(schaerfstes(mitte), 'die scharfe Ebene muss nach oben wandern').toBeLessThan(
+    schaerfstes(vorn),
+  );
+  expect(mittel(mitte, 4, 6), 'in der Bildmitte ist es jetzt am schärfsten').toBeLessThan(
+    mittel(mitte, 0, 3) - 40,
+  );
+  expect(mittel(mitte, 4, 6)).toBeLessThan(mittel(mitte, 7, 10) - 15);
+
+  await fokus.fill('0');
+  await expect
+    .poll(async () => mittel(await profil(), 0, 3), { timeout: 10_000 })
+    .toBeLessThan(mittel(vorn, 0, 3) - 25);
+
+  await alicePage.context().close();
 });

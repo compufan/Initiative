@@ -73,6 +73,16 @@ export async function runEngine(key: EngineKey, request: MaskRequest): Promise<U
   if (key === 'tap') {
     throw new EngineError('„Antippen“ läuft direkt im Editor, nicht über ein Modell.', key);
   }
+  if (key === 'tiefe') {
+    // Kein Freisteller: Das Tiefenmodell liefert eine Entfernung je
+    // Bildpunkt und keine Silhouette. Es läuft über `bild/tiefeNetz.ts` und
+    // teilt sich mit den Freistellern nur die Verwaltung – Schalter,
+    // Downloadgrösse, Laufzeit.
+    throw new EngineError(
+      '„Tiefenschärfe“ läuft über den Foto-Editor, nicht über diese Liste.',
+      key,
+    );
+  }
   if (!engineAvailable(key)) {
     throw new EngineError(
       `„${engineInfo(key).label}“ ist auf diesem Gerät abgeschaltet. Du kannst es in den Einstellungen einschalten.`,

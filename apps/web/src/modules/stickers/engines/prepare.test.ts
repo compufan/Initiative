@@ -269,3 +269,50 @@ describe('briefkasten – die Einbettung fuer SAM', () => {
     expect(Math.min(...tensor)).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe('flaechenMittel, seitenrichtig', () => {
+  it('liefert die verlangte rechteckige Grösse', () => {
+    const bild = {
+      width: 8,
+      height: 8,
+      data: new Uint8ClampedArray(8 * 8 * 4).fill(200),
+    };
+    const klein = flaechenMittel(bild, 4, 2);
+    expect(klein.width).toBe(4);
+    expect(klein.height).toBe(2);
+    expect(klein.data.length).toBe(4 * 2 * 4);
+    for (const wert of klein.data) expect(wert).toBe(200);
+  });
+
+  it('staucht nicht: eine linke Hälfte bleibt die linke Hälfte', () => {
+    /*
+     * Ohne getrennte Achsen liefe die Höhe über die Breite – ein 4:1-Bild
+     * käme als Quadrat zurück, und die Tiefenkarte wäre gegenüber dem Foto
+     * verzerrt. Mit einem waagerechten Sprung im Bild sieht man das sofort.
+     */
+    const w = 16;
+    const h = 4;
+    const data = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y += 1)
+      for (let x = 0; x < w; x += 1) {
+        const at = (y * w + x) * 4;
+        const hell = x < w / 2 ? 0 : 255;
+        data[at] = hell;
+        data[at + 1] = hell;
+        data[at + 2] = hell;
+        data[at + 3] = 255;
+      }
+    const klein = flaechenMittel({ width: w, height: h, data }, 8, 2);
+    expect(klein.width).toBe(8);
+    expect(klein.height).toBe(2);
+    expect(klein.data[0]).toBe(0);
+    expect(klein.data[(0 * 8 + 7) * 4]).toBe(255);
+  });
+
+  it('bleibt ohne zweite Angabe quadratisch', () => {
+    const bild = { width: 6, height: 9, data: new Uint8ClampedArray(6 * 9 * 4).fill(10) };
+    const klein = flaechenMittel(bild, 3);
+    expect(klein.width).toBe(3);
+    expect(klein.height).toBe(3);
+  });
+});

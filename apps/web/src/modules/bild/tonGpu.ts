@@ -224,8 +224,16 @@ const float GLANZ = 3.0;
  *    nach aussen. Ohne das bekaeme jedes freigestellte Motiv einen
  *    Heiligenschein – den Fehler sieht man auf jedem Portraetmodus, der ihn
  *    nicht vermeidet.
+ *
+ * „weite“ ist der Anteil des vollen Radius fuer DIESEN Bildpunkt. Die Maske
+ * bestimmt also, wie GROSS die Scheibe ist – nicht, wie stark ein Bild mit
+ * fester Scheibe eingeblendet wird. Der Unterschied ist der zwischen einer
+ * Linse und einer Ueberblendung: Bei halbem Gewicht zeichnet eine Linse halb
+ * so gross, waehrend die Ueberblendung ein halbdurchsichtiges Doppelbild
+ * ergibt. Beim harten Rand einer Freistellmaske faellt das kaum auf, bei
+ * einem Verlauf ueber die ganze Tiefe einer Szene ist es der ganze Effekt.
  */
-vec3 zerstreuen(vec2 uv) {
+vec3 zerstreuen(vec2 uv, float weite) {
   float dreh = fract(sin(dot(uv, vec2(12.9898, 78.233))) * 43758.5453) * 6.2831853;
   vec3 summe = vec3(0.0);
   float gewicht = 0.0;
@@ -233,7 +241,7 @@ vec3 zerstreuen(vec2 uv) {
     float t = (float(i) + 0.5) / float(TUPFEN);
     float r = sqrt(t);
     float a = float(i) * 2.39996323 + dreh;
-    vec2 p = uv + vec2(cos(a), sin(a)) * r * uBokeh;
+    vec2 p = uv + vec2(cos(a), sin(a)) * r * uBokeh * weite;
     vec3 f = texture(uBild, p).rgb;
     float g = max(bokehAn(p), 0.02) * (1.0 + GLANZ * pow(dot(f, LUMA), 4.0));
     summe += f * g;
@@ -252,7 +260,12 @@ void main() {
    * bereits getoente Farben und der Kontrast wuerde zweimal angefasst.
    */
   float bokeh = uBokeh.x > 0.0 ? bokehAn(vUv) : 0.0;
-  if (bokeh > 0.0) c = mix(scharf, zerstreuen(vUv), bokeh);
+  // Kein „mix“ mehr: Die Scheibe ist schon auf die richtige Groesse
+  // geschrumpft. Wer beides tut, rechnet das Gewicht zweimal und bekommt
+  // seinen halben Radius auch noch halb durchsichtig. Unterhalb von 0,002
+  // waere die Scheibe schmaler als ein Bildpunkt – dann lohnen die 48 Tupfen
+  // nicht, und alle traefen ohnehin denselben Punkt.
+  if (bokeh > 0.002) c = zerstreuen(vUv, bokeh);
 
   /*
    * Unschärfemaske: die Differenz zum Mittel der vier Nachbarn, verstärkt.
@@ -758,14 +771,26 @@ function aufLeinwand(
   const daten = bilddaten.data;
 
   /*
-   * Die Tiefenschärfe auf dem Prozessor: EIN Kastenweichzeichner über das
-   * ganze Bild, dann punktweise dahin gemischt, wo die Maske es sagt.
+   * Die Tiefenschärfe auf dem Prozessor: DREI Stufen statt einer.
    *
    * Ehrlich ungleich zur Grafikeinheit: Dort ist es eine Scheibe mit 48
    * Tupfen und Glanzlichtern, hier ein Kasten. Ein Lichtpunkt wird also nicht
    * zum Kreis. Das steht so auch im Vergleichstest, der Bereiche mit
    * Unschärfe ausdrücklich AUSNIMMT – eine Gleichheit zu behaupten, die nicht
    * gilt, wäre schlimmer als der Unterschied.
+   *
+   * Was hier aber gleich sein MUSS, ist die Regel: Das Maskengewicht steuert
+   * die GRÖSSE der Unschärfe, nicht die Durchsichtigkeit eines Bildes mit
+   * fester Grösse. Mit einer einzigen Stufe – so stand es hier – bekam ein
+   * Bildpunkt bei halbem Gewicht ein halb durchsichtiges Doppelbild statt
+   * einer halb so grossen Zerstreuung. Solange die Maske ein freigestelltes
+   * Motiv war, fiel das nicht auf; sobald sie ein Verlauf über die Tiefe der
+   * Szene ist, ist es der ganze Unterschied.
+   *
+   * Drei Stufen und nicht acht, weil jede eine volle Kopie des Bildes kostet:
+   * bei 2000 × 1500 sind das 12 MB je Stufe. Zwischen den Stufen wird linear
+   * überblendet – innerhalb einer Stufe bleibt also die Überblendung, aber
+   * über einen Sprung von einem Drittel Radius statt über den ganzen.
    */
   const staerkste = szene.bereiche.reduce((max, b) => Math.max(max, b.anpassung.unschaerfe), 0);
   // Das Bild, wie es vor der Tiefenschärfe war – die Schärfe liest daraus.
@@ -787,16 +812,30 @@ function aufLeinwand(
         if (wert > bokehGewicht[i]) bokehGewicht[i] = wert;
       }
     }
-    const weich = new Uint8ClampedArray(daten);
-    kastenWeichRgba(weich, breite, hoehe, bokehRadius(staerkste, Math.max(breite, hoehe)));
+    const vollerRadius = bokehRadius(staerkste, Math.max(breite, hoehe));
+    const STUFEN = 3;
+    /** Stufe 0 ist das scharfe Bild; danach ein Drittel, zwei Drittel, ganz. */
+    const stufen: Uint8ClampedArray[] = [];
+    for (let k = 1; k <= STUFEN; k += 1) {
+      const kopie = new Uint8ClampedArray(daten);
+      kastenWeichRgba(kopie, breite, hoehe, (vollerRadius * k) / STUFEN);
+      stufen.push(kopie);
+    }
     for (let i = 0; i < bokehGewicht.length; i += 1) {
       const g = bokehGewicht[i];
       if (g === 0) continue;
       const at = i * 4;
-      const t = g / 255;
-      daten[at] += (weich[at] - daten[at]) * t;
-      daten[at + 1] += (weich[at + 1] - daten[at + 1]) * t;
-      daten[at + 2] += (weich[at + 2] - daten[at + 2]) * t;
+      // Wo zwischen den Stufen liegt dieser Bildpunkt?
+      const lage = (g / 255) * STUFEN;
+      const unten = Math.min(Math.floor(lage), STUFEN - 1);
+      const t = lage - unten;
+      // `unten === 0` heisst: zwischen dem scharfen Bild und der ersten Stufe.
+      const a0 = unten === 0 ? daten : stufen[unten - 1];
+      const a1 = stufen[unten];
+      for (let k = 0; k < 3; k += 1) {
+        const von = a0[at + k];
+        daten[at + k] = von + (a1[at + k] - von) * t;
+      }
     }
   }
 
