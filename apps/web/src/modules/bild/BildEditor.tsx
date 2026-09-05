@@ -52,6 +52,7 @@ import {
   griffeVon,
   type Griffname,
 } from './bereichGriffe.js';
+import { strichTreffer } from './maske.js';
 import { maskeFuerBereich } from './maskenSpeicher.js';
 import { netzTeilRechnen, netzVerfuegbar, type Netzart } from './netzMaske.js';
 import { tiefeVerfuegbar, tiefenTeilRechnen } from './tiefeNetz.js';
@@ -225,7 +226,19 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
   const [bereichId, setBereichId] = useState<string | null>(null);
   const [teilId, setTeilId] = useState<string | null>(null);
   const [pinselBreite, setPinselBreite] = useState(30);
-  const [pinselAbziehen, setPinselAbziehen] = useState(false);
+  /**
+   * Was ein Zug mit dem Pinsel tut.
+   *
+   * „Radieren“ und „Strich löschen“ sind ausdrücklich zweierlei: Radieren
+   * MALT negativ – es setzt einen neuen Strich, der wegnimmt. Strich löschen
+   * nimmt einen vorhandenen Strich ZURÜCK, samt seiner Wirkung.
+   *
+   * Ein „letzten Strich zurücknehmen“ gibt es hier bewusst nicht: Das
+   * vorhandene Rückgängig legt über `zugGemerkt` je Zug genau einen Schritt
+   * an, kann das also schon. Ein zweiter Knopf daneben wäre derselbe Knopf.
+   */
+  const [pinselModus, setPinselModus] = useState<'malen' | 'radieren' | 'weg'>('malen');
+  const pinselAbziehen = pinselModus === 'radieren';
   const [schleier, setSchleier] = useState(true);
   /** Was das Netz gerade tut – oder woran es gescheitert ist. */
   const [netzLaeuft, setNetzLaeuft] = useState<string | null>(null);
@@ -249,6 +262,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
   const bereichRef = useRef<string | null>(null);
   const teilRef = useRef<string | null>(null);
   const pinselBreiteRef = useRef(pinselBreite);
+  const pinselModusRef = useRef(pinselModus);
   const pinselAbziehenRef = useRef(pinselAbziehen);
   const schleierRef = useRef(schleier);
   const verlauf = useRef<BildDoc[]>([]);
@@ -306,8 +320,9 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     pinselBreiteRef.current = pinselBreite;
   }, [pinselBreite]);
   useEffect(() => {
+    pinselModusRef.current = pinselModus;
     pinselAbziehenRef.current = pinselAbziehen;
-  }, [pinselAbziehen]);
+  }, [pinselModus, pinselAbziehen]);
   useEffect(() => {
     schleierRef.current = schleier;
     planenRef.current?.();
@@ -673,6 +688,23 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
         }
       }
       if (teil && teil.art === 'pinsel') {
+        /*
+         * Im Modus „Strich löschen“ ist das Antippen selbst die Handlung –
+         * es entsteht kein Zug. Deshalb steht das VOR dem Anlegen von
+         * `zug.current`: Sonst hinge nach dem Löschen ein Pinselzug in der
+         * Luft und die nächste Bewegung malte einen Strich in ein Teil, das
+         * man gerade aufräumen wollte.
+         */
+        if (pinselModusRef.current === 'weg') {
+          const treffer = strichTreffer(teil.striche, amBild, fangBereich(massRef.current.faktor));
+          if (treffer >= 0) {
+            merken();
+            const uebrig = teil.striche.filter((_strich, nummer) => nummer !== treffer);
+            teilAendern({ striche: uebrig } as Partial<Maskenteil>);
+          }
+          zug.current = { ...zug.current, art: 'keiner', begonnen: false };
+          return;
+        }
         zug.current = {
           art: 'pinsel',
           griff: teil.id,
@@ -1969,21 +2001,36 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
                     <div className="bild-reihe">
                       <button
                         type="button"
-                        className={`btn btn-sm ${!pinselAbziehen ? 'is-active' : ''}`}
-                        aria-pressed={!pinselAbziehen}
-                        onClick={() => setPinselAbziehen(false)}
+                        className={`btn btn-sm ${pinselModus === 'malen' ? 'is-active' : ''}`}
+                        aria-pressed={pinselModus === 'malen'}
+                        onClick={() => setPinselModus('malen')}
                       >
                         🖌 Malen
                       </button>
                       <button
                         type="button"
-                        className={`btn btn-sm ${pinselAbziehen ? 'is-active' : ''}`}
-                        aria-pressed={pinselAbziehen}
-                        onClick={() => setPinselAbziehen(true)}
+                        className={`btn btn-sm ${pinselModus === 'radieren' ? 'is-active' : ''}`}
+                        aria-pressed={pinselModus === 'radieren'}
+                        onClick={() => setPinselModus('radieren')}
                       >
                         🧽 Radieren
                       </button>
+                      <button
+                        type="button"
+                        className={`btn btn-sm ${pinselModus === 'weg' ? 'is-active' : ''}`}
+                        aria-pressed={pinselModus === 'weg'}
+                        onClick={() => setPinselModus('weg')}
+                        title="Einen einzelnen Strich antippen und entfernen"
+                      >
+                        ✂️ Strich löschen
+                      </button>
                     </div>
+                    {pinselModus === 'weg' && (
+                      <p className="bild-hinweis">
+                        Tippe einen Strich an, um ihn zu entfernen – auch einen alten, ohne alles
+                        danach zurückzunehmen. Für „den letzten wieder weg“ genügt ↺ oben.
+                      </p>
+                    )}
                     <label className="bild-schieber">
                       <span>Pinsel</span>
                       <input

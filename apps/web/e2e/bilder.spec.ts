@@ -1401,3 +1401,136 @@ test('„Motiv + Tiefe“ macht die Kante hart und die Unschärfe entfernungsabh
 
   await alicePage.context().close();
 });
+
+test('ein einzelner Strich lässt sich entfernen, ohne alles danach zurückzunehmen', async ({
+  browser,
+}) => {
+  /*
+   * Der Unterschied zu ↺ Rückgängig ist der ganze Zweck.
+   *
+   * Rückgängig kann schon einen Strich zurücknehmen – über `zugGemerkt`
+   * entsteht je Zug genau ein Schritt. Es nimmt aber immer den LETZTEN, und
+   * mit ihm alles, was danach kam. Wer den ERSTEN von drei Strichen loswerden
+   * will, müsste dreimal zurück und zweimal neu malen.
+   *
+   * Geprüft wird deshalb genau das: drei Striche, der erste weg, die beiden
+   * anderen bleiben. Gemessen an der Maske, nicht an der Anzahl der Klicks.
+   */
+  const alice = credentials('strich');
+  const bob = credentials('sziel');
+  const alicePage = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await alicePage.getByRole('button', { name: 'Neuer Chat' }).click();
+  await alicePage.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await alicePage.getByText(bob.displayName).first().click();
+  await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'grau.png',
+    mimeType: 'image/png',
+    buffer: grauesPng(1200, 900),
+  });
+  await alicePage.getByRole('button', { name: /^Senden \(/ }).click();
+  const bild = alicePage.locator('.media-image').first();
+  await expect(bild).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => bild.evaluate((el: HTMLImageElement) => el.naturalWidth), { timeout: 30_000 })
+    .toBeGreaterThan(0);
+  await bild.click();
+  await alicePage.getByRole('button', { name: 'Bild bearbeiten' }).click();
+  const leinwand = alicePage.locator('.bild-leinwand');
+  await expect(leinwand).toBeVisible({ timeout: 30_000 });
+
+  await alicePage.getByRole('button', { name: /Bereiche$/ }).click();
+  await alicePage.getByRole('button', { name: '🖌 Pinsel' }).click();
+  // Der Schleier ist von Haus aus AN – ein Klick auf „Maske zeigen“ würde ihn
+  // ausschalten. (Genau daran ist die erste Fassung dieses Tests gescheitert:
+  // Sie mass danach ein Bild ohne Maske und fand folgerichtig keine Striche.)
+  await expect(alicePage.getByRole('button', { name: '👁 Maske zeigen' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+
+  /*
+   * Die Leinwand JEDES MAL frisch messen, nie einmal vorab.
+   *
+   * Mit dem Pinselteil kommen drei Knöpfe und zwei Regler ins Bedienfeld, und
+   * die Leinwand schrumpft dabei. Ein vorher gemessener Kasten zeigt danach
+   * ins Leere – daran ist die erste Fassung dieses Tests gescheitert, und
+   * daran war schon der Fangbereich-Test einmal gescheitert.
+   */
+  await expect(alicePage.getByRole('button', { name: '🖌 Malen' })).toBeVisible();
+  const kastenJetzt = async () => (await leinwand.boundingBox())!;
+
+  /** Malt einen waagerechten Strich auf der angegebenen Höhe. */
+  const malen = async (anteilY: number) => {
+    const kasten = await kastenJetzt();
+    const y = kasten.y + kasten.height * anteilY;
+    await alicePage.mouse.move(kasten.x + kasten.width * 0.25, y);
+    await alicePage.mouse.down();
+    await alicePage.mouse.move(kasten.x + kasten.width * 0.75, y, { steps: 10 });
+    await alicePage.mouse.up();
+    await alicePage.waitForTimeout(250);
+  };
+
+  /** Der Rotstich des Maskenschleiers in einem schmalen Band. */
+  const band = async (anteilY: number) =>
+    alicePage.evaluate((mitte) => {
+      const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+      const ctx = c?.getContext('2d');
+      const d = c && ctx ? ctx.getImageData(0, 0, c.width, c.height).data : null;
+      if (!c || !d) return -1;
+      let summe = 0;
+      let n = 0;
+      const von = Math.round(c.height * (mitte - 0.04));
+      const bis = Math.round(c.height * (mitte + 0.04));
+      for (let y = von; y < bis; y += 1)
+        for (let x = 0; x < c.width; x += 1) {
+          const at = (y * c.width + x) * 4;
+          summe += d[at] - d[at + 2];
+          n += 1;
+        }
+      return n > 0 ? summe / n : -1;
+    }, anteilY);
+
+  await malen(0.25);
+  await malen(0.5);
+  await malen(0.75);
+
+  console.log(
+    'DIAG baender',
+    (await band(0.25)).toFixed(1),
+    (await band(0.5)).toFixed(1),
+    (await band(0.75)).toFixed(1),
+  );
+  /*
+   * Erst einmal: Der Editor muss überhaupt noch offen sein.
+   *
+   * Beim Bauen dieses Tests kam das Nachrichtenmenü mitten in den ersten
+   * Pinselstrich gesprungen – mit „Für alle löschen“ als zweitem Eintrag.
+   * Ursache: React leitet Ereignisse durch ein Portal am eigenen Baum
+   * entlang weiter, und die Lichtbox hängt dort unter der Nachrichtenblase.
+   * Der Zeigerdruck auf der Leinwand stellte damit deren Langdruck-Wecker,
+   * der 502 ms später zuschlug. Das war kein Testfehler, sondern ein
+   * Bedienfehler für jeden, der langsam malt.
+   */
+  await expect(alicePage.getByRole('heading', { name: 'Nachricht' })).toHaveCount(0);
+
+  for (const hoehe of [0.25, 0.5, 0.75]) {
+    expect(await band(hoehe), `bei ${hoehe} muss ein Strich liegen`).toBeGreaterThan(5);
+  }
+
+  // Den ERSTEN Strich antippen und entfernen.
+  await alicePage.getByRole('button', { name: '✂️ Strich löschen' }).click();
+  const kasten = await kastenJetzt();
+  await alicePage.mouse.click(kasten.x + kasten.width * 0.5, kasten.y + kasten.height * 0.25);
+  await expect.poll(async () => band(0.25), { timeout: 5_000 }).toBeLessThan(2);
+
+  // Und die beiden anderen stehen noch – genau das kann ↺ nicht.
+  expect(await band(0.5), 'der zweite Strich muss stehen bleiben').toBeGreaterThan(5);
+  expect(await band(0.75), 'der dritte Strich muss stehen bleiben').toBeGreaterThan(5);
+
+  await alicePage.context().close();
+});

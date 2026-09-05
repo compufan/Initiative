@@ -387,6 +387,71 @@ function radialFeld(teil: RadialTeil, raster: Raster): Uint8Array {
   return feld;
 }
 
+/**
+ * Welcher Strich liegt unter dem Finger?
+ *
+ * Gibt den Index des NÄCHSTEN getroffenen Strichs zurück, oder −1.
+ *
+ * Getroffen heisst: innerhalb des halben Strichdurchmessers plus einer
+ * Fingerkuppe. Der Durchmesser gehört dazu, weil ein dicker Strich auch eine
+ * dicke Fläche ist – wer auf seine Mitte zielt, hat schon getroffen, und wer
+ * seinen Rand meint, ebenso. Der Zuschlag `nah` kommt von aussen, weil er in
+ * Leinwandpunkten gedacht ist und hier alles in Originalpunkten rechnet.
+ *
+ * Der spätere Strich gewinnt bei Gleichstand: Er liegt oben, also ist er der,
+ * den man sieht und meint. Deshalb läuft die Schleife von hinten und
+ * vergleicht mit `<` statt `<=`.
+ */
+export function strichTreffer(
+  striche: readonly Pinselstrich[],
+  punkt: { x: number; y: number },
+  nah: number,
+): number {
+  /*
+   * Keine Wache gegen NaN nötig – anders als bei `griffTreffer`.
+   *
+   * Dort schloss eine Abfrage Griffe AUS („weiter, wenn zu weit“), und bei
+   * NaN greift ein Ausschluss nicht: Der erste Griff wurde angenommen. Hier
+   * fragen beide Vergleiche POSITIV („nur wenn nah genug“), und die sind bei
+   * NaN falsch. Ein NaN führt damit von selbst auf −1.
+   *
+   * Hier stand eine Wache `if (!(nah >= 0)) return -1`. Gegen NaN war sie
+   * nachweislich wirkungslos – gemessen mit und ohne, beide Male −1. Sie
+   * änderte nur den Fall eines NEGATIVEN Zuschlags, und der kommt nicht vor:
+   * `nah` stammt aus `fangBereich`, und das ist `22 / max(0,0001, faktor)`,
+   * also immer positiv. Eine Wache gegen einen unmöglichen Fall, die den
+   * möglichen nicht abdeckt, ist schlechter als keine.
+   */
+  let bester = -1;
+  let bestes = Infinity;
+  for (let i = striche.length - 1; i >= 0; i -= 1) {
+    const strich = striche[i];
+    const grenze = strich.breite / 2 + nah;
+    let abstand = Infinity;
+    const punkte = strich.punkte;
+    if (punkte.length === 2) {
+      // Ein Antipp-Strich ohne Bewegung ist ein Punkt, keine Strecke.
+      abstand = Math.hypot(punkt.x - punkte[0], punkt.y - punkte[1]);
+    }
+    for (let k = 0; k + 3 < punkte.length; k += 2) {
+      const d = abstandZuStrecke(
+        punkt.x,
+        punkt.y,
+        punkte[k],
+        punkte[k + 1],
+        punkte[k + 2],
+        punkte[k + 3],
+      );
+      if (d < abstand) abstand = d;
+    }
+    if (abstand <= grenze && abstand < bestes) {
+      bestes = abstand;
+      bester = i;
+    }
+  }
+  return bester;
+}
+
 /** Ein einzelner Maskenteil als Rasterfeld, mit `umkehren` schon angewandt. */
 export function teilBauen(teil: Maskenteil, raster: Raster): Uint8Array {
   let feld: Uint8Array;

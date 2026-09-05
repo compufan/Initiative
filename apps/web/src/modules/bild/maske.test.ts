@@ -11,6 +11,7 @@ import {
   rasterFuer,
   rasterNachOriginal,
   strichStempeln,
+  strichTreffer,
   teilBauen,
   teilSchluessel,
   teileFalten,
@@ -924,5 +925,72 @@ describe('teilSchluessel für das Tiefenteil', () => {
 
   it('enthält die Karte selbst nicht – sie würde zu [object Uint8Array]', () => {
     expect(teilSchluessel(tiefenTeil())).not.toContain('object');
+  });
+});
+
+describe('strichTreffer', () => {
+  const strich = (punkte: number[], breite = 20): Pinselstrich => ({
+    punkte,
+    breite,
+    haerte: 1,
+    abziehen: false,
+  });
+
+  it('findet den Strich unter dem Finger', () => {
+    const striche = [strich([0, 0, 100, 0])];
+    expect(strichTreffer(striche, { x: 50, y: 0 }, 0)).toBe(0);
+  });
+
+  it('rechnet den Strichdurchmesser mit', () => {
+    // Breite 20 heisst Radius 10: bei 9 Punkten Abstand noch getroffen,
+    // bei 11 nicht mehr. Ohne den Durchmesser waere schon 9 daneben.
+    const striche = [strich([0, 0, 100, 0], 20)];
+    expect(strichTreffer(striche, { x: 50, y: 9 }, 0)).toBe(0);
+    expect(strichTreffer(striche, { x: 50, y: 11 }, 0)).toBe(-1);
+  });
+
+  it('nimmt den Zuschlag für die Fingerkuppe dazu', () => {
+    const striche = [strich([0, 0, 100, 0], 20)];
+    expect(strichTreffer(striche, { x: 50, y: 25 }, 0)).toBe(-1);
+    expect(strichTreffer(striche, { x: 50, y: 25 }, 20)).toBe(0);
+  });
+
+  it('endet an den Kappen und läuft nicht auf der Geraden weiter', () => {
+    // 200 liegt auf der VERLÄNGERUNG der Strecke, aber weit hinter ihrem Ende.
+    const striche = [strich([0, 0, 100, 0], 20)];
+    expect(strichTreffer(striche, { x: 200, y: 0 }, 0)).toBe(-1);
+  });
+
+  it('trifft auch einen Strich aus einem einzigen Punkt', () => {
+    /*
+     * Ein Antippen ohne Bewegung ergibt einen Strich mit genau zwei Zahlen.
+     * Die Streckenschleife läuft dafür kein einziges Mal – ohne den
+     * Sonderfall wäre so ein Klecks nicht mehr anzutippen und liesse sich
+     * nur noch über „Maske löschen“ loswerden.
+     */
+    const striche = [strich([40, 40], 20)];
+    expect(strichTreffer(striche, { x: 42, y: 43 }, 0)).toBe(0);
+    expect(strichTreffer(striche, { x: 80, y: 80 }, 0)).toBe(-1);
+  });
+
+  it('nimmt bei Überlappung den oberen, also den späteren', () => {
+    const striche = [strich([0, 0, 100, 0]), strich([0, 2, 100, 2])];
+    expect(strichTreffer(striche, { x: 50, y: 1 }, 0)).toBe(1);
+  });
+
+  it('nimmt sonst den näheren, auch wenn er älter ist', () => {
+    const striche = [strich([0, 0, 100, 0]), strich([0, 60, 100, 60])];
+    expect(strichTreffer(striche, { x: 50, y: 5 }, 0)).toBe(0);
+  });
+
+  it('liefert −1 ohne Striche und bei unsinnigem Zuschlag', () => {
+    /*
+     * NaN entsteht eine Schicht höher, sobald durch eine Leinwandbreite 0
+     * geteilt wird – ein Fingerdruck während eines Grössenwechsels reicht.
+     * Hier führt er von selbst auf −1, weil beide Vergleiche positiv fragen.
+     */
+    expect(strichTreffer([], { x: 0, y: 0 }, 10)).toBe(-1);
+    expect(strichTreffer([strich([0, 0, 10, 0])], { x: 0, y: 0 }, Number.NaN)).toBe(-1);
+    expect(strichTreffer([strich([0, 0, 10, 0])], { x: Number.NaN, y: 0 }, 10)).toBe(-1);
   });
 });

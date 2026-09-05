@@ -29,6 +29,26 @@ export function useLongPress(onTrigger: () => void, delay = 450): LongPressHandl
   return {
     onPointerDown(event) {
       if (event.button != null && event.button !== 0) return;
+      /*
+       * Nur, wenn der Druck WIRKLICH auf dieser Nachricht landete.
+       *
+       * React leitet Ereignisse am eigenen Baum entlang weiter – auch durch
+       * ein Portal hindurch. Die Lichtbox hängt im DOM am Dokumentkörper,
+       * im React-Baum aber weiter unter der Nachrichtenblase. Ein
+       * Zeigerdruck im Bildeditor, der aus dieser Lichtbox heraus geöffnet
+       * wurde, kam damit hier an und stellte den Wecker.
+       *
+       * Was der Anwender davon sah: Er zog im Editor den ersten
+       * Pinselstrich, und mitten hinein sprang das Nachrichtenmenü mit
+       * „Für alle löschen“. Nachgemessen: Der Wecker schlug 502 ms nach dem
+       * Beginn des Zugs zu – die 450 ms von hier.
+       *
+       * `contains` fragt den DOM und nicht React. Ein Druck im Portal ist
+       * dort nicht enthalten, und genau das ist die Auskunft, die wir
+       * brauchen.
+       */
+      const ziel = event.target as Node | null;
+      if (ziel && !event.currentTarget.contains(ziel)) return;
       origin.current = { x: event.clientX, y: event.clientY };
       clear();
       timer.current = window.setTimeout(() => {
