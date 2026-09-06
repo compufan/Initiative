@@ -19,7 +19,9 @@ Startbildschirm legen und funktioniert auch ohne Netz weiter.
 - Angemeldet bleibst du dauerhaft; die Sitzung erneuert sich im Hintergrund.
   Abmelden beendet sie nur auf diesem Gerät.
 - **Profil**: Profilbild (direkt aus Kamera oder Galerie), Anzeigename und ein
-  kurzer Text „Über mich". Wer kein Bild hinterlegt, bekommt automatisch
+  kurzer Text „Über mich". Beim Profilbild wählst du den quadratischen
+  Ausschnitt selbst – die App schneidet nicht mehr stillschweigend die Mitte
+  heraus. Wer kein Bild hinterlegt, bekommt automatisch
   Initialen in einer festen eigenen Farbe.
 - **Passwort ändern** in den Einstellungen, mit Bestätigung des alten Passworts.
 - **Anmelden ohne Passwort** mit Face ID, Fingerabdruck oder Geräte-PIN
@@ -154,11 +156,19 @@ Bis zu 10 Anhänge pro Nachricht.
 
 ## Fotos bearbeiten
 
-Aus jedem Foto in der App heraus, über den Stift neben dem Zauberstab. Fünf
-Werkzeuge, alle im Gerät – kein Bild verlässt es dabei.
+Aus jedem Foto in der App heraus, über den Stift neben dem Zauberstab – und
+**schon vor dem Senden**: in der Galerie-Auswahl an jeder Vorschaukachel, in
+der Kamera zwischen „Neu aufnehmen" und „Senden". Ein schiefes Foto muss also
+niemand erst allen zeigen, um es gerade zu rücken.
+
+Fünf Werkzeuge, alle im Gerät – kein Bild verlässt es dabei.
 
 - **Zuschnitt**: frei ziehen oder feste Seitenverhältnisse, drehen in
   Vierteln, spiegeln, und eine Lupe zum genauen Setzen.
+- **Geraderichten**: ein Regler von −15° bis +15° für den schiefen Horizont.
+  Das Bild dreht sich, der Rahmen bleibt stehen – und rückt so weit nach, dass
+  keine leeren Ecken hereinschauen. Zurückdrehen holt den Ausschnitt wieder,
+  Hin und Her frisst das Bild also nicht auf.
 - **Ton**: elf Regler – Belichtung, Kontrast, Lichter, Tiefen, Schwarz, Wärme,
   Tönung, Sättigung, Dynamik, Schärfe, Vignette. Dazu **Vorlagen** wie „Klar",
   „Abend" oder „Kräftig" mit eigenem Stärkeregler.
@@ -187,9 +197,10 @@ Rückgängig und Wiederherstellen gelten für alles; ein Zug ist ein Schritt.
 
 - **Sticker-Tastatur** im Chat: alle installierten Pakete auf einen Blick.
 - **Eigene Sticker** im Studio bauen:
-  - Bild aus Galerie oder Kamera als Quelle,
+  - Bild aus Galerie oder Kamera als Quelle – oder nur Text, ganz ohne Bild,
   - Zuschneiden und Verschieben,
-  - **Text** hinzufügen,
+  - **beliebig viele Schriftzüge**, jeder frei auf der Fläche verschiebbar,
+    mit eigener Größe, Farbe, Drehung und Kontur,
   - **weiße Kontur** mit einstellbarer Stärke,
   - fertigen Sticker in ein Paket speichern.
 - **Freistellen auf fünf Arten** – vom Antippen bis zum grossen Modell:
@@ -438,6 +449,14 @@ Die App ist dafür gebaut, dass Funklöcher, U-Bahn und Flugmodus nicht stören.
   [DEPLOYMENT.md](DEPLOYMENT.md)) und steht unter der [MIT-Lizenz](../LICENSE).
 
 ---
+
+## Wenn du nicht weißt, was ein Knopf tut
+
+**Drück ihn lange.** Nach einer halben Sekunde erscheint ein Satz, der sagt,
+was passiert – und der Knopf löst dabei ausdrücklich **nicht** aus. Wer
+wissen will, was „Löschen" tut, muss es nicht ausprobieren.
+
+Am Rechner genügt es, mit der Maus darauf zu zeigen.
 
 ## Was (noch) nicht geht
 

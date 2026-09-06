@@ -43,7 +43,8 @@ Ausgaben, Umfragen, Terminfindung und Mini-Spiele.
 
 **Fotos bearbeiten**
 
-- [x] Zuschneiden, Ausrichten, Licht und Farbe, Malen und Text – im Gerät
+- [x] Zuschneiden, Geraderichten, Licht und Farbe, Malen und Text – im Gerät
+- [x] Erreichbar schon vor dem Senden, und beim Profilbild mit eigenem Ausschnitt
 - [x] Vorlagen (Looks) und ein echter Schwarz-Weiß-Filter mit Farbfilter
 - [x] Bereiche: Pinsel, Verlauf, Motiv freistellen, Tiefenkarte aus dem Foto
 - [x] Tiefenschärfe mit echter Blende statt Weichzeichner über allem
@@ -51,7 +52,8 @@ Ausgaben, Umfragen, Terminfindung und Mini-Spiele.
 **Sticker**
 
 - [x] Sticker-Tastatur im Chat
-- [x] Sticker-Editor: freistellen, zuschneiden, Text und weiße Kontur
+- [x] Sticker-Editor: freistellen, zuschneiden, weiße Kontur und beliebig
+      viele frei platzierbare Schriftzüge
 - [x] Eigene Pakete anlegen, teilen, installieren und wieder entfernen
 
 **Dateien und Sammlungen**
@@ -89,6 +91,7 @@ Ausgaben, Umfragen, Terminfindung und Mini-Spiele.
 
 - [x] Installierbar auf iPhone, Android und Desktop, arbeitet offline weiter
 - [x] Push-Benachrichtigungen, Hell/Dunkel-Design, Akzentfarbe je Konto
+- [x] Langes Drücken erklärt jeden Knopf – ohne ihn auszulösen
 - [x] Teilen-Ziel des Systems: Fotos aus anderen Apps direkt in einen Chat
 - [x] Registrierung offen, per Einladungscode oder komplett geschlossen
 - [x] Anmelden mit Passkey (Face ID, Fingerabdruck) statt Passwort
