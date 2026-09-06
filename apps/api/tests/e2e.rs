@@ -692,6 +692,62 @@ async fn full_api_scenario() {
         .unwrap();
     assert_eq!(bob_status["status"], "maybe");
 
+    /*
+     * Wer im Editor abgewaehlt wird, ist danach WIRKLICH ausgeladen.
+     *
+     * Vorher fuegte PATCH nur ein und entfernte nie. Die Oberflaeche fuellt
+     * die Kaestchen aber mit den aktuellen Teilnehmern vor - sie sieht also
+     * wie eine vollstaendige Liste aus. Wer jemanden abwaehlte und speicherte,
+     * bekam "Termin gespeichert" zu sehen, und der Abgewaehlte blieb
+     * eingeladen: weiter Erinnerungen, weiter Zugriff auf Notizen und
+     * Unterlagen. Ein stiller Fehlschlag mit Erfolgsmeldung.
+     */
+    let (status, ohne_bob) = app
+        .call(
+            "PATCH",
+            &format!("/api/v1/calendar/events/{event_id}"),
+            Some(&alice_token),
+            // Alice bleibt (sie hat den Termin angelegt), Bob faellt weg.
+            Some(json!({ "attendeeIds": [alice_id] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let teilnehmer = ohne_bob["attendees"].as_array().unwrap();
+    assert!(
+        !teilnehmer
+            .iter()
+            .any(|attendee| attendee["userId"] == bob_id.as_str()),
+        "Bob wurde abgewaehlt, ist aber noch eingeladen: {teilnehmer:?}"
+    );
+
+    // Und Alice bleibt drin - der Veranstalter darf sich nicht versehentlich
+    // selbst aus seinem Termin entfernen.
+    assert!(
+        teilnehmer
+            .iter()
+            .any(|attendee| attendee["userId"] == alice_id.as_str()),
+        "Die Veranstalterin fehlt: {teilnehmer:?}"
+    );
+
+    // Zurueckholen geht auch: die Liste ist der Sollzustand, in beide
+    // Richtungen.
+    let (_, wieder) = app
+        .call(
+            "PATCH",
+            &format!("/api/v1/calendar/events/{event_id}"),
+            Some(&alice_token),
+            Some(json!({ "attendeeIds": [alice_id, bob_id] })),
+        )
+        .await;
+    assert!(
+        wieder["attendees"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|attendee| attendee["userId"] == bob_id.as_str()),
+        "Bob liess sich nicht wieder einladen"
+    );
+
     let from = chrono::Utc::now();
     let to = chrono::Utc::now() + chrono::Duration::days(60);
     let (_, occurrences) = app

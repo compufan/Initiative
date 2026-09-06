@@ -307,6 +307,23 @@ async fn update(
     .await?;
 
     if let Some(attendee_ids) = input.attendee_ids {
+        /*
+         * Die Liste ist der SOLLZUSTAND, nicht ein Nachtrag.
+         *
+         * Vorher wurde hier nur eingefuegt. Wer im Editor jemanden abwaehlte
+         * und speicherte, bekam "Termin gespeichert" zu sehen - und der
+         * Abgewaehlte blieb eingeladen, bekam weiter Erinnerungen und sah
+         * weiter die Notizen und Unterlagen des Termins. Die Oberflaeche
+         * fuellt die Kaestchen mit den aktuellen Teilnehmern vor
+         * (`formFromEvent`), sie SIEHT also wie eine vollstaendige Liste aus.
+         * Genau so wird sie jetzt auch behandelt.
+         *
+         * Wer schon dabei ist, behaelt seine Zusage: `do nothing` beim
+         * Einfuegen laesst die Zeile samt Status stehen. Nur wer nicht mehr
+         * in der Liste steht, verliert sie - und das ist gerade der Sinn.
+         */
+        let bleiben: Vec<Uuid> = attendee_ids.clone();
+
         for attendee in attendee_ids {
             sqlx::query(
                 "insert into event_attendees (event_id, user_id, status) values ($1, $2, 'pending')
@@ -317,6 +334,22 @@ async fn update(
             .execute(&state.pool)
             .await?;
         }
+
+        // Wer den Termin angelegt hat, bleibt drin - genau wie beim
+        // ausdruecklichen Ausladen. Sonst koennte sich der Veranstalter mit
+        // einem Haken aus seinem eigenen Termin entfernen und danach nicht
+        // mehr hinein.
+        sqlx::query(
+            "delete from event_attendees
+              where event_id = $1
+                and user_id <> all($2)
+                and ($3::uuid is null or user_id <> $3)",
+        )
+        .bind(id)
+        .bind(&bleiben)
+        .bind(row.created_by)
+        .execute(&state.pool)
+        .await?;
     }
 
     let dto = load_event_dto(&state, id).await?;
