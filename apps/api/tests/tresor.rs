@@ -340,6 +340,48 @@ async fn vorspulen_im_video_holt_die_richtigen_bytes() {
         );
         assert_eq!(teil, &daten[von..=bis], "Inhalt bei {von}-{bis}");
     }
+
+    /*
+     * Ein Bereich hinter dem Dateiende ist nicht erfüllbar.
+     *
+     * Vorher kam darauf eine in sich widersprüchliche Antwort: Der Speicher
+     * klemmt den Anfang auf das letzte Byte, die Kopfzeile nannte aber weiter
+     * den angefragten Anfang – `Content-Range: bytes 999999999-299999/300000`
+     * mit einem Byte Inhalt und Status 206. Ein Bereich, dessen Anfang hinter
+     * seinem Ende liegt.
+     */
+    let (status, kopf, teil) = probe
+        .roh(
+            "GET",
+            &format!("/api/v1/media/{anhang}/bytes"),
+            Some(&token),
+            vec![("range", "bytes=999999999-".to_string())],
+            Body::empty(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::RANGE_NOT_SATISFIABLE);
+    let bereich = kopf
+        .iter()
+        .find(|(name, _)| name == "content-range")
+        .map(|(_, wert)| wert.clone())
+        .unwrap_or_default();
+    assert_eq!(bereich, format!("bytes */{}", daten.len()));
+    assert!(teil.is_empty(), "kein Inhalt bei einem leeren Bereich");
+
+    // Genau das letzte Byte ist noch erfüllbar – die Grenze liegt bei
+    // „Anfang gleich Gesamtgrösse", nicht einen Schritt davor.
+    let letzte = daten.len() - 1;
+    let (status, _, teil) = probe
+        .roh(
+            "GET",
+            &format!("/api/v1/media/{anhang}/bytes"),
+            Some(&token),
+            vec![("range", format!("bytes={letzte}-"))],
+            Body::empty(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+    assert_eq!(teil, &daten[letzte..], "das letzte Byte muss kommen");
 }
 
 fn dateien_sammeln(wurzel: &str) -> Vec<String> {

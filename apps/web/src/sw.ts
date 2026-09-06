@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
-import { cleanupOutdatedCaches, precacheAndRoute } from 'workbox-precaching';
+import { cleanupOutdatedCaches, matchPrecache, precacheAndRoute } from 'workbox-precaching';
 import type { PushPayload } from '@initiative/shared';
+import { bereichLesen } from './lib/bereich.js';
 
 declare const self: ServiceWorkerGlobalScope & {
   __WB_MANIFEST: { url: string; revision: string | null }[];
@@ -30,7 +31,7 @@ const KEEP_CACHES = [MEDIA_CACHE, MODEL_CACHE];
  * Aktivieren.
  */
 const ABGELEGTE_MODELLE = ['/models/birefnet-lite-1024.onnx'];
-const SHELL_FALLBACK = '/index.html';
+const SHELL_FALLBACK = 'index.html';
 
 cleanupOutdatedCaches();
 precacheAndRoute(self.__WB_MANIFEST);
@@ -79,6 +80,17 @@ function isMediaRequest(url: URL): boolean {
   );
 }
 
+/**
+ * Pfade, für die der Workbox-Precache schon selbst antwortet.
+ *
+ * Nur die Wurzel und die Schale selbst stehen im Manifest; alle anderen Pfade
+ * der App (`/chats`, `/kalender`, …) sind Client-Routen und kommen dort nicht
+ * vor. Für die beiden hier darf dieser Arbeiter nicht auch noch antworten.
+ */
+function precacheAntwortet(url: URL): boolean {
+  return url.pathname === '/' || url.pathname === '/index.html';
+}
+
 /** Die Freistell-Bausteine: unter /mediapipe/ und /models/. */
 function isModelRequest(url: URL): boolean {
   return url.pathname.startsWith('/mediapipe/') || url.pathname.startsWith('/models/');
@@ -108,14 +120,35 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // App shell for navigations so the PWA opens offline.
-  if (request.mode === 'navigate') {
+  /*
+   * Die App-Schale für Navigationen, damit die PWA offline aufgeht.
+   *
+   * Zwei Dinge waren hier falsch, und beide zeigten sich erst ohne Netz.
+   *
+   * **Der Rückfall traf nie.** `caches.match('/index.html')` sucht genau
+   * diese Adresse. Der Workbox-Precache legt die Datei aber unter ihrem
+   * Cache-SCHLÜSSEL ab – `index.html?__WB_REVISION__=<hash>`, im gebauten
+   * `sw.js` nachzulesen. Der Treffer war damit unmöglich, und übrig blieb
+   * `Response.error()`: Offline führte jeder Verweis auf `/chats`,
+   * `/kalender` oder `/spiele` – also genau die Verknüpfungen aus dem
+   * Manifest – auf eine kaputte Seite. `matchPrecache` schlägt über den
+   * Schlüssel nach und trifft.
+   *
+   * **Zweimal geantwortet.** `precacheAndRoute` hängt seinen eigenen
+   * fetch-Behandler an, und zwar VOR diesem. Für `/` greift dort die Regel
+   * für das Verzeichnis (`directoryIndex: 'index.html'`), der Precache
+   * antwortet – und dieser Behandler rief danach ein zweites Mal
+   * `respondWith`, was im Arbeiter einen `InvalidStateError` wirft. Bei
+   * jedem Aufruf der Startseite. Deshalb überlassen wir `/` jetzt dem
+   * Precache und kümmern uns nur um die Pfade, die er nicht kennt.
+   */
+  if (request.mode === 'navigate' && !precacheAntwortet(url)) {
     event.respondWith(
       (async () => {
         try {
           return await fetch(request);
         } catch {
-          const cached = await caches.match(SHELL_FALLBACK);
+          const cached = await matchPrecache(SHELL_FALLBACK);
           return cached ?? Response.error();
         }
       })(),
@@ -123,10 +156,48 @@ self.addEventListener('fetch', (event) => {
   }
 });
 
+/**
+ * Aus einer abgelegten ganzen Antwort einen Ausschnitt schneiden.
+ *
+ * Die Cache-API vergleicht beim Nachschlagen nur die Adresse und ignoriert den
+ * `Range`-Kopf: Eine Teilanfrage bekam deshalb die GANZE Datei mit Status 200.
+ * Für `<video>` und `<audio>` ist das die falsche Antwort – WebKit verlangt
+ * eine 206 und bricht sonst ab. Ein Video, das vollständig im Gerät lag, blieb
+ * schwarz.
+ *
+ * `null` heisst „nicht erfüllbar oder nicht verstanden" – dann geht die ganze
+ * Antwort hinaus, so wie bisher.
+ */
+async function teilAntwort(gespeichert: Response, kopf: string | null): Promise<Response | null> {
+  const daten = await gespeichert.clone().arrayBuffer();
+  const bereich = bereichLesen(kopf, daten.byteLength);
+  if (!bereich) return null;
+  const stueck = daten.slice(bereich.start, bereich.ende + 1);
+  const kopfzeilen = new Headers(gespeichert.headers);
+  kopfzeilen.set(
+    'content-range',
+    `bytes ${bereich.start}-${bereich.ende}/${daten.byteLength}`,
+  );
+  kopfzeilen.set('content-length', String(stueck.byteLength));
+  kopfzeilen.set('accept-ranges', 'bytes');
+  return new Response(stueck, {
+    status: 206,
+    statusText: 'Partial Content',
+    headers: kopfzeilen,
+  });
+}
+
 async function cacheFirst(request: Request, cacheName: string): Promise<Response> {
   const cache = await caches.open(cacheName);
+  const bereichKopf = request.headers.get('range');
   const cached = await cache.match(request, { ignoreVary: true });
-  if (cached) return cached;
+  if (cached) {
+    if (!bereichKopf) return cached;
+    // Eine abgelegte 206 gibt es nicht (unten wird nur bei 200 abgelegt), also
+    // ist das Geschnittene immer aus der vollen Datei.
+    const teil = await teilAntwort(cached, bereichKopf);
+    return teil ?? cached;
+  }
   try {
     const response = await fetch(request);
     if (response.ok && response.status === 200) {
@@ -139,7 +210,11 @@ async function cacheFirst(request: Request, cacheName: string): Promise<Response
     return response;
   } catch (error) {
     const fallback = await cache.match(request, { ignoreVary: true });
-    if (fallback) return fallback;
+    if (fallback) {
+      if (!bereichKopf) return fallback;
+      const teil = await teilAntwort(fallback, bereichKopf);
+      return teil ?? fallback;
+    }
     throw error;
   }
 }

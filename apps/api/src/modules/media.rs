@@ -397,6 +397,30 @@ async fn serve(
     };
     let range = parse_range(range_header.as_deref(), total);
 
+    /*
+     * Ein Bereich jenseits des Dateiendes ist nicht erfüllbar – und wird auch
+     * so beantwortet.
+     *
+     * Vorher entstand daraus eine in sich widersprüchliche Antwort: Der
+     * Speicher klemmt den Anfang auf das letzte Byte (`local.rs`), die
+     * Kopfzeile nannte aber weiter den ANGEFRAGTEN Anfang. Bei einer Datei von
+     * 100 Byte und `Range: bytes=999999-` stand da `Content-Range: bytes
+     * 999999-99/100` mit `Content-Length: 1` und Status 206 – ein Bereich,
+     * dessen Anfang hinter seinem Ende liegt, mit einem Byte Inhalt, das
+     * niemand angefragt hat. RFC 7233 sieht dafür 416 vor.
+     *
+     * Die Prüfung steht vor dem Lesen: Sie spart dem Speicher die Anfrage.
+     */
+    if let (Some(bereich), Some(gesamt)) = (range, total) {
+        if bereich.start >= gesamt {
+            return Ok((
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                [(header::CONTENT_RANGE, format!("bytes */{gesamt}"))],
+            )
+                .into_response());
+        }
+    }
+
     let object = state
         .storage
         .read(&attachment.storage_key, range)
@@ -465,7 +489,17 @@ async fn serve(
         );
     }
 
-    let response = match (range, object.total_size) {
+    /*
+     * Die Gesamtgrösse aus der Datenbank springt ein, wenn der Speicher keine
+     * meldet.
+     *
+     * Sonst fiel eine Bereichsanfrage in den `_`-Zweig und wurde mit 200 und
+     * dem Rumpf beantwortet, den der Speicher für den BEREICH geliefert hat –
+     * der Client hielte ein Stück für die ganze Datei. Ein Video lüde still
+     * von vorn, eine Datei käme abgeschnitten an. Dieselbe Zahl hat schon
+     * `parse_range` benutzt, sie passt also zum geklemmten Bereich.
+     */
+    let response = match (range, object.total_size.or(total)) {
         (Some(range), Some(total)) => {
             let end = range
                 .end
