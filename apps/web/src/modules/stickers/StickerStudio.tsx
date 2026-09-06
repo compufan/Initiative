@@ -614,6 +614,10 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
           `Das Netz ging nicht (${error instanceof Error ? error.message : 'unbekannt'}). Dieser Tipp wurde nach Farbe gemacht.`,
         );
       } finally {
+        // Auch hier der Merker von Hand: Der Effekt, der ihn dem Zustand
+        // nachführt, läuft erst nach dem nächsten Bild. Bis dahin hielte ein
+        // Tipp das Netz noch für beschäftigt.
+        tippRechnetRef.current = false;
         setTippRechnet(false);
         setModellStand(null);
       }

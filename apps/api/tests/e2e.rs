@@ -1036,6 +1036,91 @@ async fn full_api_scenario() {
         .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 
+    // Dasselbe Recht ein zweites Mal – für eine PERSON und für einen CHAT.
+    //
+    // Beim Chat scheiterte das: Das `on conflict` nannte nur die beiden
+    // Indizes für Personen, ein zweites Freigeben lief also in
+    // `collection_grants_unique_collection_conv_idx` und kam als „Interner
+    // Serverfehler" zurück – für einen Anwender, der nur die Stufe anheben
+    // wollte. Beide Wege müssen die Stufe ERSETZEN.
+    let (status, hoeher) = app
+        .call(
+            "POST",
+            &format!("/api/v1/collections/{sammlung_id}/grants"),
+            Some(&alice_token),
+            Some(json!({ "userId": carol_id, "level": "edit" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(hoeher["level"], "edit");
+
+    let (status, chat_recht) = app
+        .call(
+            "POST",
+            &format!("/api/v1/collections/{sammlung_id}/grants"),
+            Some(&alice_token),
+            Some(json!({ "conversationId": conversation_id, "level": "view" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(chat_recht["level"], "view");
+
+    let (status, chat_hoeher) = app
+        .call(
+            "POST",
+            &format!("/api/v1/collections/{sammlung_id}/grants"),
+            Some(&alice_token),
+            Some(json!({ "conversationId": conversation_id, "level": "edit" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(chat_hoeher["level"], "edit");
+
+    // Ein Recht, nicht zwei: Sonst stünde der Chat zweimal in der Liste, und
+    // „Zurücknehmen" nähme nur eine der beiden Zeilen weg.
+    let (status, rechte) = app
+        .call(
+            "GET",
+            &format!("/api/v1/collections/{sammlung_id}/grants"),
+            Some(&alice_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let fuer_chat = rechte["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|eintrag| eintrag["conversationId"] == conversation_id.as_str())
+        .count();
+    assert_eq!(fuer_chat, 1);
+
+    // Carol steht auf „edit" – die Stufe wurde ersetzt, nicht verdoppelt.
+    let (status, carols_sicht) = app
+        .call(
+            "GET",
+            &format!("/api/v1/collections/{sammlung_id}"),
+            Some(&carol_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(carols_sicht["myLevel"], "edit");
+
+    // Und wieder herunter: Ersetzen heisst ersetzen, in beide Richtungen.
+    // Danach steht Carol wieder auf „view" – so, wie es der Rest dieses
+    // Durchlaufs weiter unten erwartet.
+    let (status, zurueck) = app
+        .call(
+            "POST",
+            &format!("/api/v1/collections/{sammlung_id}/grants"),
+            Some(&alice_token),
+            Some(json!({ "userId": carol_id, "level": "view" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(zurueck["level"], "view");
+
     // ---- Vererbung an Unterordner ----------------------------------------
     let (status, unterordner) = app
         .call(
