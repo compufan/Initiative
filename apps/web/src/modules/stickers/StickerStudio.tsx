@@ -11,6 +11,7 @@ import { LIMITS, formatBytes, type StickerPackDto } from '@initiative/shared';
 import { toast, useHideNav } from '../../state/ui.js';
 import { clamp, errorMessage, firstEmoji, loadImageFromBlob, supportsWebp } from './helpers.js';
 import { SavePackSheet } from './SavePackSheet.js';
+import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 import {
   MAX_SCALE,
   MIN_SCALE,
@@ -44,7 +45,7 @@ import {
   type EngineKey,
 } from './engines/index.js';
 import { kanteWeichzeichnen, maskeTraegt, vorlageAus } from './engines/prepare.js';
-import { teilAn, teileFinden } from './engines/teile.js';
+import { maskeAus, teilAn, teileFinden } from './engines/teile.js';
 
 type Tool = 'move' | 'erase' | 'keep' | 'teile';
 
@@ -274,6 +275,20 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   const netzBereit = doc.tippGruppen.length > 0;
   const dazuZahl = doc.keep.filter((punkt) => punkt.mode !== 'weg').length;
   const wegZahl = doc.keep.length - dazuZahl;
+  /*
+   * Wann „Ecken entfernen“ noch etwas tut.
+   *
+   * Der Renderer lässt es fallen, sobald es einen dazunehmenden
+   * Flutungs-Tipp gibt (`flutPlus.length === 0 && doc.removeBg` in
+   * render.ts) – dann sagen die Tipps, was bleibt, und die Ecken-Automatik
+   * hat nichts mehr beizutragen. Der Knopf sperrte sich aber bei JEDEM Tipp
+   * (auch bei einem Netztipp, auch bei einem wegnehmenden) und stand dabei
+   * weiter auf „an“. Er behauptete damit eine Wirkung, die es nicht mehr gab.
+   */
+  const flutungAktiv = doc.keep.some(
+    (punkt) => (punkt.quelle ?? 'flutung') === 'flutung' && punkt.mode !== 'weg',
+  );
+  const eckenWirkt = doc.removeBg && !flutungAktiv;
 
   /*
    * Warum „Hohe Qualität“ auf diesem Gerät nicht geht – oder `null`.
@@ -703,6 +718,47 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   }
 
   /**
+   * Steckt schon Arbeit im Sticker?
+   *
+   * Gemeint ist, was der Anwender getan hat – nicht, was ohnehin dasteht.
+   * Verschieben und Zoomen zählen deshalb nicht: Wer sein Bild zurechtrückt
+   * und sich dann anders entscheidet, soll nicht gefragt werden.
+   */
+  function hatArbeit(): boolean {
+    if (!sourceRef.current) return false;
+    const stand = docRef.current;
+    return (
+      stand.strokes.length > 0 ||
+      stand.keep.length > 0 ||
+      stand.tippGruppen.length > 0 ||
+      stand.autoMask != null ||
+      stand.texte.some((text) => text.value.trim().length > 0)
+    );
+  }
+
+  /*
+   * Die Quelle wechseln – mit Rückfrage, wenn dabei Arbeit verloren geht.
+   *
+   * `applySource` leert `history.current`, setzt `canUndo` auf false und legt
+   * ein frisches Dokument an. Ein Tipp auf ein Emoji oder auf „🅣 Text“ warf
+   * damit die gesamte Freistellung, alle Striche und alle Schriftzüge weg –
+   * ohne Frage und ohne Weg zurück, denn der Rückgängig-Verlauf ging mit.
+   * Auf einem Telefon liegen diese Knöpfe zudem dicht an den Reitern.
+   */
+  const [quellWechsel, setQuellWechsel] = useState<{ quelle: EditorSource; reiter: Tab } | null>(
+    null,
+  );
+
+  function quelleWechseln(quelle: EditorSource, reiter: Tab) {
+    if (hatArbeit()) {
+      setQuellWechsel({ quelle, reiter });
+      return;
+    }
+    applySource(quelle);
+    setTab(reiter);
+  }
+
+  /**
    * Ein mitgegebenes Bild uebernehmen – einmal, nicht bei jedem Rendern.
    *
    * Die Kennung im Abhaengigkeitsfeld ist bewusst das Blob selbst: Bekommt
@@ -746,13 +802,15 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     setBusy(true);
     try {
       const image = await loadImageFromBlob(file);
-      applySource({
-        kind: 'image',
-        image,
-        width: image.naturalWidth,
-        height: image.naturalHeight,
-      });
-      setTab('move');
+      quelleWechseln(
+        {
+          kind: 'image',
+          image,
+          width: image.naturalWidth,
+          height: image.naturalHeight,
+        },
+        'move',
+      );
     } catch (error) {
       toast(errorMessage(error, 'Das Bild konnte nicht geladen werden'), 'error');
     } finally {
@@ -763,8 +821,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   function chooseEmoji(value: string) {
     const emoji = firstEmoji(value);
     if (!emoji) return;
-    applySource({ kind: 'emoji', emoji });
-    setTab('text');
+    quelleWechseln({ kind: 'emoji', emoji }, 'text');
   }
 
   /* ---------- Lupe ---------- */
@@ -1405,10 +1462,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                 <button
                   type="button"
                   className="btn btn-sm"
-                  onClick={() => {
-                    applySource({ kind: 'text' });
-                    setTab('text');
-                  }}
+                  onClick={() => quelleWechseln({ kind: 'text' }, 'text')}
                 >
                   🅣 Text
                 </button>
@@ -1464,10 +1518,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
               <button
                 type="button"
                 className="btn btn-sm"
-                onClick={() => {
-                  applySource({ kind: 'text' });
-                  setTab('text');
-                }}
+                onClick={() => quelleWechseln({ kind: 'text' }, 'text')}
               >
                 🅣 Text
               </button>
@@ -1761,8 +1812,21 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                       const quelle = sourceRef.current;
                       const maske = doc.autoMask;
                       if (!quelle || quelle.kind !== 'image' || !maske) return;
+                      /*
+                       * Dieselbe Teilauswahl wie beim Zeichnen.
+                       *
+                       * Hier stand `maske.alpha` – die GANZE Modellmaske.
+                       * Wer im Reiter „Teile“ nur den Kopf ausgewählt hatte,
+                       * bekam den Ausschnitt also auf die ganze Person
+                       * gerechnet: Das Bild sass sichtbar zu klein, und der
+                       * Knopf schien nicht zu tun, was er verspricht.
+                       */
+                      const gewaehlt =
+                        maske.teile && docRef.current.maskParts.length > 0
+                          ? maskeAus(maske.alpha, maske.teile, docRef.current.maskParts)
+                          : maske.alpha;
                       const passend = motivFuellen(
-                        maske.alpha,
+                        gewaehlt,
                         maske.width,
                         maske.height,
                         quelle,
@@ -1996,16 +2060,23 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
             <div className="stk-btn-row">
               <button
                 type="button"
-                className={`btn btn-sm ${doc.removeBg ? 'stk-chip-active' : ''}`}
+                className={`btn btn-sm ${eckenWirkt ? 'stk-chip-active' : ''}`}
                 onClick={() => {
                   commit();
                   setDoc((value) => ({ ...value, removeBg: !value.removeBg }));
                 }}
-                disabled={!hasImage || doc.keep.length > 0 || tippRechnet}
+                disabled={!hasImage || flutungAktiv || tippRechnet}
+                data-tipp="Nimmt weg, was farblich zu den vier Ecken passt – gut für einen einfarbigen Hintergrund."
               >
-                🪄 Ecken entfernen {doc.removeBg ? 'an' : 'aus'}
+                🪄 Ecken entfernen {eckenWirkt ? 'an' : 'aus'}
               </button>
             </div>
+            {flutungAktiv && doc.removeBg && (
+              <p className="stk-hint">
+                „Ecken entfernen“ ruht, solange deine Tipps sagen, was bleiben soll. Nimm die
+                Tipps zurück, und es greift wieder.
+              </p>
+            )}
             <label
               className="stk-slider"
               data-tipp="Wie ähnlich eine Farbe sein muss, damit sie beim Freistellen mit weggenommen wird"
@@ -2016,7 +2087,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                 min={5}
                 max={120}
                 value={doc.tolerance}
-                disabled={!hasImage || (!doc.removeBg && doc.keep.length === 0)}
+                disabled={!hasImage || (!eckenWirkt && doc.keep.length === 0)}
                 onChange={(event) => {
                   commit('tolerance');
                   const tolerance = Number(event.target.value);
@@ -2317,6 +2388,22 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={quellWechsel !== null}
+        title="Von vorn anfangen?"
+        description="Freistellung, Striche und Schrift gehen dabei verloren – auch der Rückgängig-Verlauf."
+        confirmLabel="Neu anfangen"
+        cancelLabel="Weiter bearbeiten"
+        danger
+        onCancel={() => setQuellWechsel(null)}
+        onConfirm={() => {
+          if (!quellWechsel) return;
+          applySource(quellWechsel.quelle);
+          setTab(quellWechsel.reiter);
+          setQuellWechsel(null);
+        }}
+      />
     </div>,
     document.body,
   );

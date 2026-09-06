@@ -23,6 +23,10 @@ export function StickerPickerSheet({ conversationId, onClose }: ComposerActionPr
   const [studioOpen, setStudioOpen] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
   const sendet = useRef(false);
+  // Der Merker sperrt, der Zustand ZEIGT es: Eine Referenz löst kein neues
+  // Bild aus, und auf einer langsamen Verbindung sah man bis zur Bestätigung
+  // gar nichts.
+  const [laeuft, setLaeuft] = useState<string | null>(null);
   const sentTimer = useRef<number | null>(null);
 
   useEffect(
@@ -89,6 +93,7 @@ export function StickerPickerSheet({ conversationId, onClose }: ComposerActionPr
      */
     if (sendet.current) return;
     sendet.current = true;
+    setLaeuft(sticker.id);
     try {
       await useChat.getState().sendMessage(conversationId, {
         type: 'sticker',
@@ -112,6 +117,7 @@ export function StickerPickerSheet({ conversationId, onClose }: ComposerActionPr
       toast(errorMessage(error, 'Sticker konnte nicht gesendet werden'), 'error');
     } finally {
       sendet.current = false;
+      setLaeuft(null);
     }
   }
 
@@ -210,6 +216,8 @@ export function StickerPickerSheet({ conversationId, onClose }: ComposerActionPr
                   type="button"
                   className={`stk-cell ${sent === sticker.id ? 'is-sent' : ''}`}
                   onClick={() => void send(sticker)}
+                  disabled={laeuft !== null}
+                  aria-busy={laeuft === sticker.id}
                   aria-label={sticker.emoji ? `Sticker ${sticker.emoji} senden` : 'Sticker senden'}
                 >
                   <img src={stickerSrc(sticker.url)} alt="" loading="lazy" decoding="async" />

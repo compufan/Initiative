@@ -57,8 +57,8 @@ import {
 import { strichTreffer } from './maske.js';
 import { VORLAGEN, vorlageAnwenden } from './vorlagen.js';
 import { maskeFuerBereich } from './maskenSpeicher.js';
-import { netzTeilRechnen, netzVerfuegbar, type Netzart } from './netzMaske.js';
-import { tiefeVerfuegbar, tiefenTeilRechnen } from './tiefeNetz.js';
+import { netzGrund, netzTeilRechnen, netzVerfuegbar, type Netzart } from './netzMaske.js';
+import { tiefeGrund, tiefeVerfuegbar, tiefenTeilRechnen } from './tiefeNetz.js';
 import { SCHRIFTEN, trifftText, zeichneAnsicht, zeichneAusgabe } from './zeichnen.js';
 import './styles.css';
 
@@ -2125,10 +2125,30 @@ export function BildEditor({
                */
               <p className="bild-hinweis bild-hinweis-warn">{netzFehler}</p>
             )}
-            {!netzVerfuegbar('object') && !netzFehler && (
+            {/*
+                Zu JEDEM grauen Knopf steht, warum er grau ist.
+
+                Erklärt war nur „Motiv“. „Person“, „Tiefe“ und „Motiv + Tiefe“
+                waren dauerhaft grau, und wer sie brauchte, hatte keinen
+                Anhaltspunkt, wo das umzustellen wäre – dabei liefern
+                `netzGrund` und `tiefeGrund` genau diesen Satz und waren hier
+                nicht einmal eingebunden.
+
+                Sichtbarer Text, kein `title`: Auf einem Telefon gibt es kein
+                Schweben.
+            */}
+            {!netzFehler && !netzVerfuegbar('object') && (
               <p className="bild-hinweis">
                 „Motiv“ ist abgeschaltet und lädt beim ersten Mal 4 MB. Du kannst es in den
                 Sticker-Einstellungen einschalten.
+              </p>
+            )}
+            {!netzFehler && !netzVerfuegbar('person') && (
+              <p className="bild-hinweis">{netzGrund('person')}</p>
+            )}
+            {!netzFehler && !tiefeVerfuegbar() && (
+              <p className="bild-hinweis">
+                {tiefeGrund()} Damit sind „🔭 Tiefe“ und „🎯 Motiv + Tiefe“ gesperrt.
               </p>
             )}
             {tiefeVerfuegbar() && !netzFehler && (
