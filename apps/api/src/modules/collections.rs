@@ -573,6 +573,44 @@ async fn assert_may_use_attachment(
             return Ok(());
         }
     }
+
+    /*
+     * Ein Recht an der EINZELNEN Datei zählt auch.
+     *
+     * `visible_collection_ids` kennt nur Rechte an einer Sammlung. Wer
+     * ausdrücklich nur eine Datei freigegeben bekommen hat – der Weg, den
+     * `collection_grants.item_id` und `item_level` eigens vorsehen –, fiel
+     * hier durch: Er sah die Datei im Ordner, durfte sie aber nicht in die
+     * eigene Sammlung legen. Zwei Antworten auf dieselbe Frage, und die
+     * strengere kam ausgerechnet für den Fall, den jemand bewusst erlaubt hat.
+     */
+    let einzeln: bool = sqlx::query_scalar(
+        "select exists (
+           select 1
+             from collection_items i
+             join collection_grants g on g.item_id = i.id
+            where i.attachment_id = $1
+              and i.deleted_at is null
+              and (
+                g.user_id = $2
+                or (
+                  g.conversation_id is not null
+                  and exists (
+                    select 1 from conversation_members m
+                     where m.conversation_id = g.conversation_id and m.user_id = $2
+                  )
+                )
+              )
+         )",
+    )
+    .bind(attachment.id)
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
+    if einzeln {
+        return Ok(());
+    }
+
     Err(AppError::forbidden(
         "Auf diese Datei hast du keinen Zugriff",
     ))

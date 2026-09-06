@@ -1238,6 +1238,87 @@ async fn full_api_scenario() {
     // Das Recht an der Datei hebt das schwächere am Ordner an, nicht umgekehrt.
     assert_eq!(carols_inhalt["items"][0]["myLevel"], "edit");
 
+    /*
+     * Und dieses Recht trägt auch beim WEITERVERWENDEN der Datei.
+     *
+     * `assert_may_use_attachment` fragte nur die sichtbaren Sammlungen ab –
+     * und die kennen nur Rechte an einer Sammlung, nicht an einer einzelnen
+     * Datei. Carol sah die Datei also im Ordner, durfte sie aber nicht in die
+     * eigene Sammlung legen: zwei Antworten auf dieselbe Frage, und die
+     * strengere ausgerechnet für den Fall, den Bob ausdrücklich erlaubt hat.
+     *
+     * Geprüft wird das mit Frida, NICHT mit Carol: Carol hat obendrein ein
+     * Leserecht am ganzen Ordner, und über das käme sie ohnehin durch – ein
+     * Prüffall, der beide Wege offen lässt, misst keinen von beiden. (Genau
+     * das ist beim ersten Anlauf passiert: Der Test lief auch ohne die
+     * Behebung durch.) Frida hat nur dieses eine Recht an dieser einen Datei.
+     */
+    let (status, frida_session) = app
+        .call(
+            "POST",
+            "/api/v1/auth/register",
+            None,
+            Some(json!({
+                "username": format!("frida{suffix}"),
+                "password": "passwort123",
+                "displayName": "Frida"
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{frida_session}");
+    let frida_token = frida_session["accessToken"].as_str().unwrap().to_string();
+    let frida_id = frida_session["user"]["id"].as_str().unwrap().to_string();
+
+    // Ohne jedes Recht kommt sie nicht an die Datei.
+    let (status, frida_ordner) = app
+        .call(
+            "POST",
+            "/api/v1/collections",
+            Some(&frida_token),
+            Some(json!({ "name": "Fridas Ablage" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{frida_ordner}");
+    let frida_ordner_id = frida_ordner["id"].as_str().unwrap().to_string();
+    let (status, _) = app
+        .call(
+            "POST",
+            &format!("/api/v1/collections/{frida_ordner_id}/items"),
+            Some(&frida_token),
+            Some(json!({ "attachmentId": attachment_id })),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "ohne jedes Recht darf die Datei nicht in einen fremden Ordner"
+    );
+
+    // Bob gibt ihr genau diese eine Datei frei – mehr nicht.
+    let (status, _) = app
+        .call(
+            "POST",
+            &format!("/api/v1/collections/items/{eintrag_id}/grants"),
+            Some(&bob_token),
+            Some(json!({ "userId": frida_id, "level": "view" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (status, uebernommen) = app
+        .call(
+            "POST",
+            &format!("/api/v1/collections/{frida_ordner_id}/items"),
+            Some(&frida_token),
+            Some(json!({ "attachmentId": attachment_id })),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::CREATED,
+        "ein Recht an genau dieser Datei muss zum Weiterverwenden reichen: {uebernommen}"
+    );
+
     // ---- Löschen wirkt nach unten ----------------------------------------
     let (status, _) = app
         .call(
