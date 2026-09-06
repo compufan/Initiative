@@ -61,7 +61,11 @@ export function EventCollection({ event, canManage, onChanged }: Props) {
       </h2>
 
       {event.collectionId && (
-        <a className="btn btn-block" href={`/dateien/${event.collectionId}`}>
+        <a
+          className="btn btn-block"
+          href={`/dateien/${event.collectionId}`}
+          data-tipp="Öffnet den Ordner mit allen Dateien und Bildern, die zu diesem Termin gehören"
+        >
           📁 {verknuepft?.name ?? 'Zur Sammlung'}
         </a>
       )}

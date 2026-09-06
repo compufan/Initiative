@@ -142,6 +142,32 @@ const TONREGLER: {
   { key: 'vignette', label: 'Vignette', min: -1, max: 1, schritt: 0.01 },
 ];
 
+/**
+ * Was jeder Regler tut – in einem Satz, für den Tooltip.
+ *
+ * Die Beschriftung nennt den Fachbegriff, und der sagt niemandem etwas, der
+ * nicht ohnehin weiss, was er bedeutet. „Dynamik“ ist das beste Beispiel: Der
+ * Name verrät nicht, dass der Regler blasse Farben anhebt und kräftige in
+ * Ruhe lässt – und genau deshalb greift man zur Sättigung und wundert sich
+ * über orange Gesichter.
+ *
+ * An einer Stelle, weil beide Reglerlisten – global und je Bereich – dieselben
+ * Namen benutzen. Zwei Listen liefen unweigerlich auseinander.
+ */
+const REGLER_TIPP: Partial<Record<keyof Anpassung | keyof Bereichston, string>> = {
+  belichtung: 'Macht das ganze Bild heller oder dunkler – wie eine längere Belichtungszeit.',
+  kontrast: 'Zieht Hell und Dunkel auseinander. Zu viel davon frisst Zeichnung in beiden.',
+  lichter: 'Holt Zeichnung in die hellen Stellen zurück – gegen ausgebrannten Himmel.',
+  tiefen: 'Hellt die dunklen Stellen auf, ohne den Rest anzufassen.',
+  schwarz: 'Legt fest, ab wo Dunkel wirklich Schwarz ist. Gibt dem Bild Halt.',
+  waerme: 'Verschiebt die Farben zwischen kühlem Blau und warmem Gelb.',
+  toenung: 'Der Ausgleich in die andere Richtung: zwischen Grün und Magenta.',
+  saettigung: 'Verstärkt alle Farben gleichmässig. Ganz nach links wird das Bild grau.',
+  dynamik: 'Hebt blasse Farben an und lässt kräftige Farben und Hauttöne in Ruhe.',
+  schaerfe: 'Betont Kanten. Sparsam einsetzen – zu viel sieht nach Blech aus.',
+  vignette: 'Dunkelt die Ecken ab und zieht den Blick zur Mitte.',
+};
+
 const FARBEN = [
   '#ffffff',
   '#111111',
@@ -1945,7 +1971,11 @@ export function BildEditor({
             {TONREGLER.map((regler) => {
               const wert = doc.anpassung[regler.key];
               return (
-                <label className="bild-schieber" key={regler.key}>
+                <label
+                  className="bild-schieber"
+                  key={regler.key}
+                  data-tipp={REGLER_TIPP[regler.key]}
+                >
                   <span>{regler.label}</span>
                   <input
                     type="range"
@@ -2145,7 +2175,10 @@ export function BildEditor({
                 )}
 
                 {aktivesTeil?.art === 'radial' && (
-                  <label className="bild-schieber">
+                  <label
+                    className="bild-schieber"
+                    data-tipp="Wie weich der Rand der Ellipse ausläuft – klein heisst harte Kante"
+                  >
                     <span>Weichheit</span>
                     <input
                       type="range"
@@ -2303,7 +2336,11 @@ export function BildEditor({
                 {BEREICHSREGLER.map((regler) => {
                   const wert = aktiverBereich.anpassung[regler.key];
                   return (
-                    <label className="bild-schieber" key={regler.key}>
+                    <label
+                      className="bild-schieber"
+                      key={regler.key}
+                      data-tipp={REGLER_TIPP[regler.key]}
+                    >
                       <span>{regler.label}</span>
                       <input
                         type="range"

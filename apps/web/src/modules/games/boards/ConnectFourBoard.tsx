@@ -123,9 +123,24 @@ export function ConnectFourBoard({ session, mySeat, onMove, busy }: GameBoardPro
       </div>
 
       {mySeat != null && state.winner == null && !state.draw && (
-        <p className="game-hint">
+        /*
+         * Der Stein trägt die ganze Aussage – und war für eine Vorlesehilfe
+         * unsichtbar (`aria-hidden`) wie für jeden, der Farben schlecht
+         * unterscheidet. „Du spielst“ und dann nichts.
+         *
+         * Der Satz sagt jetzt selbst, was Sache ist; der Stein illustriert
+         * ihn nur noch.
+         */
+        <p
+          className="game-hint"
+          data-tipp="Diese Steine gehören dir – tippe auf eine Spalte, um einen davon einzuwerfen"
+        >
           Du spielst{' '}
           <span className={`c4-disc c4-disc-inline ${seatClass(mySeat)}`} aria-hidden="true" />
+          <span className="visually-hidden">
+            {mySeat === 0 ? 'die erste Farbe' : 'die zweite Farbe'}
+          </span>{' '}
+          – tippe auf eine Spalte, um einen Stein einzuwerfen.
         </p>
       )}
 

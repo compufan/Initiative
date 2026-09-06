@@ -1793,7 +1793,10 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                     {doc.ausweiten > 0 ? `+${doc.ausweiten}` : doc.ausweiten}
                   </span>
                 </label>
-                <label className="stk-slider">
+                <label
+                  className="stk-slider"
+                  data-tipp="Macht die Kante des Freigestellten weicher, damit sie nicht wie Treppen aussieht"
+                >
                   <span>Weichheit</span>
                   <input
                     type="range"
@@ -1983,7 +1986,10 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                 🪄 Ecken entfernen {doc.removeBg ? 'an' : 'aus'}
               </button>
             </div>
-            <label className="stk-slider">
+            <label
+              className="stk-slider"
+              data-tipp="Wie ähnlich eine Farbe sein muss, damit sie beim Freistellen mit weggenommen wird"
+            >
               <span>Toleranz</span>
               <input
                 type="range"
