@@ -229,16 +229,37 @@ export function DatePollComposerSheet({ conversationId, onClose }: ComposerActio
             <div className="poll-quick">
               <span className="poll-hint">Für alle Tage:</span>
               <div className="poll-chips" role="group" aria-label="Schnellauswahl für alle Tage">
-                {TIME_PRESETS.map((preset) => (
-                  <button
-                    key={preset.label}
-                    type="button"
-                    className="poll-chip"
-                    onClick={() => toggleTimeEverywhere(preset.minutes)}
-                  >
-                    {preset.label}
-                  </button>
-                ))}
+                {TIME_PRESETS.map((preset) => {
+                  /*
+                   * Der Chip muss zeigen, ob er hinzufügt oder wegnimmt.
+                   *
+                   * Er tat es nicht, und daraus wurde eine Falle: Jeder frisch
+                   * gewählte Tag trägt schon `DEFAULT_MINUTES` = 10:00, und
+                   * das ist genau „Vormittag". Der erste Tipp darauf hat also
+                   * die Zeit von ALLEN Tagen entfernt, wo jeder das Gegenteil
+                   * erwartet – und der Chip sah davor und danach gleich aus.
+                   */
+                  const ueberall =
+                    dayKeys.length > 0 &&
+                    dayKeys.every((key) => (days[key] ?? []).includes(preset.minutes));
+                  return (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      className={`poll-chip ${ueberall ? 'is-active' : ''}`}
+                      aria-pressed={ueberall}
+                      onClick={() => toggleTimeEverywhere(preset.minutes)}
+                      data-tipp={
+                        ueberall
+                          ? `${preset.label} von allen Tagen wieder entfernen`
+                          : `${preset.label} bei allen Tagen als Vorschlag eintragen`
+                      }
+                    >
+                      {ueberall ? '✓ ' : '＋ '}
+                      {preset.label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
