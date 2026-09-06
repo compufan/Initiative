@@ -61,8 +61,15 @@ export function AboutCard() {
       if (stand === 'laedt') {
         toast('Eine neue Fassung wird gerade geladen – gleich meldet sie sich oben.', 'info');
       }
+      /*
+          „Es hat nicht geklappt" deckt beide Fälle ehrlich ab.
+          `unmoeglich` heisst entweder „es gab gar nichts nachzusehen" (kein
+          Service Worker) oder „gefunden, aber das Laden ist gescheitert"
+          (`redundant`). Der frühere Satz „Konnte nicht nachsehen" behauptete
+          für den zweiten Fall etwas Falsches: Nachgesehen wurde sehr wohl.
+      */
       if (stand === 'unmoeglich') {
-        toast('Konnte nicht nachsehen – lade die Seite neu und versuch es dann.', 'error');
+        toast('Hat gerade nicht geklappt – lade die Seite neu und versuch es dann.', 'error');
       }
     } catch (error) {
       toast(errorMessage(error, 'Nach Updates suchen ging gerade nicht'), 'error');

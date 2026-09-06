@@ -120,16 +120,23 @@ export function PersonenWahl({
     };
   }, [suche, suchbar]);
 
-  // Alles, was gerade zur Wahl steht: Vorschläge, Suchtreffer – und immer die
-  // bereits Gewählten, damit keiner beim Tippen verschwindet.
-  const [gemerkt, setGemerkt] = useState<Record<string, Person>>({});
-  useEffect(() => {
-    setGemerkt((vorher) => {
-      const naechster = { ...vorher };
-      for (const person of [...vorschlaege, ...treffer]) naechster[person.id] = person;
-      return naechster;
-    });
-  }, [vorschlaege, treffer]);
+  /*
+   * Alles, was gerade zur Wahl steht: Vorschläge, Suchtreffer – und immer die
+   * bereits Gewählten, damit keiner beim Tippen verschwindet.
+   *
+   * `bekannt` fasst zusammen, was OHNE Nachfrage schon da ist. Wichtig ist,
+   * dass es beim ersten Bild bereits stimmt: Stand hier nur der Zustand aus
+   * dem Effekt, war er beim Einhängen leer, und der Nachlade-Effekt darunter
+   * hielt für einen Augenblick JEDEN Gewählten für unbekannt – bei zwölf
+   * Eingeladenen zwölf Anfragen an den Server, deren Antworten eine
+   * Millisekunde später ohnehin aus den Vorschlägen gekommen wären.
+   */
+  const [nachgeladen, setNachgeladen] = useState<Record<string, Person>>({});
+  const gemerkt = useMemo(() => {
+    const zusammen: Record<string, Person> = { ...nachgeladen };
+    for (const person of [...vorschlaege, ...treffer]) zusammen[person.id] = person;
+    return zusammen;
+  }, [vorschlaege, treffer, nachgeladen]);
 
   /*
    * Gewählte, die weder vorgeschlagen noch gesucht wurden, werden NACHGELADEN.
@@ -156,7 +163,7 @@ export function PersonenWahl({
       ),
     ).then((geladen) => {
       if (abgebrochen) return;
-      setGemerkt((vorher) => {
+      setNachgeladen((vorher) => {
         const naechster = { ...vorher };
         for (const person of geladen) naechster[person.id] = person;
         return naechster;

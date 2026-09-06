@@ -118,6 +118,21 @@ export function AudioBubble({ message, isMine }: MessageRendererProps) {
         <button
           type="button"
           className="media-wave"
+          /*
+              Ein Schieberegler, kein Knopf.
+
+              Als `button` versprach die Leiste eine Auslösung, die es nicht
+              gibt: Eingabe und Leertaste laufen in `seekFromEvent` sofort in
+              `event.detail === 0` und tun nichts. Vorgelesen wurde „Knopf,
+              Position ändern" – ohne die aktuelle Position, ohne den Bereich
+              und ohne Rückmeldung nach dem Springen. `slider` sagt beides:
+              was er ist und wo er gerade steht.
+          */
+          role="slider"
+          aria-valuemin={0}
+          aria-valuemax={Math.max(1, Math.round(duration))}
+          aria-valuenow={Math.round(position)}
+          aria-valuetext={formatDuration(position * 1000)}
           onClick={seekFromEvent}
           onKeyDown={tasten}
           /*

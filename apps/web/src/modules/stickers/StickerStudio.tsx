@@ -648,6 +648,9 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       setRechnet(key);
       setModellFehler(null);
       setModellStand(null);
+      // Ob der Lauf durchkam – die Messzeile darf sonst den Lauf davor
+      // beschreiben.
+      let gelungen = false;
       try {
         const { image } = vorlageHolen(quelle);
 
@@ -704,6 +707,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
         // Werkzeug unter der Hand wegzunehmen wäre das Gegenteil von
         // „Antippen ist unabhängig“.
         if (toolRef.current !== 'keep') setTool(teile.anzahl > 1 ? 'teile' : 'move');
+        gelungen = true;
       } catch (error) {
         setModellFehler(
           error instanceof EngineError
@@ -714,8 +718,10 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
         setRechnet(null);
         setModellStand(null);
         // Nur „Hohe Qualität" misst – die anderen Verfahren rechnen ohnehin
-        // in Sekundenbruchteilen, dort wäre die Zeile nur Rauschen.
-        setMessung(key === 'birefnet' ? letzteMessung() : null);
+        // in Sekundenbruchteilen, dort wäre die Zeile nur Rauschen. Und nur
+        // ein gelungener Lauf: Nach einem Abbruch beschriebe die Zeile den
+        // Lauf davor.
+        setMessung(key === 'birefnet' && gelungen ? letzteMessung() : null);
       }
     },
     [commit],
@@ -731,6 +737,10 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     setDoc(createDoc());
     setTool('move');
     setLupe({ zoom: 1, x: STICKER_SIZE / 2, y: STICKER_SIZE / 2 });
+    // Die Messzeile gehört zum Lauf auf dem alten Bild. Bliebe sie stehen,
+    // beschriebe sie unter einem neuen Motiv eine Rechnung, die es für dieses
+    // Motiv nie gegeben hat.
+    setMessung(null);
   }
 
   /**
