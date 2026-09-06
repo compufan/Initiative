@@ -6,7 +6,7 @@ Alles unter `/api/v1`. Die Rust-API (`apps/api`) ist die Quelle der Wahrheit;
 benutzen.
 
 ```
-Basis-URL:   {PUBLIC_API_URL}/api/v1        z. B. https://initiative-api.fly.dev/api/v1
+Basis-URL:   {PUBLIC_API_URL}/api/v1        z. B. https://deine-domain.de/api/v1
 WebSocket:   {PUBLIC_API_URL}/ws            außerhalb des Präfixes
 Healthcheck: {PUBLIC_API_URL}/healthz       außerhalb des Präfixes
 ```
@@ -147,17 +147,62 @@ wenn der Feed-Link irgendwo gelandet ist, wo er nicht hingehört.
 }
 ```
 
+## Passkeys
+
+Anmelden ohne Passwort, nach WebAuthn. Der Server hält den Zustand einer
+laufenden Registrierung oder Anmeldung in `webauthn_states`; jeder Ablauf
+besteht deshalb aus zwei Anfragen.
+
+| Methode | Pfad                        | Auth   | Request                             | Antwort                        |
+| ------- | --------------------------- | ------ | ----------------------------------- | ------------------------------ |
+| GET     | `/passkeys`                 | Bearer | –                                   | `200` `Passkey[]`              |
+| DELETE  | `/passkeys/{id}`            | Bearer | –                                   | `200` `{ removed: true }`      |
+| POST    | `/passkeys/register/start`  | Bearer | –                                   | `200` `{ requestId, options }` |
+| POST    | `/passkeys/register/finish` | Bearer | `{ requestId, label?, credential }` | `200` `Passkey`                |
+| POST    | `/passkeys/login/start`     | –      | `{ username }`                      | `200` `{ requestId, options }` |
+| POST    | `/passkeys/login/finish`    | –      | `{ requestId, credential }`         | `200` `AuthSession`            |
+
+`options` ist unverändert das, was `navigator.credentials` erwartet
+(`PublicKeyCredentialCreationOptions` bzw. `…RequestOptions`); `credential` ist
+unverändert das, was das Gerät zurückgibt. `requestId` verknüpft beide Hälften.
+
+**Passkey** = `{ id, label, lastUsedAt, createdAt }`. Zwei Abweichungen von den
+Grundregeln oben, die hier so gewachsen sind: `GET /passkeys` antwortet mit
+einem nackten Array statt `{ items }`, und `DELETE` mit `200 { removed: true }`
+statt `204`.
+
+Die **Relying Party ID** ist der nackte Hostname der App und lässt sich über
+`WEBAUTHN_RP_ID` auf eine übergeordnete Ebene setzen. Ein Passkey gilt für
+genau den Namen, unter dem er angelegt wurde – wer unter einer Unterdomain
+anfängt, kann später nicht mehr auf die Hauptdomain umziehen, ohne dass alle
+ihre Schlüssel verlieren. Diese Entscheidung fällt einmal.
+
 ## Benutzer
 
-| Methode | Pfad          | Auth   | Request                                                  | Antwort                   |
-| ------- | ------------- | ------ | -------------------------------------------------------- | ------------------------- |
-| GET     | `/users`      | Bearer | Query `q` (Pflicht), `limit` (Standard 20)               | `200` `{ items: User[] }` |
-| GET     | `/users/{id}` | Bearer | –                                                        | `200` `User`              |
-| PATCH   | `/users/me`   | Bearer | `{ displayName?, bio?, avatarAttachmentId?, settings? }` | `200` `SelfUser`          |
+| Methode | Pfad               | Auth   | Request                                                  | Antwort                   |
+| ------- | ------------------ | ------ | -------------------------------------------------------- | ------------------------- |
+| GET     | `/users`           | Bearer | Query `q` (Pflicht), `limit` (Standard 20)               | `200` `{ items: User[] }` |
+| GET     | `/users/batch`     | Bearer | Query `ids` (kommagetrennt)                              | `200` `{ items: User[] }` |
+| GET     | `/users/{id}`      | Bearer | –                                                        | `200` `User`              |
+| PATCH   | `/users/me`        | Bearer | `{ displayName?, bio?, avatarAttachmentId?, settings? }` | `200` `SelfUser`          |
+| GET     | `/users/me/export` | Bearer | –                                                        | `200` `application/json`  |
+| DELETE  | `/users/me`        | Bearer | `{ password }`                                           | `204`                     |
 
 `bio` und `avatarAttachmentId` verstehen `null` als „löschen"; fehlt das Feld,
 bleibt es unverändert. Eine Profiländerung wird als `user.updated` an alle
 Kontakte gesendet.
+
+`/users/batch` holt viele Profile in einer Anfrage – die App braucht das für
+Absendernamen, sobald sie einen Chat aus dem Offline-Cache öffnet.
+
+**Auskunft und Löschung** (Art. 15 und 17 DSGVO) sind Endpunkte, keine
+E-Mail-Adresse: `/users/me/export` gibt alles heraus, was zum Konto gespeichert
+ist; `DELETE /users/me` löscht es. Was dabei mitgeht und was bleibt, prüft
+`apps/api/tests/betroffenenrechte.rs` – unter anderem, dass gelöschte Anhänge
+in `storage_muell` landen und ihre Bytes anschließend verschwinden. Eine
+Ausnahme gibt es: Das **letzte** Konto mit Verwaltungsrechten darf nicht gehen,
+sonst käme niemand mehr in die Verwaltung – erst jemand anderen zum Verwalter
+machen.
 
 ## Chats
 
@@ -272,6 +317,7 @@ Gelöschte Nachrichten verschwinden nicht aus der Liste: `deletedAt` ist gesetzt
 | POST    | `/media/uploads/{id}/data`     | Bearer         | `multipart/form-data`, Feld `file`                             | `200` `Attachment`                                       |
 | POST    | `/media/uploads/{id}/complete` | Bearer         | `{ width?, height?, durationMs?, waveform?, previewDataUrl? }` | `200` `Attachment`                                       |
 | GET     | `/media/{id}`                  | – (Capability) | Header `Range` erlaubt                                         | `200`/`206` Binärdaten oder `302` auf eine signierte URL |
+| GET     | `/media/{id}/bytes`            | – (Capability) | Header `Range` erlaubt                                         | wie oben, aber **nie** als Weiterleitung                 |
 | GET     | `/media/{id}/download`         | – (Capability) | –                                                              | wie oben, mit `Content-Disposition: attachment`          |
 | DELETE  | `/media/{id}`                  | Bearer         | –                                                              | `204` (nur eigene, noch nicht gesendete Anhänge)         |
 
@@ -301,11 +347,22 @@ Abschluss gleich mit – Schritt 3 ist dann nur für Metadaten nötig.
 
 **Warum `GET /media/{id}` ohne Token geht.** `<img src>`, `<video>` und der
 Service-Worker-Cache können keinen `Authorization`-Header setzen. Die Anhang-ID
-ist eine UUID v7 mit 74 Zufallsbits und wirkt als Capability-URL: Wer sie nicht
-kennt, findet sie auch nicht. Mit R2/S3 antwortet der Endpunkt mit einer
+ist eine UUID v7 mit 74 Zufallsbits, und die URL ist damit ein
+**Zugriffsschlüssel**: Wer sie hat, bekommt die Datei – auch ohne Anmeldung,
+auch nach dem Weiterleiten. Wer sie nicht hat, findet sie nicht. Die Antwort
+trägt deshalb `X-Robots-Tag: noindex, nofollow, noarchive, noimageindex`,
+`X-Content-Type-Options: nosniff` und (außer bei PDF) eine CSP mit `sandbox`. Mit R2/S3 antwortet der Endpunkt mit einer
 Weiterleitung auf eine kurzlebige signierte URL (`SIGNED_URL_TTL`), lokal
 streamt er selbst – inklusive `Range`-Unterstützung, damit man in ein Video
 springen kann.
+
+`/media/{id}/bytes` liefert dieselben Daten, aber **garantiert** durch die API.
+Für `<img src>` ist die Umleitung zum Speicher richtig; für alles, was die
+Bilddaten _lesen_ muss – Fotoeditor, Sticker daraus schneiden – ist sie ein
+Problem: Nach einer Umleitung auf eine andere Herkunft schickt der Browser
+`Origin: null`, und eine CORS-Regel auf die Adresse der App greift dann nicht
+mehr. Das Ergebnis wäre ein Bild, das man sehen, aber nicht anfassen kann. Der
+gerade Weg kostet Bandbreite – aber nur beim Bearbeiten, nicht beim Anschauen.
 
 **Attachment**
 
@@ -349,17 +406,20 @@ hast – sonst `403`. Anhänge der Art `sticker` dürfen 2 MB groß sein und mü
 
 ## Kalender
 
-| Methode | Pfad                                 | Auth           | Request                                             | Antwort                                              |
-| ------- | ------------------------------------ | -------------- | --------------------------------------------------- | ---------------------------------------------------- |
-| GET     | `/calendar/events`                   | Bearer         | Query `from?`, `to?`, `conversationId?`             | `200` `{ items: CalendarEvent[] }`                   |
-| POST    | `/calendar/events`                   | Bearer         | siehe unten                                         | `201` `CalendarEvent`                                |
-| GET     | `/calendar/events/{id}`              | Bearer         | –                                                   | `200` `CalendarEvent`                                |
-| PATCH   | `/calendar/events/{id}`              | Bearer         | Teilmenge der Anlegen-Felder                        | `200` `CalendarEvent`                                |
-| DELETE  | `/calendar/events/{id}`              | Bearer         | –                                                   | `204`                                                |
-| POST    | `/calendar/events/{id}/rsvp`         | Bearer         | `{ status: 'yes'\|'no'\|'maybe'\|'pending' }`       | `200` `CalendarEvent`                                |
-| GET     | `/calendar/events/{id}/occurrences`  | Bearer         | Query `from?`, `to?` (Standard: jetzt bis +90 Tage) | `200` `{ items: [{ index, startsAt, endsAt }] }`     |
-| GET     | `/calendar/events/{id}/event.ics`    | – (Capability) | –                                                   | `200` `text/calendar`, einzelner Termin zum Download |
-| GET     | `/calendar/{calendarToken}/feed.ics` | – (Token)      | –                                                   | `200` `text/calendar`, persönliches Abo              |
+| Methode | Pfad                                       | Auth           | Request                                             | Antwort                                              |
+| ------- | ------------------------------------------ | -------------- | --------------------------------------------------- | ---------------------------------------------------- |
+| GET     | `/calendar/events`                         | Bearer         | Query `from?`, `to?`, `conversationId?`             | `200` `{ items: CalendarEvent[] }`                   |
+| POST    | `/calendar/events`                         | Bearer         | siehe unten                                         | `201` `CalendarEvent`                                |
+| GET     | `/calendar/events/{id}`                    | Bearer         | –                                                   | `200` `CalendarEvent`                                |
+| PATCH   | `/calendar/events/{id}`                    | Bearer         | Teilmenge der Anlegen-Felder                        | `200` `CalendarEvent`                                |
+| DELETE  | `/calendar/events/{id}`                    | Bearer         | –                                                   | `204`                                                |
+| POST    | `/calendar/events/{id}/rsvp`               | Bearer         | `{ status: 'yes'\|'no'\|'maybe'\|'pending' }`       | `200` `CalendarEvent`                                |
+| GET     | `/calendar/events/{id}/occurrences`        | Bearer         | Query `from?`, `to?` (Standard: jetzt bis +90 Tage) | `200` `{ items: [{ index, startsAt, endsAt }] }`     |
+| GET     | `/calendar/events/{id}/event.ics`          | – (Capability) | –                                                   | `200` `text/calendar`, einzelner Termin zum Download |
+| GET     | `/calendar/{calendarToken}/feed.ics`       | – (Token)      | –                                                   | `200` `text/calendar`, persönliches Abo              |
+| POST    | `/calendar/planning`                       | Bearer         | `{ conversationId, title, slots[], alsoIn?, … }`    | `201` `CalendarEvent` mit angehängter Terminfindung  |
+| POST    | `/calendar/events/{id}/confirm`            | Bearer         | `{ optionId?, closePoll? }`                         | `200` `CalendarEvent`                                |
+| DELETE  | `/calendar/events/{id}/attendees/{userId}` | Bearer         | –                                                   | `200` `CalendarEvent` – jemanden wieder ausladen     |
 
 **Termin anlegen**
 
@@ -393,6 +453,47 @@ serverseitig in `/occurrences` aufgelöst.
 Android, Google Kalender und Outlook als Abo eintragen; er liefert ein Jahr
 rückwärts und zwei Jahre voraus. Wer den Link verliert, ruft
 `POST /auth/calendar-token/rotate` auf.
+
+### Notizen und Listen am Termin
+
+An einem Termin hängen Notizen. Eine Notiz ist entweder ein Text (`kind: "note"`)
+oder eine Liste mit Punkten (`kind: "list"`) – wer was darf, steht je Notiz
+einzeln drin.
+
+| Methode | Pfad                                                        | Request                                                             | Antwort                        |
+| ------- | ----------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------ |
+| GET     | `/calendar/events/{id}/notes`                               | –                                                                   | `200` `{ items: EventNote[] }` |
+| POST    | `/calendar/events/{id}/notes`                               | `{ title?, body, kind?, editScope?, addScope?, checkScope?, …Ids }` | `201` `EventNote`              |
+| PATCH   | `/calendar/events/{id}/notes/{noteId}`                      | Teilmenge davon                                                     | `200` `EventNote`              |
+| DELETE  | `/calendar/events/{id}/notes/{noteId}`                      | –                                                                   | `204`                          |
+| POST    | `/calendar/events/{id}/notes/{noteId}/items`                | `{ text, requiredChecks?, requiredAll?, assigneeIds? }`             | `201` `EventNote`              |
+| PATCH   | `/calendar/events/{id}/notes/{noteId}/items/{itemId}`       | dieselben Felder, alle optional, dazu `position?`                   | `200` `EventNote`              |
+| DELETE  | `/calendar/events/{id}/notes/{noteId}/items/{itemId}`       | –                                                                   | `200` `EventNote`              |
+| POST    | `/calendar/events/{id}/notes/{noteId}/items/{itemId}/check` | `{ checked? }` – ohne Angabe wird umgeschaltet                      | `200` `EventNote`              |
+
+Drei Rechte, je einzeln vergeben: `editScope`, `addScope`, `checkScope` – jeweils
+`author`, `members` oder `listed` (dann sagen `editorIds`, `adderIds`,
+`checkerIds`, wer namentlich darf; `checkScope` kennt zusätzlich `nobody` für
+eine Liste zum Nachlesen).
+
+Die Soll-Zahl steht am **einzelnen Punkt**, nicht an der Liste: In derselben
+Liste kann „Zahnbürste" stehen, das jeder für sich abhakt (`requiredAll: true`),
+und „Kuchen backen", das einer übernimmt (`requiredChecks: 1`). Sind
+`assigneeIds` gesetzt, schlagen sie beides – der Punkt ist erledigt, wenn genau
+diese abgehakt haben. Ohne das hakt irgendwer ab und niemand weiß hinterher, ob
+der Kuchen gebacken wird.
+
+### Dateien am Termin
+
+| Methode | Pfad                                           | Request                              | Antwort                              |
+| ------- | ---------------------------------------------- | ------------------------------------ | ------------------------------------ |
+| GET     | `/calendar/events/{id}/documents`              | –                                    | `200` `{ items: EventAttachment[] }` |
+| POST    | `/calendar/events/{id}/documents`              | `{ attachmentId, title? }`           | `201` `EventAttachment`              |
+| DELETE  | `/calendar/events/{id}/documents/{documentId}` | –                                    | `204`                                |
+| PATCH   | `/calendar/events/{id}/collection`             | `{ collectionId }` – `null` löst sie | `200` `CalendarEvent`                |
+
+`collection` verknüpft den Termin mit einer Sammlung – dann liegen die Dateien
+des Termins dort, statt ein zweites Mal irgendwo.
 
 ## Umfragen und Terminfindung
 
@@ -444,6 +545,137 @@ Ergebnis in `createdEventId`.
 **Poll** trägt neben Optionen und Stimmen eine fertige Auswertung:
 `tally` (je Option `{ yes, maybe, no, score }`), `voterCount` und `myVotes`. Bei
 `anonymous: true` liefert der Server nur Zahlen, keine Namen.
+
+## Dateien und Sammlungen
+
+Eine Sammlung ist ein Ordner; Ordner dürfen ineinander liegen. Darin liegen
+**dieselben** Anhänge, die auch im Chat verschickt werden – eine Datei bekommt
+dort einen zweiten Platz, sie wird nicht noch einmal hochgeladen.
+
+| Methode | Pfad                                 | Request                                                                    | Antwort                              |
+| ------- | ------------------------------------ | -------------------------------------------------------------------------- | ------------------------------------ |
+| GET     | `/collections`                       | –                                                                          | `200` `{ items: Collection[] }`      |
+| POST    | `/collections`                       | `{ name, parentId?, conversationId?, description?, color?, memberLevel? }` | `201` `Collection`                   |
+| GET     | `/collections/{id}`                  | –                                                                          | `200` `Collection`                   |
+| PATCH   | `/collections/{id}`                  | Teilmenge davon, `null` löscht                                             | `200` `Collection`                   |
+| DELETE  | `/collections/{id}`                  | –                                                                          | `204`                                |
+| GET     | `/collections/{id}/items`            | –                                                                          | `200` `{ items: CollectionItem[] }`  |
+| POST    | `/collections/{id}/items`            | `{ attachmentId, title?, note?, messageId? }`                              | `201` `CollectionItem`               |
+| PATCH   | `/collections/{id}/items/{itemId}`   | `{ title?, note?, sortKey?, collectionId? }`                               | `200` `CollectionItem`               |
+| DELETE  | `/collections/{id}/items/{itemId}`   | –                                                                          | `204`                                |
+| GET     | `/collections/{id}/grants`           | –                                                                          | `200` `{ items: CollectionGrant[] }` |
+| POST    | `/collections/{id}/grants`           | `{ level, userId }` **oder** `{ level, conversationId }`                   | `201` `CollectionGrant`              |
+| DELETE  | `/collections/{id}/grants/{grantId}` | –                                                                          | `204`                                |
+| POST    | `/collections/items/{itemId}/grants` | wie oben, aber für eine einzelne Datei                                     | `201` `CollectionGrant`              |
+
+**Berechtigungen.** Vier Stufen, aufsteigend: `none` · `view` · `edit` · `own`.
+Vergeben lassen sich nur die oberen drei – „kein Zugriff" heißt schlicht: kein
+Eintrag. Ein Grant gilt entweder für **eine Person** oder für **alle in einem
+Chat**, nie für beides; der Server weist die Mischung ab. `memberLevel` an der
+Sammlung sagt, was für alle im zugehörigen Chat gilt (`none`, `view`, `edit` –
+`own` wäre hier sinnlos). `myLevel` in der Antwort sagt, was **du** hier darfst.
+
+Ordner, deren Elternteil du nicht sehen darfst, kommen ohne ihn – das ist kein
+Fehler, sondern der Normalfall. Die App hängt sie dann oben ein
+(`buildCollectionTree` in `packages/shared`).
+
+## Ausgaben
+
+Wer hat ausgelegt, wer schuldet wem wie viel. **Alle Beträge in Cent** –
+Fließkomma wäre bei Geld die falsche Zahlenart.
+
+| Methode | Pfad                                 | Request                                                   | Antwort                        |
+| ------- | ------------------------------------ | --------------------------------------------------------- | ------------------------------ |
+| GET     | `/expenses`                          | Query `conversationId?`, `eventId?`, `includeSettled?`    | `200` `{ items: Expense[] }`   |
+| POST    | `/expenses`                          | siehe unten                                               | `201` `Expense`                |
+| GET     | `/expenses/{id}`                     | –                                                         | `200` `Expense`                |
+| PATCH   | `/expenses/{id}`                     | Teilmenge der Anlegen-Felder                              | `200` `Expense`                |
+| DELETE  | `/expenses/{id}`                     | –                                                         | `204`                          |
+| POST    | `/expenses/{id}/settle`              | `{ userId?, settled? }` – ohne `userId` der eigene Anteil | `200` `Expense`                |
+| POST    | `/expenses/settle-up`                | `{ userId, settled? }` – alles mit dieser Person          | `200` `{ count, amountCents }` |
+| GET     | `/expenses/balances`                 | –                                                         | `200` `{ items: Balance[] }`   |
+| GET     | `/expenses/payment-profile`          | –                                                         | `200` `PaymentProfile`         |
+| PUT     | `/expenses/payment-profile`          | `{ paypalMe?, iban?, bic?, accountHolder?, note? }`       | `200` `PaymentProfile`         |
+| GET     | `/expenses/payment-profile/{userId}` | –                                                         | `200` `PaymentProfile`         |
+| POST    | `/expenses/{id}/hidden/{userId}`     | –                                                         | `200` `Expense`                |
+| DELETE  | `/expenses/{id}/hidden/{userId}`     | –                                                         | `200` `Expense`                |
+
+**Ausgabe anlegen**
+
+```json
+{
+  "conversationId": "018f…",
+  "eventId": null,
+  "title": "Hüttenabend",
+  "amountCents": 4500,
+  "currency": "EUR",
+  "paidBy": "018f…",
+  "spentAt": "2026-09-05T20:00:00Z",
+  "shares": [{ "userId": "018f…" }, { "userId": "018f…", "amountCents": 2000 }],
+  "visibility": "participants"
+}
+```
+
+Ein `share` ohne `amountCents` bekommt seinen Teil aus der gleichmäßigen
+Aufteilung – und die geht **genau** auf: 10 € auf drei Personen sind
+3,34 + 3,33 + 3,33, nicht dreimal 3,33. Dieselbe Rechnung steht in
+`splitEvenly` (`packages/shared`), damit die Vorschau in der App zeigt, was
+hinterher gespeichert wird.
+
+**Wer sieht eine Ausgabe?** `visibility` ist `participants` (nur die
+Beteiligten), `conversation` (alle im Chat) oder `listed` (die in `viewerIds`).
+`hiddenFromIds` nimmt einzelne ausdrücklich heraus – das Geschenk vor dem
+Beschenkten.
+
+**Vier Stufen je Anteil**, und der Unterschied zwischen den mittleren beiden
+ist der Punkt: `open` (nichts passiert) → `reported` (der Schuldner sagt, er
+habe gezahlt) → `confirmed` (der Empfänger sagt, es sei angekommen) → `closed`
+(beide sagen es). Erst dann muss sich niemand mehr erinnern. Wer abgehakt hat,
+steht in `settledBy` – ist es der Schuldner, ist es eine Meldung, ist es der
+Auslegende, eine Bestätigung.
+
+**Balance** = `{ userId, netCents, currency }`. Positiv heißt: die Person
+schuldet mir. Negativ: ich ihr.
+
+**PaymentProfile** trägt nur den Namen aus dem persönlichen PayPal.Me-Link,
+IBAN, BIC, Kontoinhaber und eine Notiz. Über die App läuft **kein Geld** – sie
+zeigt nur, wohin.
+
+## Verwaltung
+
+Der Verwaltungsbereich ist aus, solange `ADMIN_PASSWORD` fehlt oder kürzer als
+8 Zeichen ist. Aufgeschlossen wird er je Sitzung, und er sperrt sich wieder zu.
+
+| Methode | Pfad                    | Request                           | Antwort                                 |
+| ------- | ----------------------- | --------------------------------- | --------------------------------------- |
+| GET     | `/admin/status`         | –                                 | `200` `{ available, isAdmin }`          |
+| POST    | `/admin/unlock`         | `{ password }`                    | `200` `{ available, isAdmin }`          |
+| POST    | `/admin/lock`           | –                                 | `200` `{ available, isAdmin }`          |
+| GET     | `/admin/invites`        | –                                 | `200` `Invite[]`                        |
+| POST    | `/admin/invites`        | `{ note?, maxUses?, expiresAt? }` | `200` `Invite` (Code entsteht hier)     |
+| DELETE  | `/admin/invites/{code}` | –                                 | `200` `{ revoked: true }`               |
+| GET     | `/admin/members`        | –                                 | `200` `Member[]`                        |
+| DELETE  | `/admin/members/{id}`   | –                                 | `200` `{ removed: true }`               |
+| GET     | `/admin/storage-check`  | –                                 | `200` `{ driver, …, steps[], verdict }` |
+
+`available` sagt, ob überhaupt ein Passwort hinterlegt ist; `isAdmin`, ob
+**dieses** Konto Verwaltungsrechte hat. Der Einladungscode wird serverseitig
+erzeugt – aus einem Alphabet ohne leicht verwechselbare Zeichen, damit man ihn
+vorlesen kann.
+
+`/admin/storage-check` legt eine Testdatei an, liest sie zurück und löscht sie
+wieder – der schnellste Weg herauszufinden, ob die Speicher-Konfiguration
+wirklich trägt, bevor es jemand mit einem Foto herausfindet. Jeder Schritt
+nennt `name`, `ok`, ein `detail` und – wenn er scheitert – einen `hint`, was zu
+tun ist; darunter steht ein `verdict` über das Ganze.
+
+Zwei Sperren, die absichtlich im Weg stehen: Das **eigene** Konto lässt sich
+hier nicht entfernen, und der **letzte** Verwalter auch nicht – sonst käme
+niemand mehr hinein außer über die Datenbank. `/admin/unlock` ist gedrosselt
+(5 Versuche pro Stunde), ein Treffer setzt den Zähler zurück.
+
+Auch diese Routen antworten mit nackten Arrays und `{ … : true }` statt mit
+`{ items }` und `204` – gewachsen, nicht gewollt.
 
 ## Mini-Spiele
 
@@ -527,12 +759,27 @@ bestehenden Eintrag.
 
 ## Dienst-Endpunkte
 
-| Methode | Pfad       | Auth | Antwort                                                                   |
-| ------- | ---------- | ---- | ------------------------------------------------------------------------- |
-| GET     | `/healthz` | –    | `200` `{ status, storage, bus, push, connections }`, `503` bei `degraded` |
-| GET     | `/`        | –    | `200` `{ name, version, runtime, modules[], docs }`                       |
+| Methode | Pfad           | Auth | Antwort                                                                   |
+| ------- | -------------- | ---- | ------------------------------------------------------------------------- |
+| GET     | `/healthz`     | –    | `200` `{ status, storage, bus, push, connections }`, `503` bei `degraded` |
+| GET     | `/readyz`      | –    | derselbe Befund, `503` wenn der Dienst noch nicht bereit ist              |
+| GET     | `/`            | –    | `200` `{ name, version, runtime, modules[], docs }`                       |
+| GET     | `/datenschutz` | –    | `200` `text/html` – Datenschutzerklärung                                  |
+| GET     | `/impressum`   | –    | `200` `text/html` – Impressum                                             |
 
-Beide liegen **außerhalb** von `/api/v1`.
+Alle liegen **außerhalb** von `/api/v1`.
+
+`/healthz` und `/readyz` erheben denselben Befund und ziehen nur eine andere
+Schlussfolgerung daraus. Der Datenbank-Ping darin läuft in ein
+Fünf-Sekunden-Zeitlimit – ein Lebenszeichen, das selbst hängen bleibt, ist
+keins.
+
+`/datenschutz` und `/impressum` sind bewusst **ohne Anmeldung** erreichbar und
+werden serverseitig gerendert: Sie nennen, was diese Instanz wirklich tut –
+welcher Speicher eingestellt ist, ob Dateien verschlüsselt liegen, ob Push an
+ist, wie lange Sitzungen halten, ob Registrierung offen ist. Eine
+Datenschutzerklärung, die man mit der Konfiguration auseinanderlaufen lassen
+kann, ist keine.
 
 ---
 
@@ -569,26 +816,29 @@ Verbindung tot und der Client baut sie neu auf.
 
 ### Server → Client
 
-| `type`                 | `payload`                                       | Bedeutung                                                   |
-| ---------------------- | ----------------------------------------------- | ----------------------------------------------------------- |
-| `hello`                | `{ userId, connectionId, serverTime }`          | Erstes Frame nach dem Verbinden                             |
-| `pong`                 | `{ ts }`                                        | Antwort auf `ping`                                          |
-| `message.new`          | `{ message }`                                   | Neue Nachricht in einem deiner Chats                        |
-| `message.updated`      | `{ message }`                                   | Nachricht bearbeitet                                        |
-| `message.deleted`      | `{ conversationId, messageId }`                 | Nachricht gelöscht                                          |
-| `message.reactions`    | `{ conversationId, messageId, reactions }`      | Reaktionen geändert                                         |
-| `conversation.updated` | `{ conversation }`                              | Titel, Bild, Mitglieder, Stummschaltung, Archiv             |
-| `conversation.removed` | `{ conversationId }`                            | Du bist kein Mitglied mehr                                  |
-| `read.updated`         | `{ conversationId, userId, lastReadMessageId }` | Lesestand eines Mitglieds                                   |
-| `typing`               | `{ conversationId, userId, until }`             | Jemand tippt, läuft nach `until` von selbst ab              |
-| `presence`             | `{ userId, online, lastSeenAt }`                | Kontakt online oder offline                                 |
-| `poll.updated`         | `{ poll }`                                      | Stimme, neue Option, geschlossen oder geöffnet              |
-| `event.updated`        | `{ event }`                                     | Termin angelegt, geändert, Zu-/Absage                       |
-| `event.deleted`        | `{ eventId, conversationId }`                   | Termin gelöscht                                             |
-| `game.updated`         | `{ session }`                                   | Zug, Beitritt, Ende einer Partie                            |
-| `user.updated`         | `{ user }`                                      | Ein Kontakt hat sein Profil geändert                        |
-| `sync.hint`            | `{ scope, conversationId? }`                    | Nutzlast war zu groß für den Bus – bitte per REST nachladen |
-| `error`                | `{ code, message }`                             | Fehler in einem Client-Ereignis                             |
+| `type`                 | `payload`                                        | Bedeutung                                                   |
+| ---------------------- | ------------------------------------------------ | ----------------------------------------------------------- |
+| `hello`                | `{ userId, connectionId, serverTime }`           | Erstes Frame nach dem Verbinden                             |
+| `pong`                 | `{ ts }`                                         | Antwort auf `ping`                                          |
+| `message.new`          | `{ message }`                                    | Neue Nachricht in einem deiner Chats                        |
+| `message.updated`      | `{ message }`                                    | Nachricht bearbeitet                                        |
+| `message.deleted`      | `{ conversationId, messageId }`                  | Nachricht gelöscht                                          |
+| `message.reactions`    | `{ conversationId, messageId, reactions }`       | Reaktionen geändert                                         |
+| `conversation.updated` | `{ conversation }`                               | Titel, Bild, Mitglieder, Stummschaltung, Archiv             |
+| `conversation.removed` | `{ conversationId }`                             | Du bist kein Mitglied mehr                                  |
+| `read.updated`         | `{ conversationId, userId, lastReadMessageId }`  | Lesestand eines Mitglieds                                   |
+| `typing`               | `{ conversationId, userId, until }`              | Jemand tippt, läuft nach `until` von selbst ab              |
+| `presence`             | `{ userId, online, lastSeenAt }`                 | Kontakt online oder offline                                 |
+| `poll.updated`         | `{ poll }`                                       | Stimme, neue Option, geschlossen oder geöffnet              |
+| `event.updated`        | `{ event }`                                      | Termin angelegt, geändert, Zu-/Absage                       |
+| `event.deleted`        | `{ eventId, conversationId }`                    | Termin gelöscht                                             |
+| `game.updated`         | `{ session }`                                    | Zug, Beitritt, Ende einer Partie                            |
+| `expense.updated`      | `{ expense }`                                    | Ausgabe angelegt oder geändert                              |
+| `expense.deleted`      | `{ expenseId }`                                  | Ausgabe gelöscht                                            |
+| `expense.settled`      | `{ byUserId, withUserId, amountCents, settled }` | Sammelabrechnung mit einer Person                           |
+| `user.updated`         | `{ user }`                                       | Ein Kontakt hat sein Profil geändert                        |
+| `sync.hint`            | `{ scope, conversationId? }`                     | Nutzlast war zu groß für den Bus – bitte per REST nachladen |
+| `error`                | `{ code, message }`                              | Fehler in einem Client-Ereignis                             |
 
 ### Client → Server
 
@@ -605,8 +855,9 @@ Chats werden still verworfen. `read` setzt den Lesestand nur vorwärts – ein
 
 ### Zustellung
 
-Ereignisse gehen an alle Verbindungen der betroffenen Benutzer. Laufen mehrere
-API-Instanzen, verteilt Postgres `LISTEN/NOTIFY` sie zwischen den Instanzen
+Ereignisse gehen an alle Verbindungen der betroffenen Benutzer. Bei genau einem
+API-Prozess bleibt das im Speicher (`REALTIME_BUS=memory`, der Standard); laufen
+mehrere Instanzen, verteilt Postgres `LISTEN/NOTIFY` sie zwischen ihnen
 (`REALTIME_BUS=postgres`). Die Nutzlast von `NOTIFY` ist begrenzt: Ist ein
 Ereignis zu groß, kommt statt der Daten ein `sync.hint` – der Client lädt dann
 per REST nach.
