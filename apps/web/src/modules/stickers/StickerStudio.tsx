@@ -1557,8 +1557,15 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                     drehung: 0,
                   }));
                 }}
+                data-tipp="Setzt Lage, Zoom und Drehung auf den Anfang zurück"
               >
-                Zentrieren
+                {/*
+                  Er hiess „Zentrieren" und setzte auch `scale` und `drehung`
+                  zurück – wer nur die Lage richten wollte, verlor seinen Zoom
+                  und seine Drehung dazu. Der Knopf tut das Richtige, er hiess
+                  nur falsch.
+                */}
+                Alles zurücksetzen
               </button>
               <button
                 type="button"

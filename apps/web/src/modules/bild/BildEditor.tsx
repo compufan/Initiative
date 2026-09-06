@@ -2579,8 +2579,21 @@ export function BildEditor({
                           kontur: aktiverText.kontur === '#111111' ? '#ffffff' : '#111111',
                         })
                       }
+                      data-tipp={
+                        aktiverText.kontur === '#111111'
+                          ? 'Tippen macht die Kontur hell'
+                          : 'Tippen macht die Kontur dunkel'
+                      }
                     >
-                      Kontur {aktiverText.kontur === '#111111' ? 'dunkel' : 'hell'}
+                      {/*
+                        Der Doppelpunkt ist der ganze Unterschied.
+                        „Kontur dunkel" las sich wie ein Befehl – und stellte
+                        beim Drücken das Gegenteil ein, weil die Beschriftung
+                        den AKTUELLEN Zustand nannte. Anders als die
+                        Nachbarknöpfe trug dieser auch keine Markierung, die
+                        ihn als Anzeige kenntlich gemacht hätte.
+                      */}
+                      Kontur: {aktiverText.kontur === '#111111' ? 'dunkel' : 'hell'}
                     </button>
                   )}
                   <button type="button" className="btn btn-sm" onClick={textLoeschen}>
