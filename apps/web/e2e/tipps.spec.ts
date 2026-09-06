@@ -125,3 +125,39 @@ test('ohne langen Druck kommt der Klick ganz normal an', async ({ browser }) => 
 
   await page.close();
 });
+
+test('ein Modal schliesst beim Tipp daneben – und hat ein ✕', async ({ browser }) => {
+  /*
+   * Der Schleier hinter einem Dialog trägt `onClick={onClose}`, kündigt also
+   * an, dass ein Tipp daneben schliesst. Bei `variant="modal"` war er nie zu
+   * erreichen: `.modal` liegt mit z-index 77 über dem Schleier (76) und deckt
+   * mit `inset: 0` den ganzen Bildschirm. Jeder Klick daneben landete auf dem
+   * Modal und versickerte.
+   *
+   * Geprüft wird am „Konto löschen"-Dialog – einem, bei dem ein Fehlgriff
+   * teuer wäre.
+   */
+  const alice = credentials('modal');
+  const page = await signUp(browser, alice);
+
+  await page.goto('/profil/einstellungen');
+  const oeffnen = page.getByRole('button', { name: /Konto löschen/ }).first();
+  await expect(oeffnen).toBeVisible({ timeout: 15_000 });
+  await oeffnen.click();
+
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+
+  // Das ✕ muss da sein – ohne es bliebe auf dem Telefon nur die Zurück-Geste.
+  await expect(dialog.getByRole('button', { name: 'Schließen' })).toBeVisible();
+
+  // Ein Tipp INS Fenster darf nichts schliessen.
+  await dialog.getByRole('heading').first().click();
+  await expect(dialog).toBeVisible();
+
+  // Und einer daneben schon: oben links, weit weg von der Karte.
+  await page.mouse.click(8, 8);
+  await expect(dialog).toBeHidden({ timeout: 5000 });
+
+  await page.close();
+});

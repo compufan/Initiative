@@ -3,6 +3,7 @@ import { api, type PasskeyDto } from '../../lib/api.js';
 import { passkeysUsable, registerPasskey } from '../../lib/passkeys.js';
 import { toast } from '../../state/ui.js';
 import { errorMessage } from './helpers.js';
+import { ConfirmDialog } from './ConfirmDialog.js';
 
 /**
  * Face ID, Fingerabdruck oder Geräte-PIN statt Passwort.
@@ -15,6 +16,10 @@ export function PasskeyCard() {
   const [available, setAvailable] = useState<boolean | null>(null);
   const [keys, setKeys] = useState<PasskeyDto[] | null>(null);
   const [busy, setBusy] = useState(false);
+  // Ein entfernter Passkey kommt nicht zurück – das Gerät muss neu
+  // eingerichtet werden. Jede andere unumkehrbare Aktion in diesem Modul
+  // fragt vorher nach; diese als einzige nicht.
+  const [weg, setWeg] = useState<PasskeyDto | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -59,6 +64,7 @@ export function PasskeyCard() {
     try {
       await api.passkeys.remove(key.id);
       setKeys((current) => current?.filter((item) => item.id !== key.id) ?? null);
+      setWeg(null);
       toast('Gerät entfernt', 'success');
     } catch (error) {
       toast(errorMessage(error, 'Entfernen fehlgeschlagen'), 'error');
@@ -95,7 +101,8 @@ export function PasskeyCard() {
                 type="button"
                 className="btn btn-ghost"
                 disabled={busy}
-                onClick={() => void drop(key)}
+                onClick={() => setWeg(key)}
+                data-tipp="Dieses Gerät kann sich danach nicht mehr ohne Passwort anmelden"
               >
                 Entfernen
               </button>
@@ -113,6 +120,18 @@ export function PasskeyCard() {
           Dieses Gerät bietet keinen eingebauten Sensor an. Auf dem iPhone geht es nur in der zum
           Home-Bildschirm hinzugefügten App, in Safari.
         </p>
+      )}
+      {weg && (
+        <ConfirmDialog
+          open
+          title={`„${weg.label}" entfernen?`}
+          description="Dieses Gerät kann sich danach nicht mehr ohne Passwort anmelden. Einrichten lässt es sich jederzeit wieder – der alte Schlüssel kommt aber nicht zurück."
+          confirmLabel="Entfernen"
+          danger
+          busy={busy}
+          onCancel={() => setWeg(null)}
+          onConfirm={() => void drop(weg)}
+        />
       )}
     </section>
   );

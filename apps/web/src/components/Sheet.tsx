@@ -54,21 +54,54 @@ export function Sheet({ open, onClose, title, children, actions, variant = 'shee
 
   const content =
     variant === 'modal' ? (
-      <div className="modal" role="dialog" aria-modal="true" aria-labelledby={title ? titleId : undefined}>
-        <div className="modal-card">
+      /*
+       * Der Tipp NEBEN das Fenster schliesst – und das musste hierher.
+       *
+       * Der Schleier darunter traegt zwar `onClick={onClose}`, kündigt also
+       * genau das an. Erreichbar war er nie: `.modal` liegt mit
+       * `z-index: 77` über dem Schleier (76) und deckt mit `inset: 0` den
+       * ganzen Bildschirm. Jeder Klick daneben landete auf dem Modal selbst
+       * und versickerte. Eine tote Bedienung, die sich als lebendige ausgibt.
+       *
+       * Deshalb der Handler hier, und `stopPropagation` auf der Karte: Ein
+       * Klick INS Fenster darf es nicht schliessen.
+       */
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
+        onClick={onClose}
+      >
+        <div className="modal-card" onClick={(event) => event.stopPropagation()}>
           {(title || actions) && (
             <div className="row row-between" style={{ marginBottom: 'var(--space-3)' }}>
               <h2 id={titleId} className="sheet-title">
                 {title}
               </h2>
-              {actions}
+              {/*
+                Der ✕-Rückfall gehört auch hierher.
+                Er stand nur im Blatt-Zweig; ein Modal ohne eigene
+                Abbrechen-Schaltfläche liess sich auf dem Telefon nur über die
+                Zurück-Geste verlassen – und wer die nicht kennt, sitzt fest.
+              */}
+              {actions ?? (
+                <button type="button" className="icon-btn" onClick={onClose} aria-label="Schließen">
+                  ✕
+                </button>
+              )}
             </div>
           )}
           {children}
         </div>
       </div>
     ) : (
-      <div className="sheet" role="dialog" aria-modal="true" aria-labelledby={title ? titleId : undefined}>
+      <div
+        className="sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
+      >
         <div className="sheet-handle" />
         {(title || actions) && (
           <div className="sheet-header">

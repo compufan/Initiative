@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 import {
   EXPENSE_STATUS_LABEL,
   EXPENSE_STATUS_ORDER,
@@ -120,16 +122,13 @@ export function AusgabenScreen() {
   }, [balances, expenses]);
   const name = useNamen(namensIds, myId);
 
-
   const facetten: Facette<ExpenseDto>[] = useMemo(
     () => [
       {
         key: 'status',
         label: 'Zustand',
         reihenfolge: EXPENSE_STATUS_ORDER,
-        werte: (expense) => [
-          { id: expense.status, label: EXPENSE_STATUS_LABEL[expense.status] },
-        ],
+        werte: (expense) => [{ id: expense.status, label: EXPENSE_STATUS_LABEL[expense.status] }],
       },
       {
         key: 'chat',
@@ -165,7 +164,6 @@ export function AusgabenScreen() {
     suchtext: (expense) => `${expense.title} ${expense.note ?? ''}`,
     facetten,
   });
-
 
   const summe = useMemo(
     () => balances.reduce((wert, eintrag) => wert + eintrag.netCents, 0),
@@ -314,6 +312,9 @@ function ExpenseCard({
   onChanged: () => void | Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
+  // Löschen trifft alle im Chat und ist nicht rückgängig zu machen. Überall
+  // sonst in dieser App steht davor ein zweiter Schritt.
+  const [loeschFrage, setLoeschFrage] = useState(false);
   const meiner = expense.shares.find((share) => share.userId === myId);
   const offen = expense.shares.filter((share) => share.settledAt == null).length;
 
@@ -405,7 +406,12 @@ function ExpenseCard({
 
       <div className="row">
         {meiner && meiner.userId !== expense.paidBy && (
-          <button type="button" className="btn btn-sm" disabled={busy} onClick={() => void abhaken()}>
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busy}
+            onClick={() => void abhaken()}
+          >
             {meiner.status === 'reported' || meiner.status === 'closed'
               ? 'Doch noch offen'
               : 'Bezahlt'}
@@ -425,8 +431,7 @@ function ExpenseCard({
           expense.shares
             .filter(
               (share) =>
-                share.userId !== myId &&
-                (share.status === 'open' || share.status === 'reported'),
+                share.userId !== myId && (share.status === 'open' || share.status === 'reported'),
             )
             .map((share) => (
               <button
@@ -446,12 +451,23 @@ function ExpenseCard({
             type="button"
             className="btn btn-sm btn-danger"
             disabled={busy}
-            onClick={() => void loeschen()}
+            onClick={() => setLoeschFrage(true)}
+            data-tipp="Diese Ausgabe entfernen – bei allen, die sie sehen"
           >
             Löschen
           </button>
         )}
       </div>
+      <ConfirmDialog
+        open={loeschFrage}
+        title={`„${expense.title}" löschen?`}
+        description="Die Ausgabe verschwindet bei allen, die sie sehen, samt der Aufteilung und den bereits gesetzten Haken. Rückgängig geht das nicht."
+        confirmLabel="Löschen"
+        danger
+        busy={busy}
+        onCancel={() => setLoeschFrage(false)}
+        onConfirm={() => void loeschen()}
+      />
     </article>
   );
 }
@@ -513,7 +529,14 @@ function TerminVermerk({ eventId }: { eventId: string }) {
     <p className="exp-event">
       <span aria-hidden="true">📅</span>{' '}
       {titel ? (
-        <a href={`/kalender/${eventId}`}>Gehört zu „{titel}“</a>
+        /*
+         * Zwei Fehler in einer Zeile, beide unsichtbar bis zum Antippen:
+         * Das Ziel hiess `/kalender/:id`, angemeldet ist aber
+         * `/kalender/termin/:id` – der Verweis lief also ins Leere. Und ein
+         * blankes <a> laedt in einer PWA die ganze Seite neu, statt innerhalb
+         * der App zu wechseln.
+         */
+        <Link to={`/kalender/termin/${eventId}`}>Gehört zu „{titel}“</Link>
       ) : (
         'Gehört zu einem Termin'
       )}
