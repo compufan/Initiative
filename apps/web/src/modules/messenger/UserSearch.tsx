@@ -11,6 +11,14 @@ interface UserSearchProps {
   selectedIds?: string[];
   placeholder?: string;
   autoFocus?: boolean;
+  /**
+   * Die Kennung dessen, auf den gerade gewartet wird.
+   *
+   * Ohne das passierte zwischen Antippen und Antwort des Servers sichtbar
+   * nichts: Wer in einem langsamen Netz auf einen Namen tippte, tippte ein
+   * zweites und drittes Mal.
+   */
+  wartetAuf?: string | null;
   onPick: (user: UserDto) => void;
 }
 
@@ -20,6 +28,7 @@ export function UserSearch({
   selectedIds = [],
   placeholder = 'Nach Namen suchen',
   autoFocus,
+  wartetAuf = null,
   onPick,
 }: UserSearchProps) {
   const [query, setQuery] = useState('');
@@ -93,12 +102,15 @@ export function UserSearch({
         <div className="list msg-picker-list">
           {visible.map((user) => {
             const selected = selectedIds.includes(user.id);
+            const wartet = wartetAuf === user.id;
             return (
               <button
                 key={user.id}
                 type="button"
                 className="list-row"
                 aria-pressed={selected}
+                aria-busy={wartet}
+                disabled={wartetAuf != null}
                 onClick={() => onPick(user)}
               >
                 <Avatar name={user.displayName} id={user.id} url={user.avatarUrl} size={40} />
@@ -113,7 +125,13 @@ export function UserSearch({
                     @{user.username}
                   </span>
                 </span>
-                {selected && <span aria-hidden="true">✓</span>}
+                {wartet ? (
+                  <span className="muted" style={{ fontSize: '0.82rem' }}>
+                    Wird geöffnet …
+                  </span>
+                ) : (
+                  selected && <span aria-hidden="true">✓</span>
+                )}
               </button>
             );
           })}

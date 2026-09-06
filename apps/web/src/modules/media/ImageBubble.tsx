@@ -5,6 +5,7 @@ import { Lightbox } from './Lightbox.js';
 import { MediaCaption, PendingMedia } from './MediaFrame.js';
 import { buildAttachment, mediaSrc, sendMedia } from './helpers.js';
 import { prepareImage } from '../../lib/upload.js';
+import { toast } from '../../state/ui.js';
 
 function ImageTile({
   attachment,
@@ -88,7 +89,7 @@ export function ImageBubble({ message, isMine }: MessageRendererProps) {
             // Als neue Nachricht, nicht als Ersatz: Das Original bleibt im
             // Verlauf stehen, wo es steht.
             const bild = await prepareImage(blob, 1920, true);
-            await sendMedia(message.conversationId, 'image', null, [
+            const gesendet = await sendMedia(message.conversationId, 'image', null, [
               buildAttachment({
                 kind: 'image',
                 mime: bild.mime,
@@ -99,6 +100,22 @@ export function ImageBubble({ message, isMine }: MessageRendererProps) {
                 previewDataUrl: bild.previewDataUrl,
               }),
             ]);
+            /*
+             * Bei Erfolg macht der Betrachter den Weg frei.
+             *
+             * Der Rückgabewert wurde nicht ausgewertet: Der Editor schloss
+             * sich, der Vollbildbetrachter blieb aber mit dem UNBEARBEITETEN
+             * Original offen. Wer gerade zugeschnitten hatte, sah sein altes
+             * Bild und hielt das Senden für gescheitert – die neue Nachricht
+             * lag die ganze Zeit dahinter im Chat.
+             *
+             * Ging es schief, bleibt der Betrachter stehen: Dort steht das
+             * Bild noch, mit dem sich der zweite Versuch machen lässt.
+             */
+            if (gesendet) {
+              toast('Ins Gespräch geschickt.', 'success');
+              setOpenIndex(null);
+            }
           }}
         />
       )}

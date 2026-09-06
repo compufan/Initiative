@@ -55,11 +55,17 @@ export function NewChatSheet({ open, onClose }: NewChatSheetProps) {
       setPicked([]);
       setTitle('');
       setBusy(false);
+      setOeffnet(null);
     }
   }, [open]);
 
+  // Auf WEN gewartet wird, nicht nur DASS gewartet wird: Die Liste braucht
+  // die Kennung, um genau diese Zeile zu kennzeichnen.
+  const [oeffnet, setOeffnet] = useState<string | null>(null);
+
   async function open1to1(user: UserDto) {
     setBusy(true);
+    setOeffnet(user.id);
     try {
       const conversation = await api.conversations.create({ type: 'direct', memberIds: [user.id] });
       useChat.getState().upsertConversation(conversation);
@@ -69,6 +75,7 @@ export function NewChatSheet({ open, onClose }: NewChatSheetProps) {
       toast('Chat konnte nicht gestartet werden', 'error');
     } finally {
       setBusy(false);
+      setOeffnet(null);
     }
   }
 
@@ -141,6 +148,7 @@ export function NewChatSheet({ open, onClose }: NewChatSheetProps) {
         <UserSearch
           autoFocus
           placeholder="Wen möchtest du anschreiben?"
+          wartetAuf={oeffnet}
           onPick={(user) => void open1to1(user)}
         />
       ) : (

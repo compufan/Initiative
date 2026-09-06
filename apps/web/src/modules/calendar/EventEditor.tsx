@@ -140,25 +140,43 @@ export function EventEditor(props: EventEditorProps) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
-  // Vorschlaege sind die Leute aus dem gewaehlten Chat – gesucht werden darf
-  // darueber hinaus, siehe PersonenWahl.
+  /*
+   * Vorschlaege sind die Leute aus dem gewaehlten Chat UND die bereits
+   * Eingeladenen – gesucht werden darf darueber hinaus, siehe PersonenWahl.
+   *
+   * Die Eingeladenen mussten dazu: PersonenWahl zeigt eine gewaehlte Person
+   * nur, wenn sie ihr schon einmal begegnet ist (aus Vorschlaegen oder aus der
+   * Suche). Wer eingeladen war, aber nicht im Chat sitzt – jemand, den man
+   * beim letzten Mal ueber die Suche dazugeholt hat –, blieb deshalb
+   * unsichtbar, waehrend der Zaehler ihn mitzaehlte: „5 gewaehlt“ ueber einer
+   * Liste mit drei Haken. Beim Speichern ging er trotzdem mit, weil `form`
+   * seine Kennung fuehrt – man sah nur nicht, wen man da einlaedt.
+   */
   const [chatLeute, setChatLeute] = useState<Person[]>([]);
+  // Die Kennungen als Zeichenkette: `event.attendees` bekommt bei jedem Laden
+  // ein neues Feld, der Inhalt bleibt aber derselbe.
+  const eingeladeneIds = (event?.attendees ?? [])
+    .map((teilnehmer) => teilnehmer.userId)
+    .sort()
+    .join(',');
   useEffect(() => {
     const chat = conversations.find((eintrag) => eintrag.id === form.conversationId);
-    if (!chat) {
+    const ids = new Set<string>(eingeladeneIds ? eingeladeneIds.split(',') : []);
+    for (const member of chat?.members ?? []) ids.add(member.userId);
+    if (ids.size === 0) {
       setChatLeute([]);
       return undefined;
     }
     let abgebrochen = false;
     void Promise.all(
-      chat.members.map((member) => api.users.byId(member.userId).catch(() => null)),
+      [...ids].map((userId) => api.users.byId(userId).catch(() => null)),
     ).then((ergebnis) => {
       if (!abgebrochen) setChatLeute(ergebnis.filter((person) => person != null));
     });
     return () => {
       abgebrochen = true;
     };
-  }, [conversations, form.conversationId]);
+  }, [conversations, form.conversationId, eingeladeneIds]);
 
   const eventId = event?.id ?? null;
   const eventStamp = event?.updatedAt ?? null;

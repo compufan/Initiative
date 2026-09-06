@@ -215,14 +215,43 @@ export function ChatScreen() {
     element.scrollTo({ top: element.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
   }
 
-  function jumpTo(messageId: string) {
+  /**
+   * Zur zitierten Nachricht springen – und sie notfalls erst holen.
+   *
+   * Vorher wurde nur im gerenderten Verlauf gesucht. Ein Zitat zeigt aber
+   * gerade auf etwas Älteres, und älter heisst in einem langen Chat: noch
+   * nicht geladen. Der Tipp auf das Zitatfeld endete deshalb regelmässig bei
+   * „Die Nachricht ist noch nicht geladen“ – während der Knopf „Ältere laden“
+   * einen Zentimeter weiter oben genau das getan hätte.
+   *
+   * Die Kennungen sind zeitlich sortiert (UUIDv7), also lässt sich am
+   * Vergleich mit der ältesten geladenen ablesen, ob weiteres Nachladen
+   * überhaupt helfen kann. Die Obergrenze steht gegen den Fall, dass der
+   * Server eine Nachricht nicht mehr liefert (gelöscht, kein Zugriff): Sonst
+   * lädt die Schleife den ganzen Chat und findet trotzdem nichts.
+   */
+  async function jumpTo(messageId: string) {
     const selector =
       typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
         ? `[data-message-id="${CSS.escape(messageId)}"]`
         : `[data-message-id="${messageId}"]`;
-    const target = scrollRef.current?.querySelector(selector);
+
+    const suchen = () => scrollRef.current?.querySelector(selector) ?? null;
+    const geladen = () =>
+      (useChat.getState().messages[conversationId] ?? []).some((item) => item.id === messageId);
+
+    for (let versuch = 0; versuch < 20 && !suchen() && !geladen(); versuch += 1) {
+      const zustand = useChat.getState();
+      if (!(zustand.hasMore[conversationId] ?? false)) break;
+      await zustand.loadOlder(conversationId);
+    }
+
+    // Nach dem Nachladen braucht React ein Bild, bevor die Zeile im DOM steht.
+    if (!suchen()) await new Promise((weiter) => requestAnimationFrame(() => weiter(null)));
+
+    const target = suchen();
     if (!target) {
-      toast('Die Nachricht ist noch nicht geladen', 'info');
+      toast('Die Nachricht ist nicht mehr da', 'info');
       return;
     }
     target.scrollIntoView({ block: 'center', behavior: 'smooth' });

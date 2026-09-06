@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from 'react';
 import { formatDuration } from '@initiative/shared';
 import type { MessageRendererProps } from '../types.js';
 import { MediaCaption, PendingMedia, surfaceClass } from './MediaFrame.js';
@@ -61,13 +68,39 @@ export function AudioBubble({ message, isMine }: MessageRendererProps) {
     }
   };
 
+  const springen = (sekunden: number) => {
+    const audio = audioRef.current;
+    if (!audio || duration <= 0) return;
+    const ziel = Math.min(duration, Math.max(0, sekunden));
+    audio.currentTime = ziel;
+    setPosition(ziel);
+  };
+
+  /*
+   * Nur ein echter Zeigerklick trägt eine Position.
+   *
+   * Wird die Leiste mit der Tastatur ausgelöst (Eingabe oder Leertaste auf dem
+   * fokussierten Knopf), meldet der Browser `clientX = 0` und `detail = 0`.
+   * Das ergab einen negativen Anteil, geklemmt auf 0 – die Sprachnachricht
+   * sprang also an den Anfang, obwohl niemand das wollte. Mit der Tastatur
+   * geht es jetzt in Schritten von fünf Sekunden über die Pfeiltasten, und die
+   * Beschriftung sagt das auch.
+   */
   const seekFromEvent = (event: MouseEvent<HTMLButtonElement>) => {
+    if (event.detail === 0) return;
     const audio = audioRef.current;
     if (!audio || duration <= 0) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
-    audio.currentTime = ratio * duration;
-    setPosition(ratio * duration);
+    springen(ratio * duration);
+  };
+
+  const tasten = (event: KeyboardEvent<HTMLButtonElement>) => {
+    const schritt =
+      event.key === 'ArrowRight' ? 5 : event.key === 'ArrowLeft' ? -5 : null;
+    if (schritt == null) return;
+    event.preventDefault();
+    springen(position + schritt);
   };
 
   const cycleSpeed = () => {
@@ -94,7 +127,9 @@ export function AudioBubble({ message, isMine }: MessageRendererProps) {
           type="button"
           className="media-wave"
           onClick={seekFromEvent}
-          aria-label="Position ändern"
+          onKeyDown={tasten}
+          aria-label="Position ändern – mit den Pfeiltasten in Fünf-Sekunden-Schritten"
+          data-tipp="Tippe in die Leiste, um zu springen. Pfeiltasten: fünf Sekunden vor oder zurück."
         >
           {peaks.map((peak, index) => (
             <span
