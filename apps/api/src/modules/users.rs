@@ -15,6 +15,7 @@ use crate::drossel::regeln;
 use crate::dto::{ListResult, SelfUserDto, UserDto};
 use crate::error::{AppError, AppResult};
 use crate::realtime::Event;
+use crate::services::attachments::require_eigener_anhang;
 use crate::services::users::{
     contacts_of, load_user, merge_settings, to_self_user_dto, to_user_dto,
 };
@@ -310,6 +311,13 @@ async fn update_me(
         Validator::new()
             .length("displayName", name, 1, crate::constants::DISPLAY_NAME_MAX)
             .finish()?;
+    }
+
+    // Ein Profilbild muss die eigene Datei sein – sonst wäre eine geratene
+    // Anhangskennung ein Mittel, eine fremde Datei allen zu zeigen, die mich
+    // sehen. Siehe `require_eigener_anhang`.
+    if let Some(Some(anhang)) = input.avatar_attachment_id {
+        require_eigener_anhang(&state.pool, anhang, user.id()).await?;
     }
     if let Some(Some(bio)) = &input.bio {
         Validator::new()

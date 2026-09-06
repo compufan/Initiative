@@ -11,6 +11,7 @@ use crate::auth::AuthUser;
 use crate::dto::{ConversationDto, ListResult};
 use crate::error::{AppError, AppResult};
 use crate::realtime::Event;
+use crate::services::attachments::require_eigener_anhang;
 use crate::services::conversations::{
     assert_can_moderate, assert_membership, broadcast_conversation, find_direct_conversation,
     load_conversation_dto, load_conversation_dtos, member_ids, require_conversation, ListOptions,
@@ -133,6 +134,13 @@ async fn create(
         None
     };
 
+    // Dasselbe wie beim Profilbild: Ein Gruppenbild muss die eigene Datei
+    // sein. Sonst reichte eine geratene Anhangskennung, um eine fremde Datei
+    // allen Mitgliedern einer Gruppe zu zeigen.
+    if let Some(anhang) = input.avatar_attachment_id {
+        require_eigener_anhang(&state.pool, anhang, user.id()).await?;
+    }
+
     let mut tx = state.pool.begin().await?;
     sqlx::query(
         "insert into conversations (id, type, title, avatar_attachment_id, created_by)
@@ -212,6 +220,9 @@ async fn update(
     if input.title.is_some() || input.avatar_attachment_id.is_some() {
         if membership.role == "member" {
             return Err(AppError::forbidden("Nur Admins dürfen den Chat ändern"));
+        }
+        if let Some(Some(anhang)) = input.avatar_attachment_id {
+            require_eigener_anhang(&state.pool, anhang, user.id()).await?;
         }
         sqlx::query(
             "update conversations set

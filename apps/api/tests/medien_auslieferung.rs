@@ -331,6 +331,136 @@ async fn gefaehrliche_dateien_werden_nicht_angezeigt_harmlose_schon() {
     );
 }
 
+/// Eine fremde Anhangskennung wird nicht zum eigenen Bild.
+///
+/// Die Kennung ist in dieser API der Schlüssel zur Datei – wer sie kennt, darf
+/// lesen. Sie darf deshalb nicht zugleich ein Mittel sein, Rechte zu VERGEBEN:
+/// Liesse sich eine fremde Kennung als eigenes Profilbild oder als Bild einer
+/// Gruppe eintragen, würde daraus „jeder in dieser Gruppe sieht die Datei" –
+/// die Weitergabe eines fremden Bildes an einen ganzen Kreis, mit einem PATCH
+/// und einer geratenen Kennung.
+#[tokio::test(flavor = "multi_thread")]
+async fn eine_fremde_datei_wird_nicht_zum_eigenen_bild() {
+    let Some((probe, token)) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL nicht gesetzt – übersprungen");
+        return;
+    };
+
+    // Der erste lädt ein Bild hoch. Er allein hat es hochgeladen.
+    let fremd = probe
+        .hochladen(&token, "image", "image/png", "geheim.png", &png_pixel())
+        .await;
+
+    // Ein zweites Konto, das die Kennung nur kennt.
+    let kennung = Uuid::now_v7().simple().to_string();
+    let name = format!("dieb{}", &kennung[kennung.len() - 12..]);
+    let (status, konto) = probe
+        .call(
+            "POST",
+            "/api/v1/auth/register",
+            None,
+            Some(json!({
+                "username": &name,
+                "displayName": "Zweites Konto",
+                "password": "richtigespasswort",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{konto}");
+    let dieb = konto["accessToken"].as_str().expect("Token").to_string();
+
+    // Eine Gruppe braucht mindestens ein Mitglied – ein drittes Konto dafür.
+    let name = format!("gast{}", &kennung[kennung.len() - 12..]);
+    let (status, gast) = probe
+        .call(
+            "POST",
+            "/api/v1/auth/register",
+            None,
+            Some(json!({
+                "username": &name,
+                "displayName": "Drittes Konto",
+                "password": "richtigespasswort",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{gast}");
+    let gast_id = gast["user"]["id"].as_str().expect("Kennung").to_string();
+
+    // Als Profilbild: abgelehnt.
+    let (status, antwort) = probe
+        .call(
+            "PATCH",
+            "/api/v1/users/me",
+            Some(&dieb),
+            Some(json!({ "avatarAttachmentId": fremd })),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "eine fremde Datei darf nicht das eigene Profilbild werden: {antwort}"
+    );
+
+    // Als Gruppenbild beim Anlegen: ebenfalls abgelehnt.
+    let (status, antwort) = probe
+        .call(
+            "POST",
+            "/api/v1/conversations",
+            Some(&dieb),
+            Some(json!({
+                "type": "group",
+                "title": "Runde",
+                "memberIds": [gast_id],
+                "avatarAttachmentId": fremd,
+            })),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "eine fremde Datei darf nicht das Bild einer Gruppe werden: {antwort}"
+    );
+
+    // Und der Weg über das Ändern eines bestehenden Chats ist derselbe.
+    let (status, chat) = probe
+        .call(
+            "POST",
+            "/api/v1/conversations",
+            Some(&dieb),
+            Some(json!({ "type": "group", "title": "Runde", "memberIds": [gast_id] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{chat}");
+    let chat_id = chat["id"].as_str().expect("Chatkennung");
+    let (status, antwort) = probe
+        .call(
+            "PATCH",
+            &format!("/api/v1/conversations/{chat_id}"),
+            Some(&dieb),
+            Some(json!({ "avatarAttachmentId": fremd })),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "auch nachträglich nicht: {antwort}"
+    );
+
+    // Das eigene Bild geht selbstverständlich weiter.
+    let eigenes = probe
+        .hochladen(&dieb, "image", "image/png", "meins.png", &png_pixel())
+        .await;
+    let (status, antwort) = probe
+        .call(
+            "PATCH",
+            "/api/v1/users/me",
+            Some(&dieb),
+            Some(json!({ "avatarAttachmentId": eigenes })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "das eigene Bild muss gehen: {antwort}");
+}
+
 /// Das kleinstmögliche gültige PNG – ein Pixel.
 fn png_pixel() -> Vec<u8> {
     const ROH: &[u8] = &[

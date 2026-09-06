@@ -60,3 +60,36 @@ pub async fn load_attachment(pool: &PgPool, id: Uuid) -> AppResult<AttachmentRow
         .await?
         .ok_or_else(|| AppError::not_found("Datei nicht gefunden"))
 }
+
+/// Ein Bild, das man als *eigenes* ausgibt, muss auch das eigene sein.
+///
+/// # Warum das nötig ist
+///
+/// Die Anhangskennung ist in dieser API bewusst der Schlüssel zur Datei
+/// (`media.rs`: „capability URL"). Wer sie kennt, darf lesen. Genau deshalb
+/// darf sie nicht zugleich ein Mittel sein, Rechte zu VERGEBEN.
+///
+/// Ohne diese Prüfung liess sich eine fremde Anhangskennung als eigenes
+/// Profilbild oder als Bild einer Gruppe eintragen. Aus „wer die Kennung
+/// kennt, sieht die Datei" wäre damit „jeder in dieser Gruppe sieht die
+/// Datei" geworden – die Weitergabe eines fremden Bildes an einen ganzen
+/// Kreis, mit einem PATCH und einer geratenen Kennung.
+///
+/// Für ein Profil- oder Gruppenbild ist die strenge Regel auch die richtige:
+/// Der Client lädt es unmittelbar davor selbst hoch. Es gibt keinen
+/// rechtmässigen Weg, hier auf eine fremde Datei zu zeigen. `collections.rs`
+/// kennt für das Ablegen in einer Sammlung eine mildere Fassung
+/// (`assert_may_use_attachment`) – dort ist das Weiterreichen ja der Zweck.
+pub async fn require_eigener_anhang(
+    pool: &PgPool,
+    attachment_id: Uuid,
+    user_id: Uuid,
+) -> AppResult<()> {
+    let anhang = load_attachment(pool, attachment_id).await?;
+    if anhang.uploader_id == Some(user_id) {
+        return Ok(());
+    }
+    // Bewusst „nicht gefunden" statt „verboten": Ob es eine Datei mit dieser
+    // Kennung gibt, geht den Fragenden nichts an.
+    Err(AppError::not_found("Datei nicht gefunden"))
+}
