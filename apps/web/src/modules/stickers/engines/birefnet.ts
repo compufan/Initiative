@@ -51,6 +51,7 @@ import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url
 import ortMjsUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url';
 import { grafikAufgeben, laufzeitEntscheiden, ortVorbereiten } from './ort-laufzeit.js';
 import { ArbeiterFehler, BirefnetKanal, type ArbeiterAehnlich } from './birefnetKanal.js';
+import { browserUmgebung, messungMerken, stockungMessen } from './stockung.js';
 import { flaechenMittel, maskeSkalieren } from './prepare.js';
 
 /**
@@ -290,14 +291,24 @@ async function imArbeiter(
   image: ImageData,
   melden?: Fortschritt,
 ): Promise<Float32Array> {
+  const messer = stockungMessen(browserUmgebung());
   try {
     const ergebnis = await draht.rechne(vorbereiten(image), melden);
+    const stockungMs = messer.beenden();
+    messungMerken({
+      weg: 'arbeiter',
+      ladeMs: ergebnis.ladeMs,
+      laufMs: ergebnis.laufMs,
+      stockungMs,
+    });
     // eslint-disable-next-line no-console
     console.info(
-      `[birefnet] im Arbeiter: laden ${ergebnis.ladeMs} ms, rechnen ${ergebnis.laufMs} ms`,
+      `[birefnet] im Arbeiter: laden ${ergebnis.ladeMs} ms, rechnen ${ergebnis.laufMs} ms, ` +
+        `längste Stockung ${stockungMs} ms`,
     );
     return ergebnis.roh;
   } catch (fehler) {
+    messer.beenden();
     if (fehler instanceof ArbeiterFehler && fehler.imLauf) {
       /*
        * Ein Abbruch MITTEN im Rechnen ist die Auskunft „dieses Gerät schafft
@@ -328,15 +339,30 @@ async function imArbeiter(
  */
 async function imHauptfaden(image: ImageData, melden?: Fortschritt): Promise<Float32Array> {
   const ort = await import('onnxruntime-web/webgpu');
+  const geladenBegonnen = Date.now();
   const runner = await loadSession(melden);
+  const ladeMs = Date.now() - geladenBegonnen;
   melden?.(1, 'Wird freigestellt …');
 
   const eingabe = new ort.Tensor('float32', vorbereiten(image), [1, 3, EINGABE, EINGABE]);
+  // Auf BEIDEN Wegen dasselbe messen – sonst liesse sich nicht vergleichen,
+  // und genau der Vergleich ist die offene Frage: Bringt der Arbeiter auf
+  // diesem Gerät etwas?
+  const messer = stockungMessen(browserUmgebung());
   const begonnen = Date.now();
   try {
     const ergebnis = await runner.run({ [runner.inputNames[0]]: eingabe });
+    const laufMs = Date.now() - begonnen;
+    const stockungMs = messer.beenden();
+    messungMerken({ weg: 'hauptfaden', ladeMs, laufMs, stockungMs });
+    // eslint-disable-next-line no-console
+    console.info(
+      `[birefnet] im Hauptfaden: laden ${ladeMs} ms, rechnen ${laufMs} ms, ` +
+        `längste Stockung ${stockungMs} ms`,
+    );
     return ergebnis[runner.outputNames[0]].data as Float32Array;
   } catch (fehler) {
+    messer.beenden();
     const text = fehler instanceof Error ? fehler.message : String(fehler);
     grafikAufgeben(text);
     await releaseBirefnet();

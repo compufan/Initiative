@@ -587,3 +587,10 @@
   flex-direction: column;
   gap: 0.4rem;
 }
+
+/* Die Messzeile unter dem Freistellen-Ergebnis. Bewusst leise: Sie ist eine
+   Auskunft für den, der sie sucht, und kein Werbeschild. */
+.stk-messung {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}

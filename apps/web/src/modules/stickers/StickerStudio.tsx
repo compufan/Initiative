@@ -46,6 +46,7 @@ import {
 } from './engines/index.js';
 import { kanteWeichzeichnen, maskeTraegt, vorlageAus } from './engines/prepare.js';
 import { maskeAus, teilAn, teileFinden } from './engines/teile.js';
+import { letzteMessung, messungText, type Messung } from './engines/stockung.js';
 
 type Tool = 'move' | 'erase' | 'keep' | 'teile';
 
@@ -175,6 +176,15 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   const [modellFehler, setModellFehler] = useState<string | null>(null);
   /** Was das Modell gerade tut – bei knapp 94 MB die halbe Miete. */
   const [modellStand, setModellStand] = useState<string | null>(null);
+  /*
+   * Die Messung des letzten Modelllaufs – sichtbar, nicht nur im Protokoll.
+   *
+   * Ob der Umzug von „Hohe Qualität“ in einen eigenen Arbeiter etwas bringt,
+   * lässt sich nur auf einem echten Gerät beantworten; hier steht keine
+   * Grafikeinheit. Eine Zeile in der Entwicklerkonsole eines Telefons liest
+   * niemand – also steht sie hier.
+   */
+  const [messung, setMessung] = useState<Messung | null>(null);
   const [canUndo, setCanUndo] = useState(false);
   const [result, setResult] = useState<{ blob: Blob; mime: string } | null>(null);
 
@@ -704,6 +714,9 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       } finally {
         setRechnet(null);
         setModellStand(null);
+        // Nur „Hohe Qualität" misst – die anderen Verfahren rechnen ohnehin
+        // in Sekundenbruchteilen, dort wäre die Zeile nur Rauschen.
+        setMessung(key === 'birefnet' ? letzteMessung() : null);
       }
     },
     [commit],
@@ -1919,6 +1932,11 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
               <p className="stk-hint" role="status">
                 Freigestellt mit „{engineInfo(doc.autoMask.engine as EngineKey).label}“. Verschieben
                 und Zoomen geht weiterhin – der Ausschnitt bleibt am Motiv.
+              </p>
+            )}
+            {messung && !modellFehler && (
+              <p className="stk-hint stk-messung">
+                ⏱ {messungText(messung)}
               </p>
             )}
             {/* Das Modell liefert eine Fläche; erst die Zerlegung macht daraus
