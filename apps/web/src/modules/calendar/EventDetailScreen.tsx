@@ -64,8 +64,12 @@ export function EventDetailScreen() {
       .map((member) => ({ id: member.userId, displayName: member.user.displayName }));
   }, [conversation, event]);
 
+  const [einladenAuswahl, setEinladenAuswahl] = useState<string[]>([]);
+  const [laedtEin, setLaedtEin] = useState(false);
+
   async function einladen(ids: string[]) {
     if (!event || ids.length === 0) return;
+    setLaedtEin(true);
     try {
       setEvent(
         await api.calendar.invite(
@@ -74,9 +78,12 @@ export function EventDetailScreen() {
           ids,
         ),
       );
+      setEinladenAuswahl([]);
       toast(ids.length === 1 ? 'Eingeladen.' : `${ids.length} eingeladen.`, 'success');
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Einladen fehlgeschlagen', 'error');
+    } finally {
+      setLaedtEin(false);
     }
   }
 
@@ -293,12 +300,33 @@ export function EventDetailScreen() {
         {isCreator && (
           <details className="cal-invite">
             <summary>Jemanden einladen</summary>
+            {/*
+                Auswählen und Einladen sind zwei Schritte.
+
+                Vorher stand `gewaehlt={[]}` da, und `onChange` lud sofort ein.
+                „Alle auswählen“ – ein Knopf, der nach Vorbereiten klingt –
+                verschickte damit in einem Zug Einladungen an jeden
+                Vorgeschlagenen. Zurücknehmen liess sich das nur einzeln über
+                „Ausladen“. Die Häkchen blieben danach leer und der Zähler
+                stand weiter auf „0 Personen“ – man sah nicht einmal, was man
+                gerade getan hatte.
+            */}
             <PersonenWahl
               label="Nachträglich einladen"
               vorschlaege={einladbar}
-              gewaehlt={[]}
-              onChange={(ids) => void einladen(ids)}
+              gewaehlt={einladenAuswahl}
+              onChange={setEinladenAuswahl}
             />
+            <button
+              type="button"
+              className="btn btn-primary btn-block"
+              disabled={einladenAuswahl.length === 0 || laedtEin}
+              onClick={() => void einladen(einladenAuswahl)}
+            >
+              {einladenAuswahl.length <= 1
+                ? 'Einladen'
+                : `${einladenAuswahl.length} Personen einladen`}
+            </button>
           </details>
         )}
       </section>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import type { CalendarEventDto, CollectionDto } from '@initiative/shared';
 import { api } from '../../lib/api.js';
 import { toast } from '../../state/ui.js';
@@ -23,19 +24,33 @@ interface Props {
 export function EventCollection({ event, canManage, onChanged }: Props) {
   const [sammlungen, setSammlungen] = useState<CollectionDto[]>([]);
   const [busy, setBusy] = useState(false);
+  const [ladeFehler, setLadeFehler] = useState(false);
+  const [erneut, setErneut] = useState(0);
 
+  /*
+   * Ein Fehlschlag beim Laden wird gezeigt, nicht verschluckt.
+   *
+   * Hier stand `.catch(() => {})`. Ohne Netz blieb `sammlungen` leer – und
+   * damit verlor sogar die BEREITS verknüpfte Sammlung ihren Namen: Der Knopf
+   * unten fällt dann auf „Zur Sammlung“ zurück, das Auswahlfeld sieht aus, als
+   * gäbe es keine einzige Sammlung. Es sah nach „nichts da“ aus, wo „nicht
+   * geladen“ richtig gewesen wäre.
+   */
   useEffect(() => {
     let abgebrochen = false;
+    setLadeFehler(false);
     void api.collections
       .list()
       .then(({ items }) => {
         if (!abgebrochen) setSammlungen(items);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!abgebrochen) setLadeFehler(true);
+      });
     return () => {
       abgebrochen = true;
     };
-  }, []);
+  }, [erneut]);
 
   const verknuepft = sammlungen.find((eintrag) => eintrag.id === event.collectionId) ?? null;
 
@@ -60,14 +75,28 @@ export function EventCollection({ event, canManage, onChanged }: Props) {
         Sammlung
       </h2>
 
+      {/*
+          `Link`, kein rohes `href`: Ein echter Seitenaufruf lädt die ganze
+          PWA neu – Zustand fort, Verlauf fort, und auf einem Telefon dauert
+          es sichtbar. Jede andere Stelle im Modul macht es längst so.
+      */}
       {event.collectionId && (
-        <a
+        <Link
           className="btn btn-block"
-          href={`/dateien/${event.collectionId}`}
+          to={`/dateien/${event.collectionId}`}
           data-tipp="Öffnet den Ordner mit allen Dateien und Bildern, die zu diesem Termin gehören"
         >
           📁 {verknuepft?.name ?? 'Zur Sammlung'}
-        </a>
+        </Link>
+      )}
+
+      {ladeFehler && (
+        <p className="cal-hint">
+          Die Sammlungen konnten nicht geladen werden.{' '}
+          <button type="button" className="btn btn-sm" onClick={() => setErneut((n) => n + 1)}>
+            Erneut versuchen
+          </button>
+        </p>
       )}
 
       {canManage && (

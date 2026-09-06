@@ -154,6 +154,14 @@
   font-weight: 600;
 }
 
+/*
+ * Sichtbar 26 Pixel, treffbar 44.
+ *
+ * Der Kreis soll die Kachel nicht zudecken, die Trefferfläche muss aber dem
+ * Daumen genügen – sonst trifft man beim Entfernen das Bild und beim Öffnen
+ * das Entfernen. Das Pseudoelement vergrössert nur den Bereich, nicht die
+ * Zeichnung.
+ */
 .fil-tile-remove {
   position: absolute;
   top: 6px;
@@ -167,6 +175,13 @@
   font-size: 0.8rem;
   line-height: 1;
   cursor: pointer;
+}
+
+.fil-tile-remove::after {
+  content: '';
+  position: absolute;
+  inset: -9px;
+  border-radius: 50%;
 }
 
 /* ---- Betrachter ---- */

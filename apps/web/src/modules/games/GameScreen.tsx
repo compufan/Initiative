@@ -172,13 +172,28 @@ export function GameScreen() {
       subtitle={conversation ? conversationLabel(conversation, myId) : 'Partie'}
       back={back}
       actions={
+        /*
+            Der Knopf sagt jetzt, was er tut – und wann er scheitert.
+
+            `reload` setzt im Fehlerfall nur `failed`/`offline`, und die werden
+            ausschliesslich im Zweig OHNE geladene Partie gezeigt. Bei einer
+            laufenden Partie blieb ein Fehlschlag also völlig stumm: Man tippte
+            auf ⟳, es passierte nichts, und ob der Spielstand nun aktuell war,
+            liess sich nicht erkennen.
+        */
         <button
           type="button"
           className="icon-btn"
           aria-label="Spielstand neu laden"
-          onClick={() => void reload()}
+          data-tipp="Holt den aktuellen Spielstand vom Server"
+          disabled={loading}
+          onClick={() => {
+            void reload().then((gelungen) => {
+              if (!gelungen) toast('Spielstand konnte nicht geladen werden', 'error');
+            });
+          }}
         >
-          ⟳
+          {loading ? '…' : '⟳'}
         </button>
       }
     >

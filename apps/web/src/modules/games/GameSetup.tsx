@@ -46,9 +46,23 @@ export function GameSetup({
   const { games, loading, failed } = useGameCatalog();
   const conversations = useChat((state) => state.conversations);
 
+  /*
+   * Der Chat, aus dem man kommt, bleibt drin – auch wenn er archiviert ist.
+   *
+   * Archivierte gehören nicht in die Auswahlliste; wer aber IN einem
+   * archivierten Chat auf „Spiel“ tippt, kam vorher gar nicht weiter: `chat`
+   * war null, `ready` blieb false, „Spiel starten“ war dauerhaft grau, und
+   * statt eines Hinweises erschien die Chat-Auswahl, deren Änderung der
+   * Effekt unten sofort wieder zurückdrehte. Ein Spiel im archivierten Chat
+   * ist nichts Verbotenes – der Server kennt die Unterscheidung nicht einmal.
+   */
   const chats = useMemo(
-    () => conversations.filter((item) => !item.archived && item.members.length > 1),
-    [conversations],
+    () =>
+      conversations.filter(
+        (item) =>
+          item.members.length > 1 && (!item.archived || item.id === conversationId),
+      ),
+    [conversations, conversationId],
   );
 
   const [chatId, setChatId] = useState<string>(conversationId ?? chats[0]?.id ?? '');
@@ -110,16 +124,21 @@ export function GameSetup({
   const minOpponents = Math.max(1, (info?.minPlayers ?? 2) - 1);
   const ready = Boolean(chat && info) && opponents.length >= minOpponents;
 
+  /*
+   * Bei genau einem freien Platz ERSETZT der neue Tipp den alten.
+   *
+   * Beide Spiele sind für zwei Personen, `maxOpponents` ist also 1. Wer sich
+   * vertippt hatte, bekam beim zweiten Namen nur „Dieses Spiel ist für zwei
+   * Personen“ – und musste erst den ersten Namen wieder abwählen. Bei einer
+   * Auswahl, die ohnehin nur einen zulässt, ist Umschalten das Erwartete;
+   * abgelehnt wird nur da, wo wirklich mehrere Plätze zu vergeben sind.
+   */
   function toggleOpponent(userId: string) {
     setOpponents((current) => {
       if (current.includes(userId)) return current.filter((item) => item !== userId);
+      if (maxOpponents === 1) return [userId];
       if (current.length >= maxOpponents) {
-        toast(
-          maxOpponents === 1
-            ? 'Dieses Spiel ist für zwei Personen'
-            : `Höchstens ${maxOpponents} Mitspielende`,
-          'info',
-        );
+        toast(`Höchstens ${maxOpponents} Mitspielende`, 'info');
         return current;
       }
       return [...current, userId];
@@ -242,7 +261,10 @@ export function GameSetup({
                     <button
                       key={member.userId}
                       type="button"
-                      role="checkbox"
+                      // Ein Platz heisst eine Wahl – dafür steht `radio`, nicht
+                      // `checkbox`. Vorlesende Geräte sagen damit dasselbe wie
+                      // das Verhalten: Der nächste Name ersetzt den vorigen.
+                      role={maxOpponents === 1 ? 'radio' : 'checkbox'}
                       aria-checked={checked}
                       className="list-row game-member"
                       onClick={() => toggleOpponent(member.userId)}

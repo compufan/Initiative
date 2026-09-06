@@ -62,11 +62,26 @@ export function NoteListe({ eventId, note, onChanged, leute }: Props) {
     }
   }
 
+  /*
+   * Geleert wird erst, wenn der Punkt wirklich angekommen ist.
+   *
+   * Vorher stand `setNeuerText('')` VOR dem Serveraufruf. Scheiterte er – im
+   * Zug, im Aufzug –, blieb eine Meldung, und der getippte Text war weg. Ein
+   * langer Einkaufspunkt musste dann noch einmal getippt werden, und man
+   * musste ihn erst aus dem Gedächtnis holen.
+   */
   async function hinzufuegen() {
     const text = neuerText.trim();
     if (!text) return;
-    setNeuerText('');
-    await ruf(() => api.calendar.addNoteItem(eventId, note.id, { text }));
+    setBusy(true);
+    try {
+      onChanged(await api.calendar.addNoteItem(eventId, note.id, { text }));
+      setNeuerText('');
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Nicht gespeichert');
+    } finally {
+      setBusy(false);
+    }
   }
 
   // Eine Textnotiz bekommt hier gar nichts.

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ATTACHMENT_KINDS,
@@ -133,6 +133,24 @@ export function DateienScreen() {
     suchtext: (item) => `${item.title ?? ''} ${item.attachment.fileName ?? ''} ${item.note ?? ''}`,
     facetten,
   });
+
+  /*
+   * Jeder Ordner geht ungefiltert auf.
+   *
+   * Beide Routen zeigen dieselbe Komponenteninstanz (App.tsx setzt keinen
+   * `key`), also überlebte der Filterzustand den Ordnerwechsel: Man suchte in
+   * einem Ordner nach „Vertrag“, ging eine Ebene tiefer – und der neue Ordner
+   * sah leer aus. Die Filterleiste erscheint zudem erst ab zwei Dateien, der
+   * Grund war also unter Umständen gar nicht zu sehen.
+   *
+   * Die Rücksetzfunktion wird über eine Referenz gelesen: Sie entsteht bei
+   * jedem Bild neu, im Abhängigkeitsfeld liefe der Effekt dauernd.
+   */
+  const zuruecksetzenRef = useRef(filter.zuruecksetzen);
+  zuruecksetzenRef.current = filter.zuruecksetzen;
+  useEffect(() => {
+    zuruecksetzenRef.current();
+  }, [collectionId]);
 
   // Der Betrachter haengt an einem Index – und zwar in GENAU der Liste, die
   // gerade gezeigt wird. Kaeme er aus `items` und die Kacheln aus der
@@ -442,14 +460,17 @@ function DateiKachel({
   onOpen: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [frage, setFrage] = useState(false);
   const darfAendern = allowsLevel(item.myLevel, 'edit');
   const name = item.title ?? item.attachment.fileName ?? 'Datei';
 
   async function entfernen() {
     setBusy(true);
+    setFrage(false);
     try {
       await api.collections.removeItem(collectionId, item.id);
       await useFiles.getState().loadItems(collectionId, true);
+      toast(`„${name}“ entfernt.`, 'success');
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Entfernen fehlgeschlagen');
     } finally {
@@ -470,16 +491,38 @@ function DateiKachel({
         <span className="fil-tile-name truncate">{name}</span>
         <span className="fil-meta">{formatBytes(item.attachment.size)}</span>
       </button>
+      {/*
+          Das ✕ fragt nach.
+
+          Es sitzt 26 × 26 Pixel gross direkt auf dem Vorschaubild – also
+          genau dort, wohin der Daumen beim Öffnen der Datei geht – und
+          entfernte den Eintrag ohne Rückfrage, ohne Meldung und ohne
+          Rückgängig. Überall sonst in dieser App steht vor dem Entfernen ein
+          zweiter Schritt.
+      */}
       {darfAendern && (
         <button
           type="button"
           className="fil-tile-remove"
           aria-label={`„${name}“ aus der Sammlung entfernen`}
+          data-tipp="Nimmt die Datei aus dieser Sammlung – die Datei selbst bleibt im Chat"
           disabled={busy}
-          onClick={() => void entfernen()}
+          onClick={() => setFrage(true)}
         >
           ✕
         </button>
+      )}
+      {frage && (
+        <ConfirmDialog
+          open
+          title={`„${name}“ entfernen?`}
+          description="Die Datei bleibt dort, wo sie herkommt – sie ist nur nicht mehr in dieser Sammlung."
+          confirmLabel="Entfernen"
+          danger
+          busy={busy}
+          onCancel={() => setFrage(false)}
+          onConfirm={() => void entfernen()}
+        />
       )}
     </li>
   );

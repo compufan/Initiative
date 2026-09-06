@@ -110,7 +110,9 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
           } else {
             const preview = await videoPreview(file);
             next.push({
-              id: `${file.name}-${file.lastModified}-${next.length}`,
+              // Dieselbe Begründung wie beim Bild darüber – hier war sie beim
+              // Beheben schlicht übersehen worden.
+              id: `${file.name}-${file.lastModified}-${naechsteKennung()}`,
               kind,
               blob: file,
               mime: mimeForFile(file),

@@ -350,6 +350,13 @@
   min-height: 24px;
 }
 
+/* Abstand zum „Erneut senden" daneben: Die beiden standen sechs Pixel
+   auseinander, und der eine wirft weg, was der andere retten will. */
+.msg-retry-verwerfen {
+  margin-left: var(--space-2);
+  color: var(--text-muted);
+}
+
 .msg-reactions {
   display: flex;
   flex-wrap: wrap;

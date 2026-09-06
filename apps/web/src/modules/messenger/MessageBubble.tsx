@@ -1,4 +1,4 @@
-import { type ComponentType } from 'react';
+import { useState, type ComponentType } from 'react';
 import { messagePreview, type ConversationDto } from '@initiative/shared';
 import { messageRenderers } from '../registry.js';
 import type { MessageRendererProps } from '../types.js';
@@ -9,6 +9,7 @@ import { toast } from '../../state/ui.js';
 import { TextBubble } from './TextBubble.js';
 import { formatTime, senderName } from './helpers.js';
 import { useLongPress } from './useLongPress.js';
+import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 
 let rendererCache: Record<string, ComponentType<MessageRendererProps>> | null = null;
 
@@ -39,6 +40,9 @@ export function MessageBubble({
   const isMine = message.senderId == null || message.senderId === myId;
   const Renderer = rendererFor(message.type);
   const longPress = useLongPress(() => onOpenActions(message));
+  // Vor der frühen Rückkehr für Systemnachrichten: Ein Haken darf nicht
+  // manchmal laufen und manchmal nicht.
+  const [verwerfenFrage, setVerwerfenFrage] = useState(false);
 
   if (message.type === 'system') {
     return <Renderer message={message} conversation={conversation} isMine={isMine} />;
@@ -121,10 +125,30 @@ export function MessageBubble({
           {isMine && message.pending && <span aria-label="wird gesendet">⏳</span>}
           {isMine && message.failed && (
             <>
-              <button type="button" className="msg-retry" onClick={() => void retry()}>
+              <button
+                type="button"
+                className="msg-retry"
+                data-tipp="Schickt die Nachricht noch einmal – der Text bleibt erhalten"
+                onClick={() => void retry()}
+              >
                 ⚠️ Erneut senden
               </button>
-              <button type="button" className="msg-retry" onClick={() => void discard()}>
+              {/*
+                  Verwerfen fragt nach.
+
+                  Ein Tipp löschte den Outbox-Eintrag sofort, und damit war der
+                  getippte Text unwiederbringlich fort – bei einer Nachricht,
+                  die man gerade deshalb noch sieht, weil sie NICHT abgeschickt
+                  werden konnte. Der Knopf sass dabei sechs Pixel neben „Erneut
+                  senden“, also genau da, wo man hin will. Für „Für alle
+                  löschen“ gibt es diese Rückfrage längst.
+              */}
+              <button
+                type="button"
+                className="msg-retry msg-retry-verwerfen"
+                data-tipp="Wirft die nicht gesendete Nachricht weg – der Text ist danach fort"
+                onClick={() => setVerwerfenFrage(true)}
+              >
                 Verwerfen
               </button>
             </>
@@ -177,6 +201,22 @@ export function MessageBubble({
       >
         ⋯
       </button>
+
+      {verwerfenFrage && (
+        <ConfirmDialog
+          open
+          title="Nachricht verwerfen?"
+          description="Der getippte Text ist danach fort. Sie wurde nie gesendet – niemand sonst hat sie gesehen."
+          confirmLabel="Verwerfen"
+          cancelLabel="Behalten"
+          danger
+          onCancel={() => setVerwerfenFrage(false)}
+          onConfirm={() => {
+            setVerwerfenFrage(false);
+            void discard();
+          }}
+        />
+      )}
     </div>
   );
 }

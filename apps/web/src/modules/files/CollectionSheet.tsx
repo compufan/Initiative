@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { LIMITS, MEMBER_LEVELS, type CollectionDto, type MemberLevel } from '@initiative/shared';
 import { Sheet } from '../../components/Sheet.js';
 import { api } from '../../lib/api.js';
@@ -35,6 +35,23 @@ export function CollectionSheet({
   const [description, setDescription] = useState(collection?.description ?? '');
   const [memberLevel, setMemberLevel] = useState<MemberLevel>(collection?.memberLevel ?? 'edit');
   const [busy, setBusy] = useState(false);
+
+  /*
+   * Beim Öffnen frisch – nicht nur beim ersten Einhängen.
+   *
+   * `useState(collection?.name ?? '')` liest den Anfangswert genau einmal. Das
+   * Blatt bleibt aber dauerhaft eingehängt und wird nur über `open`
+   * eingeblendet: Nach Speichern oder Abbrechen standen beim nächsten Öffnen
+   * noch die alten Eingaben da. Wer eine Sammlung anlegte und gleich die
+   * nächste wollte, fand den Namen der vorigen im Feld – und legte sie mit
+   * etwas Pech ein zweites Mal an.
+   */
+  useEffect(() => {
+    if (!open) return;
+    setName(collection?.name ?? '');
+    setDescription(collection?.description ?? '');
+    setMemberLevel(collection?.memberLevel ?? 'edit');
+  }, [open, collection?.name, collection?.description, collection?.memberLevel]);
 
   const bearbeiten = Boolean(collection);
   const chat = collection?.conversationId ?? conversationId ?? null;

@@ -15,7 +15,14 @@ export interface LiveGameSession {
   predict: (session: GameSessionDto, baseVersion: number) => void;
   /** Undo a prediction the server rejected. */
   rollback: (session: GameSessionDto) => void;
-  reload: () => Promise<void>;
+  /**
+   * Lädt den Spielstand neu und sagt, ob es geklappt hat.
+   *
+   * Der Rückgabewert kam dazu, weil `failed` nur im Zweig OHNE geladene
+   * Partie gezeigt wird: Bei laufender Partie blieb ein Fehlschlag stumm, und
+   * der Aufrufer hatte kein Mittel, das zu bemerken.
+   */
+  reload: () => Promise<boolean>;
 }
 
 /**
@@ -62,7 +69,7 @@ export function useLiveGameSession(
   }, []);
 
   const reload = useCallback(async () => {
-    if (!sessionId) return;
+    if (!sessionId) return false;
     setLoading(true);
     try {
       const loaded = await api.games.byId(sessionId);
@@ -70,9 +77,11 @@ export function useLiveGameSession(
       setSession(loaded);
       setFailed(false);
       setOffline(false);
+      return true;
     } catch (error) {
       setFailed(true);
       setOffline(error instanceof ApiError && error.isOffline);
+      return false;
     } finally {
       setLoading(false);
     }
