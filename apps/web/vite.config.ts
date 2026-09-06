@@ -9,15 +9,29 @@ export default defineConfig(({ mode }) => {
 
   // Welcher Stand ist das hier? Vercel und GitHub legen den Commit als
   // Umgebungsvariable bereit; lokal steht schlicht "dev".
-  const commit = (
-    env.VERCEL_GIT_COMMIT_SHA ||
-    env.GITHUB_SHA ||
-    'dev'
-  ).slice(0, 7);
+  const commit = (env.VERCEL_GIT_COMMIT_SHA || env.GITHUB_SHA || 'dev').slice(0, 7);
 
   return {
     define: {
       __APP_COMMIT__: JSON.stringify(commit),
+    },
+    /*
+     * Arbeiter als ES-Module bauen.
+     *
+     * Vite baut sie voreingestellt als `iife`, und das verträgt sich nicht mit
+     * `import()` – Rollup lehnt es ausdrücklich ab („UMD and IIFE output
+     * formats are not supported for code-splitting builds"). Der
+     * BiRefNet-Arbeiter lädt ONNX Runtime aber genau so, damit die 26 MB
+     * Laufzeit erst beim ersten Freistellen geholt werden und nicht bei jedem
+     * Start der App.
+     *
+     * Passt zu `new Worker(..., { type: 'module' })` an der Aufrufstelle.
+     * Beides muss gemeinsam stimmen: Ein Modul-Arbeiter, der als iife gebaut
+     * wird, lädt nicht – und ein klassischer Arbeiter aus ES-Modulcode auch
+     * nicht.
+     */
+    worker: {
+      format: 'es' as const,
     },
     resolve: {
       alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
@@ -110,8 +124,18 @@ export default defineConfig(({ mode }) => {
           icons: [
             { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
             { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
-            { src: '/icons/maskable-192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
-            { src: '/icons/maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+            {
+              src: '/icons/maskable-192.png',
+              sizes: '192x192',
+              type: 'image/png',
+              purpose: 'maskable',
+            },
+            {
+              src: '/icons/maskable-512.png',
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'maskable',
+            },
           ],
           shortcuts: [
             { name: 'Neuer Chat', url: '/chats?new=1' },

@@ -68,7 +68,14 @@ describe('keepAtSeeds mit Vorzeichen', () => {
     // Und zur Gegenprobe, dass der Test ueberhaupt etwas misst: Als PLUS-Tipp
     // an derselben Stelle bliebe das rechte Feld deutlich stehen.
     const alsPlus = zweiFelder();
-    keepAtSeeds(alsPlus, [{ x: 5, y: 10 }, { x: 30, y: 10 }], 40);
+    keepAtSeeds(
+      alsPlus,
+      [
+        { x: 5, y: 10 },
+        { x: 30, y: 10 },
+      ],
+      40,
+    );
     expect(rechtsSichtbar(alsPlus)).toBeGreaterThan(rechtsSichtbar(mit) + 200);
   });
 

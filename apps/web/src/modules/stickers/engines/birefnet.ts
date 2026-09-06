@@ -15,6 +15,24 @@
  * Die Datei liegt beim eigenen Server. Sie wird beim Bauen einmal geholt
  * (`scripts/prepare-models.mjs`); das Gerät des Anwenders spricht nie mit
  * Hugging Face.
+ *
+ * # Was hier passiert und was im Arbeiter
+ *
+ * Gerechnet wird in `birefnet.worker.ts` – 94 MB Modell einlesen, den Graphen
+ * bauen, die Shader übersetzen und laufen lassen. Das ist die Arbeit, die den
+ * Hauptfaden anhält, und sie gehört dort nicht hin.
+ *
+ * Hier bleibt, was nicht in einen Arbeiter kann oder soll:
+ *
+ * - **Die Entscheidung über das Gerät** und der Merkposten „hat aufgegeben“.
+ *   Beide hängen an `localStorage`, das es in einem Arbeiter nicht gibt.
+ * - **Die Vor- und Nachbereitung.** Bild auf 512 bringen, normalisieren,
+ *   hinterher die Kurve und das Hochrechnen auf Bildgrösse. Zusammen ein
+ *   Bruchteil des Laufs – und der Weg dorthin und zurück kostet sonst zwei
+ *   weitere Puffer.
+ * - **Der Rückfall.** Kann dieser Browser keine Modul-Arbeiter, wird hier
+ *   gerechnet wie bisher. Ein Gerät soll durch den Umbau nicht schlechter
+ *   dastehen als vorher.
  */
 
 import type { InferenceSession } from 'onnxruntime-web';
@@ -31,7 +49,8 @@ import type { InferenceSession } from 'onnxruntime-web';
 // und rechnete auf der CPU weiter. Auf jedem Gerät, seit dem ersten Tag.
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url';
 import ortMjsUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.mjs?url';
-import { grafikAufgeben, ortVorbereiten } from './ort-laufzeit.js';
+import { grafikAufgeben, laufzeitEntscheiden, ortVorbereiten } from './ort-laufzeit.js';
+import { ArbeiterFehler, BirefnetKanal, type ArbeiterAehnlich } from './birefnetKanal.js';
 import { flaechenMittel, maskeSkalieren } from './prepare.js';
 
 /**
@@ -54,6 +73,39 @@ export type Fortschritt = (anteil: number, text: string) => void;
 
 let session: InferenceSession | null = null;
 let ladend: Promise<InferenceSession> | null = null;
+
+/**
+ * Der Arbeiter, sofern dieser Browser einen bauen kann.
+ *
+ * `null` heisst: noch nicht versucht. `false` heisst: geht nicht, es wird im
+ * Hauptfaden gerechnet – so, wie es vor diesem Umbau überall war.
+ */
+let kanal: BirefnetKanal | null | false = null;
+
+function kanalHolen(): BirefnetKanal | false {
+  if (kanal !== null) return kanal;
+  try {
+    /*
+     * Ein Modul-Arbeiter, gebaut über `import.meta.url`.
+     *
+     * Diese Schreibweise erkennt Vite und bündelt den Arbeiter samt seinen
+     * Abhängigkeiten mit – eine Zeichenkette täte das nicht, und der Arbeiter
+     * fiele im Auslieferungsbau still aus.
+     */
+    kanal = new BirefnetKanal(
+      () =>
+        new Worker(new URL('./birefnet.worker.js', import.meta.url), {
+          type: 'module',
+        }) as unknown as ArbeiterAehnlich,
+    );
+  } catch {
+    // Alte Browser ohne Modul-Arbeiter, oder eine Richtlinie, die sie
+    // verbietet. Dann eben hier – langsamer für die Oberfläche, aber es
+    // rechnet.
+    kanal = false;
+  }
+  return kanal;
+}
 
 /**
  * Wie lange der letzte Lauf gedauert hat, in Millisekunden.
@@ -193,37 +245,25 @@ function vorbereiten(image: ImageData): Float32Array {
  * Rückgabe: ein Wert je Bildpunkt, 0 = weg, 255 = bleibt, in Bildgrösse.
  */
 export async function birefnetMask(image: ImageData, melden?: Fortschritt): Promise<Uint8Array> {
-  const ort = await import('onnxruntime-web/webgpu');
-  const runner = await loadSession(melden);
-  melden?.(1, 'Wird freigestellt …');
-
-  const eingabe = new ort.Tensor('float32', vorbereiten(image), [1, 3, EINGABE, EINGABE]);
-
   /*
-   * Ein Fehlschlag hier ist endgültig, und das ist Absicht.
+   * Die Gerätefrage zuerst, und zwar HIER.
    *
-   * Die Shader eines WebGPU-Rechenwegs werden erst beim ersten Lauf
-   * übersetzt: Ein Gerät, dessen Grenzen nicht reichen, meldet sich nicht
-   * beim Erzeugen der Sitzung, sondern genau hier. Ausweichen liesse sich nur
-   * auf den Prozessor – und der braucht für dieses Netz eine Viertelstunde je
-   * Bild. Also wird der Abbruch gemerkt (beim nächsten Mal fängt es gar nicht
-   * erst an) und ehrlich gesagt, was stattdessen hilft.
+   * Sie liest den Merkposten aus `localStorage` – den gibt es im Arbeiter
+   * nicht. Und sie erspart im Zweifel 94 MB Download für ein Gerät, auf dem
+   * der erste Shader ohnehin abbricht.
    */
-  const begonnen = Date.now();
-  let roh: Float32Array;
-  try {
-    const ergebnis = await runner.run({ [runner.inputNames[0]]: eingabe });
-    roh = ergebnis[runner.outputNames[0]].data as Float32Array;
-  } catch (fehler) {
-    const text = fehler instanceof Error ? fehler.message : String(fehler);
-    grafikAufgeben(text);
-    await releaseBirefnet();
+  const laufzeit = await laufzeitEntscheiden();
+  if (!laufzeit.taugt) {
     throw new Error(
-      `Die Grafikeinheit hat nach ${Math.round((Date.now() - begonnen) / 1000)} s mitten im ` +
-        `Rechnen abgebrochen (${text}). ` +
-        'Nimm „Niedrige Qualität“ – das rechnet auf jedem Gerät in Sekunden.',
+      `„Hohe Qualität" braucht eine Grafikeinheit. ${laufzeit.grund ?? ''} ` +
+        'Auf dem Prozessor rechnet dieses Netz an einem Bild eine Viertelstunde – ' +
+        'nimm „Niedrige Qualität", das braucht ein paar Sekunden.',
     );
   }
+
+  const draht = kanalHolen();
+  const roh = draht ? await imArbeiter(draht, image, melden) : await imHauptfaden(image, melden);
+
   // Erst die Kurve über die Modellwerte, dann daraus abtasten. Vorher lief
   // `Math.exp` je AUSGABEpunkt statt je Modellpunkt – dasselbe Ergebnis, nur
   // ein Vielfaches der Arbeit.
@@ -237,8 +277,83 @@ export async function birefnetMask(image: ImageData, melden?: Fortschritt): Prom
   return maskeSkalieren(tabelle, EINGABE, image.width, image.height);
 }
 
+/**
+ * Der Regelweg: rechnen lassen und dabei nichts blockieren.
+ *
+ * Die Zeiten kommen mit zurück und landen im Protokoll. Das ist kein Schmuck:
+ * Ob dieser Umbau auf einem echten Telefon etwas bringt, lässt sich nur DORT
+ * messen – hier steht keine Grafikeinheit. Ohne diese Zeilen bliebe die Frage
+ * für immer offen.
+ */
+async function imArbeiter(
+  draht: BirefnetKanal,
+  image: ImageData,
+  melden?: Fortschritt,
+): Promise<Float32Array> {
+  try {
+    const ergebnis = await draht.rechne(vorbereiten(image), melden);
+    // eslint-disable-next-line no-console
+    console.info(
+      `[birefnet] im Arbeiter: laden ${ergebnis.ladeMs} ms, rechnen ${ergebnis.laufMs} ms`,
+    );
+    return ergebnis.roh;
+  } catch (fehler) {
+    if (fehler instanceof ArbeiterFehler && fehler.imLauf) {
+      /*
+       * Ein Abbruch MITTEN im Rechnen ist die Auskunft „dieses Gerät schafft
+       * es nicht" – die wird gemerkt, damit der nächste Versuch gar nicht
+       * erst anfängt. Ein Fehler beim Laden ist etwas anderes (die Datei kam
+       * nicht an) und darf das Verfahren nicht dauerhaft abschalten.
+       */
+      grafikAufgeben(fehler.message);
+      draht.freigeben();
+      kanal = null;
+      throw new Error(
+        `Die Grafikeinheit hat nach ${Math.round(fehler.laufMs / 1000)} s mitten im ` +
+          `Rechnen abgebrochen (${fehler.message}). ` +
+          'Nimm „Niedrige Qualität" – das rechnet auf jedem Gerät in Sekunden.',
+      );
+    }
+    throw fehler instanceof Error ? fehler : new Error(String(fehler));
+  }
+}
+
+/**
+ * Der Rückfall, wenn dieser Browser keine Modul-Arbeiter kann.
+ *
+ * Wortgleich zu dem, was vor dem Umbau überall lief. Er ist da, damit ein
+ * altes Gerät durch die Verbesserung nicht schlechter dasteht – und nicht,
+ * weil mit ihm zu rechnen wäre: Ein Browser mit WebGPU und ohne Modul-
+ * Arbeiter ist eine sehr schmale Schnittmenge.
+ */
+async function imHauptfaden(image: ImageData, melden?: Fortschritt): Promise<Float32Array> {
+  const ort = await import('onnxruntime-web/webgpu');
+  const runner = await loadSession(melden);
+  melden?.(1, 'Wird freigestellt …');
+
+  const eingabe = new ort.Tensor('float32', vorbereiten(image), [1, 3, EINGABE, EINGABE]);
+  const begonnen = Date.now();
+  try {
+    const ergebnis = await runner.run({ [runner.inputNames[0]]: eingabe });
+    return ergebnis[runner.outputNames[0]].data as Float32Array;
+  } catch (fehler) {
+    const text = fehler instanceof Error ? fehler.message : String(fehler);
+    grafikAufgeben(text);
+    await releaseBirefnet();
+    throw new Error(
+      `Die Grafikeinheit hat nach ${Math.round((Date.now() - begonnen) / 1000)} s mitten im ` +
+        `Rechnen abgebrochen (${text}). ` +
+        'Nimm „Niedrige Qualität" – das rechnet auf jedem Gerät in Sekunden.',
+    );
+  }
+}
+
 /** Gibt die Modelldaten wieder frei – hier besonders wichtig, es sind 94 MB. */
 export async function releaseBirefnet(): Promise<void> {
+  if (kanal) kanal.freigeben();
+  // Nicht auf `false` setzen: Das hiesse „dieser Browser kann keine
+  // Arbeiter". Beim nächsten Mal soll wieder einer gebaut werden.
+  if (kanal !== false) kanal = null;
   await session?.release();
   session = null;
   ladend = null;

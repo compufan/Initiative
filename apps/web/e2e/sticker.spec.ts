@@ -1,3 +1,4 @@
+import { crc32, deflateSync } from 'node:zlib';
 import { expect, test, type Browser, type Page } from '@playwright/test';
 
 /**
@@ -401,4 +402,201 @@ test('Schriftzüge lassen sich frei setzen, nicht nur oben und unten', async ({ 
   await expect(page.getByRole('button', { name: 'WELT' })).toBeVisible();
 
   await page.close();
+});
+
+/* Aus bilder.spec.ts übernommen – ein erkennbares Motiv, im Test gebaut. */
+function motivPng(breite: number, hoehe: number): Buffer {
+  const kopfX = breite / 2;
+  const kopfY = hoehe * 0.28;
+  const kopfR = Math.min(breite, hoehe) * 0.14;
+  return pngAus(breite, hoehe, (x, y) => {
+    const imKopf = (x - kopfX) ** 2 + (y - kopfY) ** 2 < kopfR ** 2;
+    const imRumpf = x > breite * 0.33 && x < breite * 0.67 && y > hoehe * 0.4;
+    /*
+     * Bewusst UNBUNT: rot gleich blau, überall.
+     *
+     * Der Maskenschleier wird über seinen Rotstich (r − b) gemessen. Auf
+     * einem farbigen Bild trägt schon das Motiv selbst einen Rotstich, und
+     * die Messung mischt zwei Dinge. Unbunt heisst: ohne Schleier ist r − b
+     * exakt null, mit Schleier deutlich positiv – ein Signal, das nichts
+     * verwässert.
+     */
+    if (imKopf || imRumpf) return [50, 50, 50];
+    // Ein sanfter Verlauf statt einer Fläche: Ein völlig gleichmässiges Bild
+    // sieht ein Netz als ebenso motivlos an wie gar keines.
+    const wert = Math.round(168 + 60 * (y / hoehe));
+    return [wert, wert, wert];
+  });
+}
+
+/**
+ * Ein Bild mit einem HORIZONT, der um `grad` schief steht.
+ *
+ * Oben hell, unten dunkel, dazwischen eine harte Kante. Genau das, wofür es
+ * das Geraderichten gibt – und etwas, dessen Schieflage sich hinterher in
+ * einer Zahl messen lässt: In welcher Zeile liegt die Kante, Spalte für
+ * Spalte? Bei einem geraden Horizont in jeder Spalte in derselben.
+ */
+function horizontPng(breite: number, hoehe: number, grad: number): Buffer {
+  const steigung = Math.tan((grad * Math.PI) / 180);
+  const mitte = hoehe / 2;
+  return pngAus(breite, hoehe, (x, y) => {
+    // Unbunt, damit die Messung nur Helligkeit sieht.
+    const kante = mitte + (x - breite / 2) * steigung;
+    return y < kante ? [225, 225, 225] : [45, 45, 45];
+  });
+}
+
+function pngAus(
+  breite: number,
+  hoehe: number,
+  farbe: (x: number, y: number) => [number, number, number],
+): Buffer {
+  const zeilen: Buffer[] = [];
+  for (let y = 0; y < hoehe; y += 1) {
+    // Jede PNG-Zeile beginnt mit dem Filterbyte 0 („kein Filter“).
+    const zeile = Buffer.alloc(breite * 3 + 1);
+    for (let x = 0; x < breite; x += 1) {
+      const [r, g, b] = farbe(x, y);
+      zeile[1 + x * 3] = r;
+      zeile[2 + x * 3] = g;
+      zeile[3 + x * 3] = b;
+    }
+    zeilen.push(zeile);
+  }
+  const stueck = (typ: string, daten: Buffer): Buffer => {
+    const inhalt = Buffer.concat([Buffer.from(typ, 'ascii'), daten]);
+    const laenge = Buffer.alloc(4);
+    laenge.writeUInt32BE(daten.length);
+    const pruef = Buffer.alloc(4);
+    pruef.writeUInt32BE(crc32(inhalt) >>> 0);
+    return Buffer.concat([laenge, inhalt, pruef]);
+  };
+  const kopf = Buffer.alloc(13);
+  kopf.writeUInt32BE(breite, 0);
+  kopf.writeUInt32BE(hoehe, 4);
+  kopf[8] = 8; // acht Bit je Kanal
+  kopf[9] = 2; // Farbtyp 2: RGB ohne Alpha
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    stueck('IHDR', kopf),
+    stueck('IDAT', deflateSync(Buffer.concat(zeilen), { level: 9 })),
+    stueck('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+test('„Hohe Qualität" rechnet im eigenen Arbeiter – und meldet sich, wenn es scheitert', async ({
+  browser,
+}) => {
+  /*
+   * Der Umbau, den dieser Test absichert: BiRefNet lief bisher im Hauptfaden.
+   * 94 MB Modell einlesen, den Graphen bauen und die Shader übersetzen ist
+   * synchrone Arbeit am Stück – währenddessen steht die Oberfläche.
+   *
+   * # Was hier geprüft werden KANN und was nicht
+   *
+   * Dieser Rechner hat keine Grafikeinheit (`navigator.gpu` fehlt). Ein
+   * echter Lauf ist also nicht zu haben, und die Frage „wie viel schneller
+   * fühlt es sich an" lässt sich hier nicht beantworten – sie steht im
+   * Protokoll der App, damit sie auf einem echten Telefon beantwortet wird.
+   *
+   * Prüfbar ist die ganze KETTE davor, und die ist der eigentliche Umbau:
+   * Die Gerätefrage sagt ja, der Arbeiter wird gebaut, er startet, er lädt
+   * seine Laufzeit – und wenn es dann nicht weitergeht, kommt eine Nachricht
+   * zurück statt Stille. Genau das ist der Unterschied zum eingebauten
+   * Proxy-Arbeiter, der mit WebGPU still in einer nicht unterstützten Fassung
+   * weiterliefe.
+   *
+   * Dafür wird `navigator.gpu` vorgetäuscht: Adapter da, `shader-f16` da.
+   * Damit läuft alles bis zur Stelle, an der es echte Hardware bräuchte.
+   */
+  const alice = credentials('bfnw');
+  const context = await browser.newContext();
+  const page = await context.newPage();
+
+  await page.addInitScript(() => {
+    /*
+     * Ein Adapter, der behauptet zu können, was gebraucht wird.
+     *
+     * `defineProperty` und nicht schlicht zuweisen: `navigator.gpu` ist in
+     * Chromium ein Nur-Lese-Zugriff. Eine Zuweisung wirft im strikten Modus,
+     * und ein geworfener Fehler im Init-Skript nimmt die ganze Seite mit –
+     * der erste Anlauf dieses Tests kam deshalb nicht einmal bis zum
+     * Anmeldebildschirm.
+     */
+    Object.defineProperty(navigator, 'gpu', {
+      configurable: true,
+      value: {
+        requestAdapter: async () => ({ features: { has: (n: string) => n === 'shader-f16' } }),
+      },
+    });
+    /*
+     * „Hohe Qualität" ist von Haus aus abgeschaltet – 94 MB lädt niemand
+     * ungefragt.
+     *
+     * In try/catch, weil ein Init-Skript auch auf `about:blank` läuft. Dort
+     * wirft jeder Zugriff auf `localStorage` einen SecurityError, und der
+     * nimmt das ganze Skript mit – samt der Grafikeinheit oben.
+     */
+    try {
+      localStorage.setItem('initiative.cutout-engines', JSON.stringify({ birefnet: true }));
+    } catch {
+      /* kommt beim nächsten Aufruf mit echtem Ursprung */
+    }
+  });
+
+  const arbeiter: string[] = [];
+  page.on('worker', (w) => arbeiter.push(w.url()));
+
+  await page.goto('/');
+  await page.getByRole('button', { name: /Noch kein Konto/ }).click();
+  await page.getByLabel('Benutzername').fill(alice.username);
+  await page.getByLabel('Anzeigename').fill(alice.displayName);
+  await page.getByLabel('Passwort', { exact: true }).fill(alice.password);
+  await page.getByRole('button', { name: 'Konto erstellen' }).click();
+  await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
+
+  const bob = credentials('bfziel');
+  await signUp(browser, bob);
+  await page.getByRole('button', { name: 'Neuer Chat' }).click();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await page.getByText(bob.displayName).first().click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await page.getByRole('button', { name: 'Sticker', exact: true }).click();
+  await page.getByRole('button', { name: /Sticker erstellen/ }).click();
+
+  // Ein Bild, damit das Freistellen überhaupt angeboten wird.
+  await page.getByRole('tab', { name: 'Quelle' }).click();
+  await page
+    .locator('input[type=file]')
+    .first()
+    .setInputFiles({
+      name: 'motiv.png',
+      mimeType: 'image/png',
+      buffer: motivPng(256, 256),
+    });
+
+  await page.getByRole('tab', { name: 'Freistellen' }).click();
+  const knopf = page.getByRole('button', { name: /Hohe Qualität/ });
+  await expect(knopf).toBeEnabled({ timeout: 15_000 });
+  await knopf.click();
+
+  /*
+   * Der Arbeiter muss entstehen. Ohne ihn läge die ganze Arbeit wieder im
+   * Hauptfaden – der Umbau wäre wirkungslos, und nichts würde es verraten.
+   */
+  await expect
+    .poll(() => arbeiter.filter((u) => u.includes('birefnet')).length, { timeout: 30_000 })
+    .toBeGreaterThan(0);
+
+  /*
+   * Und es muss eine Antwort kommen. Ein Arbeiter, der still stirbt, wäre
+   * schlimmer als gar keiner: Der Anwender sähe „rechnet …" und danach für
+   * immer nichts.
+   */
+  await expect(page.getByRole('button', { name: /Hohe Qualität/ })).not.toContainText('rechnet', {
+    timeout: 60_000,
+  });
+
+  await context.close();
 });
