@@ -22,6 +22,13 @@ Startbildschirm legen und funktioniert auch ohne Netz weiter.
   kurzer Text „Über mich". Wer kein Bild hinterlegt, bekommt automatisch
   Initialen in einer festen eigenen Farbe.
 - **Passwort ändern** in den Einstellungen, mit Bestätigung des alten Passworts.
+- **Anmelden ohne Passwort** mit Face ID, Fingerabdruck oder Geräte-PIN
+  (Passkeys). Mehrere Geräte lassen sich hinterlegen und einzeln wieder
+  entfernen. Der private Schlüssel verlässt das Gerät nie – beim Server liegt
+  nur der öffentliche Teil.
+- **Konto löschen** in den Einstellungen, mit Passwort als Bestätigung. Was du
+  in Chats geschrieben hast, bleibt bei den anderen stehen, aber ohne deinen
+  Namen.
 
 ## Chats
 
@@ -142,16 +149,61 @@ Startbildschirm legen und funktioniert auch ohne Netz weiter.
 
 Bis zu 10 Anhänge pro Nachricht.
 
+## Fotos bearbeiten
+
+Aus jedem Foto in der App heraus, über den Stift neben dem Zauberstab. Fünf
+Werkzeuge, alle im Gerät – kein Bild verlässt es dabei.
+
+- **Zuschnitt**: frei ziehen oder feste Seitenverhältnisse, drehen in
+  Vierteln, spiegeln, und eine Lupe zum genauen Setzen.
+- **Ton**: elf Regler – Belichtung, Kontrast, Lichter, Tiefen, Schwarz, Wärme,
+  Tönung, Sättigung, Dynamik, Schärfe, Vignette. Dazu **Vorlagen** wie „Klar",
+  „Abend" oder „Kräftig" mit eigenem Stärkeregler.
+- **Schwarz-Weiss mit Farbfilter**: Sobald entsättigt wird, kommen zwei
+  Regler dazu, die wie ein Filter vor dem Objektiv wirken – Rot macht Himmel
+  und Laub dunkel, Grün hebt Laub und senkt Rot. Ohne Filter bekämen eine rote
+  Rose und ein blauer Himmel gleicher Helligkeit denselben Grauton.
+- **Bereiche**: Anpassungen, die nur an einer Stelle wirken – der Himmel
+  dunkler, das Gesicht heller. Die Fläche dafür entsteht als Verlauf, Ellipse,
+  gemalter Pinselstrich oder aus einem der Freistellmodelle („Person",
+  „Motiv"). Bis zu vier Bereiche je Bild, jeder mit denselben Farbreglern.
+- **Tiefenschärfe**: Ein Regler „Weichzeichnen" je Bereich zerstreut das Bild
+  dahinter zu einer Scheibe – wie ein Objektiv, nicht wie ein Weichzeichner.
+  Mit dem Knopf **„Tiefe"** schätzt ein Modell für jeden Bildpunkt die
+  Entfernung, sodass die Unschärfe mit dem Abstand *wächst*; **„Motiv + Tiefe"**
+  nimmt zusätzlich die Kante vom Freistellmodell, damit das Motiv scharf
+  bleibt. Auch das rechnet vollständig im Gerät.
+- **Malen**: Stift und Marker in mehreren Farben und Breiten, Pixelbalken zum
+  Unkenntlichmachen, Radiergummi. Einzelne Striche lassen sich gezielt
+  antippen und entfernen – auch alte, ohne alles danach zurückzunehmen.
+- **Text**: frei platzierbar, in Farbe und Grösse einstellbar.
+
+Rückgängig und Wiederherstellen gelten für alles; ein Zug ist ein Schritt.
+
 ## Sticker
 
 - **Sticker-Tastatur** im Chat: alle installierten Pakete auf einen Blick.
 - **Eigene Sticker** im Studio bauen:
   - Bild aus Galerie oder Kamera als Quelle,
-  - **Freistellen** – Hintergrund wegwischen,
   - Zuschneiden und Verschieben,
   - **Text** hinzufügen,
   - **weiße Kontur** mit einstellbarer Stärke,
   - fertigen Sticker in ein Paket speichern.
+- **Freistellen auf fünf Arten** – vom Antippen bis zum grossen Modell:
+  - **Antippen**: Du tippst an, was bleiben soll; die App flutet nach Farbe.
+    Ohne Download, funktioniert auf jedem Gerät.
+  - **Antippen mit Netz**: Dasselbe, aber ein Modell versteht, was ein
+    Gegenstand ist – Flasche antippen, Flasche kommt, samt Glanzlicht.
+  - **Person** und **Gesicht**: erkennen Menschen bzw. schneiden als Kopf zu.
+  - **Niedrige Qualität**: stellt auch Gegenstände frei und rechnet auf jedem
+    Gerät in Sekunden.
+  - **Hohe Qualität**: deutlich genauer an Haaren, Zäunen und Brillenbügeln –
+    braucht aber zwingend eine Grafikeinheit und ist der grösste Download.
+
+  **Alles rechnet im Gerät.** Es werden keine Bilder irgendwohin geschickt.
+  Die grösseren Verfahren sind von Haus aus abgeschaltet, weil sie beim ersten
+  Benutzen einen Download kosten; einschalten kann man sie einzeln unter
+  Profil → Einstellungen.
 - **Pakete** anlegen, umbenennen, Titelbild wählen, löschen.
 - Ein Paket **öffentlich** stellen, damit andere es finden und installieren
   können; installierte Pakete lassen sich jederzeit wieder entfernen.
@@ -290,8 +342,25 @@ Die App ist dafür gebaut, dass Funklöcher, U-Bahn und Flugmodus nicht stören.
   nie den Anmeldevorgang.
 - Zugriff auf einen Chat hat **nur, wer Mitglied ist**; jede Anfrage prüft das
   einzeln.
-- Medien liegen hinter **kurzlebigen, nicht erratbaren Links**.
-- Kein Tracking, keine Werbung, keine Weitergabe an Dritte.
+- Anhänge liegen hinter **nicht erratbaren Adressen**. Wichtig zu wissen: Die
+  Adresse *ist* die Berechtigung – wer sie hat, kann die Datei abrufen, auch
+  ohne angemeldet zu sein. Anders lassen sich Bilder im Chat nicht anzeigen.
+  Sie sind für Suchmaschinen gesperrt und dürfen in keinem fremden
+  Zwischenspeicher landen.
+- **Fotos verlieren beim Senden ihre Zusatzdaten**, einschliesslich des
+  Aufnahmeorts – sie werden neu berechnet. **Videos ebenfalls**: Die
+  Metadatenboxen im Container werden überschrieben, ohne das Video neu zu
+  kodieren.
+- **Gelöschtes verschwindet auch aus dem Speicher.** Wird eine Nachricht, ein
+  Chat oder ein Konto gelöscht, räumt ein Dienst die zugehörigen Dateien weg.
+- Die **Bildverarbeitung rechnet im Gerät**: Freistellen und Tiefenschärfe
+  laden ihre Modelle vom eigenen Server und schicken keine Bilddaten irgendwohin.
+- Kein Tracking, keine Werbung, keine Weitergabe an Dritte. Die Seite lädt
+  nichts von fremden Servern – keine Schriftart, kein Symbol, kein Zählpixel.
+- **Impressum und Datenschutzerklärung** sind ohne Anmeldung erreichbar, direkt
+  aus der Fusszeile des Anmeldebildschirms.
+- **Verwendete fremde Software** steht vollständig in der App unter
+  Profil → Einstellungen → Über – mit Rechteinhaber, Lizenz und Lizenztext.
 - Der Server gehört dir: Initiative ist **selbst gehostet** (siehe
   [DEPLOYMENT.md](DEPLOYMENT.md)) und steht unter der [MIT-Lizenz](../LICENSE).
 
@@ -305,6 +374,13 @@ Ehrlichkeitshalber:
 - Keine **Ende-zu-Ende-Verschlüsselung** – der Server kann Inhalte lesen.
   Transport und Speicherung sind gesichert, aber das ist etwas anderes.
 - Keine **Statusmeldungen/Stories**.
+- **Lesebestätigung, Tippanzeige und Online-Status lassen sich nicht
+  abschalten.** Wer einen Chat mit dir teilt, sieht, wann du zuletzt da warst
+  und bis wohin du gelesen hast.
+- **Dein Profil ist für jedes Konto durchsuchbar**, nicht nur für deine
+  Chatpartner.
+- Eine als **anonym** angelegte Umfrage zeigt die Stimmen nicht an, speichert
+  sie aber dem Konto zugeordnet.
 - Gelöschte Nachrichten hinterlassen sichtbar den Hinweis „gelöscht" – sie
   verschwinden nicht spurlos aus dem Verlauf.
 - Kein **Export** des kompletten Verlaufs über die Oberfläche.
