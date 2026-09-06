@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { createPortal } from 'react-dom';
+import { BildBearbeiten } from '../bild/BildBearbeiten.js';
 import type { ComposerActionProps } from '../types.js';
 import { prepareImage, videoPreview } from '../../lib/upload.js';
 import { toast, useHideNav } from '../../state/ui.js';
@@ -334,6 +335,31 @@ export function CameraSheet({ conversationId, onClose }: ComposerActionProps) {
     setCaption('');
   };
 
+  /**
+   * Die bearbeitete Fassung tritt an die Stelle der Aufnahme.
+   *
+   * Erneut durch `prepareImage`, damit Masse, Vorschau und Grösse zur neuen
+   * Datei passen – der Editor darf zuschneiden, und ein Entwurf, der die
+   * alten Masse behält, zeigt im Chat ein verzerrtes Vorschaubild.
+   */
+  const uebernehmen = async (fertig: Blob, fertigName: string) => {
+    const prepared = await prepareImage(new File([fertig], fertigName, { type: fertig.type }));
+    if (!aliveRef.current) return;
+    setDraft((alt) =>
+      alt
+        ? {
+            ...alt,
+            blob: prepared.blob,
+            mime: prepared.mime,
+            width: prepared.width,
+            height: prepared.height,
+            previewDataUrl: prepared.previewDataUrl,
+          }
+        : alt,
+    );
+    toast('Bearbeitete Fassung übernommen.', 'success');
+  };
+
   const shutterLabel =
     mode === 'photo' ? 'Foto aufnehmen' : recording ? 'Aufnahme beenden' : 'Videoaufnahme starten';
 
@@ -466,14 +492,30 @@ export function CameraSheet({ conversationId, onClose }: ComposerActionProps) {
               aria-label="Bildunterschrift"
             />
             <div className="row row-between">
-              <button type="button" className="btn btn-ghost" onClick={discard} disabled={sending}>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={discard}
+                disabled={sending}
+                data-tipp="Aufnahme verwerfen und noch einmal auslösen"
+              >
                 Neu aufnehmen
               </button>
+              {draft.kind === 'image' && (
+                <BildBearbeiten
+                  blob={draft.blob}
+                  name={timestampName('foto', draft.mime)}
+                  label="Bearbeiten"
+                  tipp="Zuschneiden, geraderichten, Licht und Farbe – bevor du sendest"
+                  onFertig={uebernehmen}
+                />
+              )}
               <button
                 type="button"
                 className="btn btn-primary"
                 onClick={() => void send()}
                 disabled={sending}
+                data-tipp="An diesen Chat schicken"
               >
                 {sending ? 'Wird gesendet …' : 'Senden'}
               </button>

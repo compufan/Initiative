@@ -9,6 +9,7 @@ import { useSession } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
 import { connectionInfo, errorMessage, memberSince, patchMe } from './helpers.js';
+import { BildEditor } from '../bild/BildEditor.js';
 
 type EditField = 'displayName' | 'bio' | null;
 
@@ -21,6 +22,8 @@ export function ProfileScreen() {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
+  /** Das noch unbearbeitete Foto, solange der Zuschnitt offen ist. */
+  const [avatarRoh, setAvatarRoh] = useState<File | null>(null);
   const [confirmLogout, setConfirmLogout] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -82,7 +85,18 @@ export function ProfileScreen() {
     }
   }
 
-  async function pickAvatar(event: ChangeEvent<HTMLInputElement>) {
+  /**
+   * Ein Foto auswählen – und es SELBST zuschneiden dürfen.
+   *
+   * Vorher ging die Datei unbesehen hoch, und den Rest erledigte
+   * `object-fit: cover`: Die Anzeige schnitt mittig zu, ohne zu fragen. Bei
+   * einem Hochkantfoto ist die Mitte selten das Gesicht – man bekam einen
+   * Bauchnabel als Profilbild und keine Möglichkeit, das zu ändern.
+   *
+   * Jetzt öffnet sich der Editor mit fest eingerastetem Quadrat. Was
+   * hochgeht, hat der Mensch bestimmt.
+   */
+  function pickAvatar(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
@@ -90,13 +104,18 @@ export function ProfileScreen() {
       toast('Bitte wähle ein Foto aus', 'error');
       return;
     }
+    setAvatarRoh(file);
+  }
+
+  async function avatarFertig(fertig: Blob, name: string) {
+    setAvatarRoh(null);
     setUploading(true);
     try {
-      const prepared = await prepareImage(file, 640);
+      const prepared = await prepareImage(new File([fertig], name, { type: fertig.type }), 640);
       const attachment = await uploadBlob({
         kind: 'image',
         mime: prepared.mime,
-        fileName: file.name || 'profilbild',
+        fileName: name || 'profilbild',
         blob: prepared.blob,
         width: prepared.width,
         height: prepared.height,
@@ -155,6 +174,7 @@ export function ProfileScreen() {
           onClick={() => fileRef.current?.click()}
           disabled={uploading}
           aria-label="Profilbild ändern"
+          data-tipp="Foto auswählen und den Ausschnitt selbst festlegen"
         >
           <Avatar name={user.displayName} id={user.id} url={user.avatarUrl} size={104} />
           <span className="prf-avatar-badge" aria-hidden="true">
@@ -166,8 +186,18 @@ export function ProfileScreen() {
           type="file"
           accept="image/*"
           className="prf-file-input"
-          onChange={(event) => void pickAvatar(event)}
+          onChange={pickAvatar}
         />
+        {avatarRoh && (
+          <BildEditor
+            quelle={avatarRoh}
+            name={avatarRoh.name}
+            startVerhaeltnis={1}
+            zielName="Als Profilbild"
+            onClose={() => setAvatarRoh(null)}
+            onFertig={avatarFertig}
+          />
+        )}
         {uploading ? (
           <Spinner label="Profilbild wird hochgeladen …" />
         ) : user.avatarUrl ? (
@@ -175,6 +205,7 @@ export function ProfileScreen() {
             type="button"
             className="btn btn-ghost btn-sm"
             onClick={() => void removeAvatar()}
+            data-tipp="Zurück zu den Initialen in deiner Farbe"
           >
             Profilbild entfernen
           </button>

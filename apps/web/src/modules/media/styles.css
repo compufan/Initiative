@@ -762,3 +762,28 @@
   align-items: center;
   gap: 6px;
 }
+
+/*
+ * Der Stift auf einer Vorschaukachel – gegenüber vom ✕, damit man beim
+ * Bearbeiten nicht versehentlich entfernt. Beide Ziele sind 44 Punkte gross;
+ * kleiner trifft ein Daumen nicht zuverlässig.
+ */
+.media-tile-edit {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+}
+
+.media-tile-knopf {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #fff;
+  font-size: 0.95rem;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  cursor: pointer;
+}

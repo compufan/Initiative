@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { BrowserRouter, NavLink, Navigate, useNavigate, useRoutes } from 'react-router-dom';
 import { ToastHost } from './components/Feedback.js';
+import { Tipp } from './components/Tipp.js';
 import { AuthScreen } from './screens/AuthScreen.js';
 import { SplashScreen } from './screens/SplashScreen.js';
 import { UpdateBanner } from './screens/UpdateBanner.js';
@@ -97,6 +98,7 @@ function AuthedApp() {
       <BottomNav />
       <ModuleOverlays />
       <ToastHost />
+      <Tipp />
     </div>
   );
 }
@@ -116,6 +118,7 @@ export function App() {
         <>
           <AuthScreen />
           <ToastHost />
+          <Tipp />
         </>
       ) : (
         <AuthedApp />

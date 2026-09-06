@@ -703,3 +703,44 @@ canvas {
   opacity: 0.5;
   pointer-events: none;
 }
+
+/* ---------- Tooltips ---------- */
+
+/*
+ * Die Blase zu `data-tipp`. Sie liegt im Portal am `body`, also ausserhalb
+ * jedes `overflow: hidden` – ein Tooltip an einem Knopf in einer scrollenden
+ * Liste würde sonst an deren Rand abgeschnitten.
+ */
+.tipp {
+  position: fixed;
+  z-index: 9999;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--tipp-grund, rgba(20, 22, 30, 0.96));
+  color: #fff;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+  /* Die Blase darf nie selbst Ziel eines Drucks sein: Sonst schlucke ich den
+     Klick auf den Knopf darunter, den ich gerade erklären wollte. */
+  pointer-events: none;
+  animation: tipp-auf 120ms ease-out;
+}
+
+@keyframes tipp-auf {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tipp {
+    animation: none;
+  }
+}
