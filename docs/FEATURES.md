@@ -29,6 +29,9 @@ Startbildschirm legen und funktioniert auch ohne Netz weiter.
 - **Konto löschen** in den Einstellungen, mit Passwort als Bestätigung. Was du
   in Chats geschrieben hast, bleibt bei den anderen stehen, aber ohne deinen
   Namen.
+- **Deine Daten mitnehmen**: Unter „Deine Daten" lädst du alles, was der Dienst
+  über dich gespeichert hat, als JSON herunter – ohne jemanden zu fragen.
+  Datenschutzerklärung und Impressum sind von dort aus direkt erreichbar.
 
 ## Chats
 
@@ -170,7 +173,7 @@ Werkzeuge, alle im Gerät – kein Bild verlässt es dabei.
 - **Tiefenschärfe**: Ein Regler „Weichzeichnen" je Bereich zerstreut das Bild
   dahinter zu einer Scheibe – wie ein Objektiv, nicht wie ein Weichzeichner.
   Mit dem Knopf **„Tiefe"** schätzt ein Modell für jeden Bildpunkt die
-  Entfernung, sodass die Unschärfe mit dem Abstand *wächst*; **„Motiv + Tiefe"**
+  Entfernung, sodass die Unschärfe mit dem Abstand _wächst_; **„Motiv + Tiefe"**
   nimmt zusätzlich die Kante vom Freistellmodell, damit das Motiv scharf
   bleibt. Auch das rechnet vollständig im Gerät.
 - **Malen**: Stift und Marker in mehreren Farben und Breiten, Pixelbalken zum
@@ -204,10 +207,59 @@ Rückgängig und Wiederherstellen gelten für alles; ein Zug ist ein Schritt.
   Die grösseren Verfahren sind von Haus aus abgeschaltet, weil sie beim ersten
   Benutzen einen Download kosten; einschalten kann man sie einzeln unter
   Profil → Einstellungen.
+
 - **Pakete** anlegen, umbenennen, Titelbild wählen, löschen.
 - Ein Paket **öffentlich** stellen, damit andere es finden und installieren
   können; installierte Pakete lassen sich jederzeit wieder entfernen.
 - Öffentliche Pakete **durchsuchen** unter „Sticker entdecken".
+
+## Dateien und Sammlungen
+
+Ein zweiter Ort für Dinge, die sonst im Chatverlauf nach oben wandern und nie
+wieder auftauchen.
+
+- **Sammlungen sind Ordner** und dürfen ineinander liegen.
+- **Der Weg hinein führt über den Chat**: Nachricht mit Anhang lange antippen →
+  „Zur Sammlung hinzufügen". Das steht jedem im Chat offen, nicht nur dem, der
+  die Datei geschickt hat. Die Datei wird dabei **nicht** noch einmal
+  hochgeladen – sie bekommt einen zweiten Platz.
+- **Direkt ablegen** geht auch, ohne Umweg über eine Nachricht.
+- **Freigeben, an wen du willst**: an einzelne Personen oder an alle in einem
+  Chat, wahlweise für eine ganze Sammlung oder für eine einzelne Datei. Drei
+  Stufen: ansehen, ändern, verwalten.
+- **Filtern und suchen** nach Art (Bilder, Videos, Ton, Dateien, Sticker), nach
+  Herkunft (aus dem Chat oder direkt abgelegt) und danach, wer sie hinzugefügt
+  hat.
+- Ein Bild lässt sich von hier aus **bearbeiten**; die bearbeitete Fassung
+  landet als neue Datei daneben, das Original bleibt.
+- **Eine Sammlung zu löschen löscht keine Datei.** Die Anhänge bleiben im Chat.
+
+## Ausgaben
+
+Wer hat ausgelegt, wer schuldet wem wie viel – ohne dass jemand mitschreiben
+muss.
+
+- **Ausgabe eintragen** mit Titel, Betrag, Datum und wer ausgelegt hat.
+- **Aufteilen**: gleichmäßig auf die Beteiligten oder mit festen Beträgen je
+  Person. Die gleichmäßige Aufteilung geht **genau** auf – 10 € auf drei sind
+  3,34 + 3,33 + 3,33, nicht dreimal 3,33 mit einem verschwundenen Cent.
+- **Wer sie sieht**, entscheidest du: nur wer mitzahlt, alle im Chat, oder
+  zusätzlich ausgewählte Personen. Einzelne lassen sich ausdrücklich
+  ausnehmen – für das Geschenk, von dem der Beschenkte nichts wissen soll.
+- **Salden je Person**: was du bekommst, was du schuldest, auf einen Blick.
+- **Abhaken in zwei Schritten**, und das ist Absicht: Wer schuldet, meldet
+  „bezahlt"; wer ausgelegt hat, bestätigt „ist angekommen". Erst wenn beide es
+  gesagt haben, ist die Sache erledigt und niemand muss sich mehr erinnern.
+  Ein zu früh gesetzter Haken lässt sich zurücknehmen.
+- **Alles auf einmal ausgleichen** mit einer Person, statt Posten für Posten.
+- **Zahlungsweg im Profil**: PayPal.Me-Name, IBAN, BIC, Kontoinhaber. Beim
+  Ausgleichen erscheint daraus ein fertiger PayPal-Link mit dem richtigen
+  Betrag, und die IBAN steht zum Kopieren bereit.
+
+  **Über die App läuft kein Geld.** Sie rechnet und zeigt, wohin – überwiesen
+  wird woanders.
+
+- Eine Ausgabe kann **zu einem Termin gehören**; dann taucht sie dort auf.
 
 ## Kalender
 
@@ -226,6 +278,27 @@ Rückgängig und Wiederherstellen gelten für alles; ein Zug ist ein Schritt.
 - Ein neuer Termin wird auf Wunsch **als Karte in den Chat** gepostet – dort
   kann direkt zu- oder abgesagt werden.
 - **Einzelnen Termin exportieren** (`.ics`) und in jede Kalender-App übernehmen.
+
+### Notizen und Listen am Termin
+
+- An jedem Termin hängen **Notizen** (ein Text) und **Listen** (Punkte zum
+  Abhaken) – für „was wir mitbringen", „wer besorgt was", „Adresse und Code
+  fürs Tor".
+- Drei Rechte, getrennt einstellbar: wer **ändern**, wer **hinzufügen** und wer
+  **abhaken** darf. Jeweils nur ich, alle Eingeladenen oder ausgewählte
+  Personen – beim Abhaken zusätzlich „niemand", für eine Liste zum Nachlesen.
+- **Wie viele abhaken müssen, steht am einzelnen Punkt**, nicht an der Liste.
+  In derselben Liste kann „Zahnbürste" stehen, das jeder für sich abhakt, und
+  „Kuchen backen", das einer übernimmt.
+- **Namentlich zuweisen**: „Das übernimmt Nora." Dann ist der Punkt erledigt,
+  wenn genau die Zugewiesenen abgehakt haben – nicht irgendwer.
+- Wer schon abgehakt hat, steht am Punkt. Man sieht also, wer noch fehlt.
+
+### Dateien am Termin
+
+- **Dokumente anhängen** – Tickets, Anfahrtsskizze, Speisekarte.
+- Ein Termin lässt sich mit einer **Sammlung verknüpfen**; dann liegen seine
+  Dateien dort, statt ein zweites Mal irgendwo.
 
 ### Kalender abonnieren
 
@@ -343,7 +416,7 @@ Die App ist dafür gebaut, dass Funklöcher, U-Bahn und Flugmodus nicht stören.
 - Zugriff auf einen Chat hat **nur, wer Mitglied ist**; jede Anfrage prüft das
   einzeln.
 - Anhänge liegen hinter **nicht erratbaren Adressen**. Wichtig zu wissen: Die
-  Adresse *ist* die Berechtigung – wer sie hat, kann die Datei abrufen, auch
+  Adresse _ist_ die Berechtigung – wer sie hat, kann die Datei abrufen, auch
   ohne angemeldet zu sein. Anders lassen sich Bilder im Chat nicht anzeigen.
   Sie sind für Suchmaschinen gesperrt und dürfen in keinem fremden
   Zwischenspeicher landen.
@@ -383,4 +456,11 @@ Ehrlichkeitshalber:
   sie aber dem Konto zugeordnet.
 - Gelöschte Nachrichten hinterlassen sichtbar den Hinweis „gelöscht" – sie
   verschwinden nicht spurlos aus dem Verlauf.
-- Kein **Export** des kompletten Verlaufs über die Oberfläche.
+- Der **Datenexport** unter „Deine Daten" gibt dein Konto, deine Chats,
+  **deine eigenen** Nachrichten, Ausgaben und Termine als JSON heraus. Was
+  andere in gemeinsamen Chats geschrieben haben, ist nicht dabei – das gehört
+  ihnen. Ein vollständiger, lesbarer Verlauf zum Archivieren ist es also nicht.
+- **Anhänge sind im Export gar nicht enthalten** – weder als Datei noch als
+  Verweis. Fotos und Sprachnachrichten holst du dir aus dem Chat.
+- In **Sammlungen** und bei **Ausgaben** gibt es keinen Papierkorb: Entferntes
+  ist sofort weg (die Dateien selbst bleiben allerdings im Chat).
