@@ -17,6 +17,8 @@ import {
   rasten,
   sourceRect,
   zurFlaeche,
+  trifftText,
+  textMass,
   zweiFingerZug,
   removeBackground,
   saatAufFlaeche,
@@ -87,12 +89,26 @@ describe('removeBackground', () => {
 describe('document helpers', () => {
   it('clones strokes and text layers instead of sharing them', () => {
     const doc = createDoc();
+    doc.texte.push({
+      id: 't1',
+      value: 'Hallo',
+      x: 0.5,
+      y: 0.5,
+      size: 68,
+      color: '#fff',
+      outline: true,
+      drehung: 0,
+    });
     const copy = cloneDoc(doc);
     copy.strokes.push({ size: 10, points: [1, 2], mode: 'weg' });
-    copy.top.value = 'Hallo';
+    copy.texte[0].value = 'Anders';
+    copy.texte.push({ ...copy.texte[0], id: 't2' });
 
     expect(doc.strokes).toHaveLength(0);
-    expect(doc.top.value).toBe('');
+    // Die Schriftzüge müssen EINZELN kopiert sein, nicht nur die Liste:
+    // sonst schreibt ein Rückgängig-Schritt in den aktuellen Stand zurück.
+    expect(doc.texte).toHaveLength(1);
+    expect(doc.texte[0].value).toBe('Hallo');
   });
 
   it('knows when there is nothing to export yet', () => {
@@ -100,7 +116,23 @@ describe('document helpers', () => {
     expect(isEmptyDoc(null, doc)).toBe(true);
     expect(isEmptyDoc({ kind: 'text' }, doc)).toBe(true);
     expect(isEmptyDoc({ kind: 'emoji', emoji: '🐱' }, doc)).toBe(false);
-    expect(isEmptyDoc(null, { ...doc, top: { ...doc.top, value: 'Moin' } })).toBe(false);
+    expect(
+      isEmptyDoc(null, {
+        ...doc,
+        texte: [
+          {
+            id: 't1',
+            value: 'Moin',
+            x: 0.5,
+            y: 0.5,
+            size: 68,
+            color: '#fff',
+            outline: true,
+            drehung: 0,
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 });
 
@@ -866,5 +898,109 @@ describe('formPfad', () => {
         }
       }
     }
+  });
+});
+
+describe('Schriftzüge auf dem Sticker', () => {
+  /**
+   * Ein Messkontext, der sich wie `measureText` verhält, ohne einen Browser.
+   *
+   * Node hat kein Canvas. Gebraucht wird hier nur die Breite eines Textes,
+   * und die darf für den Zweck eine schlichte Rechnung sein: Zeichenzahl mal
+   * halbe Schrifthöhe. Wichtig ist nicht der genaue Wert, sondern dass
+   * Zeichnen und Antippen DENSELBEN benutzen – das prüfen die Tests unten.
+   */
+  function messkontext(): CanvasRenderingContext2D {
+    let groesse = 10;
+    return {
+      set font(wert: string) {
+        groesse = Number(/([\d.]+)px/.exec(wert)?.[1] ?? 10);
+      },
+      get font() {
+        return `800 ${groesse}px x`;
+      },
+      measureText: (wert: string) => ({ width: wert.length * groesse * 0.5 }),
+    } as unknown as CanvasRenderingContext2D;
+  }
+
+  const text = (patch: Partial<Parameters<typeof trifftText>[1]> = {}) => ({
+    id: 't1',
+    value: 'Moin',
+    x: 0.5,
+    y: 0.5,
+    size: 68,
+    color: '#fff',
+    outline: true,
+    drehung: 0,
+    ...patch,
+  });
+
+  it('trifft in der Mitte des Schriftzugs', () => {
+    const mitte = { x: STICKER_SIZE / 2, y: STICKER_SIZE / 2 };
+    expect(trifftText(messkontext(), text(), mitte, STICKER_SIZE)).toBe(true);
+  });
+
+  it('trifft nicht weit daneben', () => {
+    const daneben = { x: STICKER_SIZE / 2, y: STICKER_SIZE * 0.05 };
+    expect(trifftText(messkontext(), text(), daneben, STICKER_SIZE)).toBe(false);
+  });
+
+  it('wandert mit, wenn der Schriftzug woanders sitzt', () => {
+    // Der ganze Sinn der freien Platzierung: Die Trefferfläche darf nicht an
+    // einer festen Stelle kleben, sonst greift man ins Leere.
+    const oben = text({ y: 0.15 });
+    const beiIhm = { x: STICKER_SIZE / 2, y: STICKER_SIZE * 0.15 };
+    const inDerMitte = { x: STICKER_SIZE / 2, y: STICKER_SIZE / 2 };
+    expect(trifftText(messkontext(), oben, beiIhm, STICKER_SIZE)).toBe(true);
+    expect(trifftText(messkontext(), oben, inDerMitte, STICKER_SIZE)).toBe(false);
+  });
+
+  it('dreht die Trefferfläche mit', () => {
+    /*
+     * Ein um 90° gedrehter Schriftzug steht senkrecht. Ein Punkt, der beim
+     * ungedrehten weit rechts noch trifft, muss dann danebengehen – und ein
+     * Punkt weit unten muss treffen. Ohne das Zurückdrehen in `trifftText`
+     * bliebe die Fläche waagerecht liegen, und man griffe neben den Text,
+     * den man sieht.
+     */
+    const gerade = text({ value: 'Langer Text hier' });
+    const gedreht = text({ value: 'Langer Text hier', drehung: 90 });
+    const rechts = { x: STICKER_SIZE / 2 + 120, y: STICKER_SIZE / 2 };
+    const unten = { x: STICKER_SIZE / 2, y: STICKER_SIZE / 2 + 120 };
+    expect(trifftText(messkontext(), gerade, rechts, STICKER_SIZE)).toBe(true);
+    expect(trifftText(messkontext(), gerade, unten, STICKER_SIZE)).toBe(false);
+    expect(trifftText(messkontext(), gedreht, rechts, STICKER_SIZE)).toBe(false);
+    expect(trifftText(messkontext(), gedreht, unten, STICKER_SIZE)).toBe(true);
+  });
+
+  it('schrumpft die Schrift, bis sie auf die Fläche passt', () => {
+    const lang = text({ value: 'Ein wirklich sehr langer Schriftzug', size: 140 });
+    const mass = textMass(messkontext(), lang, STICKER_SIZE);
+    expect(mass.groesse).toBeLessThan(140);
+    expect(mass.breite).toBeLessThanOrEqual(STICKER_SIZE);
+  });
+
+  it('rechnet die Grösse auf die Kantenlänge um', () => {
+    // Vorschau und Ausgabe haben verschiedene Kantenlängen. Ein Schriftzug,
+    // der in beiden gleich gross gerechnet würde, säße in der Vorschau
+    // richtig und in der Ausgabe falsch – oder umgekehrt.
+    const gross = textMass(messkontext(), text(), STICKER_SIZE);
+    const klein = textMass(messkontext(), text(), STICKER_SIZE / 2);
+    expect(klein.groesse).toBeCloseTo(gross.groesse / 2, 6);
+  });
+
+  it('gibt auch einem leeren Schriftzug eine Trefferfläche', () => {
+    /*
+     * Sonst könnte man einen frisch angelegten Text nie anfassen, um ihn zu
+     * verschieben – und er säße für immer dort, wo er entstanden ist.
+     *
+     * Gemessen wird bewusst NEBEN dem Mittelpunkt: Genau in der Mitte trifft
+     * man auch mit einer Trefferfläche der Grösse null. Ein Finger landet
+     * dort nie, und der erste Anlauf dieses Tests war damit wertlos – er
+     * blieb grün, als ich die Toleranz zum Versuch auf 0 setzte.
+     */
+    const leer = text({ value: '' });
+    const knappDaneben = { x: STICKER_SIZE / 2 + 9, y: STICKER_SIZE / 2 + 9 };
+    expect(trifftText(messkontext(), leer, knappDaneben, STICKER_SIZE)).toBe(true);
   });
 });

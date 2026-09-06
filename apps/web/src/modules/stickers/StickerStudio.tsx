@@ -30,7 +30,8 @@ import {
   type EditorSource,
   type ShapeKind,
   type StickerDoc,
-  type TextSlot,
+  trifftText,
+  type StickerText,
 } from './render.js';
 import {
   EngineError,
@@ -134,7 +135,8 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   const [doc, setDoc] = useState<StickerDoc>(createDoc);
   const [tab, setTab] = useState<Tab>('source');
   const [tool, setTool] = useState<Tool>('move');
-  const [slot, setSlot] = useState<TextSlot>('top');
+  /** Welcher Schriftzug gerade bearbeitet wird. */
+  const [aktiverText, setAktiverText] = useState<string | null>(null);
   const [brush, setBrush] = useState(56);
   /** Ob der Pinsel wegnimmt oder das Original zurückholt. */
   const [pinsel, setPinsel] = useState<'weg' | 'zurueck'>('weg');
@@ -178,6 +180,23 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   const docRef = useRef(doc);
   const sourceRef = useRef(source);
   const toolRef = useRef(tool);
+  const tabRef = useRef(tab);
+  /** Läuft gerade ein Textzug? Dann gehört die Bewegung dem Schriftzug. */
+  const textZug = useRef<{
+    id: string;
+    startX: number;
+    startY: number;
+    x0: number;
+    y0: number;
+  } | null>(null);
+  /**
+   * Eine Fläche nur zum Messen.
+   *
+   * Die Trefferprüfung braucht `measureText`, und das gibt es nur an einem
+   * Zeichenkontext. Die Sticker-Fläche selbst dafür zu benutzen wäre riskant:
+   * Jedes `ctx.font = …` bliebe dort stehen und ginge in das nächste Bild ein.
+   */
+  const messRef = useRef<CanvasRenderingContext2D | null>(null);
   const brushRef = useRef(brush);
   const pinselRef = useRef(pinsel);
   const tippModusRef = useRef(tippModus);
@@ -313,6 +332,10 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     sourceRef.current = source;
     schedule();
   }, [doc, source, schedule]);
+
+  useEffect(() => {
+    tabRef.current = tab;
+  }, [tab]);
 
   useEffect(() => {
     toolRef.current = tool;
@@ -766,6 +789,26 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     return { x: (clientX - rect.left) * factor, y: (clientY - rect.top) * factor };
   }
 
+  /**
+   * Welcher Schriftzug liegt unter diesem Punkt?
+   *
+   * Von hinten nach vorn: Was zuletzt gezeichnet wurde, liegt oben und wird
+   * zuerst getroffen. Andersherum bekäme man beim Übereinanderliegen immer
+   * den untersten zu fassen – und der obere liesse sich nie mehr anfassen.
+   */
+  function textUnter(punkt: { x: number; y: number }): StickerText | null {
+    if (!messRef.current) {
+      messRef.current = document.createElement('canvas').getContext('2d');
+    }
+    const ctx = messRef.current;
+    if (!ctx) return null;
+    const liste = docRef.current.texte;
+    for (let i = liste.length - 1; i >= 0; i -= 1) {
+      if (trifftText(ctx, liste[i], punkt, STICKER_SIZE)) return liste[i];
+    }
+    return null;
+  }
+
   function midpoint(): { x: number; y: number; distance: number } {
     const list = [...pointers.current.values()];
     const a = list[0];
@@ -820,7 +863,6 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   }
 
   function onPointerDown(event: ReactPointerEvent<HTMLCanvasElement>) {
-    if (!source) return;
     const point = canvasPoint(event.clientX, event.clientY);
     pointers.current.set(event.pointerId, { ...point, cx: event.clientX, cy: event.clientY });
     try {
@@ -829,6 +871,38 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       /* pointer capture is a nice-to-have */
     }
 
+    /*
+     * Im Textreiter gehört ein Druck auf einen Schriftzug diesem Schriftzug –
+     * und zwar VOR allem anderen.
+     *
+     * Vor der Quellbild-Sperre, weil ein Schriftzug keins braucht: Ein
+     * Sticker, der nur aus Text besteht, ist ausdrücklich vorgesehen
+     * (`isEmptyDoc` lässt ihn zu), und für ihn war diese ganze Fläche bisher
+     * tot. Der Text erschien, liess sich aber nicht anfassen.
+     *
+     * Und vor der Lupe und dem Verschieben des Motivs, weil derselbe Zug
+     * sonst das Bild darunter verschöbe – der Text bliebe, wo er war.
+     */
+    if (tabRef.current === 'text' && pointers.current.size === 1) {
+      const treffer = textUnter(point);
+      if (treffer) {
+        armGesture();
+        commitArmedGesture();
+        setAktiverText(treffer.id);
+        textZug.current = {
+          id: treffer.id,
+          startX: point.x,
+          startY: point.y,
+          x0: treffer.x,
+          y0: treffer.y,
+        };
+        gesture.current = { ...gesture.current, mode: 'none' };
+        busyGesture.current = true;
+        return;
+      }
+    }
+
+    if (!source) return;
     busyGesture.current = true;
     if (pointers.current.size >= 2) {
       // Ueber 1x gehoeren beide Finger der Lupe: Wer eine Kontur bearbeitet,
@@ -932,6 +1006,22 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   function onPointerMove(event: ReactPointerEvent<HTMLCanvasElement>) {
     if (!pointers.current.has(event.pointerId)) return;
     const point = canvasPoint(event.clientX, event.clientY);
+
+    const zug = textZug.current;
+    if (zug) {
+      pointers.current.set(event.pointerId, { ...point, cx: event.clientX, cy: event.clientY });
+      // In Anteilen rechnen und am Rand klemmen: Ein Schriftzug, den man aus
+      // der Fläche hinausziehen kann, ist danach nicht wiederzufinden.
+      const dx = (point.x - zug.startX) / STICKER_SIZE;
+      const dy = (point.y - zug.startY) / STICKER_SIZE;
+      const x = Math.min(1, Math.max(0, zug.x0 + dx));
+      const y = Math.min(1, Math.max(0, zug.y0 + dy));
+      setDoc((value) => ({
+        ...value,
+        texte: value.texte.map((text) => (text.id === zug.id ? { ...text, x, y } : text)),
+      }));
+      return;
+    }
     pointers.current.set(event.pointerId, { ...point, cx: event.clientX, cy: event.clientY });
     const state = gesture.current;
 
@@ -1017,6 +1107,10 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
 
   function endPointer(event: ReactPointerEvent<HTMLCanvasElement>) {
     if (!pointers.current.delete(event.pointerId)) return;
+    // Ein Textzug endet mit dem Finger, der ihn begonnen hat. Bliebe er
+    // stehen, verschöbe der nächste Druck irgendwo auf der Fläche denselben
+    // Schriftzug weiter.
+    textZug.current = null;
     if (pointers.current.size >= 2) {
       if (lupeRef.current.zoom > 1) beginLupenPinch();
       else beginPinch();
@@ -1128,9 +1222,47 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     setTool(shape === 'free' ? 'erase' : 'move');
   }
 
-  function updateText(patch: Partial<StickerDoc['top']>) {
-    commit(`text-${slot}`);
-    setDoc((value) => ({ ...value, [slot]: { ...value[slot], ...patch } }));
+  function textHinzufuegen() {
+    commit();
+    const id = `t${Date.now().toString(36)}${Math.round(Math.random() * 1e6).toString(36)}`;
+    /*
+     * Neue Schriftzüge stapeln sich nicht übereinander.
+     *
+     * Der erste sitzt oben, der zweite unten, jeder weitere versetzt in der
+     * Mitte. Läge jeder an derselben Stelle, sähe man nach dem zweiten
+     * „Text hinzufügen“ nur einen – und suchte den anderen darunter.
+     */
+    setDoc((value) => {
+      const n = value.texte.length;
+      const y = n === 0 ? 0.14 : n === 1 ? 0.86 : 0.5 + (n % 2 === 0 ? -1 : 1) * 0.08 * (n - 1);
+      const neuer: StickerText = {
+        id,
+        value: '',
+        x: 0.5,
+        y: Math.min(0.94, Math.max(0.06, y)),
+        size: 68,
+        color: '#ffffff',
+        outline: true,
+        drehung: 0,
+      };
+      return { ...value, texte: [...value.texte, neuer] };
+    });
+    setAktiverText(id);
+  }
+
+  function updateText(patch: Partial<StickerText>) {
+    if (!aktiverText) return;
+    commit(`text-${aktiverText}`);
+    setDoc((value) => ({
+      ...value,
+      texte: value.texte.map((text) => (text.id === aktiverText ? { ...text, ...patch } : text)),
+    }));
+  }
+
+  function textLoeschen(id: string) {
+    commit();
+    setDoc((value) => ({ ...value, texte: value.texte.filter((text) => text.id !== id) }));
+    setAktiverText((alt) => (alt === id ? null : alt));
   }
 
   /* ---------- export ---------- */
@@ -1169,7 +1301,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     }
   }
 
-  const layer = doc[slot];
+  const layer = doc.texte.find((text) => text.id === aktiverText) ?? null;
   const hasImage = source?.kind === 'image';
   const teileAnzahl = doc.autoMask?.teile?.anzahl ?? 0;
 
@@ -1221,7 +1353,17 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
             onPointerCancel={endPointer}
             onContextMenu={(event) => event.preventDefault()}
           />
-          {!source && (
+          {/*
+            Die Einstiegsfläche verschwindet, sobald etwas da ist – auch wenn
+            das etwas nur ein Schriftzug ist.
+
+            Sie liegt ÜBER der Leinwand und schluckt jeden Druck. Bei einem
+            reinen Text-Sticker, den `isEmptyDoc` ausdrücklich zulässt, war
+            die Fläche damit tot: Der Text erschien, liess sich aber nicht
+            anfassen. Wer danach doch ein Bild will, findet es im Reiter
+            „Quelle“ – dort stehen dieselben Knöpfe.
+          */}
+          {!source && doc.texte.length === 0 && (
             <div className="stk-canvas-empty">
               <span className="stk-canvas-emoji" aria-hidden="true">
                 🌟
@@ -2015,64 +2157,100 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
             <div className="stk-btn-row">
               <button
                 type="button"
-                className={`btn btn-sm ${slot === 'top' ? 'stk-chip-active' : ''}`}
-                onClick={() => setSlot('top')}
+                className="btn btn-sm"
+                onClick={textHinzufuegen}
+                data-tipp="Legt einen Schriftzug an – du kannst ihn danach frei verschieben"
               >
-                Oben
+                ＋ Text
               </button>
-              <button
-                type="button"
-                className={`btn btn-sm ${slot === 'bottom' ? 'stk-chip-active' : ''}`}
-                onClick={() => setSlot('bottom')}
-              >
-                Unten
-              </button>
-            </div>
-            <input
-              className="input"
-              value={layer.value}
-              maxLength={60}
-              placeholder={slot === 'top' ? 'Text oben' : 'Text unten'}
-              aria-label={slot === 'top' ? 'Text oben' : 'Text unten'}
-              onChange={(event) => updateText({ value: event.target.value })}
-            />
-            <label className="stk-slider">
-              <span>Größe</span>
-              <input
-                type="range"
-                min={24}
-                max={140}
-                value={layer.size}
-                onChange={(event) => updateText({ size: Number(event.target.value) })}
-              />
-              <span className="stk-slider-value">{layer.size}</span>
-            </label>
-            <div className="stk-btn-row">
-              {TEXT_COLORS.map((color) => (
+              {doc.texte.map((text, index) => (
                 <button
-                  key={color}
+                  key={text.id}
                   type="button"
-                  className={`stk-swatch ${layer.color === color ? 'is-active' : ''}`}
-                  style={{ background: color }}
-                  onClick={() => updateText({ color })}
-                  aria-label={`Textfarbe ${color}`}
-                />
+                  className={`btn btn-sm ${text.id === aktiverText ? 'stk-chip-active' : ''}`}
+                  onClick={() => setAktiverText(text.id)}
+                  data-tipp="Diesen Schriftzug bearbeiten"
+                >
+                  {text.value.trim() || `Text ${index + 1}`}
+                </button>
               ))}
-              <input
-                type="color"
-                className="stk-swatch stk-swatch-picker"
-                value={layer.color}
-                aria-label="Eigene Textfarbe"
-                onChange={(event) => updateText({ color: event.target.value })}
-              />
-              <button
-                type="button"
-                className={`btn btn-sm ${layer.outline ? 'stk-chip-active' : ''}`}
-                onClick={() => updateText({ outline: !layer.outline })}
-              >
-                Kontur {layer.outline ? 'an' : 'aus'}
-              </button>
             </div>
+
+            {!layer ? (
+              <p className="stk-hint">
+                Noch kein Text. <b>＋ Text</b> legt einen an – danach ziehst du ihn auf der Fläche
+                dorthin, wo er stehen soll.
+              </p>
+            ) : (
+              <>
+                <input
+                  className="input"
+                  value={layer.value}
+                  maxLength={60}
+                  placeholder="Was soll dastehen?"
+                  aria-label="Text"
+                  onChange={(event) => updateText({ value: event.target.value })}
+                />
+                <label className="stk-slider">
+                  <span>Größe</span>
+                  <input
+                    type="range"
+                    min={24}
+                    max={140}
+                    value={layer.size}
+                    onChange={(event) => updateText({ size: Number(event.target.value) })}
+                  />
+                  <span className="stk-slider-value">{layer.size}</span>
+                </label>
+                <label className="stk-slider">
+                  <span>Drehen</span>
+                  <input
+                    type="range"
+                    min={-180}
+                    max={180}
+                    value={layer.drehung}
+                    onChange={(event) => updateText({ drehung: Number(event.target.value) })}
+                  />
+                  <span className="stk-slider-value">{layer.drehung}°</span>
+                </label>
+                <div className="stk-btn-row">
+                  {TEXT_COLORS.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      className={`stk-swatch ${layer.color === color ? 'is-active' : ''}`}
+                      style={{ background: color }}
+                      onClick={() => updateText({ color })}
+                      aria-label={`Textfarbe ${color}`}
+                    />
+                  ))}
+                  <input
+                    type="color"
+                    className="stk-swatch stk-swatch-picker"
+                    value={layer.color}
+                    aria-label="Eigene Textfarbe"
+                    onChange={(event) => updateText({ color: event.target.value })}
+                  />
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${layer.outline ? 'stk-chip-active' : ''}`}
+                    onClick={() => updateText({ outline: !layer.outline })}
+                    data-tipp="Ein Rand in der Gegenfarbe – damit der Text auf jedem Grund lesbar bleibt"
+                  >
+                    Kontur {layer.outline ? 'an' : 'aus'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => textLoeschen(layer.id)}
+                    data-tipp="Diesen Schriftzug entfernen"
+                  >
+                    🗑
+                  </button>
+                </div>
+                <p className="stk-hint">Zieh den Text auf der Fläche dorthin, wo er stehen soll.</p>
+              </>
+            )}
           </>
         )}
       </div>

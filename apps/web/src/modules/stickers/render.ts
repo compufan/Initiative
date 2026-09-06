@@ -21,13 +21,32 @@ const FONT_STACK =
   "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
 
 export type ShapeKind = 'square' | 'rounded' | 'circle' | 'bubble' | 'free';
-export type TextSlot = 'top' | 'bottom';
 
-export interface TextLayer {
+/**
+ * Ein Schriftzug auf dem Sticker – frei gesetzt, nicht in ein Fach gesteckt.
+ *
+ * Vorher gab es genau zwei Plätze, „oben“ und „unten“, jeweils mittig und auf
+ * fester Höhe. Das reicht für ein Meme und für sonst nichts: kein Wort neben
+ * das Gesicht, keine zwei Zeilen nebeneinander, kein schräger Schriftzug, und
+ * drei Wörter gehen gar nicht.
+ */
+export interface StickerText {
+  id: string;
   value: string;
+  /**
+   * Die MITTE des Schriftzugs, in Anteilen der Sticker-Kante (0…1).
+   *
+   * Anteile statt Bildpunkte, damit die Lage nicht an `STICKER_SIZE` hängt:
+   * Die Fläche wird für die Vorschau kleiner gerechnet als für die Ausgabe,
+   * und ein in Punkten gemerkter Text säße in beiden woanders.
+   */
+  x: number;
+  y: number;
   size: number;
   color: string;
   outline: boolean;
+  /** Drehung im Uhrzeigersinn, in Grad. */
+  drehung: number;
 }
 
 /**
@@ -208,8 +227,7 @@ export interface StickerDoc {
   outline: boolean;
   outlineWidth: number;
   strokes: Stroke[];
-  top: TextLayer;
-  bottom: TextLayer;
+  texte: StickerText[];
 }
 
 export type EditorSource =
@@ -236,8 +254,7 @@ export function createDoc(): StickerDoc {
     outline: true,
     outlineWidth: 10,
     strokes: [],
-    top: { value: '', size: 68, color: '#ffffff', outline: true },
-    bottom: { value: '', size: 68, color: '#ffffff', outline: true },
+    texte: [],
   };
 }
 
@@ -253,15 +270,14 @@ export function cloneDoc(doc: StickerDoc): StickerDoc {
     maskParts: doc.maskParts.slice(),
     keep: doc.keep.map((seed) => ({ ...seed })),
     strokes: doc.strokes.map((stroke) => ({ ...stroke, points: stroke.points.slice() })),
-    top: { ...doc.top },
-    bottom: { ...doc.bottom },
+    texte: doc.texte.map((text) => ({ ...text })),
   };
 }
 
 /** True as soon as the document would produce visible pixels. */
 export function isEmptyDoc(source: EditorSource | null, doc: StickerDoc): boolean {
   if (source && source.kind !== 'text') return false;
-  return doc.top.value.trim().length === 0 && doc.bottom.value.trim().length === 0;
+  return doc.texte.every((text) => text.value.trim().length === 0);
 }
 
 /* ---------- background removal ---------- */
@@ -611,31 +627,77 @@ function contrastColour(hex: string): string {
   return (r * 299 + g * 587 + b * 114) / 1000 > 150 ? '#111111' : '#ffffff';
 }
 
-function drawTextLayer(ctx: CanvasRenderingContext2D, layer: TextLayer, slot: TextSlot): void {
-  const value = layer.value.trim();
-  if (value.length === 0) return;
-
-  const maxWidth = STICKER_SIZE - 44;
-  let size = layer.size;
-  ctx.textAlign = 'center';
-  ctx.textBaseline = slot === 'top' ? 'top' : 'bottom';
-  ctx.font = `800 ${size}px ${FONT_STACK}`;
-  while (size > 18 && ctx.measureText(value).width > maxWidth) {
-    size -= 2;
-    ctx.font = `800 ${size}px ${FONT_STACK}`;
+/**
+ * Wie gross ein Schriftzug auf einer Fläche der Kantenlänge `kante` wird.
+ *
+ * Eine Funktion für zwei Zwecke: Zeichnen und Antippen. Zwei getrennte
+ * Rechnungen wären die zuverlässigste Art, einen Text zu bauen, den man sieht,
+ * aber nicht anfassen kann – oder umgekehrt einen, der neben sich selbst
+ * Treffer meldet.
+ *
+ * Die Schrift schrumpft, bis sie auf die Fläche passt. `size` ist also ein
+ * Wunsch, kein Versprechen.
+ */
+export function textMass(
+  ctx: CanvasRenderingContext2D,
+  text: StickerText,
+  kante: number,
+): { breite: number; hoehe: number; groesse: number; wert: string } {
+  const wert = text.value.trim();
+  const skala = kante / STICKER_SIZE;
+  const maxBreite = kante - 24 * skala;
+  let groesse = Math.max(8, text.size * skala);
+  ctx.font = `800 ${groesse}px ${FONT_STACK}`;
+  while (groesse > 12 * skala && ctx.measureText(wert).width > maxBreite) {
+    groesse -= 2 * skala;
+    ctx.font = `800 ${groesse}px ${FONT_STACK}`;
   }
+  return { breite: ctx.measureText(wert).width, hoehe: groesse, groesse, wert };
+}
 
-  const x = STICKER_SIZE / 2;
-  const y = slot === 'top' ? 22 : STICKER_SIZE - 22;
-  if (layer.outline) {
+/** Ob ein Punkt (in Flächenpunkten) auf dem Schriftzug liegt. */
+export function trifftText(
+  ctx: CanvasRenderingContext2D,
+  text: StickerText,
+  punkt: { x: number; y: number },
+  kante: number,
+): boolean {
+  const mass = textMass(ctx, text, kante);
+  const mx = text.x * kante;
+  const my = text.y * kante;
+  // Zurückdrehen statt das Rechteck zu drehen: In diesem Bezugssystem ist der
+  // Treffer wieder ein Vergleich zweier Zahlen.
+  const w = (-text.drehung * Math.PI) / 180;
+  const dx = punkt.x - mx;
+  const dy = punkt.y - my;
+  const rx = dx * Math.cos(w) - dy * Math.sin(w);
+  const ry = dx * Math.sin(w) + dy * Math.cos(w);
+  // Ein Finger ist breiter als eine Schriftlinie, und ein leerer Schriftzug
+  // hätte sonst gar keine Trefferfläche.
+  const luft = Math.max(mass.groesse * 0.4, 12);
+  return Math.abs(rx) <= mass.breite / 2 + luft && Math.abs(ry) <= mass.hoehe / 2 + luft;
+}
+
+function drawStickerText(ctx: CanvasRenderingContext2D, text: StickerText, kante: number): void {
+  const mass = textMass(ctx, text, kante);
+  if (mass.wert.length === 0) return;
+
+  ctx.save();
+  ctx.translate(text.x * kante, text.y * kante);
+  if (text.drehung !== 0) ctx.rotate((text.drehung * Math.PI) / 180);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `800 ${mass.groesse}px ${FONT_STACK}`;
+  if (text.outline) {
     ctx.lineJoin = 'round';
     ctx.miterLimit = 2;
-    ctx.lineWidth = Math.max(3, size * 0.18);
-    ctx.strokeStyle = contrastColour(layer.color);
-    ctx.strokeText(value, x, y);
+    ctx.lineWidth = Math.max(3, mass.groesse * 0.18);
+    ctx.strokeStyle = contrastColour(text.color);
+    ctx.strokeText(mass.wert, 0, 0);
   }
-  ctx.fillStyle = layer.color;
-  ctx.fillText(value, x, y);
+  ctx.fillStyle = text.color;
+  ctx.fillText(mass.wert, 0, 0);
+  ctx.restore();
 }
 
 /* ---------- pipeline ---------- */
@@ -1605,8 +1667,7 @@ export function renderSticker(
   // vor der Schrift, damit die lesbar bleibt.
   if (schleier) schleierZeichnen(ctx, schleier, doc.shape);
 
-  drawTextLayer(ctx, doc.top, 'top');
-  drawTextLayer(ctx, doc.bottom, 'bottom');
+  for (const text of doc.texte) drawStickerText(ctx, text, STICKER_SIZE);
 }
 
 /**

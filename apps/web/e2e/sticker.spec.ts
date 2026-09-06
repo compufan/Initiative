@@ -305,3 +305,100 @@ test('ein fertiger Sticker laesst sich auch wirklich speichern', async ({ browse
 
   await context.close();
 });
+
+test('Schriftzüge lassen sich frei setzen, nicht nur oben und unten', async ({ browser }) => {
+  /*
+   * Vorher gab es genau zwei Plätze: mittig oben, mittig unten. Das reicht
+   * für ein Meme und für sonst nichts – kein Wort neben ein Gesicht, keine
+   * drei Wörter, nichts Schräges.
+   *
+   * # Was gemessen wird
+   *
+   * Nicht „ein Regler steht auf X", sondern das BILD: Wo auf der Fläche
+   * stehen helle Punkte? Ein weisser Schriftzug auf durchsichtigem Grund ist
+   * dafür ideal – die Schwerpunktzeile der hellen Punkte sagt, wo der Text
+   * sitzt. Nach dem Ziehen nach oben muss sie deutlich weiter oben liegen.
+   */
+  const alice = credentials('sctxt');
+  const page = await signUp(browser, alice);
+  const bob = credentials('sczie');
+  await signUp(browser, bob);
+
+  await page.getByRole('button', { name: 'Neuer Chat' }).click();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await page.getByText(bob.displayName).first().click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await page.getByRole('button', { name: 'Sticker', exact: true }).click();
+  await page.getByRole('button', { name: /Sticker erstellen/ }).click();
+
+  await page.getByRole('tab', { name: 'Text' }).click();
+  // Ohne Text steht dort ein Hinweis und kein Eingabefeld.
+  await expect(page.getByText(/Noch kein Text/)).toBeVisible();
+
+  await page.getByRole('button', { name: '＋ Text' }).click();
+  const feld = page.getByLabel('Text', { exact: true });
+  await expect(feld).toBeVisible();
+  await feld.fill('HALLO');
+
+  const leinwand = page.locator('.stk-canvas, canvas').first();
+  await expect(leinwand).toBeVisible();
+  // Warten, bis die Fläche wirklich Masse hat – ein <canvas> ohne gesetzte
+  // Grösse ist 300×150 und schwarz, und man misst dann das leere Rechteck.
+  await expect
+    .poll(async () => leinwand.evaluate((el: HTMLCanvasElement) => el.width), { timeout: 15_000 })
+    .toBeGreaterThan(200);
+
+  /** Die mittlere Zeile aller hellen Punkte, als Anteil der Höhe. */
+  const schwerpunkt = async () =>
+    leinwand.evaluate((el: HTMLCanvasElement) => {
+      const ctx = el.getContext('2d');
+      if (!ctx) return -1;
+      const d = ctx.getImageData(0, 0, el.width, el.height).data;
+      let summe = 0;
+      let n = 0;
+      for (let y = 0; y < el.height; y += 1)
+        for (let x = 0; x < el.width; x += 1) {
+          const at = (y * el.width + x) * 4;
+          if (d[at + 3] > 200 && d[at] > 200 && d[at + 1] > 200 && d[at + 2] > 200) {
+            summe += y;
+            n += 1;
+          }
+        }
+      return n < 20 ? -1 : summe / n / el.height;
+    });
+
+  await expect.poll(schwerpunkt, { timeout: 15_000 }).toBeGreaterThan(0);
+  const vorher = await schwerpunkt();
+
+  /*
+   * Nach unten ziehen, nicht nach oben.
+   *
+   * Der erste Schriftzug entsteht bei y = 0,14 – oben. Der erste Anlauf
+   * dieses Tests zog ihn nach 0,12 und stellte dann fest, dass sich nichts
+   * bewegt hatte: Er war schon dort. Eine Prüfung, die den Text an seinen
+   * eigenen Platz schiebt, beweist nichts.
+   */
+  const kasten = await leinwand.boundingBox();
+  expect(kasten).not.toBeNull();
+  if (!kasten) return;
+  expect(vorher).toBeLessThan(0.3);
+  const vonY = kasten.y + kasten.height * vorher;
+  await page.mouse.move(kasten.x + kasten.width / 2, vonY);
+  await page.mouse.down();
+  await page.mouse.move(kasten.x + kasten.width / 2, kasten.y + kasten.height * 0.8, {
+    steps: 12,
+  });
+  await page.mouse.up();
+
+  const nachher = await schwerpunkt();
+  expect(nachher).toBeGreaterThan(0);
+  expect(nachher).toBeGreaterThan(vorher + 0.4);
+
+  // Und ein zweiter Schriftzug legt sich nicht auf den ersten.
+  await page.getByRole('button', { name: '＋ Text' }).click();
+  await page.getByLabel('Text', { exact: true }).fill('WELT');
+  await expect(page.getByRole('button', { name: 'HALLO' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'WELT' })).toBeVisible();
+
+  await page.close();
+});
