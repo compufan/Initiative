@@ -237,12 +237,19 @@ export function GameScreen() {
       )}
 
       <div className="game-actions">
-        {finished ? (
+        {/*
+          Revanche nur für Mitspielende.
+          `rematch()` baut die Gegner aus allen Spielenden ausser mir – wer
+          zuschaut, filtert damit niemanden heraus und erzeugt aus einem
+          Spiel für zwei eine Partie mit drei Personen.
+        */}
+        {finished && mySeat != null ? (
           <button
             type="button"
             className="btn btn-primary"
             disabled={busy}
             onClick={() => void rematch()}
+            data-tipp="Startet dieselbe Aufstellung noch einmal"
           >
             🔁 Revanche
           </button>

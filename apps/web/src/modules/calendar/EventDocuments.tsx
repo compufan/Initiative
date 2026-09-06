@@ -6,8 +6,19 @@ import { toast } from '../../state/ui.js';
 import { FileViewer } from '../files/FileViewer.js';
 import { uploadBlob } from '../../lib/upload.js';
 import { kindForFile, mimeForFile, withinUploadLimit } from '../media/helpers.js';
+import { useMyId } from '../../state/session.js';
 
 interface EventDocumentsProps {
+  /**
+   * Ob ich den Termin verwalte.
+   *
+   * Fürs Entfernen, und zwar genau wie der Server prüft: Das darf nur, wer
+   * das Dokument hochgeladen hat, oder die Terminverwaltung
+   * (`remove_document` in calendar.rs). Das ✕ stand vorher bei jedem
+   * Dokument für jede eingeladene Person – für die meisten ein garantierter
+   * Fehlschlag.
+   */
+  canManage: boolean;
   eventId: string;
 }
 
@@ -19,7 +30,8 @@ interface EventDocumentsProps {
  * zweiter Bildschirm für dieselbe Aufgabe wäre eine zweite Stelle, an der
  * sich Fehler einnisten.
  */
-export function EventDocuments({ eventId }: EventDocumentsProps) {
+export function EventDocuments({ eventId, canManage }: EventDocumentsProps) {
+  const meineId = useMyId();
   const [items, setItems] = useState<EventAttachmentDto[]>([]);
   const [laedt, setLaedt] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -125,14 +137,17 @@ export function EventDocuments({ eventId }: EventDocumentsProps) {
                 </span>
                 <span className="cal-doc-meta">{formatBytes(item.attachment.size)}</span>
               </button>
-              <button
-                type="button"
-                className="icon-btn"
-                aria-label="Dokument entfernen"
-                onClick={() => void entfernen(item.id)}
-              >
-                ✕
-              </button>
+              {(item.addedBy === meineId || canManage) && (
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-label="Dokument entfernen"
+                  data-tipp="Nimmt die Datei vom Termin – aus dem Chat verschwindet sie nicht"
+                  onClick={() => void entfernen(item.id)}
+                >
+                  ✕
+                </button>
+              )}
             </li>
           ))}
         </ul>

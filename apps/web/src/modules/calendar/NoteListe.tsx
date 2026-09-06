@@ -172,7 +172,9 @@ function NotePunkt({
       {punkt.assigneeIds.length > 0 ? (
         <span className="nl-stand" title={wer ? `Abgehakt von ${wer}` : 'Noch niemand'}>
           {punkt.assigneeIds
-            .map((id) => `${id === myId ? 'Du' : name(id)}${punkt.checkedBy.includes(id) ? ' ✓' : ''}`)
+            .map(
+              (id) => `${id === myId ? 'Du' : name(id)}${punkt.checkedBy.includes(id) ? ' ✓' : ''}`,
+            )
             .join(', ')}
         </span>
       ) : (
@@ -252,9 +254,7 @@ function NotePunkt({
             type="button"
             className="btn btn-sm btn-danger"
             disabled={busy}
-            onClick={() =>
-              void ruf(() => api.calendar.removeNoteItem(eventId, note.id, punkt.id))
-            }
+            onClick={() => void ruf(() => api.calendar.removeNoteItem(eventId, note.id, punkt.id))}
           >
             Punkt löschen
           </button>

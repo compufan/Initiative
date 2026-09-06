@@ -305,6 +305,7 @@ export function EventDetailScreen() {
 
       <EventNotes
         eventId={event.id}
+        canManage={isCreator}
         people={attendees.map((attendee) => ({
           id: attendee.userId,
           displayName:
@@ -312,7 +313,7 @@ export function EventDetailScreen() {
         }))}
       />
 
-      <EventDocuments eventId={event.id} />
+      <EventDocuments eventId={event.id} canManage={isCreator} />
 
       <EventExpenses eventId={event.id} conversationId={event.conversationId} />
 

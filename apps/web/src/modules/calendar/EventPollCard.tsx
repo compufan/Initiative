@@ -192,8 +192,8 @@ export function EventPollCard({ event, canManage, onConfirmed }: EventPollCardPr
 
           {chatNamen.length > 0 && (
             <p className="cal-hint">
-              Dieselbe Abstimmung läuft in: {chatNamen.join(', ')}. Ein Ergebnis für alle – wer
-              dort antwortet, hat auch hier geantwortet.
+              Dieselbe Abstimmung läuft in: {chatNamen.join(', ')}. Ein Ergebnis für alle – wer dort
+              antwortet, hat auch hier geantwortet.
             </p>
           )}
 
@@ -235,8 +235,10 @@ export function EventPollCard({ event, canManage, onConfirmed }: EventPollCardPr
 
 /** Der Name eines Chats – bei Direktchats der des Gegenübers. */
 function chatName(conversations: ConversationDto[], id: string, myId: string): string {
-  return conversationLabel(
-    conversations.find((chat) => chat.id === id),
-    myId,
-  ) ?? 'Chat';
+  return (
+    conversationLabel(
+      conversations.find((chat) => chat.id === id),
+      myId,
+    ) ?? 'Chat'
+  );
 }

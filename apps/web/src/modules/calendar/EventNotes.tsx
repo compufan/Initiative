@@ -14,11 +14,22 @@ import { NoteListe } from './NoteListe.js';
 import { api } from '../../lib/api.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
+import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 
 interface EventNotesProps {
   eventId: string;
   /** Wer zum Termin gehört – für „nur diese Personen dürfen ändern“. */
   people: { id: string; displayName: string }[];
+  /**
+   * Ob ich diesen Termin verwalte.
+   *
+   * Gebraucht fürs Löschen, und zwar genau wie der Server es prüft: Der
+   * darf nur der Verfasser oder die Terminverwaltung (`remove_note` in
+   * calendar.rs). Der Knopf hing vorher an `canEdit` – bei „Ändern darf:
+   * Alle Eingeladenen" ist das jeder Gast, und für jeden von ihnen war der
+   * Knopf ein garantierter Fehlschlag.
+   */
+  canManage: boolean;
 }
 
 const SCOPE_TEXT: Record<NoteScope, string> = {
@@ -34,7 +45,7 @@ const SCOPE_TEXT: Record<NoteScope, string> = {
  * zwischen der Einkaufsliste, an der alle mitschreiben, und der Ansprache,
  * an der niemand herumbessert.
  */
-export function EventNotes({ eventId, people }: EventNotesProps) {
+export function EventNotes({ eventId, people, canManage }: EventNotesProps) {
   const [notes, setNotes] = useState<EventNoteDto[]>([]);
   const [laedt, setLaedt] = useState(true);
   // Welche Art gerade angelegt wird – oder `null`, wenn nichts offen ist.
@@ -105,8 +116,7 @@ export function EventNotes({ eventId, people }: EventNotesProps) {
       ) : notes.length === 0 && !neu ? (
         <p className="cal-hint">
           Noch nichts da. Eine <b>Notiz</b> ist ein Text – die Adresse, eine Erinnerung. Eine{' '}
-          <b>Liste</b> hat Punkte zum Abhaken, und du legst fest, wer ergänzen und wer abhaken
-          darf.
+          <b>Liste</b> hat Punkte zum Abhaken, und du legst fest, wer ergänzen und wer abhaken darf.
         </p>
       ) : (
         <>
@@ -122,6 +132,7 @@ export function EventNotes({ eventId, people }: EventNotesProps) {
                     note={note}
                     eventId={eventId}
                     people={people}
+                    canManage={canManage}
                     onChanged={(neue) =>
                       setNotes((liste) =>
                         liste.map((eintrag) => (eintrag.id === neue.id ? neue : eintrag)),
@@ -145,17 +156,30 @@ function NoteCard({
   note,
   eventId,
   people,
+  canManage,
   onChanged,
   onRemoved,
 }: {
   note: EventNoteDto;
   eventId: string;
   people: EventNotesProps['people'];
+  canManage: boolean;
   onChanged: (note: EventNoteDto) => void;
   onRemoved: () => void;
 }) {
   const [bearbeiten, setBearbeiten] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [loeschFrage, setLoeschFrage] = useState(false);
+  const meineId = useMyId();
+  /*
+   * Genau die Regel, die auch der Server anwendet.
+   *
+   * Vorher hing der Knopf an `note.canEdit`. Bei „Ändern darf: Alle
+   * Eingeladenen" ist das jeder Gast – und für jeden von ihnen war „Löschen"
+   * ein garantierter Fehlschlag: `remove_note` erlaubt es nur dem Verfasser
+   * oder der Terminverwaltung.
+   */
+  const darfLoeschen = note.authorId === meineId || canManage;
 
   if (bearbeiten) {
     return (
@@ -195,28 +219,36 @@ function NoteCard({
 
       {/* Die Liste. Steht sie leer und darf niemand ergaenzen, zeigt sie
           nichts – eine Notiz ohne Liste soll aussehen wie vorher. */}
-      <NoteListe
-        eventId={eventId}
-        note={note}
-        onChanged={onChanged}
-        leute={people}
-      />
+      <NoteListe eventId={eventId} note={note} onChanged={onChanged} leute={people} />
 
       {note.canEdit && (
         <div className="row">
           <button type="button" className="btn btn-sm" onClick={() => setBearbeiten(true)}>
             Bearbeiten
           </button>
-          <button
-            type="button"
-            className="btn btn-sm btn-danger"
-            disabled={busy}
-            onClick={() => void loeschen()}
-          >
-            Löschen
-          </button>
+          {darfLoeschen && (
+            <button
+              type="button"
+              className="btn btn-sm btn-danger"
+              disabled={busy}
+              onClick={() => setLoeschFrage(true)}
+              data-tipp="Notiz samt allen Punkten entfernen – für alle Eingeladenen"
+            >
+              Löschen
+            </button>
+          )}
         </div>
       )}
+      <ConfirmDialog
+        open={loeschFrage}
+        title={`„${note.title || 'Notiz'}" löschen?`}
+        description="Die Notiz verschwindet für alle Eingeladenen, samt allen Punkten und Haken. Rückgängig geht das nicht."
+        confirmLabel="Löschen"
+        danger
+        busy={busy}
+        onCancel={() => setLoeschFrage(false)}
+        onConfirm={() => void loeschen()}
+      />
     </article>
   );
 }
@@ -372,60 +404,59 @@ function NoteEditor({
           Hauptsache und gehoert nicht versteckt. */}
       {art === 'list' && (
         <>
-
-        <fieldset className="field" disabled={!binVerfasser}>
-          <legend>Punkte hinzufügen darf</legend>
-          {NOTE_SCOPES.map((wert) => (
-            <label key={wert} className="cal-check">
-              <input
-                type="radio"
-                name={`add-${note?.id ?? 'neu'}`}
-                checked={addScope === wert}
-                onChange={() => setAddScope(wert)}
-              />
-              <span>{SCOPE_TEXT[wert]}</span>
-            </label>
-          ))}
-        </fieldset>
-
-        {addScope === 'listed' && (
           <fieldset className="field" disabled={!binVerfasser}>
-            <legend>Diese Personen</legend>
-            <PersonenWahl
-              label="Wer Punkte hinzufügen darf"
-              vorschlaege={people}
-              gewaehlt={adderIds}
-              onChange={setAdderIds}
-            />
+            <legend>Punkte hinzufügen darf</legend>
+            {NOTE_SCOPES.map((wert) => (
+              <label key={wert} className="cal-check">
+                <input
+                  type="radio"
+                  name={`add-${note?.id ?? 'neu'}`}
+                  checked={addScope === wert}
+                  onChange={() => setAddScope(wert)}
+                />
+                <span>{SCOPE_TEXT[wert]}</span>
+              </label>
+            ))}
           </fieldset>
-        )}
 
-        <fieldset className="field" disabled={!binVerfasser}>
-          <legend>Abhaken darf</legend>
-          {CHECK_SCOPES.map((wert) => (
-            <label key={wert} className="cal-check">
-              <input
-                type="radio"
-                name={`check-${note?.id ?? 'neu'}`}
-                checked={checkScope === wert}
-                onChange={() => setCheckScope(wert)}
+          {addScope === 'listed' && (
+            <fieldset className="field" disabled={!binVerfasser}>
+              <legend>Diese Personen</legend>
+              <PersonenWahl
+                label="Wer Punkte hinzufügen darf"
+                vorschlaege={people}
+                gewaehlt={adderIds}
+                onChange={setAdderIds}
               />
-              <span>{wert === 'nobody' ? 'Niemand (nur zum Nachlesen)' : SCOPE_TEXT[wert]}</span>
-            </label>
-          ))}
-        </fieldset>
+            </fieldset>
+          )}
 
-        {checkScope === 'listed' && (
           <fieldset className="field" disabled={!binVerfasser}>
-            <legend>Diese Personen</legend>
-            <PersonenWahl
-              label="Wer abhaken darf"
-              vorschlaege={people}
-              gewaehlt={checkerIds}
-              onChange={setCheckerIds}
-            />
+            <legend>Abhaken darf</legend>
+            {CHECK_SCOPES.map((wert) => (
+              <label key={wert} className="cal-check">
+                <input
+                  type="radio"
+                  name={`check-${note?.id ?? 'neu'}`}
+                  checked={checkScope === wert}
+                  onChange={() => setCheckScope(wert)}
+                />
+                <span>{wert === 'nobody' ? 'Niemand (nur zum Nachlesen)' : SCOPE_TEXT[wert]}</span>
+              </label>
+            ))}
           </fieldset>
-        )}
+
+          {checkScope === 'listed' && (
+            <fieldset className="field" disabled={!binVerfasser}>
+              <legend>Diese Personen</legend>
+              <PersonenWahl
+                label="Wer abhaken darf"
+                vorschlaege={people}
+                gewaehlt={checkerIds}
+                onChange={setCheckerIds}
+              />
+            </fieldset>
+          )}
         </>
       )}
 
