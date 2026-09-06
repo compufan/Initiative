@@ -23,8 +23,9 @@ Beispiel: eine gemeinsame Aufgabenliste.
 
 ### 1.1 Migration schreiben
 
-Neue Datei `apps/api/migrations/0002_tasks.sql`. Die Nummer muss **größer** sein
-als alle bestehenden, der Name danach ist frei.
+Neue Datei `apps/api/migrations/0014_tasks.sql` (zuletzt vergeben ist `0013`;
+`ls apps/api/migrations` sagt dir die aktuelle Nummer). Die Nummer muss
+**größer** sein als alle bestehenden, der Name danach ist frei.
 
 ```sql
 -- Gemeinsame Aufgaben pro Chat.
@@ -48,6 +49,13 @@ Regeln, die sich bewährt haben:
   erneuter Lauf nie scheitert.
 - Fremdschlüssel mit `on delete cascade` auf `conversations`, sonst bleiben
   Waisen zurück, wenn ein Chat verschwindet.
+- **Wenn deine Tabelle auf `attachments` zeigt: auch dort `on delete cascade`,
+  und nichts weiter.** Die Dateien selbst räumt der Auslöser aus
+  `0013_storage_muell.sql` weg – er trägt jeden gelöschten Anhang in
+  `storage_muell` ein, und `storage::muell` löscht die Bytes später im
+  Speicher. Räum nicht selbst im Anwendungscode auf: Ein `cascade` an einer
+  ganz anderen Stelle löscht Anhänge, ohne dass dein Code je davon erfährt –
+  genau deshalb sitzt die Aufräumerei in der Datenbank und nicht in Rust.
 - Migrationen sind **einkompiliert** (`sqlx::migrate!` in `lib.rs`) und laufen
   beim Start. Eine schon angewandte Migration darf **nie** nachträglich
   geändert werden – sqlx prüft Prüfsummen und verweigert sonst den Start.
@@ -302,7 +310,9 @@ import tasks from './tasks/module.js';
 export const appModules: AppModuleDefinition[] = [
   messenger,
   media,
+  files,
   calendar,
+  expenses,
   games,
   stickers,
   polls,
@@ -1152,7 +1162,8 @@ notify_users(
 
 ## 7. Migrationen im Betrieb
 
-- Neue Datei mit **höherer Nummer**: `0003_<name>.sql`.
+- Neue Datei mit **höherer Nummer** als alle vorhandenen; die nächste freie
+  ist `0014_<name>.sql`.
 - **Nie** eine ausgelieferte Migration ändern – sqlx vergleicht Prüfsummen und
   verweigert sonst den Start.
 - Migrationen laufen beim Start automatisch (`RUN_MIGRATIONS=true`). Bei
@@ -1187,8 +1198,16 @@ cargo test --manifest-path apps/api/Cargo.toml
 - [ ] Sichtbare Texte auf Deutsch (du-Form), Bezeichner und Kommentare Englisch.
 - [ ] Touch-Ziele ≥ 44 px, auf iPhone (Safari) und Android geprüft.
 - [ ] Eigenes CSS ausschließlich in der `styles.css` des Moduls.
-- [ ] Keine neuen npm-Abhängigkeiten (verfügbar: react, react-dom,
-      react-router-dom, zustand, idb, `@initiative/shared`).
+- [ ] Keine neuen npm-Abhängigkeiten. Vorhanden sind: react, react-dom,
+      react-router-dom, zustand, idb, `@initiative/shared` – dazu
+      `onnxruntime-web` und `@mediapipe/tasks-vision`, die ausschließlich der
+      Fotoeditor lädt, und zwar erst beim ersten Gebrauch.
+- [ ] Muss es doch eine sein: Lizenz **MIT, Apache-2.0 oder BSD**. Die App wird
+      kommerziell betrieben, GPL/AGPL und „nur für Forschung" scheiden aus –
+      das gilt für Modellgewichte genauso wie für Code. Danach
+      `pnpm --filter @initiative/web lizenzen` laufen lassen, damit die Liste
+      unter _Profil → Lizenzen_ die neue Abhängigkeit nennt; ohne sie ist die
+      Namensnennung verletzt, die MIT und Apache verlangen.
 - [ ] Migration ist neu nummeriert und additiv.
 
 ## Weiterlesen
@@ -1196,3 +1215,4 @@ cargo test --manifest-path apps/api/Cargo.toml
 - [ARCHITECTURE.md](ARCHITECTURE.md) – Datenfluss und Erweiterungspunkte
 - [API.md](API.md) – bestehender Vertrag
 - [FEATURES.md](FEATURES.md) – was es schon gibt
+- [SICHERHEIT.md](SICHERHEIT.md) – wogegen der Kern schützt und wogegen nicht
