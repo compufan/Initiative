@@ -50,6 +50,18 @@ keine – weil man sich darauf verlässt.
   Uploads, damit ein grosses Video nicht den Speicher aufbraucht.
 - `REGISTRATION_MODE=invite` auf dem Server: Niemand legt sich ungefragt ein
   Konto an.
+- **Metadaten werden entfernt, bevor etwas den Server erreicht.** Fotos werden
+  im Gerät neu gezeichnet, dabei fällt EXIF weg – Aufnahmeort, Uhrzeit,
+  Seriennummer der Kamera. Bei Videos werden die Metadaten-Boxen im MP4 an Ort
+  und Stelle überschrieben (`lib/videoMetadaten.ts`): Der Kasten behält seine
+  Länge und heisst danach `free`, weil `stco` absolute Dateipositionen enthält
+  und jede Längenänderung die Datei zerstören würde.
+
+  Das ist **kein** Serverschutz, sondern einer für die Empfänger: Ein Foto, das
+  im Chat weitergereicht wird, verrät nicht mehr, wo es aufgenommen wurde. Was
+  ein unbekannter Container mitbringt, bleibt allerdings unangetastet – die
+  Bereinigung greift nur bei erkannten MP4-Strukturen und lässt alles andere
+  lieber unverändert durch, als es kaputtzumachen.
 
 ### 3. Was hinausgeht — die Lücke, die der Umzug aufgemacht hat
 
@@ -69,7 +81,35 @@ Ton, PDF). Alles andere bekommt `Content-Disposition: attachment` und eine
 `sandbox`-CSP. `image/*` steht bewusst **nicht** auf der Liste – `image/svg+xml`
 ist ein Bild und gleichzeitig ein Dokument, in dem Skript läuft.
 
+Dazu `X-Robots-Tag: noindex, nofollow, noarchive, noimageindex` an jeder
+Auslieferung. Das schützt **nicht** vor dem, der die Adresse hat – die ist und
+bleibt ein Zugriffsschlüssel. Es schützt davor, dass sie jemand _findet_, ohne
+sie zu haben: Landet ein Link versehentlich in einem öffentlichen Beitrag, soll
+ihn kein Suchdienst aufnehmen oder archivieren.
+
 Siehe `tests/medien_auslieferung.rs`.
+
+### 3b. Was gelöscht wird
+
+Ein gelöschter Anhang muss auch als Datei verschwinden – sonst ist „für alle
+löschen" eine Beruhigung und keine Löschung, und Art. 17 DSGVO steht auf dem
+Papier.
+
+Das erledigt **die Datenbank**, nicht der Anwendungscode: Ein Auslöser auf
+`attachments` trägt jede gelöschte Zeile in `storage_muell` ein
+(`0013_storage_muell.sql`), ein Hintergrunddienst löscht die Bytes und danach
+den Eintrag (`storage/muell.rs`).
+
+Der Weg über die Datenbank ist nicht Geschmack. `on delete cascade` löscht
+Anhänge an Dutzenden Stellen mit – wenn ein Chat verschwindet, ein Termin, ein
+Konto. Kein einziger dieser Fälle geht durch einen `storage.delete`-Aufruf in
+Rust; ein Auslöser sieht sie alle.
+
+Scheitert eine Löschung im Speicher, bleibt die Zeile stehen und wird erneut
+versucht; nach zehn Anläufen gibt der Dienst sie auf, damit eine einzelne
+kaputte Datei nicht die ganze Warteschlange blockiert. Geprüft in
+`tests/muell.rs`, mit einem Speicher, der absichtlich fehlschlägt – `local`
+schluckt sonst jeden Fehler, und die Prüfung wäre wertlos gewesen.
 
 ### 4. Die abgelegten Dateien
 
