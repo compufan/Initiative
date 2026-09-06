@@ -75,6 +75,40 @@ export function ChatListScreen() {
     return () => window.clearTimeout(timer);
   }, [term]);
 
+  /*
+   * Das Archiv – bisher eine Einbahnstrasse.
+   *
+   * „Chat archivieren" nahm den Chat aus der Liste, und damit war er weg:
+   * `api.conversations.list()` fragt ohne Argument nur die unarchivierten ab,
+   * und eine Archivansicht gab es nirgends. Der Weg zurück („Aus dem Archiv
+   * holen") steht in der Chat-Info – die man nur AUS dem Chat heraus öffnet,
+   * den man nicht mehr öffnen kann.
+   *
+   * Geladen wird erst beim Hinsehen: Wer nie archiviert, soll dafür auch
+   * keine Anfrage bezahlen.
+   */
+  const [archivOffen, setArchivOffen] = useState(false);
+  const [archiv, setArchiv] = useState<ConversationDto[] | null>(null);
+
+  useEffect(() => {
+    if (!archivOffen) return;
+    let weg = false;
+    api.conversations
+      .list(true)
+      .then(({ items }) => {
+        if (!weg) setArchiv(items);
+      })
+      .catch(() => {
+        if (!weg) {
+          setArchiv([]);
+          toast('Das Archiv konnte nicht geladen werden', 'error');
+        }
+      });
+    return () => {
+      weg = true;
+    };
+  }, [archivOffen]);
+
   const visible = useMemo(() => {
     const list = conversations.filter((conversation) => !conversation.archived);
     const filtered =
@@ -94,7 +128,7 @@ export function ChatListScreen() {
 
   return (
     <Screen
-      title="Chats"
+      title={archivOffen ? 'Archiv' : 'Chats'}
       bare
       actions={
         <>
@@ -110,7 +144,22 @@ export function ChatListScreen() {
           <button
             type="button"
             className="icon-btn"
+            aria-label={archivOffen ? 'Zurück zu den Chats' : 'Archivierte Chats'}
+            aria-pressed={archivOffen}
+            data-tipp={
+              archivOffen
+                ? 'Zurück zur normalen Chatliste'
+                : 'Zeigt die Chats, die du archiviert hast – von dort holst du sie zurück'
+            }
+            onClick={() => setArchivOffen((wert) => !wert)}
+          >
+            {archivOffen ? '💬' : '🗄️'}
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
             aria-label="Neuer Chat"
+            data-tipp="Jemanden anschreiben oder eine Gruppe gründen"
             onClick={() => setNewChatOpen(true)}
           >
             ✎
@@ -119,124 +168,157 @@ export function ChatListScreen() {
       }
     >
       <div className="page">
-        {searchOpen && (
-          <div className="chat-search">
-            <input
-              className="input"
-              type="search"
-              inputMode="search"
-              autoFocus
-              placeholder="Chats und Nachrichten durchsuchen"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </div>
-        )}
-
-        {!initialised && conversations.length === 0 && (
-          <div style={{ padding: 'var(--space-5)' }}>
-            <Spinner label="Chats werden geladen" />
-          </div>
-        )}
-
-        {initialised && conversations.length === 0 && (
-          <EmptyState
-            emoji="💬"
-            title="Noch keine Chats"
-            description="Starte ein Gespräch – such dir jemanden oder gründe direkt eine Gruppe."
-            action={
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => setNewChatOpen(true)}
-              >
-                Neuen Chat starten
-              </button>
-            }
-          />
-        )}
-
-        {conversations.length > 0 &&
-          visible.length === 0 &&
-          term.length > 0 &&
-          hits.length === 0 &&
-          !searching && (
-            <EmptyState
-              emoji="🔍"
-              title="Nichts gefunden"
-              description={`Keine Treffer für „${term}“.`}
-            />
-          )}
-
-        {visible.length > 0 && (
-          <div className="list">
-            {visible.map((conversation) => (
-              <ChatRow
-                key={conversation.id}
-                conversation={conversation}
-                myId={myId}
-                online={
-                  conversation.type === 'direct'
-                    ? (presence[counterpartOf(conversation, myId)?.userId ?? '']?.online ?? false)
-                    : undefined
-                }
-                typing={(typing[conversation.id] ?? []).some((entry) => entry.userId !== myId)}
-              />
-            ))}
-          </div>
-        )}
-
-        {term.length >= 2 && (
-          <div className="chat-hits">
-            <div className="msg-info-label" style={{ padding: '0 var(--space-4)' }}>
-              Nachrichten
-            </div>
-            {searching && (
-              <div style={{ padding: 'var(--space-3) var(--space-4)' }}>
-                <Spinner label="Suche läuft" />
+        {archivOffen ? (
+          <>
+            {archiv === null && (
+              <div style={{ padding: 'var(--space-5)' }}>
+                <Spinner label="Archiv wird geladen" />
               </div>
             )}
-            {!searching && hits.length === 0 && (
-              <p className="muted" style={{ padding: '0 var(--space-4)', fontSize: '0.88rem' }}>
-                Keine passenden Nachrichten.
-              </p>
+            {archiv?.length === 0 && (
+              <EmptyState
+                emoji="🗄️"
+                title="Nichts archiviert"
+                description="Archivierte Chats verschwinden aus der Liste, bleiben aber vollständig erhalten. Hier findest du sie wieder."
+              />
             )}
-            <div className="list">
-              {hits.map((hit) => {
-                const conversation =
-                  conversations.find((item) => item.id === hit.conversationId) ?? null;
-                return (
+            {archiv && archiv.length > 0 && (
+              <div className="list">
+                {archiv.map((conversation) => (
+                  <ChatRow
+                    key={conversation.id}
+                    conversation={conversation}
+                    myId={myId}
+                    online={undefined}
+                    typing={false}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            {searchOpen && (
+              <div className="chat-search">
+                <input
+                  className="input"
+                  type="search"
+                  inputMode="search"
+                  autoFocus
+                  placeholder="Chats und Nachrichten durchsuchen"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                />
+              </div>
+            )}
+
+            {!initialised && conversations.length === 0 && (
+              <div style={{ padding: 'var(--space-5)' }}>
+                <Spinner label="Chats werden geladen" />
+              </div>
+            )}
+
+            {initialised && conversations.length === 0 && (
+              <EmptyState
+                emoji="💬"
+                title="Noch keine Chats"
+                description="Starte ein Gespräch – such dir jemanden oder gründe direkt eine Gruppe."
+                action={
                   <button
-                    key={hit.id}
                     type="button"
-                    className="list-row"
-                    onClick={() => {
-                      closeSearch();
-                      navigate(`/chats/${hit.conversationId}`);
-                    }}
+                    className="btn btn-primary"
+                    onClick={() => setNewChatOpen(true)}
                   >
-                    <span aria-hidden="true" style={{ fontSize: '1.2rem' }}>
-                      💬
-                    </span>
-                    <span style={{ minWidth: 0, flex: 1 }}>
-                      <span className="truncate" style={{ display: 'block', fontWeight: 600 }}>
-                        {conversation ? conversationTitle(conversation, myId) : 'Chat'}
-                      </span>
-                      <span
-                        className="muted truncate"
-                        style={{ display: 'block', fontSize: '0.84rem' }}
-                      >
-                        {senderName(conversation, hit.senderId)}: {messagePreview(hit)}
-                      </span>
-                    </span>
-                    <span className="faint" style={{ fontSize: '0.75rem' }}>
-                      {formatListStamp(hit.createdAt)}
-                    </span>
+                    Neuen Chat starten
                   </button>
-                );
-              })}
-            </div>
-          </div>
+                }
+              />
+            )}
+
+            {conversations.length > 0 &&
+              visible.length === 0 &&
+              term.length > 0 &&
+              hits.length === 0 &&
+              !searching && (
+                <EmptyState
+                  emoji="🔍"
+                  title="Nichts gefunden"
+                  description={`Keine Treffer für „${term}“.`}
+                />
+              )}
+
+            {visible.length > 0 && (
+              <div className="list">
+                {visible.map((conversation) => (
+                  <ChatRow
+                    key={conversation.id}
+                    conversation={conversation}
+                    myId={myId}
+                    online={
+                      conversation.type === 'direct'
+                        ? (presence[counterpartOf(conversation, myId)?.userId ?? '']?.online ??
+                          false)
+                        : undefined
+                    }
+                    typing={(typing[conversation.id] ?? []).some((entry) => entry.userId !== myId)}
+                  />
+                ))}
+              </div>
+            )}
+
+            {term.length >= 2 && (
+              <div className="chat-hits">
+                <div className="msg-info-label" style={{ padding: '0 var(--space-4)' }}>
+                  Nachrichten
+                </div>
+                {searching && (
+                  <div style={{ padding: 'var(--space-3) var(--space-4)' }}>
+                    <Spinner label="Suche läuft" />
+                  </div>
+                )}
+                {!searching && hits.length === 0 && (
+                  <p className="muted" style={{ padding: '0 var(--space-4)', fontSize: '0.88rem' }}>
+                    Keine passenden Nachrichten.
+                  </p>
+                )}
+                <div className="list">
+                  {hits.map((hit) => {
+                    const conversation =
+                      conversations.find((item) => item.id === hit.conversationId) ?? null;
+                    return (
+                      <button
+                        key={hit.id}
+                        type="button"
+                        className="list-row"
+                        onClick={() => {
+                          closeSearch();
+                          navigate(`/chats/${hit.conversationId}`);
+                        }}
+                      >
+                        <span aria-hidden="true" style={{ fontSize: '1.2rem' }}>
+                          💬
+                        </span>
+                        <span style={{ minWidth: 0, flex: 1 }}>
+                          <span className="truncate" style={{ display: 'block', fontWeight: 600 }}>
+                            {conversation ? conversationTitle(conversation, myId) : 'Chat'}
+                          </span>
+                          <span
+                            className="muted truncate"
+                            style={{ display: 'block', fontSize: '0.84rem' }}
+                          >
+                            {senderName(conversation, hit.senderId)}: {messagePreview(hit)}
+                          </span>
+                        </span>
+                        <span className="faint" style={{ fontSize: '0.75rem' }}>
+                          {formatListStamp(hit.createdAt)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 

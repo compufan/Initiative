@@ -86,3 +86,60 @@ test('legt eine Gruppe an und zeigt sie beiden Mitgliedern', async ({ browser })
   await ownerPage.context().close();
   await guestPage.context().close();
 });
+
+test('ein archivierter Chat ist wiederzufinden – das Archiv war eine Einbahnstrasse', async ({
+  browser,
+}) => {
+  /*
+   * „Chat archivieren" nahm den Chat aus der Liste, und damit war er weg:
+   * `api.conversations.list()` fragt ohne Argument nur die unarchivierten ab,
+   * und eine Archivansicht gab es nirgends. Der Weg zurück steht in der
+   * Chat-Info – die man nur AUS dem Chat heraus öffnet, den man nicht mehr
+   * öffnen kann.
+   *
+   * Der Test geht denselben Weg wie ein Mensch: archivieren, feststellen dass
+   * er fort ist, ihn im Archiv wiederfinden, zurückholen.
+   */
+  const alice = credentials('arch');
+  const bob = credentials('arziel');
+  const page = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await page.getByRole('button', { name: 'Neuer Chat' }).click();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await page.getByText(bob.displayName).first().click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await page.getByPlaceholder('Nachricht schreiben').fill('Hallo');
+  await page.getByRole('button', { name: 'Senden' }).click();
+
+  // Archivieren aus der Chat-Info heraus.
+  await page
+    .getByRole('button', { name: /Chat-Info|Info/ })
+    .first()
+    .click();
+  await page.getByRole('button', { name: /Chat archivieren/ }).click();
+
+  await page.goto('/chats');
+  await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
+  // Fort aus der Liste – so weit war es schon immer richtig.
+  await expect(page.getByText(bob.displayName)).toHaveCount(0);
+
+  // Und jetzt der Teil, der gefehlt hat: wiederfinden.
+  await page.getByRole('button', { name: 'Archivierte Chats' }).click();
+  await expect(page.getByRole('heading', { name: 'Archiv' })).toBeVisible();
+  await expect(page.getByText(bob.displayName).first()).toBeVisible({ timeout: 15_000 });
+
+  // Von dort hinein und zurückholen.
+  await page.getByText(bob.displayName).first().click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await page
+    .getByRole('button', { name: /Chat-Info|Info/ })
+    .first()
+    .click();
+  await page.getByRole('button', { name: /Aus dem Archiv holen/ }).click();
+
+  await page.goto('/chats');
+  await expect(page.getByText(bob.displayName).first()).toBeVisible({ timeout: 15_000 });
+
+  await page.close();
+});
