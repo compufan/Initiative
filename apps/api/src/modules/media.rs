@@ -350,10 +350,34 @@ async fn serve(
     state: AppState,
     id: Uuid,
     headers: HeaderMap,
+    betrachter: Option<AuthUser>,
     as_download: bool,
     direkt: bool,
 ) -> AppResult<Response> {
     let attachment = load_attachment(&state.pool, id).await?;
+
+    /*
+     * Ein unbestätigter Upload gehört nur dem, der ihn hochlädt.
+     *
+     * Der Fall ist schmal, aber er existiert: Beim Hochladen über eine
+     * signierte Adresse liegen die Bytes im Speicher, sobald der Browser
+     * fertig ist – `status` wird aber erst von `complete_upload` auf `ready`
+     * gesetzt. Bleibt dieser Aufruf aus (Netz weg, App geschlossen), steht
+     * eine Datei im Speicher, die niemand je abgeschickt hat und die trotzdem
+     * über ihre Kennung vollständig abrufbar war.
+     *
+     * Beim Weg durch die API ist der Zustand folgenlos – dort gibt es ohne
+     * `ready` auch keine Bytes –, und für fertige Anhänge ändert sich nichts.
+     * Die Kennung bleibt für sie der Schlüssel; das ist Absicht und der Grund,
+     * warum `<img>` und der Service Worker ohne Anmeldung funktionieren.
+     */
+    if attachment.status != "ready" {
+        let eigen = betrachter.map(|user| user.id()) == attachment.uploader_id
+            && attachment.uploader_id.is_some();
+        if !eigen {
+            return Err(AppError::not_found("Datei nicht gefunden"));
+        }
+    }
     let options = DownloadOptions {
         file_name: attachment.file_name.clone(),
         mime: Some(attachment.mime.clone()),
@@ -530,9 +554,10 @@ async fn serve(
 async fn deliver(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    betrachter: Option<AuthUser>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    serve(state, id, headers, false, true).await
+    serve(state, id, headers, betrachter, false, true).await
 }
 
 /**
@@ -552,17 +577,19 @@ async fn deliver(
 async fn bytes_through_api(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    betrachter: Option<AuthUser>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    serve(state, id, headers, false, false).await
+    serve(state, id, headers, betrachter, false, false).await
 }
 
 async fn download(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    betrachter: Option<AuthUser>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    serve(state, id, headers, true, true).await
+    serve(state, id, headers, betrachter, true, true).await
 }
 
 async fn remove(
