@@ -241,12 +241,21 @@ async fn a_von_allen_b_von_drei_c_gar_nicht_d_von_einer_person() {
     // Genau dafuer ist `requiredAll` ein eigenes Feld und keine feste Zahl:
     // Wer spaeter eingeladen wird, muss ebenfalls abhaken.
     let (_, spaet_id) = probe.anmelden(&suffix, "pia").await;
+    /*
+     * Die volle Liste, nicht nur die Neue.
+     *
+     * `attendeeIds` ist der SOLLZUSTAND. Frueher war das Feld ergaenzend, und
+     * genau daraus wurde ein Fehler: Der Termin-Editor schickt die
+     * vollstaendige Liste, und wer dort jemanden abwaehlte, bekam
+     * "gespeichert" zu sehen - ausgeladen war niemand. Ein Feld mit zwei
+     * Bedeutungen, je nach Aufrufer.
+     */
     let (status, _) = probe
         .call(
             "PATCH",
             &format!("/api/v1/calendar/events/{event_id}"),
             Some(&a_token),
-            Some(json!({ "attendeeIds": [spaet_id] })),
+            Some(json!({ "attendeeIds": [a_id, b_id, c_id, d_id, spaet_id] })),
         )
         .await;
     assert_eq!(status, StatusCode::OK);

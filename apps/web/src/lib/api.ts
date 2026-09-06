@@ -476,9 +476,22 @@ export const api = {
     remove: (id: string) => del<void>(`/calendar/events/${id}`),
     rsvp: (id: string, status: 'yes' | 'no' | 'maybe' | 'pending') =>
       post<CalendarEventDto>(`/calendar/events/${id}/rsvp`, { status }),
-    /** Nachtraeglich einladen – die Liste wird ergaenzt, nicht ersetzt. */
-    invite: (id: string, attendeeIds: string[]) =>
-      patch<CalendarEventDto>(`/calendar/events/${id}`, { attendeeIds }),
+    /**
+     * Nachträglich einladen.
+     *
+     * `attendeeIds` ist der SOLLZUSTAND, nicht ein Nachtrag – deshalb müssen
+     * die schon Eingeladenen mitgeschickt werden. Vorher war das Feld auf dem
+     * Server ergänzend, und genau daraus wurde ein Fehler: Der Termin-Editor
+     * schickt die vollständige Liste (er füllt die Kästchen mit den aktuellen
+     * Teilnehmern vor), und wer dort jemanden abwählte, bekam „gespeichert"
+     * zu sehen – ausgeladen war niemand.
+     *
+     * Ein Feld, zwei Bedeutungen, je nach Aufrufer. Jetzt hat es eine.
+     */
+    invite: (id: string, bisher: string[], neue: string[]) =>
+      patch<CalendarEventDto>(`/calendar/events/${id}`, {
+        attendeeIds: [...new Set([...bisher, ...neue])],
+      }),
     /** Und wieder ausladen. Nur wer den Termin verwaltet. */
     uninvite: (id: string, userId: string) =>
       del<CalendarEventDto>(`/calendar/events/${id}/attendees/${userId}`),

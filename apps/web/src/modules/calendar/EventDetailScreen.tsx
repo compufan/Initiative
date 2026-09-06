@@ -67,7 +67,13 @@ export function EventDetailScreen() {
   async function einladen(ids: string[]) {
     if (!event || ids.length === 0) return;
     try {
-      setEvent(await api.calendar.invite(event.id, ids));
+      setEvent(
+        await api.calendar.invite(
+          event.id,
+          event.attendees.map((teilnehmer) => teilnehmer.userId),
+          ids,
+        ),
+      );
       toast(ids.length === 1 ? 'Eingeladen.' : `${ids.length} eingeladen.`, 'success');
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Einladen fehlgeschlagen', 'error');
