@@ -240,14 +240,24 @@ export function ChatScreen() {
     const geladen = () =>
       (useChat.getState().messages[conversationId] ?? []).some((item) => item.id === messageId);
 
+    const bild = () => new Promise((weiter) => requestAnimationFrame(() => weiter(null)));
+
     for (let versuch = 0; versuch < 20 && !suchen() && !geladen(); versuch += 1) {
       const zustand = useChat.getState();
       if (!(zustand.hasMore[conversationId] ?? false)) break;
+      const vorher = (zustand.messages[conversationId] ?? []).length;
       await zustand.loadOlder(conversationId);
+      /*
+       * `loadOlder` kehrt sofort zurück, wenn schon ein Laden läuft – das
+       * Scrollen weiter oben stösst nämlich dasselbe an. Ohne diese Pause
+       * liefe die Schleife dann zwanzig Mal ins Leere und meldete am Ende
+       * „nicht mehr da“, während die Nachricht gerade unterwegs ist.
+       */
+      if ((useChat.getState().messages[conversationId] ?? []).length === vorher) await bild();
     }
 
     // Nach dem Nachladen braucht React ein Bild, bevor die Zeile im DOM steht.
-    if (!suchen()) await new Promise((weiter) => requestAnimationFrame(() => weiter(null)));
+    if (!suchen()) await bild();
 
     const target = suchen();
     if (!target) {
