@@ -61,7 +61,9 @@ Startbildschirm legen und funktioniert auch ohne Netz weiter.
   **Archiv**.
 - Archivierte Chats verschwinden aus der Hauptliste und **zählen nicht mehr in
   den Ungelesen-Zähler** der unteren Leiste.
-- Sie bleiben vollständig erhalten und lassen sich jederzeit zurückholen.
+- Sie bleiben vollständig erhalten und lassen sich jederzeit zurückholen: Das
+  Symbol 🗄️ oben in der Chatliste zeigt das Archiv, von dort führt der Weg
+  zurück über die Chat-Info.
 - Auch das gilt nur für dich.
 
 ## Nachrichten

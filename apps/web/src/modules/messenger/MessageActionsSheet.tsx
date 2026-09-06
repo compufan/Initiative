@@ -5,6 +5,7 @@ import { messageActions } from '../registry.js';
 import { api } from '../../lib/api.js';
 import { useChat, type ChatMessage } from '../../state/chat.js';
 import { useMyId } from '../../state/session.js';
+import { canModerate } from './helpers.js';
 import { toast } from '../../state/ui.js';
 
 interface MessageActionsSheetProps {
@@ -65,7 +66,19 @@ function Actions({
   // fremden Nachrichten. Bei ANDEREN etwas verschwinden zu lassen, steht nur
   // dem zu, der es geschrieben hat.
   const kannFuerMich = !isLocal && !message.deletedAt;
-  const canDelete = isMine;
+  /*
+   * Auch die Gruppenverwaltung darf für alle löschen.
+   *
+   * Hier stand `isMine`, und das war eine Lücke zwischen vier Stellen, die
+   * dasselbe sagen sollten: Der Server erlaubt es ausdrücklich
+   * (`darf_moderieren` in messages.rs), `canModerate` steht dafür bereit,
+   * FEATURES.md verspricht es – nur die Oberfläche bot es nicht an. Wer eine
+   * Gruppe verwaltet, konnte eine entgleiste Nachricht nicht entfernen.
+   *
+   * Der Kommentar unten spricht von etwas anderem: „nur für mich" gegen „für
+   * alle". Diese Unterscheidung bleibt, sie hat mit Moderation nichts zu tun.
+   */
+  const canDelete = isMine || (!isLocal && canModerate(conversation, myId));
   const canCopy = Boolean(message.body?.trim());
 
   // Was andere Bereiche der App an dieser Nachricht anbieten – etwa „Zur
