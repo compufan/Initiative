@@ -87,6 +87,12 @@ services:
       PUBLIC_APP_URL: ${PUBLIC_APP_URL:?fehlt}
       PUBLIC_API_URL: ${PUBLIC_API_URL:?fehlt}
       DATABASE_URL: postgres://${POSTGRES_USER:-initiative}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-initiative}
+      # Notfallschalter, wenn sqlx wegen einer geaenderten Pruefsumme jede
+      # Migration verweigert (`VersionMismatch`). Ohne diese Zeile ist er im
+      # Container gar nicht zu erreichen - `environment:` ist eine Liste, keine
+      # Durchreiche. Leer bedeutet aus; gesetzt wird er fuer genau einen
+      # Neustart und danach wieder entfernt. Siehe docs/DEPLOYMENT.md.
+      MIGRATIONS_REPAIR: ${MIGRATIONS_REPAIR:-}
       LOCAL_STORAGE_DIR: /data/uploads
       STORAGE_DRIVER: local
       # Verschluesselt die abgelegten Dateien. Ohne Schluessel liegen sie im
