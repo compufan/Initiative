@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { formatBytes } from '@initiative/shared';
 import { Sheet } from '../../components/Sheet.js';
 import { api } from '../../lib/api.js';
@@ -40,6 +40,23 @@ export function UploadToCollectionSheet({ open, onClose, collectionId }: Props) 
   const [posten, setPosten] = useState<Posten[]>([]);
   const [laeuft, setLaeuft] = useState(false);
   const feld = useRef<HTMLInputElement | null>(null);
+
+  /*
+   * Die Liste gehört zu EINEM Öffnen und zu EINER Sammlung.
+   *
+   * Das Blatt bleibt eingehängt, solange man in einem Ordner steht, und
+   * `posten` wurde bisher nur beim Auswählen neuer Dateien geleert. Wer es
+   * erneut öffnete, sah die Meldungen vom letzten Mal – „✓ Mietvertrag.pdf“ –
+   * und musste raten, ob das gerade eben passiert war. Beim Wechsel in eine
+   * andere Sammlung war es sogar falsch: Die Dateien liegen dort nicht.
+   *
+   * `laeuft` gehört AUSDRÜCKLICH nicht ins Abhängigkeitsfeld: Am Ende von
+   * `hochladen` fällt es auf false, und der Effekt würde genau die Fehlerzeile
+   * wegwischen, die unten mit Bedacht stehen bleibt.
+   */
+  useEffect(() => {
+    setPosten([]);
+  }, [open, collectionId]);
 
   async function hochladen(dateien: File[]) {
     const erlaubt = dateien.filter((datei) =>

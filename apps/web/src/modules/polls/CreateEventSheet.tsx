@@ -18,7 +18,17 @@ interface CreateEventSheetProps {
  * RSVP states of the new event, so nobody has to reply twice.
  */
 export function CreateEventSheet({ poll, onClose, onCreated }: CreateEventSheetProps) {
+  /*
+   * „Die meisten Zusagen“ nur, wenn überhaupt jemand zugesagt hat.
+   *
+   * `bestOption` gibt bei leerer Auswertung den frühesten Vorschlag zurück –
+   * eine vernünftige Vorauswahl, aber keine Aussage über Stimmen. Der Hinweis
+   * behauptete trotzdem „Der Vorschlag mit den meisten Zusagen“, auch wenn
+   * niemand geantwortet hatte. Die Blase nebenan (PollBubble.tsx) hält
+   * denselben Riegel schon vor.
+   */
   const best = bestOption(poll.options, poll.tally);
+  const hatStimmen = Boolean(best && poll.voterCount > 0 && (poll.tally[best.id]?.score ?? 0) > 0);
   const [optionId, setOptionId] = useState(best?.id ?? poll.options[0]?.id ?? '');
   const [title, setTitle] = useState(poll.question);
   const [location, setLocation] = useState('');
@@ -79,8 +89,12 @@ export function CreateEventSheet({ poll, onClose, onCreated }: CreateEventSheetP
             </option>
           ))}
         </select>
-        {best && best.id === optionId && (
-          <span className="poll-hint">Der Vorschlag mit den meisten Zusagen.</span>
+        {best?.id === optionId && (
+          <span className="poll-hint">
+            {hatStimmen
+              ? 'Der Vorschlag mit den meisten Zusagen.'
+              : 'Noch keine Antworten – vorausgewählt ist der früheste Vorschlag.'}
+          </span>
         )}
       </div>
 

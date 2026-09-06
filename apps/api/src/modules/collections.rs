@@ -716,18 +716,44 @@ async fn write_grant(
         assert_membership(&state.pool, conversation_id, granted_by).await?;
     }
 
-    let sql = if collection_id.is_some() {
-        "insert into collection_grants (id, collection_id, user_id, conversation_id, level, granted_by)
-         values ($1, $2, $3, $4, $5, $6)
-         on conflict (collection_id, user_id) where collection_id is not null and user_id is not null
-         do update set level = excluded.level, granted_by = excluded.granted_by
-         returning *"
-    } else {
-        "insert into collection_grants (id, item_id, user_id, conversation_id, level, granted_by)
-         values ($1, $2, $3, $4, $5, $6)
-         on conflict (item_id, user_id) where item_id is not null and user_id is not null
-         do update set level = excluded.level, granted_by = excluded.granted_by
-         returning *"
+    // Vier eindeutige Indizes, vier Konfliktziele.
+    //
+    // Hier standen nur die beiden für Personen. Ein zweites Freigeben an
+    // DENSELBEN Chat lief deshalb nicht in `do update`, sondern in
+    // `collection_grants_unique_collection_conv_idx` – und der Anwender bekam
+    // „Interner Serverfehler“, obwohl er nur die Stufe anheben wollte.
+    // Migration 0004 legt alle vier an; benannt werden mussten sie bloss.
+    let sql = match (collection_id.is_some(), input.conversation_id.is_some()) {
+        (true, false) => {
+            "insert into collection_grants (id, collection_id, user_id, conversation_id, level, granted_by)
+             values ($1, $2, $3, $4, $5, $6)
+             on conflict (collection_id, user_id) where collection_id is not null and user_id is not null
+             do update set level = excluded.level, granted_by = excluded.granted_by
+             returning *"
+        }
+        (true, true) => {
+            "insert into collection_grants (id, collection_id, user_id, conversation_id, level, granted_by)
+             values ($1, $2, $3, $4, $5, $6)
+             on conflict (collection_id, conversation_id)
+               where collection_id is not null and conversation_id is not null
+             do update set level = excluded.level, granted_by = excluded.granted_by
+             returning *"
+        }
+        (false, false) => {
+            "insert into collection_grants (id, item_id, user_id, conversation_id, level, granted_by)
+             values ($1, $2, $3, $4, $5, $6)
+             on conflict (item_id, user_id) where item_id is not null and user_id is not null
+             do update set level = excluded.level, granted_by = excluded.granted_by
+             returning *"
+        }
+        (false, true) => {
+            "insert into collection_grants (id, item_id, user_id, conversation_id, level, granted_by)
+             values ($1, $2, $3, $4, $5, $6)
+             on conflict (item_id, conversation_id)
+               where item_id is not null and conversation_id is not null
+             do update set level = excluded.level, granted_by = excluded.granted_by
+             returning *"
+        }
     };
 
     let row = sqlx::query_as::<_, CollectionGrantRow>(sql)

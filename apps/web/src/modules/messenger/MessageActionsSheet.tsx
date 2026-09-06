@@ -91,10 +91,15 @@ function Actions({
   );
   const offeneAktion = weitere.find((action) => action.key === offen);
 
-  async function react(emoji: string) {
-    const mine = message.reactions.some(
+  /** Habe ich mit diesem Emoji schon reagiert? */
+  function istMeins(emoji: string): boolean {
+    return message.reactions.some(
       (reaction) => reaction.emoji === emoji && reaction.userIds.includes(myId),
     );
+  }
+
+  async function react(emoji: string) {
+    const mine = istMeins(emoji);
     try {
       await useChat.getState().toggleReaction(message, emoji, mine);
       onClose();
@@ -183,17 +188,32 @@ function Actions({
   return (
     <div className="stack">
       <div className="msg-reaction-picker">
-        {REACTION_EMOJIS.map((emoji) => (
-          <button
-            key={emoji}
-            type="button"
-            className="msg-reaction-choice"
-            aria-label={`Mit ${emoji} reagieren`}
-            onClick={() => void react(emoji)}
-          >
-            {emoji}
-          </button>
-        ))}
+        {/*
+            Die eigene Reaktion ist zu sehen.
+
+            Der Knopf schaltet um – ein zweiter Tipp nimmt die Reaktion zurück
+            (`react` oben) –, nur sah man das der Reihe nicht an: Alle sieben
+            Emoji sahen gleich aus, auch das eigene. Wer wissen wollte, ob er
+            schon reagiert hatte, musste das Blatt schliessen und unter der
+            Nachricht nachsehen. Und wer sein Herz noch einmal antippte, nahm es
+            weg, ohne das erwartet zu haben.
+        */}
+        {REACTION_EMOJIS.map((emoji) => {
+          const meins = istMeins(emoji);
+          return (
+            <button
+              key={emoji}
+              type="button"
+              className={`msg-reaction-choice ${meins ? 'msg-reaction-choice-mine' : ''}`}
+              aria-label={meins ? `${emoji} zurücknehmen` : `Mit ${emoji} reagieren`}
+              aria-pressed={meins}
+              data-tipp={meins ? `${emoji} wieder wegnehmen` : `Mit ${emoji} reagieren`}
+              onClick={() => void react(emoji)}
+            >
+              {emoji}
+            </button>
+          );
+        })}
       </div>
 
       <div className="list msg-action-list">

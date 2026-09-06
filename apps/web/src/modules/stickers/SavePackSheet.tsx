@@ -77,14 +77,31 @@ export function SavePackSheet({ blob, mime, onClose, onSaved }: SavePackSheetPro
     }
   }
 
+  /*
+   * Ein angelegtes Paket wird beim zweiten Versuch WIEDERVERWENDET.
+   *
+   * „Neues Paket“ legte erst das Paket an und lud dann hoch. Ging das
+   * Hochladen schief – im Zug ist das der Normalfall –, blieb das leere Paket
+   * stehen, und `target` stand weiter auf „neu“. Der zweite Tipp auf
+   * „Speichern“ legte also ein zweites gleichnamiges Paket an, der dritte ein
+   * drittes. Nach drei Anläufen hatte man drei leere „Meine Sticker“ und immer
+   * noch keinen Sticker.
+   *
+   * Jetzt wird das Paket sofort in die Liste aufgenommen und ausgewählt: Der
+   * nächste Versuch lädt nur noch hoch, und der Anwender sieht, was wirklich
+   * schon entstanden ist.
+   */
   async function save() {
     if (!canSave) return;
     setSaving(true);
     try {
-      const packId =
-        target === 'new'
-          ? (await api.stickers.createPack({ name: trimmedName, isPublic: false })).id
-          : target;
+      let packId = target;
+      if (target === 'new') {
+        const neu = await api.stickers.createPack({ name: trimmedName, isPublic: false });
+        packId = neu.id;
+        setPacks((liste) => [...liste, neu]);
+        setTarget(neu.id);
+      }
 
       const attachment = await uploadBlob({
         kind: 'sticker',

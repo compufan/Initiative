@@ -249,20 +249,39 @@ export function ShareSheet({ open, onClose, collection }: ShareSheetProps) {
               </button>
 
               <p className="fil-section">Oder alle in einem Chat</p>
+              {/*
+                  Auch hier steht das bestehende Recht dabei.
+
+                  Bei den Personen darüber war das längst so; die Chatliste
+                  schwieg und sah bei jedem Chat gleich aus. Man vergab damit
+                  blind ein Recht, das schon bestand – und weil der zweite Tipp
+                  die Stufe nur ERSETZT, sah man am Ergebnis nichts.
+              */}
               <ul className="list">
-                {chats.map((chat) => (
-                  <li key={chat.id}>
-                    <button
-                      type="button"
-                      className="list-row"
-                      disabled={busy}
-                      onClick={() => void vergeben({ conversationId: chat.id })}
-                    >
-                      <span aria-hidden="true">{chat.type === 'group' ? '👥' : '💬'}</span>
-                      <span className="truncate">{conversationTitle(chat, myId)}</span>
-                    </button>
-                  </li>
-                ))}
+                {chats.map((chat) => {
+                  const bestehend = grants.find((eintrag) => eintrag.conversationId === chat.id);
+                  return (
+                    <li key={chat.id}>
+                      <button
+                        type="button"
+                        className="list-row"
+                        disabled={busy}
+                        data-tipp={
+                          bestehend
+                            ? `Recht auf „${STUFEN_TEXT[stufe]}“ ändern (jetzt: ${STUFEN_TEXT[bestehend.level]})`
+                            : `Allen in diesem Chat „${STUFEN_TEXT[stufe]}“ geben`
+                        }
+                        onClick={() => void vergeben({ conversationId: chat.id })}
+                      >
+                        <span aria-hidden="true">{chat.type === 'group' ? '👥' : '💬'}</span>
+                        <span className="truncate">{conversationTitle(chat, myId)}</span>
+                        {bestehend && (
+                          <span className="fil-badge">{STUFEN_TEXT[bestehend.level]}</span>
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             </>
           )}

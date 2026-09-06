@@ -41,6 +41,20 @@ export function AddOptionSheet({ poll, onClose, onAdded }: AddOptionSheetProps) 
         toast('Bitte wähle ein gültiges Datum', 'error');
         return;
       }
+      /*
+       * Kein Vorschlag in der Vergangenheit.
+       *
+       * Beim Anlegen der Umfrage sperrt der Kalender vergangene Tage
+       * (MiniCalendar.tsx, `disabled={past}`); beim Ergänzen stand hier nichts,
+       * und der Server prüft es auch nicht. Über diesen Weg liess sich also
+       * „letzten Dienstag“ zur Abstimmung stellen. Gemessen wird tagesgenau –
+       * genau wie im Kalender, damit nicht zwei Stellen verschieden streng
+       * sind. `YYYY-MM-DD` lässt sich dafür schlicht vergleichen.
+       */
+      if (day < dayKey(new Date())) {
+        toast('Der Vorschlag liegt in der Vergangenheit', 'error');
+        return;
+      }
       const minutes = duration === 'allDay' ? 0 : parseTime(time);
       if (minutes == null) {
         toast('Bitte gib eine gültige Uhrzeit an', 'error');
@@ -87,6 +101,7 @@ export function AddOptionSheet({ poll, onClose, onAdded }: AddOptionSheetProps) 
               id="poll-add-day"
               className="input"
               type="date"
+              min={dayKey(new Date())}
               value={day}
               onChange={(event) => setDay(event.target.value)}
             />

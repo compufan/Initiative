@@ -500,7 +500,18 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       const quelle = sourceRef.current;
       if (!quelle || quelle.kind !== 'image') return;
 
-      const netz = mitNetzRef.current && engineAvailable('tippen');
+      /*
+       * Läuft schon ein Netzlauf, wird DIESER Tipp nach Farbe gemacht.
+       *
+       * Vorher stand die Prüfung erst weiter unten, nach dem Ablegen des
+       * Punktes: Der zweite Tipp wurde als `quelle: 'netz'` gemerkt, der Lauf
+       * dann übersprungen – und weil `render.ts` Netzpunkte von der Flutung
+       * ausnimmt, entstand für diese Gruppe nie eine Maske. Der Tipp war
+       * spurlos weg, mitsamt seinem Rückgängig-Schritt. Genau das, was der
+       * Kommentar unten verhindern wollte.
+       */
+      const netz =
+        mitNetzRef.current && engineAvailable('tippen') && !tippRechnetRef.current;
       const dazu = tippModusRef.current !== 'weg';
 
       /*
@@ -540,7 +551,9 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       setDoc((value) => ({ ...value, keep: [...value.keep, seed] }));
       if (!netz) return;
 
-      if (tippRechnetRef.current) return;
+      // Der Merker wird SOFORT gesetzt, nicht erst vom Effekt nach dem
+      // Zeichnen: Zwei Tipps im selben Bild sähen sonst beide ein freies Netz.
+      tippRechnetRef.current = true;
       setTippRechnet(true);
       setModellFehler(null);
       try {
