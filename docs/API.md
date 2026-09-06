@@ -855,10 +855,13 @@ Chats werden still verworfen. `read` setzt den Lesestand nur vorwärts – ein
 
 ### Zustellung
 
-Ereignisse gehen an alle Verbindungen der betroffenen Benutzer. Bei genau einem
-API-Prozess bleibt das im Speicher (`REALTIME_BUS=memory`, der Standard); laufen
-mehrere Instanzen, verteilt Postgres `LISTEN/NOTIFY` sie zwischen ihnen
-(`REALTIME_BUS=postgres`). Die Nutzlast von `NOTIFY` ist begrenzt: Ist ein
+Ereignisse gehen an alle Verbindungen der betroffenen Benutzer. Laufen mehrere
+API-Instanzen, verteilt Postgres `LISTEN/NOTIFY` sie zwischen ihnen
+(`REALTIME_BUS=postgres`, der Standard im Code). Bei genau **einem** Prozess ist
+`memory` die robustere Wahl – so setzt es die mitgelieferte
+`docker-compose.yml`: Der Datenbank-Bus schickt sonst jedes Ereignis über
+Postgres, auch wenn Sender und Empfänger derselbe Prozess sind, und ein
+ausgefallener LISTEN-Kanal legt die Echtzeit still. Die Nutzlast von `NOTIFY` ist begrenzt: Ist ein
 Ereignis zu groß, kommt statt der Daten ein `sync.hint` – der Client lädt dann
 per REST nach.
 

@@ -40,10 +40,11 @@ PWA  ──REST /api/v1──▶  Axum (Rust)  ──SQL──▶  Postgres (im 
   und beim Nachladen älterer Nachrichten benutzt.
 - **Medien** liefert die API selbst aus (`STORAGE_DRIVER=local`). Mit S3/R2
   laufen sie an ihr vorbei – presigned PUT und GET direkt beim Speicher.
-- **Der Realtime-Bus** ist bei genau einem API-Prozess `memory`. `postgres`
-  (LISTEN/NOTIFY) erst, wenn zwei Instanzen nebeneinander laufen: Der
-  Datenbank-Bus schickt jedes Ereignis über Postgres, auch wenn Sender und
-  Empfänger derselbe Prozess sind – fällt der Kanal aus, steht die Echtzeit.
+- **Der Realtime-Bus** steht im Code auf `postgres` (LISTEN/NOTIFY), die
+  mitgelieferte `docker-compose.yml` setzt ihn auf `memory`. Bei genau einem
+  API-Prozess ist das die robustere Wahl: Der Datenbank-Bus schickt sonst
+  jedes Ereignis über Postgres, auch wenn Sender und Empfänger derselbe
+  Prozess sind – fällt der Kanal aus, steht die Echtzeit.
 
 ## Erweiterungspunkte
 
