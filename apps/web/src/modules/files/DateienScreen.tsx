@@ -21,6 +21,7 @@ import { CollectionSheet } from './CollectionSheet.js';
 import { UploadToCollectionSheet } from './UploadToCollectionSheet.js';
 import { FileViewer } from './FileViewer.js';
 import { ShareSheet } from './ShareSheet.js';
+import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 import { pfadZu, useFiles } from './state.js';
 
 const ART_TEXT: Record<AttachmentKind, string> = {
@@ -46,6 +47,8 @@ export function DateienScreen() {
   const collections = useFiles((state) => state.collections);
   const status = useFiles((state) => state.status);
   const fehler = useFiles((state) => state.error);
+  const [loeschFrage, setLoeschFrage] = useState(false);
+  const [loeschtGerade, setLoeschtGerade] = useState(false);
   const alleItems = useFiles((state) => state.items);
   const geladen = useFiles((state) => state.loaded);
   const load = useFiles((state) => state.load);
@@ -142,15 +145,26 @@ export function DateienScreen() {
   const darfAendern = aktuell ? allowsLevel(aktuell.myLevel, 'edit') : true;
   const darfBesitzen = aktuell ? allowsLevel(aktuell.myLevel, 'own') : false;
 
+  /**
+   * Eine Sammlung löschen – mit Rückfrage und gegen Doppeltippen gesperrt.
+   *
+   * Vorher lag das auf einem einzigen Tipp, unmittelbar neben „Bearbeiten“,
+   * und es gibt kein Rückgängig. Überall sonst in dieser App steht vor dem
+   * Löschen ein zweiter Schritt; hier fehlte er als einziger.
+   */
   async function loeschen() {
-    if (!aktuell) return;
+    if (!aktuell || loeschtGerade) return;
+    setLoeschtGerade(true);
     try {
       await api.collections.remove(aktuell.id);
       useFiles.getState().forget(aktuell.id);
+      setLoeschFrage(false);
       toast('Sammlung gelöscht. Die Dateien selbst bleiben im Chat.');
       navigate(aktuell.parentId ? `/dateien/${aktuell.parentId}` : '/dateien');
     } catch (error) {
-      toast(error instanceof Error ? error.message : 'Löschen fehlgeschlagen');
+      toast(error instanceof Error ? error.message : 'Löschen fehlgeschlagen', 'error');
+    } finally {
+      setLoeschtGerade(false);
     }
   }
 
@@ -232,7 +246,8 @@ export function DateienScreen() {
               <button
                 type="button"
                 className="btn btn-sm btn-danger"
-                onClick={() => void loeschen()}
+                onClick={() => setLoeschFrage(true)}
+                data-tipp="Diese Sammlung entfernen – die Dateien bleiben im Chat"
               >
                 Löschen
               </button>
@@ -246,7 +261,13 @@ export function DateienScreen() {
         </div>
       )}
 
-      {fehler && status === 'error' && (
+      {/*
+        Früher stand hier zusätzlich `status === 'error'`. Damit blieb ein
+        gescheitertes Laden des ORDNERINHALTS stumm: `loadItems` setzt nur
+        `error`, nicht `status`. Sichtbar war das als Ladeanzeige, die sich
+        endlos dreht und nie sagt, was los ist.
+      */}
+      {fehler && (
         <p className="fil-hint fil-hint-warn" role="status">
           {fehler}
         </p>
@@ -293,7 +314,7 @@ export function DateienScreen() {
             </ul>
           )}
 
-          {collectionId && !inhaltGeladen && <Spinner label="Inhalt wird geladen …" />}
+          {collectionId && !inhaltGeladen && !fehler && <Spinner label="Inhalt wird geladen …" />}
 
           {items.length > 1 && filter.steuerung}
 
@@ -346,6 +367,19 @@ export function DateienScreen() {
       )}
       {aktuell && teilen && (
         <ShareSheet open={teilen} onClose={() => setTeilen(false)} collection={aktuell} />
+      )}
+
+      {aktuell && (
+        <ConfirmDialog
+          open={loeschFrage}
+          title={`„${aktuell.name}“ löschen?`}
+          description="Der Ordner samt seiner Einträge verschwindet. Die Dateien selbst bleiben im Chat, in dem sie geschickt wurden – und lassen sich von dort wieder ablegen."
+          confirmLabel="Löschen"
+          danger
+          busy={loeschtGerade}
+          onCancel={() => setLoeschFrage(false)}
+          onConfirm={() => void loeschen()}
+        />
       )}
       {betrachterIndex >= 0 && (
         <FileViewer

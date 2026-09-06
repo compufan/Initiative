@@ -49,8 +49,21 @@ export function useLongPress(onTrigger: () => void, delay = 450): LongPressHandl
        */
       const ziel = event.target as Node | null;
       if (ziel && !event.currentTarget.contains(ziel)) return;
-      origin.current = { x: event.clientX, y: event.clientY };
+      /*
+       * Erst aufräumen, DANN den Anfangspunkt merken.
+       *
+       * Andersherum stand es hier eine Zeit lang, und es machte die
+       * Bewegungsprüfung unten wirkungslos: `clear()` setzt `origin` auf
+       * null, also fand `onPointerMove` nie einen Anfangspunkt und stieg
+       * jedes Mal sofort aus. Man konnte den Finger quer über den Bildschirm
+       * ziehen, und nach 450 ms sprang trotzdem das Menü auf – während des
+       * Scrollens, mitten im Wischen.
+       *
+       * Der Fehler ist die unangenehme Sorte: Er macht nichts kaputt, was
+       * auffällt, er lässt nur eine Schutzmassnahme still ausfallen.
+       */
       clear();
+      origin.current = { x: event.clientX, y: event.clientY };
       timer.current = window.setTimeout(() => {
         timer.current = null;
         onTrigger();

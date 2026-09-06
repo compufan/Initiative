@@ -61,9 +61,29 @@ export function GameSetup({
     else if (!chatId && chats[0]) setChatId(chats[0].id);
   }, [conversationId, chats, chatId]);
 
+  /*
+   * `gameKey` ist eine VORauswahl, kein Zwang.
+   *
+   * Vorher stand hier schlicht `if (gameKey) setSelectedGame(gameKey)` mit
+   * `selectedGame` im Abhängigkeitsfeld. Damit waren die Kacheln tot: Ein
+   * Tipp auf „Vier gewinnt“ setzte die Auswahl, das liess den Effekt erneut
+   * laufen, und der stellte sofort wieder auf `gameKey` zurück. Sichtbar war
+   * nur, dass sich beim Antippen nichts rührt.
+   *
+   * Derselbe Merker-Kniff wie bei `pickedFor` weiter unten: Der Vorschlag
+   * greift einmal je Wert und lässt danach los.
+   */
+  const vorgabeGesetzt = useRef<string | null>(null);
   useEffect(() => {
-    if (gameKey) setSelectedGame(gameKey);
-    else if (!selectedGame && games[0]) setSelectedGame(games[0].key);
+    if (gameKey) {
+      if (vorgabeGesetzt.current !== gameKey) {
+        vorgabeGesetzt.current = gameKey;
+        setSelectedGame(gameKey);
+      }
+      return;
+    }
+    vorgabeGesetzt.current = null;
+    if (!selectedGame && games[0]) setSelectedGame(games[0].key);
   }, [gameKey, games, selectedGame]);
 
   const chat = chats.find((item) => item.id === chatId) ?? null;

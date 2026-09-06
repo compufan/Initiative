@@ -28,7 +28,19 @@ interface FotoWerkstattProps {
  * nicht zweimal, einmal im Chat und einmal in den Sammlungen.
  */
 export function FotoWerkstatt({ foto, ablegen, zielName, onOffen }: FotoWerkstattProps) {
-  const [daten, setDaten] = useState<Blob | null>(null);
+  /*
+   * Die Bytes MIT ihrer Anhangkennung merken.
+   *
+   * Vorher lag hier nur der Blob. In der Lightbox wechselt `foto` beim
+   * Wischen, der gemerkte Blob aber nicht – wer Bild A bearbeitete, zu B
+   * wischte und wieder auf den Stift tippte, bekam A in den Editor und
+   * speicherte es über B. Nichts daran sah falsch aus, bis das Ergebnis im
+   * Chat stand.
+   *
+   * Mit der Kennung daneben kann der Zwischenspeicher gar nicht mehr zum
+   * falschen Bild gehören: Er gilt oder er gilt nicht.
+   */
+  const [daten, setDaten] = useState<{ id: string; blob: Blob } | null>(null);
   const [modus, setModus] = useState<'aus' | 'bearbeiten' | 'sticker'>('aus');
   const [laedt, setLaedt] = useState(false);
 
@@ -37,9 +49,9 @@ export function FotoWerkstatt({ foto, ablegen, zielName, onOffen }: FotoWerkstat
     setLaedt(true);
     try {
       // Einmal holen reicht: Wer erst bearbeitet und danach einen Sticker will,
-      // laedt das Bild nicht zweimal herunter.
-      const blob = daten ?? (await mediaBytes(foto));
-      setDaten(blob);
+      // laedt DASSELBE Bild nicht zweimal herunter.
+      const blob = daten?.id === foto.id ? daten.blob : await mediaBytes(foto);
+      setDaten({ id: foto.id, blob });
       setModus(ziel);
       onOffen?.(true);
     } catch (error) {
@@ -79,7 +91,7 @@ export function FotoWerkstatt({ foto, ablegen, zielName, onOffen }: FotoWerkstat
 
       {modus === 'bearbeiten' && daten && (
         <BildEditor
-          quelle={daten}
+          quelle={daten.blob}
           name={foto.fileName}
           onClose={schliessen}
           onFertig={ablegen}
@@ -87,7 +99,7 @@ export function FotoWerkstatt({ foto, ablegen, zielName, onOffen }: FotoWerkstat
         />
       )}
       {modus === 'sticker' && daten && (
-        <StickerStudio startBild={daten} onClose={schliessen} onSaved={schliessen} />
+        <StickerStudio startBild={daten.blob} onClose={schliessen} onSaved={schliessen} />
       )}
     </>
   );

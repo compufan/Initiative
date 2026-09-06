@@ -186,6 +186,15 @@ interface BildEditorProps {
    */
   onFertig?: (blob: Blob, name: string) => Promise<void> | void;
   zielName?: string;
+  /**
+   * Ein Seitenverhältnis, auf das der Zuschnitt sofort einrastet.
+   *
+   * Für Fälle, in denen das Ziel die Form vorgibt – ein Profilbild ist rund
+   * und wird quadratisch gebraucht. Ohne das müsste jeder selbst auf 1:1
+   * tippen, und wer es vergisst, bekommt ein Bild, das die App hinterher
+   * mittig beschneidet, ohne zu fragen.
+   */
+  startVerhaeltnis?: number;
 }
 
 /** `foto.jpg` → `foto-bearbeitet.webp`. Das Original behält seinen Namen. */
@@ -202,7 +211,14 @@ function bearbeiteterName(name: string | null | undefined, endung: string): stri
  * entweder dort landet, wo das Original liegt (Chat oder Sammlung), oder auf
  * dem Telefon – oder beides.
  */
-export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEditorProps) {
+export function BildEditor({
+  quelle,
+  name,
+  onClose,
+  onFertig,
+  zielName,
+  startVerhaeltnis,
+}: BildEditorProps) {
   useHideNav(true);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -216,7 +232,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
    * zog, hatte es wieder verloren. „Auf 16:9 zuschneiden“ war damit kein
    * Modus, sondern eine einmalige Zurechtrückung.
    */
-  const [verhaeltnis, setVerhaeltnis] = useState<number | null>(null);
+  const [verhaeltnis, setVerhaeltnis] = useState<number | null>(startVerhaeltnis ?? null);
   /** Was der Pinsel tut: malen, verpixeln oder verwischen. */
   const [malart, setMalart] = useState<'farbe' | 'pixel' | 'weich'>('farbe');
   const malartRef = useRef(malart);
@@ -453,7 +469,17 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
       .then((geladen) => {
         if (weg) return;
         setBild(geladen);
-        setDoc(neuesDoc(geladen.naturalWidth, geladen.naturalHeight));
+        const frisch = neuesDoc(geladen.naturalWidth, geladen.naturalHeight);
+        if (startVerhaeltnis) {
+          verhaeltnisRef.current = startVerhaeltnis;
+          frisch.zuschnitt = aufVerhaeltnis(
+            frisch.zuschnitt,
+            startVerhaeltnis,
+            geladen.naturalWidth,
+            geladen.naturalHeight,
+          );
+        }
+        setDoc(frisch);
       })
       .catch((error: unknown) => {
         if (weg) return;
@@ -466,6 +492,10 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     return () => {
       weg = true;
     };
+    // `startVerhaeltnis` gehört bewusst nicht in die Abhängigkeiten: Es gibt
+    // die ANFANGSform vor. Stünde es hier, würde ein Wechsel das Bild neu
+    // laden und jede Bearbeitung wegwerfen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quelle, onClose]);
 
   /** Merkt den Stand für „Rückgängig“. */

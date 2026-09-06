@@ -3,6 +3,7 @@ import { LIMITS, formatBytes, formatDuration } from '@initiative/shared';
 import { Sheet } from '../../components/Sheet.js';
 import { EmptyState, Spinner } from '../../components/Feedback.js';
 import { prepareImage, videoPreview } from '../../lib/upload.js';
+import { BildBearbeiten } from '../bild/BildBearbeiten.js';
 import type { ComposerActionProps } from '../types.js';
 import { toast } from '../../state/ui.js';
 import {
@@ -119,6 +120,36 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
     });
   };
 
+  /**
+   * Tauscht ein ausgewähltes Bild gegen seine bearbeitete Fassung.
+   *
+   * Die alte Vorschau-Adresse wird freigegeben – sonst hielte jede Bearbeitung
+   * das ursprüngliche Bild bis zum Neuladen der Seite im Speicher fest.
+   */
+  const ersetzen = async (id: string, fertig: Blob, fertigName: string) => {
+    const prepared = await prepareImage(
+      new File([fertig], fertigName, { type: fertig.type || 'image/webp' }),
+    );
+    setItems((alt) =>
+      alt.map((eintrag) => {
+        if (eintrag.id !== id) return eintrag;
+        URL.revokeObjectURL(eintrag.url);
+        return {
+          ...eintrag,
+          blob: prepared.blob,
+          mime: prepared.mime,
+          fileName: fertigName,
+          url: URL.createObjectURL(prepared.blob),
+          width: prepared.width,
+          height: prepared.height,
+          previewDataUrl: prepared.previewDataUrl,
+          size: prepared.blob.size,
+        };
+      }),
+    );
+    toast('Bearbeitete Fassung übernommen.', 'success');
+  };
+
   const send = async () => {
     if (items.length === 0 || sending) return;
     setSending(true);
@@ -218,11 +249,23 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
                     </span>
                   </>
                 )}
+                {item.kind === 'image' && (
+                  <span className="media-tile-edit">
+                    <BildBearbeiten
+                      blob={item.blob}
+                      name={item.fileName}
+                      className="media-tile-knopf"
+                      tipp="Zuschneiden, geraderichten, Licht und Farbe – vor dem Senden"
+                      onFertig={(fertig, fertigName) => ersetzen(item.id, fertig, fertigName)}
+                    />
+                  </span>
+                )}
                 <button
                   type="button"
                   className="media-tile-remove"
                   onClick={() => remove(item.id)}
                   aria-label={`${item.fileName} entfernen`}
+                  data-tipp="Diese Datei aus der Auswahl nehmen"
                 >
                   <span className="media-tile-x" aria-hidden="true">
                     ✕
