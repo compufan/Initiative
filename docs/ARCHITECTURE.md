@@ -1,17 +1,24 @@
 # Architektur
 
 Initiative ist **keine Messenger-App, sondern eine Plattform** – der Messenger ist
-nur das erste Modul. Alles ist so geschnitten, dass ein neues Feature (Mini-Spiel,
-Aufgabenliste, Kasse, …) hinzugefügt wird, ohne den Kern anzufassen.
+nur das erste Modul. Alles ist so geschnitten, dass ein neues Feature hinzugefügt
+wird, ohne den Kern anzufassen – Dateien, Ausgaben und der Fotoeditor sind genau
+so entstanden.
 
 ```
 Initiative/
 ├── apps/
-│   ├── api/          Rust-Backend (Axum + sqlx) – Fly.io, Koyeb, Docker, eigener Server
-│   └── web/          React-PWA (Vite) – Vercel, Cloudflare Pages, eigener Server
-└── packages/
-    └── shared/       TypeScript-Contracts für die PWA (Typen, Zod-Schemas, Protokoll)
+│   ├── api/          Rust-Backend (Axum + sqlx) – eine Binary im Container
+│   └── web/          React-PWA (Vite) – statisch, von Caddy ausgeliefert
+├── packages/
+│   └── shared/       TypeScript-Contracts für die PWA (Typen, Zod-Schemas, Protokoll)
+└── deploy/vps/       der Stapel, wie er auf dem eigenen Server läuft
 ```
+
+Betrieben wird das als **ein** Docker-Compose-Stapel auf einem Server: Postgres,
+API und PWA hinter einem Caddy, Dateien im Volume daneben. Getrennt betreiben
+geht weiterhin, ist aber nicht mehr der empfohlene Weg –
+[UMZUG.md](UMZUG.md) beschreibt den, der läuft.
 
 Das Backend ist die **einzige Quelle der Wahrheit** für den API-Vertrag.
 `packages/shared` spiegelt diesen Vertrag für die PWA: dieselben Feldnamen
@@ -21,17 +28,22 @@ Endpunkt ändert, ändert beides.
 ## Datenfluss
 
 ```
-PWA  ──REST /api/v1──▶  Axum (Rust)  ──SQL──▶  Postgres (Neon / Supabase / eigener)
+PWA  ──REST /api/v1──▶  Axum (Rust)  ──SQL──▶  Postgres (im Compose-Stapel)
  ▲                          │
- └──── WebSocket /ws ───────┘   Broadcast über Postgres LISTEN/NOTIFY
-                                Medien: presigned PUT/GET direkt auf R2/S3
+ └──── WebSocket /ws ───────┘   Broadcast im Prozess oder über LISTEN/NOTIFY
+                                Medien: lokale Platte, wahlweise S3/R2
                                 Push: Web Push (VAPID) an Android & iOS 16.4+
 ```
 
 - **Schreiben** geht immer über REST (idempotent per `clientId`).
 - **Lesen im Betrieb** kommt über den WebSocket; REST wird nur beim Kaltstart
   und beim Nachladen älterer Nachrichten benutzt.
-- **Medien** laufen nie durch den API-Container, wenn R2/S3 konfiguriert ist.
+- **Medien** liefert die API selbst aus (`STORAGE_DRIVER=local`). Mit S3/R2
+  laufen sie an ihr vorbei – presigned PUT und GET direkt beim Speicher.
+- **Der Realtime-Bus** ist bei genau einem API-Prozess `memory`. `postgres`
+  (LISTEN/NOTIFY) erst, wenn zwei Instanzen nebeneinander laufen: Der
+  Datenbank-Bus schickt jedes Ereignis über Postgres, auch wenn Sender und
+  Empfänger derselbe Prozess sind – fällt der Kanal aus, steht die Echtzeit.
 
 ## Erweiterungspunkte
 
@@ -62,7 +74,8 @@ async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<V
 ```
 
 Danach eine Zeile in `modules/mod.rs`: `.merge(tasks::router())`.
-`AppState` enthält `pool`, `storage`, `hub` (Realtime), `push` und `config`.
+`AppState` enthält `pool`, `storage`, `hub` und `bus` (Realtime), `push`,
+`drossel` (Ratenbegrenzung) und `config`.
 Neue Tabellen kommen als nummerierte Datei nach `apps/api/migrations/` und
 werden beim Start automatisch angewendet (sie sind in die Binary eingebettet).
 
@@ -81,10 +94,20 @@ export default defineWebModule({
 
 ## Datenmodell (Kurzfassung)
 
-`users` · `refresh_tokens` · `push_subscriptions` · `conversations` ·
-`conversation_members` · `messages` · `attachments` · `reactions` ·
-`sticker_packs` · `stickers` · `sticker_pack_installs` · `polls` · `poll_options` ·
-`poll_votes` · `calendar_events` · `event_attendees` · `game_sessions`
+38 Tabellen, gruppiert nach dem, wozu sie gehören:
+
+| Bereich          | Tabellen                                                                                                                   |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Konto            | `users` · `refresh_tokens` · `passkeys` · `webauthn_states` · `invite_codes` · `invite_redemptions` · `push_subscriptions` |
+| Chats            | `conversations` · `conversation_members` · `messages` · `message_hidden` · `attachments` · `reactions`                     |
+| Sticker          | `sticker_packs` · `stickers` · `sticker_pack_installs`                                                                     |
+| Umfragen         | `polls` · `poll_options` · `poll_votes` · `poll_placements`                                                                |
+| Kalender         | `calendar_events` · `event_attendees` · `event_attachments`                                                                |
+| Notizen & Listen | `event_notes` · `event_note_items` · `event_note_checks` · `event_note_editors` · `event_note_item_assignees`              |
+| Dateien          | `collections` · `collection_items` · `collection_grants`                                                                   |
+| Ausgaben         | `expenses` · `expense_shares` · `expense_viewers` · `expense_hidden_from` · `payment_profiles`                             |
+| Spiele           | `game_sessions`                                                                                                            |
+| Speicher         | `storage_muell` – gelöschte Anhänge, deren Bytes noch wegzuräumen sind                                                     |
 
 Alle IDs sind **UUID v7** (zeitlich sortierbar) – dadurch funktioniert
 Keyset-Pagination (`where id < cursor`) und `id > last_read_message_id` als
@@ -98,10 +121,10 @@ Ein Envelope für beide Richtungen:
 { "v": 1, "type": "message.new", "ts": "2026-08-24T10:00:00.000Z", "payload": {} }
 ```
 
-Server → Client: `hello`, `message.new|updated|deleted|reactions`,
+Server → Client: `hello`, `pong`, `message.new|updated|deleted|reactions`,
 `conversation.updated|removed`, `read.updated`, `typing`, `presence`,
-`poll.updated`, `event.updated|deleted`, `game.updated`, `user.updated`,
-`sync.hint`, `error`.
+`poll.updated`, `event.updated|deleted`, `game.updated`,
+`expense.updated|deleted|settled`, `user.updated`, `sync.hint`, `error`.
 Client → Server: `ping`, `typing`, `read`, `subscribe`.
 
 Unbekannte Event-Typen werden ignoriert – ein neuer Server bricht keinen alten
@@ -133,19 +156,41 @@ sind unveränderlich).
   `alg: none` und Verfahrenswechsel sind damit ausgeschlossen), 15 Minuten.
   Refresh-Token: 48 zufällige Bytes, nur als SHA-256-Hash gespeichert, wird bei
   jedem Refresh rotiert und dabei entwertet.
-- Jede Route prüft die Chat-Mitgliedschaft (`assertMembership`).
-- Medien-URLs sind kurzlebige signierte R2/S3-Links. Ohne S3 liefert die API
-  selbst aus – die Anhang-ID ist eine UUID v7 mit 74 Zufallsbits und wirkt als
-  Capability-URL, damit `<img>` und der Service-Worker-Cache ohne Header
-  funktionieren.
+- Jede Route prüft die Chat-Mitgliedschaft (`assert_membership`).
+- Medien-URLs sind **Zugriffsschlüssel**, keine geschützten Adressen: Die
+  Anhang-ID ist eine UUID v7 mit 74 Zufallsbits, und wer die URL hat, bekommt
+  die Datei – ohne Anmeldung. Das ist Absicht, sonst könnten weder `<img>` noch
+  der Service-Worker-Cache sie laden. Was die Auslieferung stattdessen tut:
+  `X-Robots-Tag: noindex, nofollow, noarchive, noimageindex`, damit ein
+  versehentlich veröffentlichter Link wenigstens nicht auffindbar wird,
+  `X-Content-Type-Options: nosniff` und eine CSP mit `sandbox` – falls ein
+  Browser die Antwort doch als Dokument darstellt, läuft darin kein Skript.
+  Mit S3/R2 sind es stattdessen kurzlebige signierte Links.
+- **Dateien im Speicher können verschlüsselt liegen** (`MEDIA_KEY`): Der
+  `Tresor` schiebt sich vor den eigentlichen Speicher, alles Neue geht
+  verschlüsselt hinein. Ohne Schlüssel bleibt alles wie bisher – das
+  Einschalten ist eine Zeile in der Umgebung, kein Umbau.
+- **Gelöschtes verschwindet auch wirklich.** Ein Auslöser in der Datenbank
+  trägt jeden gelöschten Anhang in `storage_muell` ein, ein Hintergrunddienst
+  löscht die Bytes. Der Weg über die Datenbank statt über den Anwendungscode
+  ist der einzige, der auch `on delete cascade` mitbekommt.
+- **Metadaten verlassen das Gerät nicht**: Fotos werden vor dem Hochladen neu
+  gezeichnet (EXIF fällt dabei weg), bei Videos werden die Metadaten-Boxen im
+  MP4 an Ort und Stelle überschrieben – Länge unverändert, weil `stco`
+  absolute Dateipositionen enthält.
 - Web Push ist nach RFC 8291 (aes128gcm) direkt implementiert; die
   Verschlüsselung ist mit einem Round-Trip-Test abgesichert.
+- Ratenbegrenzung sitzt in `drossel.rs` – vor Anmeldung (je Konto und je
+  Adresse), Registrierung, Token-Erneuerung, Passkeys, Passwortwechsel,
+  Personensuche und dem Verwaltungsbereich.
 
 ## Tests
 
 ```bash
 cargo test --manifest-path apps/api/Cargo.toml            # Unit-Tests
 TEST_DATABASE_URL=postgres://… cargo test --test e2e      # kompletter API-Durchlauf
+pnpm -r test                                              # Vitest
+pnpm --filter @initiative/web e2e                         # Playwright im Browser
 ```
 
 Der End-to-End-Test fährt den gesamten Router gegen eine echte Postgres-Datenbank
@@ -153,3 +198,11 @@ Der End-to-End-Test fährt den gesamten Router gegen eine echte Postgres-Datenba
 Ungelesen-Zähler, Reaktionen, Berechtigungen, Medien-Upload inklusive
 Range-Requests, Sticker, Umfragen, Terminfindung → Termin, ICS-Feed und eine
 komplette Partie Tic Tac Toe.
+
+Daneben liegen in `apps/api/tests/` weitere Durchläufe, die jeweils eine Zusage
+prüfen, die man sonst nur glauben müsste: `loeschen.rs` und
+`betroffenenrechte.rs` (Konto weg heißt Daten weg), `muell.rs` (die Bytes
+gelöschter Anhänge verschwinden auch bei einem Fehlschlag nicht aus der
+Warteschlange), `tresor.rs` (verschlüsselt abgelegt, unverschlüsselt gelesen),
+`medien_auslieferung.rs`, `bremse.rs`, `abrechnen.rs`, `listen.rs` und
+`migrationen.rs`.
