@@ -28,7 +28,16 @@ export function CreateEventSheet({ poll, onClose, onCreated }: CreateEventSheetP
    * denselben Riegel schon vor.
    */
   const best = bestOption(poll.options, poll.tally);
+  /*
+   * Drei Lagen, nicht zwei.
+   *
+   * „Noch keine Antworten" stimmt nur, solange auch niemand geantwortet hat.
+   * Haben alle geantwortet und alle abgesagt, ist `voterCount` grösser null
+   * und die Punktzahl trotzdem null – dann behauptete der Satz Schweigen, wo
+   * eine klare Absage steht.
+   */
   const hatStimmen = Boolean(best && poll.voterCount > 0 && (poll.tally[best.id]?.score ?? 0) > 0);
+  const niemandGefragt = poll.voterCount === 0;
   const [optionId, setOptionId] = useState(best?.id ?? poll.options[0]?.id ?? '');
   const [title, setTitle] = useState(poll.question);
   const [location, setLocation] = useState('');
@@ -93,7 +102,9 @@ export function CreateEventSheet({ poll, onClose, onCreated }: CreateEventSheetP
           <span className="poll-hint">
             {hatStimmen
               ? 'Der Vorschlag mit den meisten Zusagen.'
-              : 'Noch keine Antworten – vorausgewählt ist der früheste Vorschlag.'}
+              : niemandGefragt
+                ? 'Noch keine Antworten – vorausgewählt ist der früheste Vorschlag.'
+                : 'Bisher hat niemand zugesagt – vorausgewählt ist der früheste Vorschlag.'}
           </span>
         )}
       </div>

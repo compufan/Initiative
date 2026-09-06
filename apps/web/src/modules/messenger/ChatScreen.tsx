@@ -63,6 +63,10 @@ export function ChatScreen() {
   const myId = useMyId();
   const params = useParams();
   const conversationId = params.conversationId ?? '';
+  // Welcher Chat gerade offen ist – für laufende asynchrone Arbeit, die den
+  // Wechsel überleben würde (siehe `jumpTo`).
+  const aktuellerChat = useRef(conversationId);
+  aktuellerChat.current = conversationId;
   const keyboardInset = useKeyboardInset();
 
   const conversation = useChat(
@@ -231,37 +235,96 @@ export function ChatScreen() {
    * lädt die Schleife den ganzen Chat und findet trotzdem nichts.
    */
   async function jumpTo(messageId: string) {
+    // Der Chat, für den dieser Sprung gilt. Wechselt der Anwender währenddessen
+    // den Chat, hört die Schleife auf – sonst lüde sie Seite um Seite eines
+    // Verlaufs nach, den niemand mehr ansieht.
+    const zielChat = conversationId;
     const selector =
       typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
         ? `[data-message-id="${CSS.escape(messageId)}"]`
         : `[data-message-id="${messageId}"]`;
 
     const suchen = () => scrollRef.current?.querySelector(selector) ?? null;
-    const geladen = () =>
-      (useChat.getState().messages[conversationId] ?? []).some((item) => item.id === messageId);
+    const liste = () => useChat.getState().messages[zielChat] ?? [];
+    const geladen = () => liste().some((item) => item.id === messageId);
+    const aelteste = () => liste().find((item) => !item.pending)?.id ?? null;
+    const bild = () => new Promise<void>((weiter) => requestAnimationFrame(() => weiter()));
+    const warten = (ms: number) => new Promise<void>((weiter) => window.setTimeout(weiter, ms));
 
-    const bild = () => new Promise((weiter) => requestAnimationFrame(() => weiter(null)));
+    let grund: 'gefunden' | 'nicht-im-verlauf' | 'aufgegeben' = 'aufgegeben';
+    let ladeversuche = 0;
+    let wartezeit = 0;
 
-    for (let versuch = 0; versuch < 20 && !suchen() && !geladen(); versuch += 1) {
+    while (ladeversuche < 20) {
+      if (suchen() || geladen()) {
+        grund = 'gefunden';
+        break;
+      }
+      if (aktuellerChat.current !== zielChat) return;
+
       const zustand = useChat.getState();
-      if (!(zustand.hasMore[conversationId] ?? false)) break;
-      const vorher = (zustand.messages[conversationId] ?? []).length;
-      await zustand.loadOlder(conversationId);
+
       /*
-       * `loadOlder` kehrt sofort zurück, wenn schon ein Laden läuft – das
-       * Scrollen weiter oben stösst nämlich dasselbe an. Ohne diese Pause
-       * liefe die Schleife dann zwanzig Mal ins Leere und meldete am Ende
-       * „nicht mehr da“, während die Nachricht gerade unterwegs ist.
+       * Die Kennungen sind zeitlich sortiert (UUIDv7).
+       *
+       * Liegt das Ziel NICHT vor der ältesten geladenen Nachricht, kann
+       * Nachladen es nicht herbeischaffen – es müsste dann schon in der Liste
+       * stehen. Ohne diesen Vergleich lief die Schleife zwanzig Seiten weit,
+       * also über tausend Nachrichten, für ein Ziel, das dort nie auftauchen
+       * kann. (Dieser Vergleich stand vorher nur im Kommentar.)
        */
-      if ((useChat.getState().messages[conversationId] ?? []).length === vorher) await bild();
+      const rand = aelteste();
+      if (rand && messageId >= rand) {
+        grund = 'nicht-im-verlauf';
+        break;
+      }
+      if (!(zustand.hasMore[zielChat] ?? false)) {
+        grund = 'nicht-im-verlauf';
+        break;
+      }
+
+      /*
+       * Läuft schon ein Ladevorgang – das Scrollen stösst denselben an –,
+       * kehrt `loadOlder` sofort und wirkungslos zurück. Dann wird gewartet,
+       * ohne einen Versuch zu verbrauchen: höchstens fünf Sekunden, damit ein
+       * hängender Server die Schleife nicht festhält.
+       */
+      if (zustand.loading[zielChat]) {
+        if (wartezeit >= 5000) break;
+        wartezeit += 100;
+        await warten(100);
+        continue;
+      }
+
+      const vorher = liste().length;
+      ladeversuche += 1;
+      await zustand.loadOlder(zielChat);
+      // Nichts dazugekommen und auch nichts unterwegs: Der Aufruf ist
+      // gescheitert (`loadOlder` verschluckt seinen Fehler). Weitere Versuche
+      // würden nur dasselbe tun.
+      if (liste().length === vorher && !useChat.getState().loading[zielChat]) break;
     }
 
+    if (aktuellerChat.current !== zielChat) return;
     // Nach dem Nachladen braucht React ein Bild, bevor die Zeile im DOM steht.
     if (!suchen()) await bild();
 
     const target = suchen();
     if (!target) {
-      toast('Die Nachricht ist nicht mehr da', 'info');
+      /*
+       * Drei Ausgänge, drei Auskünfte.
+       *
+       * Vorher hiess jeder Fehlschlag „Die Nachricht ist nicht mehr da“ – auch
+       * dann, wenn nur das Netz weg war. Das ist die schlechteste der drei
+       * Auskünfte: Sie klingt endgültig und stimmt genau dann nicht, wenn ein
+       * zweiter Versuch geholfen hätte.
+       */
+      toast(
+        grund === 'nicht-im-verlauf'
+          ? 'Die Nachricht ist nicht mehr da'
+          : 'Der Verlauf liess sich gerade nicht weit genug laden. Versuch es noch einmal.',
+        'info',
+      );
       return;
     }
     target.scrollIntoView({ block: 'center', behavior: 'smooth' });

@@ -56,6 +56,11 @@ export function AboutCard() {
       // keine Service-Worker-Anmeldung gab und niemand irgendwo nachgesehen
       // hatte.
       if (stand === 'aktuell') toast('Du hast schon den neuesten Stand', 'success');
+      // „Gefunden, aber noch nicht fertig geladen" ist ein eigener Fall: Als
+      // Erfolg gemeldet, widerspräche er dem Band, das kurz darauf erscheint.
+      if (stand === 'laedt') {
+        toast('Eine neue Fassung wird gerade geladen – gleich meldet sie sich oben.', 'info');
+      }
       if (stand === 'unmoeglich') {
         toast('Konnte nicht nachsehen – lade die Seite neu und versuch es dann.', 'error');
       }

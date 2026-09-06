@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type MouseEvent,
-} from 'react';
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
 import { formatDuration } from '@initiative/shared';
 import type { MessageRendererProps } from '../types.js';
 import { MediaCaption, PendingMedia, surfaceClass } from './MediaFrame.js';
@@ -96,8 +89,7 @@ export function AudioBubble({ message, isMine }: MessageRendererProps) {
   };
 
   const tasten = (event: KeyboardEvent<HTMLButtonElement>) => {
-    const schritt =
-      event.key === 'ArrowRight' ? 5 : event.key === 'ArrowLeft' ? -5 : null;
+    const schritt = event.key === 'ArrowRight' ? 5 : event.key === 'ArrowLeft' ? -5 : null;
     if (schritt == null) return;
     event.preventDefault();
     springen(position + schritt);
@@ -128,8 +120,17 @@ export function AudioBubble({ message, isMine }: MessageRendererProps) {
           className="media-wave"
           onClick={seekFromEvent}
           onKeyDown={tasten}
+          /*
+              Kein `data-tipp` hier – er könnte nie erscheinen.
+
+              Die Blase liegt in `.msg-col`, und dort greift `useLongPress` mit
+              450 ms; die Tippblase braucht 500 ms. Der lange Druck öffnet also
+              immer zuerst das Aktionsblatt, und die Tippblase legte sich 50 ms
+              später über einen Schleier, hinter dem der Knopf gar nicht mehr
+              liegt. Was zu sagen ist, steht deshalb in der Beschriftung, die
+              Vorlesehilfen ohnehin lesen.
+          */
           aria-label="Position ändern – mit den Pfeiltasten in Fünf-Sekunden-Schritten"
-          data-tipp="Tippe in die Leiste, um zu springen. Pfeiltasten: fünf Sekunden vor oder zurück."
         >
           {peaks.map((peak, index) => (
             <span

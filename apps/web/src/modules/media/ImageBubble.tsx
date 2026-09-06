@@ -112,8 +112,20 @@ export function ImageBubble({ message, isMine }: MessageRendererProps) {
              * Ging es schief, bleibt der Betrachter stehen: Dort steht das
              * Bild noch, mit dem sich der zweite Versuch machen lässt.
              */
+            /*
+             * „Liegt im Chat", nicht „ist angekommen".
+             *
+             * `sendMedia` gibt true zurück, sobald die Nachricht in der Outbox
+             * liegt und ein Sendeversuch angestossen wurde – ohne Netz ist das
+             * genauso wahr wie mit. „Geschickt" wäre dort eine Behauptung über
+             * etwas, das noch niemand bestätigt hat. Was wirklich zählt, steht
+             * an der Blase selbst: Sanduhr, Haken oder Warnzeichen.
+             */
             if (gesendet) {
-              toast('Ins Gespräch geschickt.', 'success');
+              toast(
+                'Liegt im Chat – der Haken an der Blase zeigt, wann es angekommen ist.',
+                'success',
+              );
               setOpenIndex(null);
             }
           }}

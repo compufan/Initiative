@@ -206,7 +206,17 @@ export function MessageBubble({
         <ConfirmDialog
           open
           title="Nachricht verwerfen?"
-          description="Der getippte Text ist danach fort. Sie wurde nie gesendet – niemand sonst hat sie gesehen."
+          /*
+              Was verloren geht, hängt an der Art.
+              „Der getippte Text" stimmt für eine Textnachricht; bei einem Foto,
+              einer Sprachnachricht oder einer Datei gibt es keinen Text, und der
+              Satz beschriebe etwas, das gar nicht auf dem Spiel steht.
+          */
+          description={
+            message.type === 'text'
+              ? 'Der getippte Text ist danach fort. Sie wurde nie gesendet – niemand sonst hat sie gesehen.'
+              : 'Der Anhang wird nicht mehr gesendet und aus dem Verlauf genommen. Niemand sonst hat ihn gesehen.'
+          }
           confirmLabel="Verwerfen"
           cancelLabel="Behalten"
           danger

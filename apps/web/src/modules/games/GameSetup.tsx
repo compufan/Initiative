@@ -59,8 +59,7 @@ export function GameSetup({
   const chats = useMemo(
     () =>
       conversations.filter(
-        (item) =>
-          item.members.length > 1 && (!item.archived || item.id === conversationId),
+        (item) => item.members.length > 1 && (!item.archived || item.id === conversationId),
       ),
     [conversations, conversationId],
   );
@@ -254,7 +253,17 @@ export function GameSetup({
                   ({opponents.length}/{maxOpponents})
                 </span>
               </span>
-              <div className="list game-member-list">
+              {/*
+                  Ein `radio` ohne `radiogroup` ist für eine Vorlesehilfe keine
+                  Wahl, sondern ein loser Knopf: Sie sagt weder „1 von 3" noch,
+                  dass die Auswahl einander ausschliesst. Bei `checkbox` ist die
+                  Gruppe entbehrlich, bei `radio` gehört sie dazu.
+              */}
+              <div
+                className="list game-member-list"
+                role={maxOpponents === 1 ? 'radiogroup' : undefined}
+                aria-label={maxOpponents === 1 ? 'Wer spielt mit?' : undefined}
+              >
                 {candidates.map((member) => {
                   const checked = opponents.includes(member.userId);
                   return (

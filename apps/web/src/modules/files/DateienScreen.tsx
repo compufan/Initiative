@@ -505,7 +505,11 @@ function DateiKachel({
           type="button"
           className="fil-tile-remove"
           aria-label={`„${name}“ aus der Sammlung entfernen`}
-          data-tipp="Nimmt die Datei aus dieser Sammlung – die Datei selbst bleibt im Chat"
+          data-tipp={
+            item.messageId
+              ? 'Nimmt die Datei aus dieser Sammlung – im Chat bleibt sie stehen'
+              : 'Diese Datei liegt nur hier – nach dem Entfernen ist sie fort'
+          }
           disabled={busy}
           onClick={() => setFrage(true)}
         >
@@ -516,7 +520,21 @@ function DateiKachel({
         <ConfirmDialog
           open
           title={`„${name}“ entfernen?`}
-          description="Die Datei bleibt dort, wo sie herkommt – sie ist nur nicht mehr in dieser Sammlung."
+          /*
+              Zwei Herkünfte, zwei Wahrheiten.
+
+              Hier stand für jede Datei „Die Datei bleibt dort, wo sie
+              herkommt". Für eine über „Dateien hinzufügen" direkt abgelegte
+              Datei stimmt das nicht: Sie hängt an keiner Nachricht, dieser
+              Eintrag ist ihr einziger Ort, und nach dem Entfernen ist sie
+              nicht mehr erreichbar. Derselbe Bildschirm unterscheidet die
+              beiden Fälle im Filter „Herkunft" längst.
+          */
+          description={
+            item.messageId
+              ? 'Die Datei bleibt im Chat, aus dem sie kommt – sie ist nur nicht mehr in dieser Sammlung.'
+              : 'Diese Datei wurde direkt hier abgelegt und liegt in keinem Chat. Nach dem Entfernen ist sie nicht mehr erreichbar.'
+          }
           confirmLabel="Entfernen"
           danger
           busy={busy}

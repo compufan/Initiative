@@ -110,7 +110,15 @@ export function UserSearch({
                 className="list-row"
                 aria-pressed={selected}
                 aria-busy={wartet}
-                disabled={wartetAuf != null}
+                /*
+                    Nur die betätigte Zeile wird gesperrt.
+                    `disabled` auf ALLEN Zeilen nahm der gerade gedrückten den
+                    Fokus – ein gesperrter Knopf fällt aus der Tastaturreihenfolge,
+                    der Fokus landet auf dem Rumpf, und eine Vorlesehilfe verliert
+                    die Stelle. Ein zweiter Tipp auf eine andere Zeile ist ausserdem
+                    schon durch den Merker in `open1to1` abgefangen.
+                */
+                disabled={wartet}
                 onClick={() => onPick(user)}
               >
                 <Avatar name={user.displayName} id={user.id} url={user.avatarUrl} size={40} />

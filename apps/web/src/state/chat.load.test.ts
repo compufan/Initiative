@@ -25,7 +25,12 @@ vi.mock('../lib/api.js', () => ({
 }));
 
 vi.mock('../lib/realtime.js', () => ({
-  realtime: { on: () => () => {}, send: () => true, connect: () => {}, onStateChange: () => () => {} },
+  realtime: {
+    on: () => () => {},
+    send: () => true,
+    connect: () => {},
+    onStateChange: () => () => {},
+  },
 }));
 
 vi.mock('../lib/db.js', () => ({

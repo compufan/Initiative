@@ -29,6 +29,10 @@ export interface Umgebung {
   uhr: () => number;
   naechstesBild: (rueckruf: () => void) => number;
   abbrechen: (kennung: number) => void;
+  /** Ist das Dokument gerade nicht zu sehen? */
+  versteckt: () => boolean;
+  /** Auf Wechsel der Sichtbarkeit horchen; gibt die Abmeldung zurück. */
+  sichtbarkeitBeobachten: (rueckruf: () => void) => () => void;
 }
 
 /** Die echte Umgebung des Browsers – oder `null`, wo es keine gibt. */
@@ -40,6 +44,12 @@ export function browserUmgebung(): Umgebung | null {
     uhr: () => performance.now(),
     naechstesBild: (rueckruf) => requestAnimationFrame(() => rueckruf()),
     abbrechen: (kennung) => cancelAnimationFrame(kennung),
+    versteckt: () => typeof document !== 'undefined' && document.visibilityState === 'hidden',
+    sichtbarkeitBeobachten: (rueckruf) => {
+      if (typeof document === 'undefined') return () => {};
+      document.addEventListener('visibilitychange', rueckruf);
+      return () => document.removeEventListener('visibilitychange', rueckruf);
+    },
   };
 }
 
@@ -57,6 +67,26 @@ export function stockungMessen(umgebung: Umgebung | null): Stockungsmesser {
   let zuletzt = umgebung.uhr();
   let laeuft = true;
   let kennung = 0;
+  /*
+   * War das Fenster zwischendurch weg, ist die Messung wertlos.
+   *
+   * Der Browser ruft `requestAnimationFrame` für ein nicht gezeichnetes
+   * Dokument gar nicht mehr auf – im Hintergrund, bei gesperrtem Bildschirm,
+   * in einer anderen App. Die Auszeit sähe hier aus wie eine Blockade und
+   * wäre die längste von allen. Bei einem Lauf über eine Minute ist das
+   * Wegschalten aber der Normalfall, und die Zeile unter dem Sticker
+   * behauptete dann „längste Stockung 50 s" für einen Arbeiter, der die
+   * Oberfläche kein einziges Bild lang aufgehalten hat.
+   *
+   * Verworfen statt geschätzt: 0 heisst hier ohnehin schon „nicht gemessen",
+   * und `messungText` verschweigt die Zeile dann. Eine fehlende Auskunft ist
+   * besser als eine falsche – zumal genau diese Zahl die Frage beantworten
+   * soll, ob der Umbau etwas gebracht hat.
+   */
+  let unbrauchbar = umgebung.versteckt();
+  const abmelden = umgebung.sichtbarkeitBeobachten(() => {
+    if (umgebung.versteckt()) unbrauchbar = true;
+  });
 
   const schritt = () => {
     if (!laeuft) return;
@@ -70,9 +100,14 @@ export function stockungMessen(umgebung: Umgebung | null): Stockungsmesser {
 
   return {
     beenden() {
-      if (!laeuft) return Math.round(laengste);
+      if (!laeuft) return unbrauchbar ? 0 : Math.round(laengste);
       laeuft = false;
       umgebung.abbrechen(kennung);
+      abmelden();
+      if (unbrauchbar || umgebung.versteckt()) {
+        unbrauchbar = true;
+        return 0;
+      }
       /*
        * Die letzte Lücke zählt mit.
        *

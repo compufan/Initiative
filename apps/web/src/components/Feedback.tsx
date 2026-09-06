@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useUi } from '../state/ui.js';
+import { toastFesthalten, toastLoslassen, useUi } from '../state/ui.js';
 
 export function Spinner({ label }: { label?: string }) {
   return (
@@ -54,6 +54,11 @@ export function ToastHost() {
           className={`toast ${toast.kind === 'error' ? 'toast-error' : toast.kind === 'success' ? 'toast-success' : ''}`}
           data-tipp="Blendet die Meldung sofort aus – sonst verschwindet sie von selbst"
           aria-label={`${toast.message} – wegtippen`}
+          // Solange jemand mit der Tastatur auf der Meldung steht, läuft sie
+          // nicht ab: Ein fokussiertes Element, das verschwindet, wirft den
+          // Fokus auf den Rumpf zurück.
+          onFocus={() => toastFesthalten(toast.id)}
+          onBlur={() => toastLoslassen(toast.id)}
           onClick={() => dismiss(toast.id)}
         >
           {toast.message}

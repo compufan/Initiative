@@ -11,6 +11,8 @@ function pruefstand() {
   let jetzt = 0;
   const wartende: Array<{ kennung: number; rueckruf: () => void }> = [];
   let naechsteKennung = 1;
+  let versteckt = false;
+  const horcher: Array<() => void> = [];
   const umgebung: Umgebung = {
     uhr: () => jetzt,
     naechstesBild: (rueckruf) => {
@@ -22,9 +24,27 @@ function pruefstand() {
       const index = wartende.findIndex((eintrag) => eintrag.kennung === kennung);
       if (index >= 0) wartende.splice(index, 1);
     },
+    versteckt: () => versteckt,
+    sichtbarkeitBeobachten: (rueckruf) => {
+      horcher.push(rueckruf);
+      return () => {
+        const index = horcher.indexOf(rueckruf);
+        if (index >= 0) horcher.splice(index, 1);
+      };
+    },
   };
   return {
     umgebung,
+    /** Die App in den Hintergrund schicken – dann feuert kein Bild mehr. */
+    wegschalten() {
+      versteckt = true;
+      for (const rueckruf of [...horcher]) rueckruf();
+    },
+    zurueckholen() {
+      versteckt = false;
+      for (const rueckruf of [...horcher]) rueckruf();
+    },
+    horcherZahl: () => horcher.length,
     /** Die Zeit weiterdrehen und dann ein Bild zeichnen lassen. */
     bild(nachMs: number) {
       jetzt += nachMs;
@@ -63,6 +83,44 @@ describe('stockungMessen', () => {
 
   it('gibt ohne Umgebung 0 zurück, statt zu raten', () => {
     expect(stockungMessen(null).beenden()).toBe(0);
+  });
+
+  it('verwirft die Messung, wenn die App zwischendurch im Hintergrund war', () => {
+    const stand = pruefstand();
+    const messer = stockungMessen(stand.umgebung);
+    stand.bild(16);
+    // Der Anwender wechselt die App. Der Browser zeichnet nicht mehr, also
+    // feuert kein Bild – die Auszeit sähe aus wie eine Blockade, und zwar wie
+    // die längste von allen.
+    stand.wegschalten();
+    stand.warten(50_000);
+    stand.zurueckholen();
+    stand.bild(16);
+    expect(messer.beenden()).toBe(0);
+  });
+
+  it('verwirft auch, wenn die Messung im Hintergrund beginnt', () => {
+    const stand = pruefstand();
+    stand.wegschalten();
+    const messer = stockungMessen(stand.umgebung);
+    stand.warten(30_000);
+    expect(messer.beenden()).toBe(0);
+  });
+
+  it('misst normal, wenn die App die ganze Zeit sichtbar war', () => {
+    const stand = pruefstand();
+    const messer = stockungMessen(stand.umgebung);
+    stand.bild(16);
+    stand.bild(800);
+    expect(messer.beenden()).toBe(800);
+  });
+
+  it('meldet sich beim Beenden wieder von der Sichtbarkeit ab', () => {
+    const stand = pruefstand();
+    const messer = stockungMessen(stand.umgebung);
+    expect(stand.horcherZahl()).toBe(1);
+    messer.beenden();
+    expect(stand.horcherZahl()).toBe(0);
   });
 
   it('hört nach dem Beenden auf, Bilder anzufordern', () => {

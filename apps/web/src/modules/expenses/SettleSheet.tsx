@@ -162,7 +162,12 @@ export function SettleSheet({
           )}
 
           {ichSchulde && paypalUrl && (
-            <a className="btn btn-primary btn-block" href={paypalUrl} target="_blank" rel="noreferrer">
+            <a
+              className="btn btn-primary btn-block"
+              href={paypalUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
               Mit PayPal.Me senden
             </a>
           )}
@@ -203,11 +208,7 @@ export function SettleSheet({
             disabled={hakt}
             onClick={() => void abhaken()}
           >
-            {hakt
-              ? 'Wird abgehakt …'
-              : ichSchulde
-                ? 'Bezahlt – abhaken'
-                : 'Erhalten – abhaken'}
+            {hakt ? 'Wird abgehakt …' : ichSchulde ? 'Bezahlt – abhaken' : 'Erhalten – abhaken'}
           </button>
 
           <p className="exp-hint">
@@ -260,5 +261,8 @@ function Zeile({
 
 /** IBAN in Vierergruppen – so steht sie auf jedem Kontoauszug. */
 function formatIban(iban: string): string {
-  return iban.replace(/\s/g, '').replace(/(.{4})/g, '$1 ').trim();
+  return iban
+    .replace(/\s/g, '')
+    .replace(/(.{4})/g, '$1 ')
+    .trim();
 }

@@ -50,6 +50,46 @@ export function applyTheme(theme: ThemePreference): void {
     ?.setAttribute('content', resolved === 'light' ? '#f5f6fb' : '#0b1020');
 }
 
+/*
+ * Der Auslauf einer Meldung – anhaltbar.
+ *
+ * Seit die Meldung ein Knopf ist, kann sie den Fokus tragen. Verschwindet ein
+ * fokussiertes Element aus dem Dokument, fällt der Fokus auf den Rumpf zurück,
+ * und die nächste Tabulatortaste fängt wieder ganz vorn an – wer mit der
+ * Tastatur arbeitet, verliert mitten im Bedienen seine Stelle. Deshalb steht
+ * die Zeit still, solange jemand auf der Meldung steht.
+ *
+ * Ausserhalb des Zustands, weil ein Zeitgeber kein Zustand ist: Er darf kein
+ * neues Bild auslösen, und er soll beim Aufräumen nicht mitwandern.
+ */
+const AUSLAUF_MS = 4200;
+const uhren = new Map<string, number>();
+
+function auslaufPlanen(id: string): void {
+  auslaufStoppen(id);
+  const kennung = setTimeout(() => {
+    uhren.delete(id);
+    useUi.setState((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }));
+  }, AUSLAUF_MS);
+  uhren.set(id, kennung as unknown as number);
+}
+
+function auslaufStoppen(id: string): void {
+  const kennung = uhren.get(id);
+  if (kennung != null) clearTimeout(kennung);
+  uhren.delete(id);
+}
+
+/** Hält den Auslauf an, solange die Meldung den Fokus hat. */
+export function toastFesthalten(id: string): void {
+  auslaufStoppen(id);
+}
+
+/** Lässt die Zeit weiterlaufen, sobald der Fokus weiterzieht. */
+export function toastLoslassen(id: string): void {
+  if (useUi.getState().toasts.some((toast) => toast.id === id)) auslaufPlanen(id);
+}
+
 export const useUi = create<UiState>((set) => ({
   toasts: [],
   theme: readTheme(),
@@ -59,10 +99,11 @@ export const useUi = create<UiState>((set) => ({
   toast(message, kind = 'info') {
     const id = uuidv7();
     set((state) => ({ toasts: [...state.toasts, { id, message, kind }] }));
-    setTimeout(() => set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) })), 4200);
+    auslaufPlanen(id);
   },
 
   dismissToast(id) {
+    auslaufStoppen(id);
     set((state) => ({ toasts: state.toasts.filter((toast) => toast.id !== id) }));
   },
 

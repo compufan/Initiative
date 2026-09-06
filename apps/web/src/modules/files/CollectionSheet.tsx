@@ -96,7 +96,12 @@ export function CollectionSheet({
       onClose={onClose}
       title={bearbeiten ? 'Sammlung bearbeiten' : 'Neue Sammlung'}
       actions={
-        <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void speichern()}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={busy}
+          onClick={() => void speichern()}
+        >
           {busy ? 'Speichert …' : 'Speichern'}
         </button>
       }

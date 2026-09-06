@@ -81,7 +81,12 @@ export function AdminCard() {
           <Link className="btn btn-primary" to="/verwaltung">
             Verwaltung öffnen
           </Link>
-          <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void lock()}>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={busy}
+            onClick={() => void lock()}
+          >
             Admin-Modus abschalten
           </button>
         </>

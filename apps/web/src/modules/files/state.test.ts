@@ -31,11 +31,7 @@ beforeEach(() => {
 describe('Pfad zu einer Sammlung', () => {
   it('geht von oben nach unten', () => {
     const alle = [sammlung('enkel', 'kind'), sammlung('kind', 'wurzel'), sammlung('wurzel', null)];
-    expect(pfadZu(alle, 'enkel').map((eintrag) => eintrag.id)).toEqual([
-      'wurzel',
-      'kind',
-      'enkel',
-    ]);
+    expect(pfadZu(alle, 'enkel').map((eintrag) => eintrag.id)).toEqual(['wurzel', 'kind', 'enkel']);
   });
 
   it('bricht ab, wo man den Elternordner nicht sehen darf', () => {
@@ -63,7 +59,12 @@ describe('Ordner einer Ebene', () => {
 
     const oben = useFiles.getState().childrenOf(null);
     expect(oben.map((eintrag) => eintrag.id).sort()).toEqual(['verwaist', 'wurzel']);
-    expect(useFiles.getState().childrenOf('wurzel').map((e) => e.id)).toEqual(['kind']);
+    expect(
+      useFiles
+        .getState()
+        .childrenOf('wurzel')
+        .map((e) => e.id),
+    ).toEqual(['kind']);
   });
 
   it('sortiert nach Namen', () => {
@@ -74,11 +75,12 @@ describe('Ordner einer Ebene', () => {
         sammlung('b', null, 'Birnen'),
       ],
     });
-    expect(useFiles.getState().childrenOf(null).map((e) => e.name)).toEqual([
-      'Äpfel',
-      'Birnen',
-      'Zebra',
-    ]);
+    expect(
+      useFiles
+        .getState()
+        .childrenOf(null)
+        .map((e) => e.name),
+    ).toEqual(['Äpfel', 'Birnen', 'Zebra']);
   });
 });
 

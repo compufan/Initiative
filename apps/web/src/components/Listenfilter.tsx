@@ -93,16 +93,15 @@ export function useListenfilter<T>(items: T[], optionen: Optionen<T>): Ergebnis<
         // Innerhalb einer Facette gilt ODER, zwischen Facetten UND. Das ist
         // die Erwartung überall sonst auch: „offen ODER gemeldet“, aber
         // „offen UND in diesem Chat“.
-        const hat = facette
-          .werte(item)
-          .some((wert) => wert != null && auswahl.includes(wert.id));
+        const hat = facette.werte(item).some((wert) => wert != null && auswahl.includes(wert.id));
         if (!hat) return false;
       }
       return true;
     });
   }, [items, suche, gewaehlt, facetten, suchtext]);
 
-  const aktiv = suche.trim().length > 0 || Object.values(gewaehlt).some((liste) => liste.length > 0);
+  const aktiv =
+    suche.trim().length > 0 || Object.values(gewaehlt).some((liste) => liste.length > 0);
 
   function umschalten(facette: string, id: string) {
     setGewaehlt((vorher) => {

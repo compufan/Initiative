@@ -161,11 +161,17 @@
  * Daumen genügen – sonst trifft man beim Entfernen das Bild und beim Öffnen
  * das Entfernen. Das Pseudoelement vergrössert nur den Bereich, nicht die
  * Zeichnung.
+ *
+ * Der Knopf sitzt dafür 9 Pixel vom Rand statt 6: `.fil-tile` trägt
+ * `overflow: hidden`, und was über die Kachelkante hinausragt, wird
+ * mitsamt seiner Trefferfläche abgeschnitten. Bei 6 Pixeln blieben von den
+ * 44 nur 41 übrig, und die Ecke war zusätzlich von der 14-Pixel-Rundung
+ * angeknabbert. Bei 9 liegt das Quadrat vollständig in der Kachel.
  */
 .fil-tile-remove {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  top: 9px;
+  right: 9px;
   width: 26px;
   height: 26px;
   border: none;

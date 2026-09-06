@@ -60,7 +60,8 @@ export function nachNeuerFassungSehen(registration: ServiceWorkerRegistration): 
  * ist. Dann will man einen Knopf und keine halbe Stunde Geduld.
  *
  * Rückgabe: `'neu'`, wenn etwas zum Aktualisieren bereitliegt, `'aktuell'`,
- * wenn nachgesehen wurde und nichts da ist, und `'unmoeglich'`, wenn gar nicht
+ * wenn nachgesehen wurde und nichts da ist, `'laedt'`, wenn eine neue Fassung
+ * gefunden ist und gerade noch geholt wird, und `'unmoeglich'`, wenn gar nicht
  * nachgesehen werden konnte. Das Anwenden macht weiterhin das Band oben – hier
  * wird nur gefragt.
  *
@@ -70,7 +71,7 @@ export function nachNeuerFassungSehen(registration: ServiceWorkerRegistration): 
  * „Du hast schon den neuesten Stand“. Das ist eine Auskunft über etwas, das
  * nie nachgesehen wurde.
  */
-export type UpdateStand = 'neu' | 'aktuell' | 'unmoeglich';
+export type UpdateStand = 'neu' | 'aktuell' | 'laedt' | 'unmoeglich';
 
 export async function nachUpdateSuchen(): Promise<UpdateStand> {
   if (!anmeldung) return 'unmoeglich';
@@ -101,10 +102,21 @@ export async function nachUpdateSuchen(): Promise<UpdateStand> {
     };
     neuer.addEventListener('statechange', horcher);
 
-    // Nicht ewig hängen bleiben, wenn gar nichts mehr passiert.
+    /*
+     * Nicht ewig hängen bleiben – aber auch nicht „alles aktuell" behaupten.
+     *
+     * Hier stand `waiting != null ? 'neu' : 'aktuell'`. Dabei ist an dieser
+     * Stelle bereits BEWIESEN, dass es eine neue Fassung gibt: `installing`
+     * war gesetzt, sonst wären wir gar nicht in diesem Versprechen. Steht der
+     * neue Arbeiter nach 15 s noch auf `installing` – er lädt die Dateien
+     * vor, im Zug dauert das länger –, kam trotzdem die grüne Meldung „Du
+     * hast schon den neuesten Stand", und Sekunden später schob sich das Band
+     * „Eine neue Fassung liegt bereit" ins Bild. Zwei Auskünfte, die einander
+     * widersprechen, innerhalb einer halben Minute.
+     */
     window.setTimeout(() => {
       aufraeumen();
-      fertig(anmeldung?.waiting != null ? 'neu' : 'aktuell');
+      fertig(anmeldung?.waiting != null ? 'neu' : 'laedt');
     }, 15_000);
   });
 }

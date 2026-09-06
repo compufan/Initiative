@@ -101,9 +101,7 @@ export function AddToCollectionSheet({ message, conversation, onClose }: Message
                     disabled={busy != null}
                     onClick={() => void hinzufuegen(collection.id)}
                   >
-                    <span aria-hidden="true">
-                      {erledigt.includes(collection.id) ? '✅' : '📁'}
-                    </span>
+                    <span aria-hidden="true">{erledigt.includes(collection.id) ? '✅' : '📁'}</span>
                     <span className="truncate">
                       {collection.name}
                       {collection.conversationId === conversation?.id && (

@@ -535,8 +535,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
        * spurlos weg, mitsamt seinem Rückgängig-Schritt. Genau das, was der
        * Kommentar unten verhindern wollte.
        */
-      const netz =
-        mitNetzRef.current && engineAvailable('tippen') && !tippRechnetRef.current;
+      const netz = mitNetzRef.current && engineAvailable('tippen') && !tippRechnetRef.current;
       const dazu = tippModusRef.current !== 'weg';
 
       /*
@@ -1935,9 +1934,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
               </p>
             )}
             {messung && !modellFehler && (
-              <p className="stk-hint stk-messung">
-                ⏱ {messungText(messung)}
-              </p>
+              <p className="stk-hint stk-messung">⏱ {messungText(messung)}</p>
             )}
             {/* Das Modell liefert eine Fläche; erst die Zerlegung macht daraus
                 antippbare Teile. Der Knopf erscheint nur, wenn es überhaupt
@@ -2095,8 +2092,8 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
             </div>
             {flutungAktiv && doc.removeBg && (
               <p className="stk-hint">
-                „Ecken entfernen“ ruht, solange deine Tipps sagen, was bleiben soll. Nimm die
-                Tipps zurück, und es greift wieder.
+                „Ecken entfernen“ ruht, solange deine Tipps sagen, was bleiben soll. Nimm die Tipps
+                zurück, und es greift wieder.
               </p>
             )}
             <label

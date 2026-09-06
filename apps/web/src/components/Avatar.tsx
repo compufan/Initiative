@@ -43,8 +43,16 @@ export function Avatar({ name, id, url, size = 44, online, emoji }: AvatarProps)
       {online != null && (
         <span
           role="img"
-          aria-label={online ? 'Gerade in der App' : 'Gerade nicht in der App'}
-          data-tipp={online ? 'Gerade in der App' : 'Gerade nicht in der App'}
+          /*
+              „Zuletzt nicht gesehen" statt „nicht da".
+              Der Zustand kommt aus `presence[...]?.online ?? false` – ein
+              unbekannter Zustand ist dort nicht von einem abwesenden zu
+              unterscheiden. „Gerade nicht in der App" wäre also eine Tatsache,
+              die niemand geprüft hat; kurz nach dem Start der App gilt sie für
+              jeden.
+          */
+          aria-label={online ? 'Gerade in der App' : 'Gerade nicht zu sehen'}
+          data-tipp={online ? 'Gerade in der App' : 'Gerade nicht zu sehen'}
           style={{
             position: 'absolute',
             right: 0,

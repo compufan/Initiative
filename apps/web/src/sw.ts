@@ -174,10 +174,7 @@ async function teilAntwort(gespeichert: Response, kopf: string | null): Promise<
   if (!bereich) return null;
   const stueck = daten.slice(bereich.start, bereich.ende + 1);
   const kopfzeilen = new Headers(gespeichert.headers);
-  kopfzeilen.set(
-    'content-range',
-    `bytes ${bereich.start}-${bereich.ende}/${daten.byteLength}`,
-  );
+  kopfzeilen.set('content-range', `bytes ${bereich.start}-${bereich.ende}/${daten.byteLength}`);
   kopfzeilen.set('content-length', String(stueck.byteLength));
   kopfzeilen.set('accept-ranges', 'bytes');
   return new Response(stueck, {

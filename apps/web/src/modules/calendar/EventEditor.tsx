@@ -148,9 +148,10 @@ export function EventEditor(props: EventEditorProps) {
    * nur, wenn sie ihr schon einmal begegnet ist (aus Vorschlaegen oder aus der
    * Suche). Wer eingeladen war, aber nicht im Chat sitzt – jemand, den man
    * beim letzten Mal ueber die Suche dazugeholt hat –, blieb deshalb
-   * unsichtbar, waehrend der Zaehler ihn mitzaehlte: „5 gewaehlt“ ueber einer
-   * Liste mit drei Haken. Beim Speichern ging er trotzdem mit, weil `form`
-   * seine Kennung fuehrt – man sah nur nicht, wen man da einlaedt.
+   * unsichtbar. `PersonenWahl` laedt Gewaehlte inzwischen selbst nach, wenn
+   * sie ihr sonst nirgends begegnet sind – hier stehen sie trotzdem, weil das
+   * die Namen ohne Umweg liefert und der Zaehler damit von vornherein zur
+   * Liste passt.
    */
   const [chatLeute, setChatLeute] = useState<Person[]>([]);
   // Die Kennungen als Zeichenkette: `event.attendees` bekommt bei jedem Laden
@@ -159,24 +160,43 @@ export function EventEditor(props: EventEditorProps) {
     .map((teilnehmer) => teilnehmer.userId)
     .sort()
     .join(',');
+  /*
+   * Die Mitglieder als Zeichenkette, und nur bei offenem Blatt.
+   *
+   * `conversations` im Abhaengigkeitsfeld war eine Falle: Der Zustand
+   * ersetzt das Feld bei JEDER eingehenden Nachricht, auch aus fremden Chats.
+   * Solange der Effekt ohne gewaehlten Chat sofort abbrach, blieb das
+   * folgenlos. Seit die Eingeladenen dazukommen, gilt das nicht mehr: Ein
+   * persoenlicher Termin ohne Chat, aber mit zwoelf Eingeladenen, fragte bei
+   * jeder Nachricht irgendwo in der App zwoelf Mal `GET /users/:id` ab – fuer
+   * ein Blatt, das gar nicht offen ist. Derselbe Kniff wie in `ExpenseSheet`:
+   * Aus der Liste wird eine Zeichenkette, die sich nur aendert, wenn sich
+   * wirklich jemand aendert.
+   */
+  const chatMitglieder = conversations
+    .find((eintrag) => eintrag.id === form.conversationId)
+    ?.members.map((member) => member.userId)
+    .sort()
+    .join(',');
+
   useEffect(() => {
-    const chat = conversations.find((eintrag) => eintrag.id === form.conversationId);
+    if (!open) return undefined;
     const ids = new Set<string>(eingeladeneIds ? eingeladeneIds.split(',') : []);
-    for (const member of chat?.members ?? []) ids.add(member.userId);
+    for (const userId of chatMitglieder ? chatMitglieder.split(',') : []) ids.add(userId);
     if (ids.size === 0) {
       setChatLeute([]);
       return undefined;
     }
     let abgebrochen = false;
-    void Promise.all(
-      [...ids].map((userId) => api.users.byId(userId).catch(() => null)),
-    ).then((ergebnis) => {
-      if (!abgebrochen) setChatLeute(ergebnis.filter((person) => person != null));
-    });
+    void Promise.all([...ids].map((userId) => api.users.byId(userId).catch(() => null))).then(
+      (ergebnis) => {
+        if (!abgebrochen) setChatLeute(ergebnis.filter((person) => person != null));
+      },
+    );
     return () => {
       abgebrochen = true;
     };
-  }, [conversations, form.conversationId, eingeladeneIds]);
+  }, [open, chatMitglieder, eingeladeneIds]);
 
   const eventId = event?.id ?? null;
   const eventStamp = event?.updatedAt ?? null;
