@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LIMITS, type CalendarEventDto, type ConversationDto } from '@initiative/shared';
 import { Sheet } from '../../components/Sheet.js';
@@ -52,8 +52,28 @@ export function PlanningSheet({ open, onClose, initialDate, onSaved }: PlanningS
   const [slots, setSlots] = useState<Slot[]>([]);
   const [busy, setBusy] = useState(false);
 
+  /*
+   * Zurückgesetzt wird beim ÖFFNEN – nicht bei jeder Änderung der Chatliste.
+   *
+   * `conversations` bekommt aus dem Zustand bei jeder eintreffenden Nachricht
+   * ein neues Array. Weil es im Abhängigkeitsfeld stand, lief dieser Effekt
+   * dann erneut und leerte Titel, Ort, Beschreibung, die Zeitvorschläge und
+   * „Auch in diesen Chats fragen" – mitten im Tippen. Wer eine Terminfindung
+   * anlegte, während im Chat etwas los war, sah seine Eingaben verschwinden
+   * und hatte keine Ahnung, warum.
+   *
+   * Der Merker sorgt dafür, dass genau einmal je Öffnen zurückgesetzt wird.
+   * `conversations` darf trotzdem gelesen werden – nur eben ohne davon
+   * abzuhängen.
+   */
+  const zurueckgesetzt = useRef(false);
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      zurueckgesetzt.current = false;
+      return;
+    }
+    if (zurueckgesetzt.current) return;
+    zurueckgesetzt.current = true;
     const basis = new Date(initialDate ?? new Date());
     basis.setHours(19, 0, 0, 0);
     const naechste = new Date(basis.getTime() + 7 * 24 * 60 * 60 * 1000);
@@ -62,15 +82,17 @@ export function PlanningSheet({ open, onClose, initialDate, onSaved }: PlanningS
     setDescription('');
     setLocation('');
     setAlsoIn([]);
-    setConversationId((wert) => wert || (conversations[0]?.id ?? ''));
-  }, [open, initialDate, conversations]);
+    setConversationId((wert) => wert || (chatsRef.current[0]?.id ?? ''));
+  }, [open, initialDate]);
+
+  // Die Liste nur zum Nachschlagen, ohne Abhängigkeit – siehe oben.
+  const chatsRef = useRef(conversations);
+  chatsRef.current = conversations;
 
   const gruppen = conversations.filter((chat) => chat.id !== conversationId);
 
   function setSlot(key: string, feld: 'startsAt' | 'endsAt', wert: string) {
-    setSlots((liste) =>
-      liste.map((slot) => (slot.key === key ? { ...slot, [feld]: wert } : slot)),
-    );
+    setSlots((liste) => liste.map((slot) => (slot.key === key ? { ...slot, [feld]: wert } : slot)));
   }
 
   async function speichern() {
@@ -213,8 +235,8 @@ export function PlanningSheet({ open, onClose, initialDate, onSaved }: PlanningS
           <fieldset className="field">
             <legend>Auch in diesen Chats fragen</legend>
             <p className="cal-hint">
-              Dieselbe Abstimmung, ein Ergebnis. Wer dort antwortet, hat damit auch hier
-              geantwortet – niemand muss zweimal abstimmen.
+              Dieselbe Abstimmung, ein Ergebnis. Wer dort antwortet, hat damit auch hier geantwortet
+              – niemand muss zweimal abstimmen.
             </p>
             {gruppen.map((chat) => (
               <label key={chat.id} className="cal-check">

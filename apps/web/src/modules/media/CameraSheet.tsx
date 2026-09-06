@@ -4,6 +4,7 @@ import { BildBearbeiten } from '../bild/BildBearbeiten.js';
 import type { ComposerActionProps } from '../types.js';
 import { prepareImage, videoPreview } from '../../lib/upload.js';
 import { toast, useHideNav } from '../../state/ui.js';
+import { dialogAnmelden } from '../../lib/dialogVerlauf.js';
 import {
   VIDEO_MIME_CANDIDATES,
   baseMime,
@@ -329,6 +330,14 @@ export function CameraSheet({ conversationId, onClose }: ComposerActionProps) {
     setSending(false);
     if (ok) onClose();
   };
+
+  /*
+   * Auch die Kamera hört auf die Zurück-Taste.
+   *
+   * Vorher gab es nur das ✕ oben links; wer stattdessen die Zurück-Geste
+   * benutzte – auf Android die übliche –, landete ausserhalb des Chats.
+   */
+  useEffect(() => dialogAnmelden(onClose), [onClose]);
 
   const discard = () => {
     setDraft(null);

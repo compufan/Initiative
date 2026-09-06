@@ -31,6 +31,18 @@ interface GalleryItem {
 
 const MAX_SELECTION = 20;
 
+/**
+ * Eine fortlaufende Nummer, die den ganzen Lebenslauf des Blatts durchhält.
+ *
+ * Bewusst ein Modulzähler und keine Zufallszahl: Er ist nachvollziehbar, und
+ * in Tests kommt zweimal dasselbe heraus.
+ */
+let kennungZaehler = 0;
+function naechsteKennung(): number {
+  kennungZaehler += 1;
+  return kennungZaehler;
+}
+
 /** Photo and video picker with a preview grid and one shared caption. */
 export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
   const [items, setItems] = useState<GalleryItem[]>([]);
@@ -75,7 +87,16 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
           if (kind === 'image') {
             const prepared = await prepareImage(file);
             next.push({
-              id: `${file.name}-${file.lastModified}-${next.length}`,
+              /*
+               * Die Kennung muss über AUFRUFE hinweg eindeutig sein.
+               *
+               * `next.length` zählt nur innerhalb des gerade gewählten
+               * Stapels. Wer dieselbe Datei zweimal auswählte – „Weitere
+               * auswählen" und noch einmal dasselbe Foto –, bekam zweimal
+               * dieselbe Kennung, und das ✕ auf der einen Kachel entfernte
+               * beide: `remove` filtert über `item.id !== id`.
+               */
+              id: `${file.name}-${file.lastModified}-${naechsteKennung()}`,
               kind,
               blob: prepared.blob,
               mime: prepared.mime,

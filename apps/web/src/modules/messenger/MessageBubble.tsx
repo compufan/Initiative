@@ -142,6 +142,23 @@ export function MessageBubble({
                   type="button"
                   className={`msg-reaction ${mine ? 'msg-reaction-mine' : ''}`}
                   onClick={() => void toggleReaction(reaction.emoji, mine)}
+                  /*
+                   * Das Emoji ist `aria-hidden`, sichtbar bleibt nur eine
+                   * Zahl. Eine Vorlesehilfe las hier also „3" und sonst
+                   * nichts – und ein Sehender wusste nicht, dass ein Tipp
+                   * die eigene Reaktion setzt oder zurücknimmt.
+                   */
+                  aria-label={
+                    mine
+                      ? `Deine Reaktion ${reaction.emoji} zurücknehmen (${reaction.userIds.length})`
+                      : `Mit ${reaction.emoji} reagieren (${reaction.userIds.length})`
+                  }
+                  aria-pressed={mine}
+                  data-tipp={
+                    mine
+                      ? 'Nimmt deine Reaktion wieder zurück'
+                      : 'Du reagierst mit diesem Emoji – noch einmal tippen nimmt es zurück'
+                  }
                 >
                   <span aria-hidden="true">{reaction.emoji}</span>
                   <span>{reaction.userIds.length}</span>

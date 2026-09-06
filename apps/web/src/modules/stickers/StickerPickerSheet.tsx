@@ -22,6 +22,7 @@ export function StickerPickerSheet({ conversationId, onClose }: ComposerActionPr
   const [recent, setRecent] = useState<string[]>(() => readRecentStickers());
   const [studioOpen, setStudioOpen] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
+  const sendet = useRef(false);
   const sentTimer = useRef<number | null>(null);
 
   useEffect(
@@ -77,6 +78,17 @@ export function StickerPickerSheet({ conversationId, onClose }: ComposerActionPr
       : (packs.find((pack) => pack.id === active)?.stickers ?? []);
 
   async function send(sticker: StickerDto) {
+    /*
+     * Ein zweiter Tipp waehrend des Sendens schickt sonst denselben Sticker
+     * noch einmal.
+     *
+     * Die Bestaetigung erscheint erst NACH dem `await`, und die Kachel war
+     * bis dahin nicht gesperrt. Auf einer langsamen Verbindung ist das kein
+     * Sonderfall, sondern das, was jeder tut: Es passiert nichts, also tippt
+     * man noch einmal.
+     */
+    if (sendet.current) return;
+    sendet.current = true;
     try {
       await useChat.getState().sendMessage(conversationId, {
         type: 'sticker',
@@ -98,6 +110,8 @@ export function StickerPickerSheet({ conversationId, onClose }: ComposerActionPr
       }, 450);
     } catch (error) {
       toast(errorMessage(error, 'Sticker konnte nicht gesendet werden'), 'error');
+    } finally {
+      sendet.current = false;
     }
   }
 

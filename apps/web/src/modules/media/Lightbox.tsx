@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { AttachmentDto } from '@initiative/shared';
 import { FotoWerkstatt } from './FotoWerkstatt.js';
 import { mediaDownloadSrc, mediaSrc } from './helpers.js';
+import { dialogAnmelden } from '../../lib/dialogVerlauf.js';
 
 interface LightboxProps {
   items: AttachmentDto[];
@@ -68,6 +69,17 @@ export function Lightbox({ items, index, onClose, ablegen, zielName }: LightboxP
   });
   const moved = useRef(false);
   const lastTap = useRef(0);
+  const letzteBeruehrung = useRef(0);
+
+  /*
+   * Die Zurück-Taste schliesst den Betrachter, statt aus dem Chat zu springen.
+   *
+   * Jedes andere Overlay der App macht das (`Sheet`, der Fotoeditor) – dieses
+   * nicht, und der Unterschied fiel niemandem auf, der es gebaut hat: Auf
+   * einem Rechner gibt es keine Zurück-Geste. Auf dem Telefon ist sie die
+   * naheliegendste Art, ein Vollbild zu verlassen.
+   */
+  useEffect(() => dialogAnmelden(onClose), [onClose]);
   const item = items[current];
 
   const reset = useCallback(() => {
@@ -166,6 +178,8 @@ export function Lightbox({ items, index, onClose, ablegen, zielName }: LightboxP
       return;
     }
     setDismissY(0);
+    // Merkt, dass gerade ein Finger im Spiel war – siehe `beiDoppelklick`.
+    letzteBeruehrung.current = Date.now();
     if (!moved.current) {
       const now = Date.now();
       if (now - lastTap.current < 300) {
@@ -175,6 +189,20 @@ export function Lightbox({ items, index, onClose, ablegen, zielName }: LightboxP
         lastTap.current = now;
       }
     }
+  };
+
+  /**
+   * Doppelklick – aber nur mit der Maus.
+   *
+   * Ein Doppeltipp löste bisher ZWEIMAL aus: einmal über die eigene Erkennung
+   * in `onTouchEnd` und danach noch einmal über den `dblclick`, den der
+   * Browser aus denselben Berührungen erzeugt. Zweimal umschalten heisst nicht
+   * umschalten – der Hinweis „Doppeltippen zum Zoomen" versprach also etwas,
+   * das auf jedem Telefon wirkungslos war.
+   */
+  const beiDoppelklick = () => {
+    if (Date.now() - letzteBeruehrung.current < 800) return;
+    toggleZoom();
   };
 
   if (!item) return null;
@@ -233,7 +261,7 @@ export function Lightbox({ items, index, onClose, ablegen, zielName }: LightboxP
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
         onTouchCancel={onTouchEnd}
-        onDoubleClick={toggleZoom}
+        onDoubleClick={beiDoppelklick}
       >
         <img
           src={mediaSrc(item)}
