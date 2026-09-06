@@ -65,6 +65,56 @@ describe('Drehen und Spiegeln', () => {
     expect(nachAnsicht({ x: 0, y: 50 }, W, H, doc(0, true))).toEqual({ x: 400, y: 50 });
   });
 
+  it('findet auch bei Neigung für jeden Punkt zurück', () => {
+    // Der eigentliche Anspruch an das Paar: Der Renderer baut dieselbe Kette
+    // auf, und ein Fingertipp läuft rückwärts hindurch. Sind die beiden
+    // Richtungen nicht exakt invers, malt man neben den Finger – und zwar
+    // umso weiter daneben, je grösser der Winkel und je weiter der Punkt von
+    // der Zuschnittmitte weg ist. Deshalb hier Punkte in allen Ecken.
+    const punkte = [
+      { x: 0, y: 0 },
+      { x: 400, y: 300 },
+      { x: 400, y: 0 },
+      { x: 137, y: 42 },
+    ];
+    for (const drehung of [0, 90, 180, 270] as Drehung[]) {
+      for (const spiegel of [false, true]) {
+        for (const neigung of [-13, -1, 1, 13]) {
+          const d: BildDoc = { ...neuesDoc(W, H), drehung, spiegel, neigung };
+          for (const punkt of punkte) {
+            const hin = nachAnsicht(punkt, W, H, d);
+            const zurueck = nachOriginal(hin, W, H, d);
+            expect(zurueck.x).toBeCloseTo(punkt.x, 6);
+            expect(zurueck.y).toBeCloseTo(punkt.y, 6);
+          }
+        }
+      }
+    }
+  });
+
+  it('lässt die Zuschnittmitte beim Neigen liegen – sie ist das Drehzentrum', () => {
+    const d: BildDoc = { ...neuesDoc(W, H), neigung: 11 };
+    const mitte = { x: W / 2, y: H / 2 };
+    const hin = nachAnsicht(mitte, W, H, d);
+    expect(hin.x).toBeCloseTo(mitte.x, 6);
+    expect(hin.y).toBeCloseTo(mitte.y, 6);
+  });
+
+  it('neigt bei gespiegeltem Bild in dieselbe Richtung wie ohne Spiegel', () => {
+    // Was der Regler sagt, muss man sehen – auch gespiegelt. Ein Punkt über
+    // der Mitte muss bei +Neigung auf beiden Seiten in dieselbe
+    // Bildschirmrichtung wandern.
+    const ohne: BildDoc = { ...neuesDoc(W, H), neigung: 10 };
+    const mit: BildDoc = { ...neuesDoc(W, H), neigung: 10, spiegel: true };
+    const ueberDerMitte = { x: W / 2, y: H / 2 - 100 };
+    const a = nachAnsicht(ueberDerMitte, W, H, ohne);
+    const b = nachAnsicht(ueberDerMitte, W, H, mit);
+    // Ohne Spiegel wandert er nach rechts; mit Spiegel muss er das auch.
+    expect(a.x).toBeGreaterThan(W / 2);
+    expect(b.x).toBeGreaterThan(W / 2);
+    expect(a.x).toBeCloseTo(b.x, 6);
+  });
+
   it('dreht in beide Richtungen und bleibt im Bereich', () => {
     expect(weiterdrehen(0, 1)).toBe(90);
     expect(weiterdrehen(270, 1)).toBe(0);

@@ -15,6 +15,7 @@
  */
 
 import { FARB_NEUTRAL, NEUTRAL, istNeutral, type Anpassung, type Farbanpassung } from './ton.js';
+import { drehenUm, neigungImOriginal, rahmenEinpassen, zuschnittMitte } from './neigen.js';
 
 export type Drehung = 0 | 90 | 180 | 270;
 
@@ -226,6 +227,14 @@ export interface Bereich {
 
 export interface BildDoc {
   drehung: Drehung;
+  /**
+   * Der Feinwinkel zum Geraderichten, in Grad, wie ihn der Regler zeigt.
+   *
+   * Getrennt von `drehung`, weil es etwas anderes tut: Vierteldrehungen
+   * tauschen Kanten und bleiben achsenparallel, die Neigung dreht das Bild
+   * INNERHALB des Zuschnitts. Siehe `neigen.ts`.
+   */
+  neigung: number;
   spiegel: boolean;
   zuschnitt: Zuschnitt;
   striche: Malstrich[];
@@ -247,6 +256,7 @@ export const MAX_KANTE = 2560;
 export function neuesDoc(width: number, height: number): BildDoc {
   return {
     drehung: 0,
+    neigung: 0,
     spiegel: false,
     zuschnitt: { x: 0, y: 0, w: width, h: height },
     striche: [],
@@ -259,6 +269,7 @@ export function neuesDoc(width: number, height: number): BildDoc {
 export function docKopie(doc: BildDoc): BildDoc {
   return {
     drehung: doc.drehung,
+    neigung: doc.neigung,
     spiegel: doc.spiegel,
     zuschnitt: { ...doc.zuschnitt },
     striche: doc.striche.map((strich) => ({ ...strich, punkte: strich.punkte.slice() })),
@@ -287,6 +298,7 @@ export function docKopie(doc: BildDoc): BildDoc {
 export function docUnberuehrt(doc: BildDoc, width: number, height: number): boolean {
   return (
     doc.drehung === 0 &&
+    doc.neigung === 0 &&
     !doc.spiegel &&
     istNeutral(doc.anpassung) &&
     doc.bereiche.length === 0 &&
@@ -308,10 +320,46 @@ export function ansichtGroesse(
   return drehung === 90 || drehung === 270 ? { w: height, h: width } : { w: width, h: height };
 }
 
-/** Originalpunkt → Punkt im gedrehten Bild. */
+/**
+ * Der Zuschnitt, wie er nach der Neigung wirklich gilt.
+ *
+ * `doc.zuschnitt` ist der Rahmen, den der Nutzer gezogen hat – seine Absicht.
+ * Sobald geneigt wird, passt er womöglich nicht mehr hinein, weil das gedrehte
+ * Bild leere Ecken hat. Was dann gilt, wird hier ABGELEITET und nirgends
+ * gespeichert.
+ *
+ * Das ist der Unterschied zwischen richtig und fast richtig. Speicherte man
+ * den verkleinerten Rahmen zurück, wäre jede Reglerbewegung endgültig: einmal
+ * nach rechts, einmal zurück, und der Ausschnitt bliebe enger – nach ein paar
+ * Zügen wäre vom Bild nichts übrig. Als Ableitung wächst er beim Zurückdrehen
+ * von selbst wieder, und Rückgängig braucht keinen zweiten Merker, der aus dem
+ * Tritt geraten kann.
+ */
+export function wirksamerZuschnitt(doc: BildDoc, width: number, height: number): Zuschnitt {
+  if (doc.neigung === 0) return doc.zuschnitt;
+  return rahmenEinpassen(doc.zuschnitt, width, height, neigungImOriginal(doc.neigung, doc.spiegel));
+}
+
+/**
+ * Originalpunkt → Punkt im gedrehten Bild.
+ *
+ * Drei Schritte, und die Reihenfolge entspricht genau der, in der der
+ * Renderer sie aufbaut (`bildRaum` in `zeichnen.ts`): erst die Neigung um die
+ * Zuschnittmitte, dann die Spiegelung, dann die Vierteldrehung. Läuft das hier
+ * anders herum als dort, malt man neben den Finger – und zwar nur bei
+ * geneigten Bildern, was es unangenehm spät auffallen lässt.
+ */
 export function nachAnsicht(p: Punkt, width: number, height: number, doc: BildDoc): Punkt {
-  const x = doc.spiegel ? width - p.x : p.x;
-  const y = p.y;
+  const geneigt =
+    doc.neigung === 0
+      ? p
+      : drehenUm(
+          p,
+          zuschnittMitte(wirksamerZuschnitt(doc, width, height)),
+          neigungImOriginal(doc.neigung, doc.spiegel),
+        );
+  const x = doc.spiegel ? width - geneigt.x : geneigt.x;
+  const y = geneigt.y;
   switch (doc.drehung) {
     case 90:
       return { x: height - y, y: x };
@@ -345,7 +393,13 @@ export function nachOriginal(p: Punkt, width: number, height: number, doc: BildD
       x = p.x;
       y = p.y;
   }
-  return { x: doc.spiegel ? width - x : x, y };
+  const entspiegelt = { x: doc.spiegel ? width - x : x, y };
+  if (doc.neigung === 0) return entspiegelt;
+  return drehenUm(
+    entspiegelt,
+    zuschnittMitte(wirksamerZuschnitt(doc, width, height)),
+    -neigungImOriginal(doc.neigung, doc.spiegel),
+  );
 }
 
 /** Der Zuschnitt, wie er in der Ansicht liegt – als achsenparalleles Rechteck. */

@@ -11,6 +11,7 @@ import {
   ansichtGroesse,
   ausgabeGroesse,
   nachAnsicht,
+  wirksamerZuschnitt,
   zuschnittInAnsicht,
   type BildDoc,
   type Malstrich,
@@ -23,6 +24,7 @@ import { bildRechnen } from './tonGpu.js';
 import { griffeVon, radialRand, verlaufLinien } from './bereichGriffe.js';
 import type { Raster } from './maske.js';
 import { szeneBauen } from './maskenSpeicher.js';
+import { neigungImOriginal, zuschnittMitte } from './neigen.js';
 
 /**
  * Die Schriftarten zur Auswahl.
@@ -140,7 +142,15 @@ function ansichtsRaum(
   ctx.translate(-versatz.x, -versatz.y);
 }
 
-/** Legt zusätzlich die Drehung des Bildes an, sodass in Originalpunkten gilt. */
+/**
+ * Legt zusätzlich die Drehung des Bildes an, sodass in Originalpunkten gilt.
+ *
+ * Die Reihenfolge im Quelltext ist die UMGEKEHRTE der Wirkung: Was hier zuletzt
+ * steht, trifft die gezeichneten Koordinaten zuerst. Deshalb steht die Neigung
+ * unten – sie soll das Bild drehen, bevor Spiegelung und Vierteldrehung es
+ * ausrichten. `nachAnsicht` in `doc.ts` baut genau dieselbe Kette nach; wer
+ * hier etwas verschiebt, muss dort mit.
+ */
 function bildRaum(
   ctx: CanvasRenderingContext2D,
   width: number,
@@ -167,6 +177,13 @@ function bildRaum(
   if (doc.spiegel) {
     ctx.translate(width, 0);
     ctx.scale(-1, 1);
+  }
+  if (doc.neigung !== 0) {
+    const mitte = zuschnittMitte(wirksamerZuschnitt(doc, width, height));
+    const bogen = (neigungImOriginal(doc.neigung, doc.spiegel) * Math.PI) / 180;
+    ctx.translate(mitte.x, mitte.y);
+    ctx.rotate(bogen);
+    ctx.translate(-mitte.x, -mitte.y);
   }
 }
 
@@ -600,7 +617,7 @@ export function zeichneAnsicht(
   if (optionen.zuschnittZeigen) {
     zeichneZuschnitt(
       ctx,
-      zuschnittInAnsicht(doc.zuschnitt, width, height, doc),
+      zuschnittInAnsicht(wirksamerZuschnitt(doc, width, height), width, height, doc),
       faktor,
       { breite, hoehe },
       versatz,
@@ -802,14 +819,14 @@ export function zeichneAusgabe(
   height: number,
   doc: BildDoc,
 ): HTMLCanvasElement {
-  const mass = ausgabeGroesse(doc.zuschnitt, doc.drehung);
+  const mass = ausgabeGroesse(wirksamerZuschnitt(doc, width, height), doc.drehung);
   const canvas = document.createElement('canvas');
   canvas.width = mass.w;
   canvas.height = mass.h;
   const ctx = canvas.getContext('2d');
   if (!ctx) return canvas;
   ctx.imageSmoothingQuality = 'high';
-  const ausschnitt = zuschnittInAnsicht(doc.zuschnitt, width, height, doc);
+  const ausschnitt = zuschnittInAnsicht(wirksamerZuschnitt(doc, width, height), width, height, doc);
   malen(ctx, bild, width, height, doc, {
     faktor: mass.faktor,
     versatz: { x: ausschnitt.x, y: ausschnitt.y },

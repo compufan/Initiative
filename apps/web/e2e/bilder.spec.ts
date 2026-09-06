@@ -43,6 +43,24 @@ function motivPng(breite: number, hoehe: number): Buffer {
   });
 }
 
+/**
+ * Ein Bild mit einem HORIZONT, der um `grad` schief steht.
+ *
+ * Oben hell, unten dunkel, dazwischen eine harte Kante. Genau das, wofür es
+ * das Geraderichten gibt – und etwas, dessen Schieflage sich hinterher in
+ * einer Zahl messen lässt: In welcher Zeile liegt die Kante, Spalte für
+ * Spalte? Bei einem geraden Horizont in jeder Spalte in derselben.
+ */
+function horizontPng(breite: number, hoehe: number, grad: number): Buffer {
+  const steigung = Math.tan((grad * Math.PI) / 180);
+  const mitte = hoehe / 2;
+  return pngAus(breite, hoehe, (x, y) => {
+    // Unbunt, damit die Messung nur Helligkeit sieht.
+    const kante = mitte + (x - breite / 2) * steigung;
+    return y < kante ? [225, 225, 225] : [45, 45, 45];
+  });
+}
+
 function pngAus(
   breite: number,
   hoehe: number,
@@ -1084,6 +1102,146 @@ test('eingeschaltet erkennt das Netz das Motiv und legt daraus eine Maske an', a
   expect(rechtsDaneben, 'der Schleier greift rechts neben das Motiv').toBeLessThan(6);
 
   await context.close();
+});
+
+test('der Regler „Geraderichten" macht einen schiefen Horizont waagerecht', async ({ browser }) => {
+  /*
+   * # Was gemessen wird
+   *
+   * Nicht „der Regler steht auf −6". Gemessen wird das BILD: In welcher
+   * Zeile liegt die Hell-Dunkel-Kante, Spalte für Spalte? Bei einem schiefen
+   * Horizont wandert sie von links nach rechts; bei einem geraden liegt sie
+   * überall gleich. Die Spanne dieser Zeilennummern ist die Schieflage in
+   * Bildpunkten, und sie muss deutlich fallen.
+   *
+   * # Warum vorher UND nachher gemessen wird
+   *
+   * Weil eine Schranke, die man nur einmal misst, geraten ist. Ein Test, der
+   * bloss „Spanne < 30" verlangt, wäre auch dann grün, wenn der Regler gar
+   * nichts täte und die Leinwand von vornherein klein genug wäre. Erst der
+   * Vergleich beider Zustände zeigt, dass die Wirkung von der Bedienung
+   * kommt.
+   */
+  test.setTimeout(120_000);
+  const alice = credentials('gerad');
+  const bob = credentials('gziel');
+  const alicePage = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await alicePage.getByRole('button', { name: 'Neuer Chat' }).click();
+  await alicePage.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await alicePage.getByText(bob.displayName).first().click();
+  await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'horizont.png',
+    mimeType: 'image/png',
+    buffer: horizontPng(900, 700, 10),
+  });
+  await alicePage.getByRole('button', { name: /^Senden \(/ }).click();
+  const bild = alicePage.locator('.media-image').first();
+  await expect(bild).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => bild.evaluate((el: HTMLImageElement) => el.naturalWidth), { timeout: 30_000 })
+    .toBeGreaterThan(0);
+  await bild.click();
+  await alicePage.getByRole('button', { name: 'Bild bearbeiten' }).click();
+  await expect(alicePage.locator('.bild-leinwand')).toBeVisible({ timeout: 30_000 });
+
+  /**
+   * Wie stark die Hell-Dunkel-Kante über die Breite wandert, in Bildpunkten.
+   *
+   * Gesucht wird nur im mittleren Drittel der Leinwand – waagerecht UND
+   * senkrecht. Der Grund ist ein Fehlschlag: Sobald geneigt wird, schrumpft
+   * der Zuschnitt, und rundherum steht der abgedunkelte Bereich. Dessen Rand
+   * ist auch ein Sprung von hell nach dunkel, und die erste Fassung dieses
+   * Tests fand ihn statt des Horizonts – gemessen wurden dann 268 statt 10,
+   * die Neigung sah aus, als mache sie alles schlimmer.
+   *
+   * Der Horizont geht durch die Bildmitte, und dort wird gedreht. Er bleibt
+   * also im mittleren Band, was auch immer der Zuschnitt tut.
+   */
+  const schieflage = async () =>
+    alicePage.evaluate(() => {
+      const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+      const ctx = c?.getContext('2d');
+      if (!c || !ctx || c.width < 320) return -1;
+      const d = ctx.getImageData(0, 0, c.width, c.height).data;
+      const zeilen: number[] = [];
+      const vonY = Math.round(c.height * 0.3);
+      const bisY = Math.round(c.height * 0.7);
+      for (let x = Math.round(c.width * 0.35); x < Math.round(c.width * 0.65); x += 3) {
+        for (let y = vonY; y < bisY; y += 1) {
+          const oben = d[((y - 1) * c.width + x) * 4];
+          const unten = d[(y * c.width + x) * 4];
+          if (oben - unten > 90) {
+            zeilen.push(y);
+            break;
+          }
+        }
+      }
+      if (zeilen.length < 4) return -1;
+      return Math.max(...zeilen) - Math.min(...zeilen);
+    });
+
+  /*
+   * Warten, bis die Leinwand ihre Grösse hat.
+   *
+   * `toBeVisible` genügt hier nicht: Ein <canvas> ohne gesetzte Masse ist
+   * 300×150 gross, sichtbar und vollständig schwarz. Wer sofort misst, misst
+   * dieses leere Rechteck – und bekommt eine Zahl, die mit dem Bild nichts zu
+   * tun hat. Genau daran ist der erste Anlauf dieses Tests gescheitert.
+   */
+  await expect.poll(schieflage, { timeout: 20_000 }).toBeGreaterThan(20);
+  const vorher = await schieflage();
+
+  const regler = alicePage.getByRole('slider', { name: /Geraderichten/ });
+  await expect(regler).toBeVisible();
+  // Das Bild ist um +10° gekippt, also muss der Regler um −10° gegenhalten.
+  await regler.fill('-10');
+
+  await expect.poll(schieflage, { timeout: 15_000 }).toBeLessThan(vorher / 3);
+
+  // Und der Zuschnitt darf dabei keine leeren Ecken hereinlassen: Die vier
+  // Ecken des sichtbaren Ausschnitts müssen Bildinhalt zeigen, nicht nichts.
+  /*
+   * Und der Zuschnitt muss mitgerückt sein.
+   *
+   * Ein geneigtes Bild hat leere Ecken; der Rahmen muss also schmaler werden
+   * als das Bild. Gemessen wird er an seiner eigenen Umrandung – einer fast
+   * weissen Linie (`rgba(255,255,255,0.95)`), die sonst nichts im Bild hat:
+   * der helle Himmel liegt bei 225.
+   *
+   * Die Schranke ist gemessen, nicht geraten. Richtig eingepasst ist der
+   * Rahmen hier 837 von 900 Punkten breit; lässt man das Einpassen weg, sind
+   * es 899 – er spannt dann über das ganze Bild und zeigt in den Ecken ins
+   * Leere. 30 Punkte Abstand trennen beide Fälle mit reichlich Luft.
+   */
+  const rahmenBreite = await alicePage.evaluate(() => {
+    const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+    const ctx = c?.getContext('2d');
+    if (!c || !ctx) return -1;
+    const d = ctx.getImageData(0, 0, c.width, c.height).data;
+    let minX = c.width;
+    let maxX = -1;
+    for (let y = 0; y < c.height; y += 1) {
+      for (let x = 0; x < c.width; x += 1) {
+        const i = (y * c.width + x) * 4;
+        if (d[i] > 240 && d[i + 1] > 240 && d[i + 2] > 240 && d[i + 3] > 250) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+        }
+      }
+    }
+    return maxX < 0 ? -1 : maxX - minX;
+  });
+  const leinwandBreite = await alicePage
+    .locator('.bild-leinwand')
+    .evaluate((el: HTMLCanvasElement) => el.width);
+  expect(rahmenBreite).toBeGreaterThan(0);
+  expect(rahmenBreite).toBeLessThan(leinwandBreite - 30);
+  await alicePage.close();
 });
 
 test('die Tiefenkarte macht aus der Entfernung eine Maske', async ({ browser }) => {

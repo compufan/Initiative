@@ -22,6 +22,7 @@ import {
   neuesDoc,
   weiterdrehen,
   zuschnittHalten,
+  wirksamerZuschnitt,
   zuschnittInAnsicht,
   BEREICHE_MAX,
   BEREICH_NEUTRAL,
@@ -36,6 +37,7 @@ import {
   type VerlaufTeil,
   type Zuschnitt,
 } from './doc.js';
+import { NEIGUNG_MAX, neigungKlemmen } from './neigen.js';
 import { basisAus, lupeHalten, zoomAusSpanne } from './lupe.js';
 import {
   FARB_NEUTRAL,
@@ -673,7 +675,7 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     const leer = { x: 0, y: 0, w: 0, h: 0 };
 
     if (werkzeugRef.current === 'zuschnitt') {
-      const inAnsicht = zuschnittInAnsicht(aktuell.zuschnitt, W, H, aktuell);
+      const inAnsicht = zuschnittInAnsicht(wirksamerZuschnitt(aktuell, W, H), W, H, aktuell);
       // Erst merken, wenn sich wirklich etwas bewegt – siehe `zugGemerkt`.
       // Vorher legte jedes blosse Antippen der Fläche einen Schritt an, und
       // fünf Fehlgriffe hintereinander schoben den Verlauf leer.
@@ -935,6 +937,9 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
       const sicht = ansichtGroesse(W, H, aktuell.drehung);
       const gehalten = zuschnittHalten(rechteck, sicht.w, sicht.h);
       const amBild = ansichtAlsZuschnitt(gehalten, W, H, aktuell);
+      // Gehalten wird am Bildrand, nicht am geneigten Bild: Gespeichert ist
+      // die ABSICHT. Was davon nach der Neigung übrig bleibt, rechnet
+      // `wirksamerZuschnitt` bei jedem Zeichnen neu aus.
       zug.current = { ...zug.current, begonnen: true };
       setDoc((wert) => (wert ? { ...wert, zuschnitt: amBild } : wert));
       return;
@@ -1131,31 +1136,40 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
     verhaeltnisRef.current = wert;
     if (!bild || wert === null) return;
     merken();
-    setDoc((aktuell) =>
-      aktuell
-        ? {
-            ...aktuell,
-            zuschnitt: aufVerhaeltnis(
-              aktuell.zuschnitt,
-              // Das Verhältnis gilt für das, was man sieht; am hochkant
-              // gedrehten Bild ist „16:9“ also quer zum Original.
-              aktuell.drehung === 90 || aktuell.drehung === 270 ? 1 / wert : wert,
-              bild.naturalWidth,
-              bild.naturalHeight,
-            ),
-          }
-        : aktuell,
-    );
+    setDoc((aktuell) => {
+      if (!aktuell) return aktuell;
+      const passend = aufVerhaeltnis(
+        aktuell.zuschnitt,
+        // Das Verhältnis gilt für das, was man sieht; am hochkant
+        // gedrehten Bild ist „16:9“ also quer zum Original.
+        aktuell.drehung === 90 || aktuell.drehung === 270 ? 1 / wert : wert,
+        bild.naturalWidth,
+        bild.naturalHeight,
+      );
+      return { ...aktuell, zuschnitt: passend };
+    });
   }
 
   function zuschnittGanz() {
     if (!bild) return;
     merken();
-    setDoc((wert) =>
-      wert
-        ? { ...wert, zuschnitt: { x: 0, y: 0, w: bild.naturalWidth, h: bild.naturalHeight } }
-        : wert,
-    );
+    const ganz = { x: 0, y: 0, w: bild.naturalWidth, h: bild.naturalHeight };
+    setDoc((wert) => (wert ? { ...wert, zuschnitt: ganz } : wert));
+  }
+
+  /**
+   * Der Feinwinkel zum Geraderichten.
+   *
+   * Gerechnet wird immer vom UNGENEIGTEN Ausgangsrahmen aus, nie vom
+   * aktuellen. Sonst wäre jede Reglerbewegung eine weitere Verkleinerung:
+   * einmal nach rechts und wieder zurück, und der Ausschnitt wäre für immer
+   * enger – nach ein paar Zügen bliebe vom Bild nichts übrig.
+   */
+  function neigenSetzen(grad: number) {
+    if (!bild) return;
+    merkenGebuendelt('neigung');
+    const sauber = neigungKlemmen(grad);
+    setDoc((wert) => (wert ? { ...wert, neigung: sauber } : wert));
   }
 
   function textHinzufuegen() {
@@ -1777,8 +1791,33 @@ export function BildEditor({ quelle, name, onClose, onFertig, zielName }: BildEd
                 </button>
               ))}
             </div>
+            <label className="bild-schieber">
+              <span>Geraderichten</span>
+              <input
+                type="range"
+                min={-NEIGUNG_MAX}
+                max={NEIGUNG_MAX}
+                step={0.1}
+                value={doc?.neigung ?? 0}
+                onChange={(event) => neigenSetzen(Number(event.target.value))}
+                aria-label="Geraderichten – Bild um kleine Winkel drehen"
+              />
+              <output>{(doc?.neigung ?? 0).toFixed(1)}°</output>
+            </label>
+            <div className="bild-reihe">
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => neigenSetzen(0)}
+                disabled={!doc || doc.neigung === 0}
+              >
+                Neigung zurück
+              </button>
+            </div>
             <p className="bild-hinweis">
               Zieh an den Ecken oder Kanten. Innerhalb des Rahmens verschiebst du den Ausschnitt.
+              Mit <b>Geraderichten</b> kippst du einen schiefen Horizont gerade – der Ausschnitt
+              rückt dabei so weit nach, dass keine leeren Ecken entstehen.
             </p>
           </>
         )}
