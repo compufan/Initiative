@@ -47,10 +47,18 @@ export function AboutCard() {
     }
     setSucht(true);
     try {
-      const gefunden = await nachUpdateSuchen();
+      const stand = await nachUpdateSuchen();
       // Beim Fund setzt `onNeedRefresh` das Band – dann steht der Knopf ab
       // jetzt auf „Jetzt aktualisieren“ und niemand muss zweimal tippen.
-      if (!gefunden) toast('Du hast schon den neuesten Stand', 'success');
+      //
+      // „Konnte nicht nachsehen“ ist ausdrücklich kein Erfolg: Hier stand
+      // vorher „Du hast schon den neuesten Stand“ auch dann, wenn es gar
+      // keine Service-Worker-Anmeldung gab und niemand irgendwo nachgesehen
+      // hatte.
+      if (stand === 'aktuell') toast('Du hast schon den neuesten Stand', 'success');
+      if (stand === 'unmoeglich') {
+        toast('Konnte nicht nachsehen – lade die Seite neu und versuch es dann.', 'error');
+      }
     } catch (error) {
       toast(errorMessage(error, 'Nach Updates suchen ging gerade nicht'), 'error');
     } finally {

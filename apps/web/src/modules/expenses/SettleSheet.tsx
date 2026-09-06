@@ -51,8 +51,22 @@ export function SettleSheet({
   const meinName = useMyName();
   const verwendungszweck = meinName ? `Ausgaben ${meinName}` : 'Ausgaben';
 
+  /*
+   * Zahlungswege holt nur, wer selbst schuldet.
+   *
+   * In der anderen Richtung – „Erhalten?“ – wird das Ergebnis nirgends
+   * benutzt: PayPal-Knopf, Bankdaten und Hinweis hängen alle an `ichSchulde`.
+   * Trotzdem lag der ganze Inhalt hinter `laedt`, und ein Fehlschlag meldete
+   * „Nicht abrufbar“ für etwas, das niemand angefordert hatte. Wer nur einen
+   * Haken setzen wollte, wartete auf eine Anfrage ohne Zweck – und bekam bei
+   * schlechtem Netz eine Fehlermeldung dazu.
+   */
   useEffect(() => {
     if (!open) return;
+    if (!ichSchulde) {
+      setLaedt(false);
+      return;
+    }
     let abgebrochen = false;
     setLaedt(true);
     void api.expenses
@@ -161,8 +175,15 @@ export function SettleSheet({
                 wert={profile.accountHolder ?? displayName}
                 onCopy={kopieren}
               />
-              <Zeile label="IBAN" wert={formatIban(profile.iban)} onCopy={kopieren} />
-              {profile.bic && <Zeile label="BIC" wert={profile.bic} onCopy={kopieren} />}
+              <Zeile
+                label="IBAN"
+                wert={formatIban(profile.iban)}
+                ohneLeerzeichen
+                onCopy={kopieren}
+              />
+              {profile.bic && (
+                <Zeile label="BIC" wert={profile.bic} ohneLeerzeichen onCopy={kopieren} />
+              )}
               <Zeile
                 label="Betrag"
                 wert={formatCents(Math.abs(amountCents), currency)}
@@ -200,13 +221,25 @@ export function SettleSheet({
   );
 }
 
+/**
+ * Eine Zeile der Überweisungsdaten.
+ *
+ * `ohneLeerzeichen` gilt für IBAN und BIC: Sie stehen hier in Vierergruppen,
+ * ins Formular der Bank gehören sie am Stück. Für alles andere wäre dasselbe
+ * falsch – und genau das geschah: Kopiert wurden „AnnaMüller“, „12,50€“ und
+ * „AusgabenTimKasper“, während auf dem Schirm der richtige Text mit
+ * Leerzeichen stand. Die Bank nimmt einen so verstümmelten Namen nicht an,
+ * und im Verwendungszweck sucht der Empfänger vergeblich nach seinem Wort.
+ */
 function Zeile({
   label,
   wert,
+  ohneLeerzeichen,
   onCopy,
 }: {
   label: string;
   wert: string;
+  ohneLeerzeichen?: boolean;
   onCopy: (text: string, was: string) => void;
 }) {
   return (
@@ -216,7 +249,8 @@ function Zeile({
       <button
         type="button"
         className="btn btn-sm"
-        onClick={() => onCopy(wert.replace(/\s/g, ''), label)}
+        data-tipp={`${label} in die Zwischenablage legen`}
+        onClick={() => onCopy(ohneLeerzeichen ? wert.replace(/\s/g, '') : wert, label)}
       >
         Kopieren
       </button>

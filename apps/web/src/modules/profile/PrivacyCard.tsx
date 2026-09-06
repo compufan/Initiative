@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { herunterladen } from '../../lib/herunterladen.js';
 import { Sheet } from '../../components/Sheet.js';
 import { api, API_BASE } from '../../lib/api.js';
@@ -77,6 +77,20 @@ export function PrivacyCard() {
 function LoeschSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [passwort, setPasswort] = useState('');
   const [busy, setBusy] = useState(false);
+
+  /*
+   * Das Passwort bleibt nicht liegen.
+   *
+   * `Sheet` hängt nur seine Kinder ab, die Komponente selbst bleibt stehen –
+   * und `onClose` setzte allein `loeschen` auf false. Wer das eingetippte
+   * Passwort sah, es sich anders überlegte und zumachte, kam beim nächsten
+   * Öffnen zu einem Blatt zurück, in dem „Endgültig löschen“ sofort scharf
+   * war. Ein Blatt, das nur einen Tipp von der Kontolöschung entfernt ist,
+   * darf so nicht aufgehen.
+   */
+  useEffect(() => {
+    if (!open) setPasswort('');
+  }, [open]);
 
   async function ausfuehren() {
     setBusy(true);

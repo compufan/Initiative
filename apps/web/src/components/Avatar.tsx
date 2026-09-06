@@ -32,9 +32,19 @@ export function Avatar({ name, id, url, size = 44, online, emoji }: AvatarProps)
           {emoji ?? initialsFor(name)}
         </span>
       )}
+      {/*
+          Der Punkt sagt, was er bedeutet.
+
+          Der einzige Unterschied zwischen „da" und „nicht da" war die Farbe –
+          grün gegen grau. Wer die Bedeutung nicht kennt oder die beiden Töne
+          nicht trennen kann, bekam keinerlei Auskunft, und die Vorlesehilfe
+          übersprang ihn ganz.
+      */}
       {online != null && (
         <span
-          aria-hidden="true"
+          role="img"
+          aria-label={online ? 'Gerade in der App' : 'Gerade nicht in der App'}
+          data-tipp={online ? 'Gerade in der App' : 'Gerade nicht in der App'}
           style={{
             position: 'absolute',
             right: 0,

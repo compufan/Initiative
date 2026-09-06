@@ -78,6 +78,8 @@ export function AdminScreen() {
   const [maxUses, setMaxUses] = useState('1');
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<AdminMemberDto | null>(null);
+  /** Der Einladungscode, dessen Rücknahme gerade zur Bestätigung steht. */
+  const [ruecknahme, setRuecknahme] = useState<string | null>(null);
   const [storage, setStorage] = useState<StorageCheck | null>(null);
   const [checking, setChecking] = useState(false);
 
@@ -128,7 +130,17 @@ export function AdminScreen() {
     }
   }
 
+  /*
+   * Zurückziehen ist endgültig – deshalb Rückfrage und Sperre.
+   *
+   * Der Server kennt keinen Weg zurück (`where code = $1 and revoked_at is
+   * null`, sonst 404), der Knopf war aber weder gesperrt noch abgesichert:
+   * ein Tipp daneben, und ein Code, den vielleicht schon jemand bekommen hat,
+   * ist tot. Bei „Entfernen“ am Mitglied fragt derselbe Bildschirm längst.
+   */
   async function revoke(code: string) {
+    setBusy(true);
+    setRuecknahme(null);
     try {
       await api.admin.revokeInvite(code);
       setInvites(
@@ -140,6 +152,8 @@ export function AdminScreen() {
       toast('Code zurückgezogen', 'success');
     } catch (error) {
       toast(errorMessage(error, 'Zurückziehen fehlgeschlagen'), 'error');
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -245,7 +259,11 @@ export function AdminScreen() {
             id="adm-max"
             className="input"
             type="number"
-            min="1"
+            // `min="0"`, weil der Hinweis darunter zu genau diesem Wert
+            // auffordert und `createInvite` ihn als „unbegrenzt" liest. Mit
+            // `min="1"` kam der Zähler des Feldes nie auf 0, und wer ihn
+            // eintippte, bekam ein ungültiges Feld für den dokumentierten Fall.
+            min="0"
             value={maxUses}
             onChange={(event) => setMaxUses(event.target.value)}
           />
@@ -308,7 +326,9 @@ export function AdminScreen() {
                         <button
                           type="button"
                           className="btn btn-ghost"
-                          onClick={() => void revoke(invite.code)}
+                          disabled={busy}
+                          data-tipp="Der Code lässt sich danach nicht mehr einlösen – auch nicht von jemandem, der ihn schon hat"
+                          onClick={() => setRuecknahme(invite.code)}
                         >
                           Zurückziehen
                         </button>
@@ -363,6 +383,17 @@ export function AdminScreen() {
           </ul>
         )}
       </section>
+
+      <ConfirmDialog
+        open={ruecknahme != null}
+        title={`Code ${ruecknahme ?? ''} zurückziehen?`}
+        description="Er lässt sich danach nicht mehr einlösen – auch nicht von jemandem, der ihn schon bekommen hat. Rückgängig geht das nicht."
+        confirmLabel="Zurückziehen"
+        danger
+        busy={busy}
+        onCancel={() => setRuecknahme(null)}
+        onConfirm={() => ruecknahme && void revoke(ruecknahme)}
+      />
 
       <ConfirmDialog
         open={confirm != null}

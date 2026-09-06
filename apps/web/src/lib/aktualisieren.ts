@@ -59,32 +59,44 @@ export function nachNeuerFassungSehen(registration: ServiceWorkerRegistration): 
  * gerade auf eine bestimmte Änderung wartet und wissen will, ob sie schon da
  * ist. Dann will man einen Knopf und keine halbe Stunde Geduld.
  *
- * Rückgabe: `true`, wenn danach etwas zum Aktualisieren bereitliegt. Das
- * Anwenden macht weiterhin das Band oben – hier wird nur gefragt.
+ * Rückgabe: `'neu'`, wenn etwas zum Aktualisieren bereitliegt, `'aktuell'`,
+ * wenn nachgesehen wurde und nichts da ist, und `'unmoeglich'`, wenn gar nicht
+ * nachgesehen werden konnte. Das Anwenden macht weiterhin das Band oben – hier
+ * wird nur gefragt.
+ *
+ * Die drei Fälle mussten auseinander: Ohne Service-Worker-Anmeldung – im
+ * Entwicklungsbetrieb, im privaten Fenster, bei abgeschalteten Arbeitern – kam
+ * schlicht `false` zurück, und der Aufrufer machte daraus die Erfolgsmeldung
+ * „Du hast schon den neuesten Stand“. Das ist eine Auskunft über etwas, das
+ * nie nachgesehen wurde.
  */
-export async function nachUpdateSuchen(): Promise<boolean> {
-  if (!anmeldung) return false;
+export type UpdateStand = 'neu' | 'aktuell' | 'unmoeglich';
+
+export async function nachUpdateSuchen(): Promise<UpdateStand> {
+  if (!anmeldung) return 'unmoeglich';
   await anmeldung.update();
 
   // `update()` kommt zurück, sobald der Browser die Datei geholt hat. Ein
   // gefundener neuer Arbeiter braucht danach noch einen Moment, bis er von
   // `installing` auf `waiting` steht – ohne dieses Warten meldete der Knopf
   // „nichts Neues“, und eine Sekunde später erschiene das Band.
-  if (anmeldung.waiting) return true;
+  if (anmeldung.waiting) return 'neu';
   const neuer = anmeldung.installing;
-  if (!neuer) return false;
+  if (!neuer) return 'aktuell';
 
-  return new Promise<boolean>((fertig) => {
+  return new Promise<UpdateStand>((fertig) => {
     const aufraeumen = () => neuer.removeEventListener('statechange', horcher);
     const horcher = () => {
       if (neuer.state === 'installed') {
         aufraeumen();
-        fertig(true);
+        fertig('neu');
       } else if (neuer.state === 'redundant') {
         // Passiert, wenn die Installation scheitert – etwa weil das Netz
-        // mitten im Laden wegbricht.
+        // mitten im Laden wegbricht. Es lag also durchaus etwas bereit; wir
+        // konnten es nur nicht holen. „Du hast den neuesten Stand" wäre hier
+        // schlicht gelogen.
         aufraeumen();
-        fertig(false);
+        fertig('unmoeglich');
       }
     };
     neuer.addEventListener('statechange', horcher);
@@ -92,7 +104,7 @@ export async function nachUpdateSuchen(): Promise<boolean> {
     // Nicht ewig hängen bleiben, wenn gar nichts mehr passiert.
     window.setTimeout(() => {
       aufraeumen();
-      fertig(anmeldung?.waiting != null);
+      fertig(anmeldung?.waiting != null ? 'neu' : 'aktuell');
     }, 15_000);
   });
 }

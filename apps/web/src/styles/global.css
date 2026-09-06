@@ -524,6 +524,14 @@ canvas {
   box-shadow: var(--shadow);
   font-size: 0.9rem;
   animation: fade-in var(--transition);
+  /* Seit die Meldung ein Knopf ist: linksbündig wie vorher, volle Breite,
+     und sichtbar antippbar. */
+  width: 100%;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.9rem;
 }
 
 .toast-error {

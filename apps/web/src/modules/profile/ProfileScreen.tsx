@@ -25,6 +25,8 @@ export function ProfileScreen() {
   /** Das noch unbearbeitete Foto, solange der Zuschnitt offen ist. */
   const [avatarRoh, setAvatarRoh] = useState<File | null>(null);
   const [confirmLogout, setConfirmLogout] = useState(false);
+  // Für den „Erneut versuchen"-Knopf im Leerzustand weiter unten.
+  const [holt, setHolt] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   if (!user) {
@@ -35,12 +37,34 @@ export function ProfileScreen() {
           title="Profil noch nicht geladen"
           description="Du bist angemeldet, aber dein Profil konnte nicht vom Server geholt werden. Prüfe deine Verbindung und versuche es noch einmal."
           action={
+            /*
+                Der Knopf sagt, ob es geklappt hat.
+
+                `refreshUser` verschluckt jeden Fehler („keep the cached
+                user“), meldete also weder Erfolg noch Misserfolg, und der
+                Knopf hatte keinen Wartezustand. Wer ihn ohne Netz drückte,
+                sah denselben Bildschirm und dachte, der Knopf sei tot.
+            */
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => void useSession.getState().refreshUser()}
+              disabled={holt}
+              onClick={() => {
+                setHolt(true);
+                void useSession
+                  .getState()
+                  .refreshUser()
+                  .then(() => {
+                    // Klappt es, ersetzt das geladene Profil diesen ganzen
+                    // Bildschirm – dann sieht die Meldung niemand mehr.
+                    if (!useSession.getState().user) {
+                      toast('Das Profil kam nicht durch. Prüfe deine Verbindung.', 'error');
+                    }
+                  })
+                  .finally(() => setHolt(false));
+              }}
             >
-              Erneut versuchen
+              {holt ? 'Wird geholt …' : 'Erneut versuchen'}
             </button>
           }
         />

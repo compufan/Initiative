@@ -84,7 +84,20 @@ export function AusgabenScreen() {
     const abAusgabe = realtime.on('expense.updated', ({ expense }) => {
       setExpenses((liste) => {
         const index = liste.findIndex((eintrag) => eintrag.id === expense.id);
-        if (index < 0) return [expense, ...liste];
+        if (index < 0) {
+          /*
+           * Der Filter gilt auch für das, was hereinkommt.
+           *
+           * Der Server schickt das Ereignis an alle Beteiligten – unabhängig
+           * davon, welcher Chat hier oben eingestellt ist. Ohne diese Prüfung
+           * erschien bei gesetztem Filter „WG“ plötzlich eine Ausgabe aus der
+           * Hüttengruppe ganz oben in der Liste und verschwand beim nächsten
+           * vollständigen Laden wieder. Wer sie antippte, sah Zahlen, die zu
+           * den Salden darüber nicht passten.
+           */
+          if (chatId && expense.conversationId !== chatId) return liste;
+          return [expense, ...liste];
+        }
         const naechste = liste.slice();
         naechste[index] = expense;
         return naechste;

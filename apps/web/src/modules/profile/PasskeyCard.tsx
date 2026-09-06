@@ -111,7 +111,18 @@ export function PasskeyCard() {
         </ul>
       )}
 
-      {available ? (
+      {/*
+          Drei Zustände, nicht zwei.
+
+          `available` beginnt bei `null` und wird erst nach der Prüfung
+          gesetzt. Der Zweig behandelte `null` wie `false` und behauptete
+          damit für einen Augenblick, das Gerät könne keine Passkeys – auf
+          einem langsamen Telefon lange genug, dass man es liest und die Karte
+          wieder zumacht.
+      */}
+      {available === null ? (
+        <p className="prf-hint">Wird geprüft …</p>
+      ) : available ? (
         <button type="button" className="btn" disabled={busy} onClick={() => void add()}>
           {keys && keys.length > 0 ? 'Weiteres Gerät einrichten' : 'Dieses Gerät einrichten'}
         </button>

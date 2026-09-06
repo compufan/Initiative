@@ -89,14 +89,32 @@ export function PersonenWahl({
       return undefined;
     }
     setSucht(true);
+    /*
+     * Ein Abbruch-Merker, nicht nur ein abgeräumter Zeitgeber.
+     *
+     * Der Timer wurde abgebrochen, die bereits LAUFENDE Anfrage nicht. Zwei
+     * Dinge gingen dabei schief: Eine ältere, langsamere Antwort überschrieb
+     * die Treffer der neueren – man tippte „Ann“, dann „Anna“, und bekam die
+     * Treffer zu „Ann“ zu sehen. Und ihr `finally` setzte `sucht` auf false,
+     * während die neue Suche noch lief: Für einen Augenblick stand dann
+     * „Niemand gefunden.“ da, mitten in der Suche.
+     */
+    let abgebrochen = false;
     const timer = window.setTimeout(() => {
       void api.users
         .search(begriff)
-        .then((ergebnis) => setTreffer(ergebnis.items))
-        .catch(() => setTreffer([]))
-        .finally(() => setSucht(false));
+        .then((ergebnis) => {
+          if (!abgebrochen) setTreffer(ergebnis.items);
+        })
+        .catch(() => {
+          if (!abgebrochen) setTreffer([]);
+        })
+        .finally(() => {
+          if (!abgebrochen) setSucht(false);
+        });
     }, 250);
     return () => {
+      abgebrochen = true;
       window.clearTimeout(timer);
       setSucht(false);
     };
@@ -112,6 +130,42 @@ export function PersonenWahl({
       return naechster;
     });
   }, [vorschlaege, treffer]);
+
+  /*
+   * Gewählte, die weder vorgeschlagen noch gesucht wurden, werden NACHGELADEN.
+   *
+   * Sonst bekamen sie keine Zeile – der Zähler unten zählt sie aber mit. Die
+   * Liste zeigte drei Haken und darüber stand „5 Personen“, und was die
+   * fehlenden zwei sind, liess sich nirgends herausfinden. Genau das, was der
+   * Kommentar beim Zähler verhindern wollte.
+   *
+   * Scheitert das Nachladen, bleibt eine Zeile mit Platzhalter: Eine Person,
+   * deren Namen wir nicht kennen, ist immer noch besser als eine Zahl, die
+   * niemand erklären kann.
+   */
+  const fehlend = gewaehlt.filter((id) => !gemerkt[id]).join(',');
+  useEffect(() => {
+    if (!fehlend) return;
+    let abgebrochen = false;
+    void Promise.all(
+      fehlend.split(',').map((id) =>
+        api.users
+          .byId(id)
+          .then((person) => ({ id, displayName: person.displayName }))
+          .catch(() => ({ id, displayName: 'Unbekannt' })),
+      ),
+    ).then((geladen) => {
+      if (abgebrochen) return;
+      setGemerkt((vorher) => {
+        const naechster = { ...vorher };
+        for (const person of geladen) naechster[person.id] = person;
+        return naechster;
+      });
+    });
+    return () => {
+      abgebrochen = true;
+    };
+  }, [fehlend]);
 
   const liste = useMemo(() => {
     const nach: Person[] = [];

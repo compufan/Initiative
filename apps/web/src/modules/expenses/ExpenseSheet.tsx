@@ -61,6 +61,8 @@ export function ExpenseSheet({
   const conversations = useChat((state) => state.conversations);
 
   const [chatId, setChatId] = useState(conversationId ?? '');
+  // Zählt die Öffnungen des Blatts – siehe den Effekt weiter unten.
+  const [oeffnungsNr, setOeffnungsNr] = useState(0);
   const [title, setTitle] = useState('');
   const [betrag, setBetrag] = useState('');
   const [paidBy, setPaidBy] = useState(myId);
@@ -94,6 +96,12 @@ export function ExpenseSheet({
     setSichtbarkeit('participants');
     setZuschauer([]);
     setNote('');
+    // Zählt jedes Öffnen. `beteiligte` und `paidBy` hängen unten daran –
+    // dort stehen sie zusammen mit dem Chatwechsel, weil beides denselben
+    // Anlass hat. Ohne diesen Zähler blieb die Abwahl vom letzten Mal
+    // stehen, wenn derselbe Chat noch eingestellt war: React löst bei
+    // gleichem Wert keine Änderung aus, der Effekt lief also nicht.
+    setOeffnungsNr((nummer) => nummer + 1);
   }, [open, conversationId, conversations, myId]);
 
   /**
@@ -110,18 +118,41 @@ export function ExpenseSheet({
    */
   const mitgliedIds = chat ? chat.members.map((member) => member.userId).join(',') : '';
 
-  // Die Vorauswahl gilt beim Wechsel des Chats – und nur dann.
+  /**
+   * Wer bei DIESER Ausgabe zur Wahl steht.
+   *
+   * Ohne Chat („Nur für mich“) bin das ich – und das war die Sackgasse: Die
+   * Liste blieb leer, die Personenwahl wurde gar nicht erst gezeigt („Wähle
+   * oben einen Chat.“), und `speichern` brach mit „Wähle mindestens eine
+   * Person, die mitzahlt“ ab, obwohl im ganzen Blatt niemand zur Wahl stand.
+   * Eine Ausgabe nur für sich liess sich hier also nie eintragen, obwohl die
+   * Liste diese Art kennt und anzeigt. Wer noch gar keinen Chat hat, traf
+   * dasselbe – `conversations[0]?.id ?? ''` ist dann auch ''.
+   */
+  const wahlIds = chatId ? mitgliedIds.split(',').filter(Boolean) : [myId];
+  const wahlSchluessel = wahlIds.join(',');
+
+  /*
+   * Die Vorauswahl gilt beim Wechsel des Chats und bei jedem Öffnen.
+   *
+   * `paidBy` gehört mit hierher: Es wurde nur beim Öffnen gesetzt. Wer den
+   * Chat wechselte, schickte weiter die Kennung aus dem alten – der Server
+   * prüft `paid_by` nicht gegen die Mitgliedschaft, die Ausgabe wurde also
+   * jemandem zugeschrieben, der im neuen Chat gar nicht vorkommt. Sichtbar
+   * war davon nichts: Das Feld zeigt nur Namen aus dem neuen Chat.
+   */
   useEffect(() => {
-    setBeteiligte(chatId ? mitgliedIds.split(',').filter(Boolean) : []);
-    // Bewusst nur `chatId`: Kommt jemand in den Chat, ändert sich zwar die
-    // Mitgliederliste, aber eine laufende Eingabe darf das nicht umwerfen.
+    setBeteiligte(wahlSchluessel.split(',').filter(Boolean));
+    setPaidBy(myId);
+    // Bewusst nicht `mitgliedIds`: Kommt jemand in den Chat, ändert sich zwar
+    // die Mitgliederliste, aber eine laufende Eingabe darf das nicht umwerfen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatId]);
+  }, [chatId, oeffnungsNr, myId]);
 
   // Die Namen dagegen dürfen mitwachsen. Ohne sie wäre die Liste eine Reihe
   // Kennungen, mit denen niemand etwas anfangen kann.
   useEffect(() => {
-    const ids = mitgliedIds.split(',').filter(Boolean);
+    const ids = wahlSchluessel.split(',').filter(Boolean);
     if (ids.length === 0) {
       setLeute([]);
       return undefined;
@@ -136,7 +167,7 @@ export function ExpenseSheet({
     return () => {
       abgebrochen = true;
     };
-  }, [mitgliedIds]);
+  }, [wahlSchluessel]);
 
   const cents = parseAmount(betrag);
   const vorschau = useMemo(() => {

@@ -39,14 +39,25 @@ export function ToastHost() {
   if (toasts.length === 0) return null;
   return (
     <div className="toast-host" role="status" aria-live="polite">
+      {/*
+          Die Meldung ist wegtippbar – und sagt das jetzt auch.
+
+          Sie trug einen Klick-Behandler, aber weder `role` noch `tabIndex`
+          noch `cursor: pointer`: Dass ein Tipp sie sofort wegnimmt, erfuhr
+          niemand, und mit der Tastatur war sie überhaupt nicht zu erreichen.
+          Ein `button` erledigt beides von selbst.
+      */}
       {toasts.map((toast) => (
-        <div
+        <button
           key={toast.id}
+          type="button"
           className={`toast ${toast.kind === 'error' ? 'toast-error' : toast.kind === 'success' ? 'toast-success' : ''}`}
+          data-tipp="Blendet die Meldung sofort aus – sonst verschwindet sie von selbst"
+          aria-label={`${toast.message} – wegtippen`}
           onClick={() => dismiss(toast.id)}
         >
           {toast.message}
-        </div>
+        </button>
       ))}
     </div>
   );
