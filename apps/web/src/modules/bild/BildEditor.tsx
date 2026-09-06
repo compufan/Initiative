@@ -1210,6 +1210,12 @@ export function BildEditor({
     if (!bild) return;
     merken();
     const ganz = { x: 0, y: 0, w: bild.naturalWidth, h: bild.naturalHeight };
+    // Das Seitenverhältnis mit lösen: „Ganzes Bild" nimmt das ganze Bild, und
+    // das hat nun einmal das Verhältnis, das es hat. Blieb der Knopf „1:1"
+    // hervorgehoben, behauptete er einen Zustand, den der Zuschnitt nicht hat
+    // – und der nächste Zug an einer Ecke sprang zurück auf das Quadrat.
+    setVerhaeltnis(null);
+    verhaeltnisRef.current = null;
     setDoc((wert) => (wert ? { ...wert, zuschnitt: ganz } : wert));
   }
 
@@ -1337,6 +1343,10 @@ export function BildEditor({
       histogramm[Math.min(255, Math.max(0, Math.round(y)))] += 1;
     }
     merken();
+    // Die Automatik überschreibt alle Farbregler – dann darf keine Vorlage
+    // mehr als aktiv dastehen. Sonst behauptet der Knopf eine Einstellung,
+    // die im Bild nicht mehr steckt.
+    setVorlageId(null);
     const vorschlag = autoAnpassung(histogramm);
     setDoc((alt) =>
       alt
@@ -1409,8 +1419,25 @@ export function BildEditor({
       teil = { id, modus: 'dazu', umkehren: false, art: 'pinsel', striche: [] };
     }
 
-    merken();
+    /*
+     * Erst prüfen, dann merken.
+     *
+     * Andersherum stand es hier, und das machte aus einem wirkungslosen Knopf
+     * einen schädlichen: `merken()` legt einen Rückgängig-Schritt an und
+     * leert den Wiederherstellen-Stapel. Wer bei vollem Bereichszähler auf
+     * „Verlauf" tippte, verlor also seine Wiederherstellen-Schritte – und
+     * bekam nicht einmal gesagt, warum nichts passiert ist.
+     */
     const vorhanden = aktuell.bereiche.find((b) => b.id === bereichRef.current);
+    if (!vorhanden && aktuell.bereiche.length >= BEREICHE_MAX) {
+      toast(
+        `Mehr als ${BEREICHE_MAX} Bereiche gehen nicht. Lösch einen, wenn du einen neuen brauchst.`,
+        'info',
+      );
+      return;
+    }
+
+    merken();
     if (vorhanden) {
       setDoc((wert) =>
         wert
@@ -1423,7 +1450,6 @@ export function BildEditor({
           : wert,
       );
     } else {
-      if (aktuell.bereiche.length >= BEREICHE_MAX) return;
       const neu: Bereich = {
         id: neueId('b'),
         name: `Bereich ${aktuell.bereiche.length + 1}`,
@@ -1675,6 +1701,10 @@ export function BildEditor({
   const tonZuruecksetzen = useCallback(() => {
     merken();
     setDoc((alt) => (alt ? { ...alt, anpassung: { ...NEUTRAL } } : alt));
+    // Die Vorlage mit aufheben: Sonst blieb sie hervorgehoben, mit
+    // aria-pressed=true, obwohl von ihr im Bild nichts mehr übrig ist.
+    setVorlageId(null);
+    setVorlageStaerke(1);
   }, [merken]);
 
   function textAendern(aenderung: Partial<Schriftzug>) {
@@ -1907,7 +1937,17 @@ export function BildEditor({
                   className={`btn btn-sm ${vorlageId === vorlage.id ? 'is-active' : ''}`}
                   aria-pressed={vorlageId === vorlage.id}
                   title={vorlage.beschreibung}
-                  onClick={() => vorlageSetzen(vorlage.id, vorlageStaerke)}
+                  /*
+                   * Bei Stärke 0 wieder auf 1.
+                   *
+                   * Sonst wandte jeder Vorlagenknopf die Vorlage mit der
+                   * zuletzt eingestellten Stärke an – und wer den Regler
+                   * einmal auf 0 gezogen hatte, bekam von da an bei JEDEM
+                   * Knopf ein neutrales Bild. Die Vorlage sah dabei
+                   * ausgewählt aus (`is-active`), nur passierte nichts. Ein
+                   * toter Knopf, der so tut, als habe er gewirkt.
+                   */
+                  onClick={() => vorlageSetzen(vorlage.id, vorlageStaerke > 0 ? vorlageStaerke : 1)}
                 >
                   {vorlage.name}
                 </button>
