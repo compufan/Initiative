@@ -448,6 +448,13 @@ serverseitig in `/occurrences` aufgelöst.
 `description`, `location`, `rrule` und `color` verstehen im PATCH `null` als
 „löschen"; ein fehlendes Feld bleibt unverändert.
 
+**`attendeeIds` ist der Sollzustand, kein Nachtrag.** Wer nicht in der Liste
+steht, wird ausgeladen – nur der Veranstalter bleibt in jedem Fall drin. Wer
+jemanden **hinzufügen** will, schickt die bisherigen Teilnehmer mit. Das war
+einmal andersherum, und ein Feld mit zwei Bedeutungen je nach Aufrufer hat
+genau den Fehler erzeugt, den man erwartet: Im Termin-Editor liess sich
+niemand ausladen, die Meldung sagte trotzdem „gespeichert".
+
 **ICS-Abo.** Der `calendarToken` steckt in `SelfUser`. Der Link
 `{PUBLIC_API_URL}/api/v1/calendar/{calendarToken}/feed.ics` lässt sich in iOS,
 Android, Google Kalender und Outlook als Abo eintragen; er liefert ein Jahr
