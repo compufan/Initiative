@@ -4,20 +4,21 @@
 
 Initiative ist keine fertige Chat-App, die man höchstens umlackieren kann, sondern
 ein Fundament: ein Rust-Backend, eine installierbare React-PWA und ein
-Modul-Contract, der beides verbindet. Wer eine Aufgabenliste, eine Haushaltskasse
-oder ein weiteres Mini-Spiel dazubaut, legt einen Ordner an und trägt eine Zeile in
-eine Registry ein – der Kern bleibt unangetastet.
+Modul-Contract, der beides verbindet. Ausgaben, Dateien und der Fotoeditor sind
+genau so entstanden: ein Ordner und eine Zeile in einer Registry – der Kern bleibt
+unangetastet.
 
 Das erste Modul ist ein vollständiger Messenger: Text, Sticker (inklusive eigenem
-Editor), Fotos mit Kameraanbindung, Sprachnachrichten, Videos, Kalender, Umfragen,
-Terminfindung und Mini-Spiele.
+Editor), Fotos mit Kameraanbindung und einem Editor, der Tiefenschärfe im Gerät
+rechnet, Sprachnachrichten, Videos, Dateien mit Berechtigungen, Kalender,
+Ausgaben, Umfragen, Terminfindung und Mini-Spiele.
 
 |              |                                                                          |
 | ------------ | ------------------------------------------------------------------------ |
 | **Backend**  | Rust (Axum 0.8, sqlx, Postgres) – eine Binary, Migrationen einkompiliert |
 | **Frontend** | React 19 + Vite, installierbare PWA mit Service Worker                   |
 | **Realtime** | WebSocket `/ws`, Broadcast über Postgres `LISTEN/NOTIFY`                 |
-| **Medien**   | lokale Platte oder Cloudflare R2 / S3 mit presigned URLs                 |
+| **Medien**   | lokale Platte (Standard) oder S3/R2 mit presigned URLs                   |
 | **Push**     | Web Push (VAPID, RFC 8291) für Android und iOS 16.4+                     |
 
 ---
@@ -40,11 +41,31 @@ Terminfindung und Mini-Spiele.
 - [x] Beliebige Dateien, Bildergalerie mit Lightbox, Video-Vorschaubilder
 - [x] Medien landen offline im Cache und bleiben dort lesbar
 
+**Fotos bearbeiten**
+
+- [x] Zuschneiden, Ausrichten, Licht und Farbe, Malen und Text – im Gerät
+- [x] Vorlagen (Looks) und ein echter Schwarz-Weiß-Filter mit Farbfilter
+- [x] Bereiche: Pinsel, Verlauf, Motiv freistellen, Tiefenkarte aus dem Foto
+- [x] Tiefenschärfe mit echter Blende statt Weichzeichner über allem
+
 **Sticker**
 
 - [x] Sticker-Tastatur im Chat
 - [x] Sticker-Editor: freistellen, zuschneiden, Text und weiße Kontur
 - [x] Eigene Pakete anlegen, teilen, installieren und wieder entfernen
+
+**Dateien und Sammlungen**
+
+- [x] Ordner mit Berechtigungen – geteilt mit einzelnen Leuten oder einem Chat
+- [x] Eine Nachricht lange antippen legt ihren Anhang in eine Sammlung, ohne
+      ihn noch einmal hochzuladen
+- [x] Notizen und Listen, auch direkt an einem Termin
+
+**Ausgaben**
+
+- [x] Wer hat ausgelegt, wer schuldet wem wie viel – gerechnet wird in Cent
+- [x] Salden je Person, Ausgleich einzeln oder für alles auf einmal
+- [x] Zahlungsweg im Profil (z. B. PayPal.Me); über die App läuft kein Geld
 
 **Kalender**
 
@@ -70,6 +91,8 @@ Terminfindung und Mini-Spiele.
 - [x] Push-Benachrichtigungen, Hell/Dunkel-Design, Akzentfarbe je Konto
 - [x] Teilen-Ziel des Systems: Fotos aus anderen Apps direkt in einen Chat
 - [x] Registrierung offen, per Einladungscode oder komplett geschlossen
+- [x] Anmelden mit Passkey (Face ID, Fingerabdruck) statt Passwort
+- [x] Konto löschen – mitsamt allem, was daran hängt
 
 ---
 
@@ -196,10 +219,18 @@ pnpm typecheck                 # tsc über alle Pakete + cargo check
 pnpm lint                      # clippy mit -D warnings
 pnpm build                     # Release-Binary + PWA-Bundle
 
-# End-to-End-Test der API gegen eine echte Datenbank
+# Integrationstests der API gegen eine echte Datenbank
 TEST_DATABASE_URL=postgres://initiative:initiative@localhost:5432/initiative_test \
   cargo test --manifest-path apps/api/Cargo.toml
+
+# End-to-End im echten Browser (Playwright startet API und PWA selbst)
+pnpm --filter @initiative/web e2e
 ```
+
+Die Modelle für Freistellen und Tiefenschärfe liegen nicht im Repository – sie
+werden beim ersten `pnpm dev` geholt (`apps/web/scripts/prepare-models.mjs`) und
+landen in `apps/web/public/models/`. Ohne Netz startet die App trotzdem, nur die
+Verfahren, die ein Modell brauchen, fehlen dann.
 
 ---
 
@@ -209,34 +240,49 @@ TEST_DATABASE_URL=postgres://initiative:initiative@localhost:5432/initiative_tes
 Initiative/
 ├─ apps/
 │  ├─ api/                       Rust-Backend (Axum + sqlx)
-│  │  ├─ migrations/             0001_init.sql – in die Binary eingebettet
+│  │  ├─ migrations/             0001 … 0013 – in die Binary eingebettet
+│  │  ├─ tests/                  Integrationstests gegen echtes Postgres
 │  │  ├─ Dockerfile              zweistufig, Ergebnis ist nur die Binary
 │  │  └─ src/
-│  │     ├─ modules/             REST-Module: auth, users, conversations,
-│  │     │                       messages, media, stickers, calendar, polls,
-│  │     │                       games, push
+│  │     ├─ modules/             REST-Module: auth, passkeys, users,
+│  │     │                       conversations, messages, media, stickers,
+│  │     │                       calendar, polls, games, collections,
+│  │     │                       expenses, push, admin, datenschutz
 │  │     ├─ services/            Fachlogik + Message-Expander
 │  │     ├─ games/               Spielregeln (autoritativ, serverseitig)
 │  │     ├─ realtime/            WebSocket-Hub, Postgres LISTEN/NOTIFY
-│  │     ├─ storage/             local | r2 | s3
+│  │     ├─ storage/             local | s3/r2, Tresor (Verschlüsselung),
+│  │     │                       Müllabfuhr für gelöschte Dateien
 │  │     ├─ push/                Web Push (VAPID, aes128gcm)
+│  │     ├─ auth/                Passwörter (Argon2) und JWT
 │  │     ├─ config.rs            alle Umgebungsvariablen an einer Stelle
+│  │     ├─ drossel.rs           Ratenbegrenzung
+│  │     ├─ recurrence.rs        Serientermine · ical.rs  Export
 │  │     └─ bin/seed.rs          Demo-Daten
 │  └─ web/                       React-PWA (Vite)
+│     ├─ e2e/                    Playwright gegen die echte App
+│     ├─ public/models/          Modelle fürs Gerät (ONNX, TFLite) + Lizenzen
+│     ├─ scripts/                Modelle holen, Symbole und Lizenzliste bauen
 │     └─ src/
-│        ├─ modules/             messenger, media, stickers, calendar,
-│        │                       polls, games, profile
-│        ├─ components/          Avatar, Sheet, Screen, Feedback
-│        ├─ lib/                 api.ts, realtime.ts, db.ts, upload.ts, push.ts
-│        ├─ state/               session, chat, ui (zustand)
+│        ├─ modules/             messenger, media, bild (Fotoeditor),
+│        │                       stickers, calendar, polls, games, files,
+│        │                       expenses, profile
+│        ├─ components/          Avatar, Sheet, Screen, Feedback,
+│        │                       Listenfilter, PersonenWahl
+│        ├─ lib/                 api, realtime, db, upload, push, passkeys,
+│        │                       videoMetadaten
+│        ├─ state/               session, chat, leute, ui (zustand)
 │        ├─ styles/              tokens.css, global.css
 │        └─ sw.ts                Service Worker: Offline, Push, Share Target
 ├─ packages/
 │  └─ shared/                    TypeScript-Contracts: Typen, Limits,
 │                                Realtime-Protokoll, Spielregeln-Spiegel
-├─ docs/                         ARCHITECTURE · API · DEPLOYMENT · EXTENDING · FEATURES
+├─ deploy/vps/                   was auf dem Server liegt: Compose, Caddy,
+│                                deploy.sh, backup.sh, haerten.sh
+├─ docs/                         ARCHITECTURE · API · DEPLOYMENT · EXTENDING
+│                                FEATURES · SICHERHEIT · UMZUG
 ├─ scripts/dev.mjs               startet API und PWA gemeinsam
-├─ docker-compose.yml            Postgres + API + PWA hinter Caddy
+├─ docker-compose.yml            Postgres + API + PWA hinter Caddy (baut selbst)
 └─ .env.example                  kommentierte Beispielkonfiguration
 ```
 
@@ -244,21 +290,34 @@ Initiative/
 
 ## Deployment
 
-Frontend und Backend lassen sich getrennt betreiben – oder gemeinsam hinter einer
-Domain (`docker compose up -d --build`), dann gibt es weder CORS- noch
-Cookie-Sonderfälle.
+**Ein Server, ein `docker compose up -d --build`.** Postgres, die API und die
+fertig gebaute PWA laufen als drei Container hinter einem Caddy, die Dateien
+liegen im Volume daneben. Alles unter einer Domain – deshalb gibt es weder
+CORS- noch Cookie-Sonderfälle, und die Rechnung ist die des Servers, egal wie
+viele Fotos hineingehen.
 
-| Baustein  | Empfehlung                             | Alternativen                                               | Kosten im kleinen Rahmen |
-| --------- | -------------------------------------- | ---------------------------------------------------------- | ------------------------ |
-| PWA       | **Vercel** (Root Directory `apps/web`) | Cloudflare Pages, Netlify, eigener Caddy/nginx             | kostenlos                |
-| API       | **Fly.io** (`fly deploy`)              | Koyeb (Docker), Railway, Docker Compose auf eigenem Server | kostenlos bis wenige €   |
-| Datenbank | **Neon** (pooled Connection String)    | Supabase, eigener Postgres                                 | kostenlos                |
-| Medien    | **Cloudflare R2** (presigned PUT/GET)  | AWS S3, Backblaze B2, MinIO, `STORAGE_DRIVER=local`        | kostenlos bis 10 GB      |
-| Push      | Web Push mit eigenen VAPID-Schlüsseln  | –                                                          | kostenlos                |
+| Baustein  | So läuft es                                         | Auch möglich                                        |
+| --------- | --------------------------------------------------- | --------------------------------------------------- |
+| PWA       | im Build erzeugt, von Caddy statisch ausgeliefert   | jeder Webserver mit `index.html` als Fallback       |
+| API       | Rust-Binary im Container, Migrationen einkompiliert | direkt auf dem Host – es ist eine einzelne Datei    |
+| Datenbank | Postgres 16 im Container, Daten im Volume           | ein vorhandener Postgres, `DATABASE_URL` genügt     |
+| Medien    | `STORAGE_DRIVER=local`, Volume `/data/uploads`      | S3 oder R2 mit presigned URLs (`STORAGE_DRIVER=s3`) |
+| TLS       | Caddy aus `deploy/vps/`, Zertifikat automatisch     | nginx, Traefik oder ein Proxy, der ohnehin da ist   |
+| Push      | Web Push mit eigenen VAPID-Schlüsseln               | –                                                   |
 
-Vollständige Anleitung mit allen Umgebungsvariablen, CORS-Regel für R2,
-`fly secrets set`, Vercel-Einstellungen und Produktions-Checkliste:
-**[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
+Zwei Anleitungen, je nachdem wo du stehst:
+
+- **[docs/UMZUG.md](docs/UMZUG.md)** – von einem leeren VPS bis zur laufenden
+  App unter der eigenen Domain: Härtung, Caddy, Sicherung, Veröffentlichen per
+  Push. Ohne PC, alles vom Handy aus bedienbar.
+- **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** – alle Umgebungsvariablen, die
+  Speicher-Varianten und die Checkliste vor dem ersten echten Nutzer.
+
+Was auf dem Server liegt, steht unter `deploy/vps/`: eine `docker-compose.yml`,
+die fertige Abbilder holt statt zu bauen (ein Rust-Release-Build neben der
+laufenden App ist kein Bauvorgang, sondern ein Ausfall), der äußere
+`Caddyfile`, `deploy.sh` zum Umschalten auf einen Stand, `backup.sh` für
+Datenbank **und** Uploads, und `haerten.sh` für den Server selbst.
 
 ---
 
@@ -302,13 +361,15 @@ Mini-Spiel („Schere Stein Papier") – steht in
 
 ## Dokumentation
 
-| Datei                                        | Inhalt                                             |
-| -------------------------------------------- | -------------------------------------------------- |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Aufbau, Datenfluss, Erweiterungspunkte, Sicherheit |
-| [docs/FEATURES.md](docs/FEATURES.md)         | Was die App aus Nutzersicht kann                   |
-| [docs/API.md](docs/API.md)                   | Alle Endpunkte, Realtime-Protokoll, Fehlerformat   |
-| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)     | Schritt für Schritt in Produktion                  |
-| [docs/EXTENDING.md](docs/EXTENDING.md)       | Kochbuch für neue Module und Spiele                |
+| Datei                                        | Inhalt                                                |
+| -------------------------------------------- | ----------------------------------------------------- |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Aufbau, Datenfluss, Erweiterungspunkte, Sicherheit    |
+| [docs/FEATURES.md](docs/FEATURES.md)         | Was die App aus Nutzersicht kann                      |
+| [docs/API.md](docs/API.md)                   | Alle Endpunkte, Realtime-Protokoll, Fehlerformat      |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)     | Schritt für Schritt in Produktion                     |
+| [docs/EXTENDING.md](docs/EXTENDING.md)       | Kochbuch für neue Module und Spiele                   |
+| [docs/UMZUG.md](docs/UMZUG.md)               | Vom leeren VPS zur laufenden App, Schritt für Schritt |
+| [docs/SICHERHEIT.md](docs/SICHERHEIT.md)     | Was geschützt ist, wogegen – und was offen bleibt     |
 
 ## Lizenz
 
