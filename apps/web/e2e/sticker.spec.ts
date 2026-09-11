@@ -600,3 +600,141 @@ test('„Hohe Qualität" rechnet im eigenen Arbeiter – und meldet sich, wenn e
 
   await context.close();
 });
+
+test('alle sieben Werkzeuge stehen auf dem Schirm, auch auf dem Telefon', async ({
+  browser,
+}, testInfo) => {
+  /*
+   * Der Grund für diesen Test: Die Reiterleiste war eine waagerechte Rolle
+   * mit fester Mindestbreite je Reiter – 7 × 68 + 6 × 4 = 500 Punkte. Auf
+   * einem Telefon mit 412 Punkten lagen „Kontur“ und „Text“ jenseits des
+   * Randes, und die Rollleiste war ausgeblendet: kein Strich, kein Schatten,
+   * nichts, was auf mehr hingedeutet hätte. Wer Text auf seinen Sticker
+   * wollte, fand die Möglichkeit schlicht nicht.
+   *
+   * Gemessen wird deshalb nicht „das Element ist im DOM“, sondern ob sein
+   * Rechteck wirklich innerhalb der Leiste liegt.
+   */
+  const alice = credentials('sctab');
+  const bob = credentials('sctz');
+  const page = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await page.getByRole('button', { name: 'Neuer Chat' }).click();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await page.getByText(bob.displayName).first().click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await page.getByRole('button', { name: 'Sticker', exact: true }).click();
+  await page.getByRole('button', { name: /Sticker erstellen/ }).click();
+
+  const leiste = page.locator('.stk-tabs');
+  await expect(leiste).toBeVisible();
+  const leistenKasten = await leiste.boundingBox();
+  expect(leistenKasten).not.toBeNull();
+
+  const namen = ['Quelle', 'Bewegen', 'Form', 'Freistellen', 'Detail', 'Kontur', 'Text'];
+  for (const name of namen) {
+    const reiter = page.getByRole('tab', { name });
+    const kasten = await reiter.boundingBox();
+    expect(kasten, `„${name}“ hat kein Rechteck`).not.toBeNull();
+    if (!kasten || !leistenKasten) continue;
+    expect(
+      kasten.x >= leistenKasten.x - 1,
+      `„${name}“ beginnt links ausserhalb der Leiste (${testInfo.project.name})`,
+    ).toBe(true);
+    expect(
+      kasten.x + kasten.width <= leistenKasten.x + leistenKasten.width + 1,
+      `„${name}“ endet rechts ausserhalb der Leiste (${testInfo.project.name})`,
+    ).toBe(true);
+    // Und gross genug zum Treffen.
+    expect(kasten.width, `„${name}“ ist zu schmal zum Antippen`).toBeGreaterThanOrEqual(40);
+    expect(kasten.height, `„${name}“ ist zu flach zum Antippen`).toBeGreaterThanOrEqual(44);
+  }
+
+  // Und der hinterste führt wirklich zur Textbedienung.
+  await page.getByRole('tab', { name: 'Text' }).click();
+  await expect(page.getByRole('button', { name: '＋ Text' })).toBeVisible();
+});
+
+test('die Sprechblase bekommt einen Körper – vorher war sie ein unsichtbarer Umriss', async ({
+  browser,
+}) => {
+  /*
+   * Der Anwender meldete: „Es gibt die Option Sprechblase bei Form, aber die
+   * tut nichts."
+   *
+   * Er hatte recht, und der bestehende Test half nicht: Der prüfte, dass der
+   * Knopf DA ist, nie dass er etwas bewirkt. Eine Form schnitt nur weg, was
+   * ausserhalb ihres Pfades liegt (`destination-in`) – bei einem
+   * freigestellten Motiv liegt dort längst nichts mehr, also blieb das Bild
+   * unverändert. Eine Blase ohne Körper ist ausserdem keine.
+   *
+   * Gemessen wird deshalb die Fläche selbst: Im Körper der Blase muss etwas
+   * Undurchsichtiges stehen, unter ihr – neben dem Zipfel – nichts.
+   */
+  const alice = credentials('blase');
+  const bob = credentials('bziel');
+  const page = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await page.getByRole('button', { name: 'Neuer Chat' }).click();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await page.getByText(bob.displayName).first().click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await page.getByRole('button', { name: 'Sticker', exact: true }).click();
+  await page.getByRole('button', { name: /Sticker erstellen/ }).click();
+
+  const leinwand = page.locator('.stk-canvas, canvas').first();
+  await expect(leinwand).toBeVisible();
+  await expect
+    .poll(async () => leinwand.evaluate((el: HTMLCanvasElement) => el.width), { timeout: 15_000 })
+    .toBeGreaterThan(200);
+
+  /** Die Deckkraft an einer Stelle, in Anteilen der Kantenlänge. */
+  const deckung = async (u: number, v: number) =>
+    leinwand.evaluate((el: HTMLCanvasElement, stelle: { u: number; v: number }) => {
+      const ctx = el.getContext('2d');
+      if (!ctx) return -1;
+      const x = Math.min(el.width - 1, Math.round(stelle.u * el.width));
+      const y = Math.min(el.height - 1, Math.round(stelle.v * el.height));
+      return ctx.getImageData(x, y, 1, 1).data[3];
+    }, { u, v });
+
+  /** Die Farbe an einer Stelle als „r,g,b" – zum Vergleichen. */
+  const farbe = async (u: number, v: number) =>
+    leinwand.evaluate((el: HTMLCanvasElement, stelle: { u: number; v: number }) => {
+      const ctx = el.getContext('2d');
+      if (!ctx) return '';
+      const x = Math.min(el.width - 1, Math.round(stelle.u * el.width));
+      const y = Math.min(el.height - 1, Math.round(stelle.v * el.height));
+      const d = ctx.getImageData(x, y, 1, 1).data;
+      return `${d[0]},${d[1]},${d[2]}`;
+    }, { u, v });
+
+  /*
+   * Ein Emoji als Inhalt, damit auch die zweite Hälfte geprüft ist: Die
+   * Fläche muss HINTER das Motiv. Auf leerer Leinwand wäre „darüber" und
+   * „darunter" nicht zu unterscheiden – und genau so kam eine Fassung mit
+   * `source-over` durch die erste Version dieses Tests.
+   */
+  await page.locator('.stk-emoji-btn').first().click();
+  await expect.poll(() => deckung(0.5, 0.5), { timeout: 15_000 }).toBeGreaterThan(200);
+  const vorher = await farbe(0.5, 0.5);
+
+  await page.getByRole('tab', { name: 'Form' }).click();
+  await page.getByRole('button', { name: /Sprechblase/ }).click();
+
+  /*
+   * Gemessen wird im ZIPFEL, nicht in der Mitte: Dort liegt kein Emoji, also
+   * sagt die Deckkraft dort etwas über die Blase und nichts über den Inhalt.
+   */
+  await expect.poll(() => deckung(0.28, 0.9), { timeout: 10_000 }).toBeGreaterThan(200);
+  // Rechts unten, neben dem Zipfel, ist nichts.
+  expect(await deckung(0.92, 0.93)).toBeLessThan(40);
+  // Und das Emoji ist noch zu sehen, nicht übermalt.
+  expect(await farbe(0.5, 0.5)).toBe(vorher);
+
+  // „Ohne Fläche" nimmt den Körper wieder weg – die Wahl bleibt beim Anwender.
+  await page.getByRole('button', { name: 'Ohne Fläche' }).click();
+  await expect.poll(() => deckung(0.28, 0.9), { timeout: 10_000 }).toBeLessThan(40);
+});

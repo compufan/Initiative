@@ -13,6 +13,7 @@ import {
   strichStempeln,
   strichTreffer,
   teilBauen,
+  teilBefund,
   teilSchluessel,
   teileFalten,
   verlaufGewicht,
@@ -992,5 +993,69 @@ describe('strichTreffer', () => {
     expect(strichTreffer([], { x: 0, y: 0 }, 10)).toBe(-1);
     expect(strichTreffer([strich([0, 0, 10, 0])], { x: 0, y: 0 }, Number.NaN)).toBe(-1);
     expect(strichTreffer([strich([0, 0, 10, 0])], { x: Number.NaN, y: 0 }, 10)).toBe(-1);
+  });
+});
+
+describe('teilBefund – warum ein Knopf nichts zu tun scheint', () => {
+  const pinsel = (
+    modus: Maskenmodus,
+    werte: { umkehren?: boolean; striche?: number } = {},
+  ): Maskenteil => ({
+    id: `p${modus}${werte.striche ?? 0}${werte.umkehren ? 'u' : ''}`,
+    modus,
+    umkehren: werte.umkehren ?? false,
+    art: 'pinsel',
+    striche: Array.from({ length: werte.striche ?? 0 }, () => ({
+      punkte: [0, 0, 1, 1],
+      breite: 8,
+      haerte: 1,
+      abziehen: false,
+    })),
+  });
+
+  /*
+   * Der gemeldete Fall: „Umkehren macht manchmal nichts.“ Ein erstes Teil im
+   * Modus `weg` oder `nur` rechnet gegen eine leere Auswahl – `min(0, x)` ist
+   * null, ganz gleich was x ist und ob umgekehrt wurde.
+   */
+  it('nennt ein erstes Teil in weg oder nur wirkungslos – mit und ohne Umkehren', () => {
+    for (const modus of ['weg', 'nur'] as const) {
+      for (const umkehren of [false, true]) {
+        const teile = [pinsel(modus, { striche: 3, umkehren })];
+        expect(teilBefund(teile, 0), `${modus}/${umkehren}`).toBe('ohne-wirkung');
+      }
+    }
+  });
+
+  it('lässt weg und nur gelten, sobald etwas davor ausgewählt ist', () => {
+    const teile = [pinsel('dazu', { striche: 2 }), pinsel('weg', { striche: 2 })];
+    expect(teilBefund(teile, 1)).toBe('wirkt');
+  });
+
+  /*
+   * Ein leeres `dazu`-Teil davor hilft nicht: Es markiert selbst nichts, also
+   * bleibt die Auswahl leer und das `weg` dahinter weiterhin wirkungslos.
+   */
+  it('lässt sich von einem leeren dazu-Teil davor nicht täuschen', () => {
+    const teile = [pinsel('dazu'), pinsel('weg', { striche: 2 })];
+    expect(teilBefund(teile, 1)).toBe('ohne-wirkung');
+  });
+
+  it('zählt ein leeres dazu-Teil aber, wenn es umgekehrt ist – dann deckt es alles', () => {
+    const teile = [pinsel('dazu', { umkehren: true }), pinsel('weg', { striche: 2 })];
+    expect(teilBefund(teile, 1)).toBe('wirkt');
+  });
+
+  /* Die zweite Hälfte der Meldung: „markiert manchmal das gesamte Bild“. */
+  it('warnt, wenn ein leeres Teil umgekehrt wird', () => {
+    expect(teilBefund([pinsel('dazu', { umkehren: true })], 0)).toBe('deckt-alles');
+  });
+
+  it('schweigt bei einem leeren Teil ohne Umkehren', () => {
+    expect(teilBefund([pinsel('dazu')], 0)).toBe('wirkt');
+  });
+
+  it('schweigt bei einem gefüllten Teil mit Umkehren', () => {
+    expect(teilBefund([pinsel('dazu', { striche: 2, umkehren: true })], 0)).toBe('wirkt');
   });
 });

@@ -23,6 +23,7 @@ import { FileViewer } from './FileViewer.js';
 import { ShareSheet } from './ShareSheet.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 import { pfadZu, useFiles } from './state.js';
+import { MAX_KANTE } from '../bild/doc.js';
 
 const ART_TEXT: Record<AttachmentKind, string> = {
   image: 'Bilder',
@@ -410,7 +411,11 @@ export function DateienScreen() {
               ? async (blob, name) => {
                   // Die bearbeitete Fassung kommt als eigener Eintrag dazu; das
                   // Original bleibt unberuehrt daneben stehen.
-                  const bild = await prepareImage(blob, 1920, true);
+                  // `MAX_KANTE`, nicht 1920: Was der Editor ausgibt, geht in seiner
+                  // vollen Kante weiter. (Das Argument stand vorher auf 1920 und
+                  // wurde von `fertig` stillschweigend übergangen – jetzt gilt es,
+                  // also muss hier stehen, was wirklich gemeint ist.)
+                  const bild = await prepareImage(blob, MAX_KANTE, true);
                   const anhang = await uploadBlob({
                     kind: 'image',
                     mime: bild.mime,

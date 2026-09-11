@@ -57,8 +57,12 @@ import {
 import { strichTreffer } from './maske.js';
 import { VORLAGEN, vorlageAnwenden } from './vorlagen.js';
 import { maskeFuerBereich } from './maskenSpeicher.js';
+import { teilBefund } from './maske.js';
 import { netzGrund, netzTeilRechnen, netzVerfuegbar, type Netzart } from './netzMaske.js';
 import { tiefeGrund, tiefeVerfuegbar, tiefenTeilRechnen } from './tiefeNetz.js';
+import { engineInfo, firstUseMb } from '../stickers/engines/index.js';
+import type { EngineKey } from '../stickers/engines/types.js';
+import { writeEngineSetting } from '../stickers/engines/settings.js';
 import { SCHRIFTEN, trifftText, zeichneAnsicht, zeichneAusgabe } from './zeichnen.js';
 import './styles.css';
 
@@ -277,6 +281,35 @@ export function BildEditor({
   const [gewaehlterText, setGewaehlterText] = useState<string | null>(null);
   /** Der gewählte Bereich und das gewählte Maskenteil darin. */
   const [bereichId, setBereichId] = useState<string | null>(null);
+  /*
+   * Taugt die Grafikeinheit für „Hohe Qualität“?
+   *
+   * Dieselbe Prüfung wie im Sticker-Studio, und aus demselben Grund: Die
+   * Absage gehört an den Knopf, bevor 78 MB übertragen werden, nicht danach.
+   * `netzVerfuegbar` allein genügt dafür nicht – es fragt nur den Schalter
+   * und ob es WebAssembly gibt, nicht ob eine Grafikeinheit da ist.
+   */
+  const [grafikAus, setGrafikAus] = useState<{ grund: string } | null>(null);
+  /* Zählt hoch, wenn ein Verfahren von hier aus eingeschaltet wurde: Die
+     Einstellung liegt im Gerätespeicher und nicht im Zustand, also braucht
+     das Neuzeichnen einen Anstoss. */
+  const [, setEngineStand] = useState(0);
+  useEffect(() => {
+    let gilt = true;
+    void import('../stickers/engines/ort-laufzeit.js')
+      .then((modul) => modul.laufzeitEntscheiden())
+      .then((laufzeit) => {
+        if (!gilt) return;
+        setGrafikAus(laufzeit.taugt ? null : { grund: laufzeit.grund ?? 'Keine Grafikeinheit.' });
+      })
+      .catch(() => {
+        // Schlägt schon die Prüfung fehl, bleibt der Knopf bedienbar und die
+        // Absage kommt wie bisher aus dem Verfahren selbst.
+      });
+    return () => {
+      gilt = false;
+    };
+  }, []);
   const [teilId, setTeilId] = useState<string | null>(null);
   const [pinselBreite, setPinselBreite] = useState(30);
   /**
@@ -1608,10 +1641,50 @@ export function BildEditor({
     }
   }
 
-  /** Ob noch ein Bereich hineinpasst – oder schon einer gewählt ist. */
+  /**
+   * Ein Verfahren von hier aus einschalten.
+   *
+   * Der Schalter lebt in den Einstellungen und gilt pro Gerät – das bleibt
+   * so. Was sich ändert: Man muss nicht mehr dorthin. Wer mitten in einer
+   * Bearbeitung erfährt, dass ein Verfahren abgeschaltet ist, soll nicht den
+   * Editor verlassen müssen, um das zu ändern; ein halb bearbeitetes Bild
+   * überlebt diesen Umweg nicht.
+   */
+  function einschalten(schluessel: EngineKey) {
+    writeEngineSetting(schluessel, true);
+    // `readEngineSettings` liest bei jedem Aufruf neu aus dem Gerätespeicher;
+    // ein Neuzeichnen genügt also, damit die Knöpfe hell werden.
+    setEngineStand((wert) => wert + 1);
+    toast(
+      `„${engineInfo(schluessel).label}“ ist eingeschaltet. Der erste Lauf lädt ${firstUseMb(
+        engineInfo(schluessel),
+      )} MB.`,
+      'success',
+    );
+  }
+
+  /**
+   * Ob noch ein Bereich hineinpasst – oder schon einer gewählt ist.
+   *
+   * Sagt jetzt auch, wenn nicht. Vorher gab die Funktion nur `false` zurück,
+   * und alle drei Aufrufer (`netzTeilAnlegen`, `tiefeTeilAnlegen`,
+   * `kombiAnlegen`) brachen daraufhin mit einem nackten `return` ab: Der
+   * Knopf war hell, nahm die Berührung an und tat wortlos nichts. Wer vier
+   * Bereiche hatte und keinen ausgewählt, erlebte das als „die Knöpfe gehen
+   * nicht, obwohl ich Bereiche habe“ – und hielt es für dieselbe Sache wie
+   * die grauen Knöpfe daneben, die aus einem ganz anderen Grund grau sind.
+   *
+   * Denselben Satz zeigt `teilAnlegen` für Verlauf, Radial und Pinsel schon
+   * lange; er stand nur an der falschen Stelle, um allen zu helfen.
+   */
   function vorhandenOderPlatz(aktuell: BildDoc): boolean {
     if (aktuell.bereiche.some((b) => b.id === bereichRef.current)) return true;
-    return aktuell.bereiche.length < BEREICHE_MAX;
+    if (aktuell.bereiche.length < BEREICHE_MAX) return true;
+    toast(
+      `Mehr als ${BEREICHE_MAX} Bereiche gehen nicht. Wähl einen aus, in den die Maske soll, oder lösch einen.`,
+      'info',
+    );
+    return false;
   }
 
   function bereichAnlegen() {
@@ -2084,6 +2157,7 @@ export function BildEditor({
                 className="btn btn-sm"
                 onClick={() => void netzTeilAnlegen('person')}
                 disabled={netzLaeuft !== null || !netzVerfuegbar('person')}
+                title={netzVerfuegbar('person') ? undefined : netzGrund('person')}
               >
                 👤 Person
               </button>
@@ -2092,15 +2166,37 @@ export function BildEditor({
                 className="btn btn-sm"
                 onClick={() => void netzTeilAnlegen('object')}
                 disabled={netzLaeuft !== null || !netzVerfuegbar('object')}
+                title={netzVerfuegbar('object') ? undefined : netzGrund('object')}
               >
                 🖼 Motiv
+              </button>
+              {/*
+                  „Hohe Qualität“ stand nur im Sticker-Studio zur Verfügung,
+                  obwohl gerade die Porträt-Unschärfe von seiner Kante lebt.
+                  Es ist dasselbe Verfahren über denselben Aufruf – es fehlte
+                  hier schlicht.
+              */}
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => void netzTeilAnlegen('birefnet')}
+                disabled={netzLaeuft !== null || !netzVerfuegbar('birefnet') || grafikAus !== null}
+                title={
+                  grafikAus
+                    ? grafikAus.grund
+                    : netzVerfuegbar('birefnet')
+                      ? 'Die genaueste Kante – an Haaren, Zäunen, Brillenbügeln'
+                      : netzGrund('birefnet')
+                }
+              >
+                ✨ Hohe Qualität
               </button>
               <button
                 type="button"
                 className="btn btn-sm"
                 onClick={() => void tiefeTeilAnlegen()}
                 disabled={netzLaeuft !== null || !tiefeVerfuegbar()}
-                title="Schätzt die Entfernung je Bildpunkt"
+                title={tiefeVerfuegbar() ? 'Schätzt die Entfernung je Bildpunkt' : tiefeGrund()}
               >
                 🔭 Tiefe
               </button>
@@ -2109,7 +2205,11 @@ export function BildEditor({
                 className="btn btn-sm"
                 onClick={() => void kombiAnlegen()}
                 disabled={netzLaeuft !== null || !tiefeVerfuegbar()}
-                title="Kante vom Freisteller, Entfernung vom Tiefenmodell"
+                title={
+                  tiefeVerfuegbar()
+                    ? 'Kante vom Freisteller, Entfernung vom Tiefenmodell'
+                    : tiefeGrund()
+                }
               >
                 🎯 Motiv + Tiefe
               </button>
@@ -2137,18 +2237,59 @@ export function BildEditor({
                 Sichtbarer Text, kein `title`: Auf einem Telefon gibt es kein
                 Schweben.
             */}
-            {!netzFehler && !netzVerfuegbar('object') && (
+            {/*
+                Nicht mehr an `!netzFehler` gekoppelt.
+
+                Eine Fehlermeldung aus einem Lauf und die Begründung einer
+                Sperre sind zwei verschiedene Aussagen. Vorher verschwand die
+                Begründung für ALLE grauen Knöpfe, sobald irgendein Lauf
+                einmal gescheitert war – also genau dann, wenn jemand sie am
+                dringendsten braucht.
+
+                Und der Schalter steht hier, statt dass hier steht, wo er
+                steht: Wer lesen muss „schalt es in den Einstellungen ein“,
+                verlässt den Editor, sucht, und kommt mit einem halb fertigen
+                Bild zurück – wenn überhaupt.
+            */}
+            {!netzVerfuegbar('object') && (
               <p className="bild-hinweis">
-                „Motiv“ ist abgeschaltet und lädt beim ersten Mal 4 MB. Du kannst es in den
-                Sticker-Einstellungen einschalten.
+                „Motiv“ ist abgeschaltet und lädt beim ersten Mal{' '}
+                {firstUseMb(engineInfo('object'))} MB.{' '}
+                <button type="button" className="btn btn-sm" onClick={() => einschalten('object')}>
+                  Einschalten
+                </button>
               </p>
             )}
-            {!netzFehler && !netzVerfuegbar('person') && (
-              <p className="bild-hinweis">{netzGrund('person')}</p>
-            )}
-            {!netzFehler && !tiefeVerfuegbar() && (
+            {!netzVerfuegbar('person') && (
               <p className="bild-hinweis">
-                {tiefeGrund()} Damit sind „🔭 Tiefe“ und „🎯 Motiv + Tiefe“ gesperrt.
+                {netzGrund('person')}{' '}
+                <button type="button" className="btn btn-sm" onClick={() => einschalten('person')}>
+                  Einschalten
+                </button>
+              </p>
+            )}
+            {!netzVerfuegbar('birefnet') && (
+              <p className="bild-hinweis">
+                „Hohe Qualität“ ist abgeschaltet und lädt beim ersten Mal{' '}
+                {firstUseMb(engineInfo('birefnet'))} MB. Es braucht eine Grafikeinheit, gibt dafür
+                die genaueste Kante.{' '}
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => einschalten('birefnet')}
+                >
+                  Einschalten
+                </button>
+              </p>
+            )}
+            {!tiefeVerfuegbar() && (
+              <p className="bild-hinweis">
+                „Tiefenschärfe“ ist abgeschaltet und lädt beim ersten Mal{' '}
+                {firstUseMb(engineInfo('tiefe'))} MB. Damit sind „🔭 Tiefe“ und „🎯 Motiv + Tiefe“
+                gesperrt.{' '}
+                <button type="button" className="btn btn-sm" onClick={() => einschalten('tiefe')}>
+                  Einschalten
+                </button>
               </p>
             )}
             {tiefeVerfuegbar() && !netzFehler && (
@@ -2233,6 +2374,55 @@ export function BildEditor({
                     </button>
                   </div>
                 )}
+
+                {/*
+                    Warum tut dieser Knopf nichts?
+
+                    Zwei Fälle machten „Umkehren“ unberechenbar, und beide
+                    hängen nicht am Umkehren selbst, sondern an der Stellung
+                    des Teils in der Liste:
+
+                      * Ein erstes Teil auf „Weg“ oder „Nur“ rechnet gegen
+                        eine leere Auswahl. Es bleibt leer – mit und ohne
+                        Umkehren. Der Knopf schien tot.
+                      * Ein leeres Teil auf „Dazu“ deckt umgekehrt alles ab.
+                        Es sah aus, als markiere Umkehren wahllos das ganze
+                        Bild.
+
+                    Beides steht jetzt da, mitsamt dem Griff, der es behebt.
+                */}
+                {aktivesTeil &&
+                  (() => {
+                    const befund = teilBefund(
+                      aktiverBereich.teile,
+                      aktiverBereich.teile.findIndex((t) => t.id === aktivesTeil.id),
+                    );
+                    if (befund === 'ohne-wirkung') {
+                      return (
+                        <p className="bild-hinweis">
+                          Diese Maske wirkt noch nicht: „{aktivesTeil.modus === 'weg' ? 'Weg' : 'Nur'}
+                          “ nimmt von dem weg, was vorher ausgewählt ist – und davor ist noch
+                          nichts.{' '}
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            onClick={() => teilAendern({ modus: 'dazu' })}
+                          >
+                            Auf „Dazu“ stellen
+                          </button>
+                        </p>
+                      );
+                    }
+                    if (befund === 'deckt-alles') {
+                      return (
+                        <p className="bild-hinweis">
+                          Diese Maske ist leer, umgekehrt deckt sie deshalb das ganze Bild ab. Mal
+                          etwas hinein – oder nimm das Umkehren zurück.
+                        </p>
+                      );
+                    }
+                    return null;
+                  })()}
 
                 {aktivesTeil?.art === 'radial' && (
                   <label

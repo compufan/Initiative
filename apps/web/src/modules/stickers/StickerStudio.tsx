@@ -30,6 +30,8 @@ import {
   zweiFingerZug,
   type EditorSource,
   type ShapeKind,
+  FORM_FUELLUNG_VORGABE,
+  hatFreistellung,
   type StickerDoc,
   trifftText,
   type StickerText,
@@ -71,6 +73,15 @@ const TABS: { key: Tab; icon: string; label: string }[] = [
   { key: 'detail', icon: '🔍', label: 'Detail' },
   { key: 'outline', icon: '✨', label: 'Kontur' },
   { key: 'text', icon: '🅣', label: 'Text' },
+];
+
+/** Die Farben für die Fläche hinter der Form – wenige, dafür brauchbare. */
+const FORM_FARBEN: { wert: string; label: string }[] = [
+  { wert: '#ffffff', label: 'Weiss' },
+  { wert: '#111827', label: 'Schwarz' },
+  { wert: '#fde047', label: 'Gelb' },
+  { wert: '#38bdf8', label: 'Blau' },
+  { wert: '#fb7185', label: 'Rosa' },
 ];
 
 const SHAPES: { key: ShapeKind; label: string; icon: string }[] = [
@@ -1313,7 +1324,28 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
 
   function chooseShape(shape: ShapeKind) {
     commit();
-    setDoc((value) => ({ ...value, shape }));
+    setDoc((value) => ({
+      ...value,
+      shape,
+      /*
+       * „Sprechblase“ bekommt ihren Körper gleich mit.
+       *
+       * Ohne Füllung schneidet eine Form nur weg, was ausserhalb liegt – bei
+       * einem freigestellten Motiv also nichts, und der Knopf tat sichtbar
+       * gar nichts. Eine Blase ohne Körper ist ausserdem keine: Was jeder
+       * Messenger zeichnet, ist die Fläche mit dem Zipfel, und das Motiv
+       * liegt darin.
+       *
+       * Nur beim Wechsel gesetzt, nicht erzwungen: Wer die Füllung danach
+       * abschaltet oder umfärbt, behält das.
+       */
+      formFuellung:
+        shape === 'bubble' && value.shape !== 'bubble'
+          ? FORM_FUELLUNG_VORGABE
+          : shape === 'square' || shape === 'free'
+            ? null
+            : value.formFuellung,
+    }));
     setPinsel('weg');
     setTool(shape === 'free' ? 'erase' : 'move');
   }
@@ -1693,6 +1725,46 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                 </button>
               ))}
             </div>
+
+            {/*
+                Die Füllung steht nur dort, wo es eine Form gibt, die sie
+                tragen kann: „Quadrat“ ist die volle Fläche und „Frei“
+                überlässt den Umriss dem Radiergummi.
+            */}
+            {doc.shape !== 'square' && doc.shape !== 'free' && (
+              <>
+                <div className="stk-btn-row">
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${doc.formFuellung === null ? 'stk-chip-active' : ''}`}
+                    onClick={() => {
+                      commit();
+                      setDoc((value) => ({ ...value, formFuellung: null }));
+                    }}
+                  >
+                    Ohne Fläche
+                  </button>
+                  {FORM_FARBEN.map((farbe) => (
+                    <button
+                      key={farbe.wert}
+                      type="button"
+                      aria-label={farbe.label}
+                      className={`stk-farbknopf ${doc.formFuellung === farbe.wert ? 'is-active' : ''}`}
+                      style={{ background: farbe.wert }}
+                      onClick={() => {
+                        commit();
+                        setDoc((value) => ({ ...value, formFuellung: farbe.wert }));
+                      }}
+                    />
+                  ))}
+                </div>
+                <p className="stk-hint">
+                  {doc.shape === 'bubble'
+                    ? 'Die Fläche ist der Körper der Blase – ohne sie bleibt nur ein unsichtbarer Umriss um dein Motiv.'
+                    : 'Eine Fläche legt sich hinter das Motiv und macht aus der Form eine Karte.'}
+                </p>
+              </>
+            )}
             <label className="stk-slider">
               <span>Pinsel</span>
               <input
@@ -1828,7 +1900,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                 )}
               </p>
             )}
-            {doc.autoMask && (
+            {hatFreistellung(doc) && (
               <>
                 <div className="stk-btn-row">
                   <button

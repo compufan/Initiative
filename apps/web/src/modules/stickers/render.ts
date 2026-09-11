@@ -224,11 +224,24 @@ export interface StickerDoc {
    */
   showUnselected: boolean;
   tolerance: number;
+  /**
+   * Die Farbe hinter der Form – oder `null` für keine.
+   *
+   * Ohne sie ist eine Form nur ein Ausstecher: `applyShape` schneidet mit
+   * `destination-in` weg, was ausserhalb liegt. Bei einem freigestellten
+   * Motiv ist dort aber längst nichts mehr, und die Form tat sichtbar
+   * nichts – am auffälligsten bei „Sprechblase“, die ohne Körper eben keine
+   * Sprechblase ist, sondern ein unsichtbarer Umriss.
+   */
+  formFuellung: string | null;
   outline: boolean;
   outlineWidth: number;
   strokes: Stroke[];
   texte: StickerText[];
 }
+
+/** Die Vorgabefarbe einer Form – Weiss für alles, was einen Körper braucht. */
+export const FORM_FUELLUNG_VORGABE = '#ffffff';
 
 export type EditorSource =
   | { kind: 'image'; image: HTMLImageElement; width: number; height: number }
@@ -251,6 +264,7 @@ export function createDoc(): StickerDoc {
     maskParts: [],
     showUnselected: true,
     tolerance: 40,
+    formFuellung: null,
     outline: true,
     outlineWidth: 10,
     strokes: [],
@@ -1080,6 +1094,22 @@ function abgerundet(
  * Genau so war der erste Wurf, nachgemessen in Chromium: ein sauberes Loch
  * quer durch den unteren Rand der Blase, dort wo der Zipfel ansetzt.
  */
+/**
+ * Ist überhaupt etwas freigestellt?
+ *
+ * Genau diese Frage entscheidet beim Zeichnen, ob es eine Maske gibt – und
+ * damit, ob „Kante“ und „Weichheit“ etwas bewirken. Die Bedienung hing
+ * stattdessen an `doc.autoMask` allein: Wer mit „Antippen“ freigestellt hatte,
+ * bekam die beiden Regler nicht zu sehen, obwohl sie auf SEINE Maske genauso
+ * wirken. Eine zweite Fassung derselben Bedingung daneben hätte dasselbe
+ * wieder auseinanderlaufen lassen, also steht sie hier einmal.
+ */
+export function hatFreistellung(doc: StickerDoc): boolean {
+  return Boolean(
+    doc.autoMask || doc.tippGruppen.length > 0 || doc.keep.length > 0 || doc.removeBg,
+  );
+}
+
 export function formPfad(ctx: CanvasRenderingContext2D, shape: ShapeKind): boolean {
   const s = STICKER_SIZE;
   const r = FORM_RAND;
@@ -1107,6 +1137,31 @@ export function formPfad(ctx: CanvasRenderingContext2D, shape: ShapeKind): boole
     return true;
   }
   return false;
+}
+
+/**
+ * Legt die Form als Fläche HINTER den Inhalt.
+ *
+ * `destination-over` und nicht einfach ein früher Aufruf: Gezeichnet wird
+ * erst der Inhalt, und der soll oben bleiben. Erst diese Fläche macht aus dem
+ * Umriss einer Sprechblase eine, aus „Karte“ eine Karte und aus „Kreis“ einen
+ * Anstecker. `square` und `free` haben keinen Pfad – dort gibt es nichts zu
+ * füllen, und der Aufruf verläuft folgenlos.
+ */
+function formFuellen(
+  ctx: CanvasRenderingContext2D,
+  shape: ShapeKind,
+  farbe: string | null,
+): void {
+  if (!farbe) return;
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (formPfad(ctx, shape)) {
+    ctx.globalCompositeOperation = 'destination-over';
+    ctx.fillStyle = farbe;
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function applyShape(ctx: CanvasRenderingContext2D, shape: ShapeKind): void {
@@ -1562,11 +1617,7 @@ export function renderSticker(
    * durchsichtig, und die Flutung bricht an durchsichtigen Punkten ab – es
    * gäbe dort schlicht nichts mehr anzutippen.
    */
-  if (
-    !options.fast &&
-    source?.kind === 'image' &&
-    (doc.autoMask || doc.tippGruppen.length > 0 || doc.keep.length > 0 || doc.removeBg)
-  ) {
+  if (!options.fast && source?.kind === 'image' && hatFreistellung(doc)) {
     const alsMaske = (gruppe: TippGruppe) =>
       deckungLesen(
         maskenflaeche(
@@ -1658,6 +1709,10 @@ export function renderSticker(
 
   applyShape(ctx, doc.shape);
   applyStrokes(ctx, doc.strokes, original, source, doc);
+  // Nach dem Radieren, nicht davor: Der Radiergummi gilt dem Motiv, nicht
+  // dem Körper der Blase – wer im Blaseninneren radiert, will das Bild
+  // wegnehmen und kein Loch in die Blase schneiden.
+  formFuellen(ctx, doc.shape, doc.formFuellung);
 
   if (!options.fast && doc.outline && doc.outlineWidth > 0) {
     applyOutline(canvas, Math.round(doc.outlineWidth));

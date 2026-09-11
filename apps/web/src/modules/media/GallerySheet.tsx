@@ -150,8 +150,11 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
    * das ursprüngliche Bild bis zum Neuladen der Seite im Speicher fest.
    */
   const ersetzen = async (id: string, fertig: Blob, fertigName: string) => {
+    // Wie in `CameraSheet`: schon kodiert, also nicht noch einmal.
     const prepared = await prepareImage(
       new File([fertig], fertigName, { type: fertig.type || 'image/webp' }),
+      1920,
+      true,
     );
     setItems((alt) =>
       alt.map((eintrag) => {

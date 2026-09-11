@@ -352,7 +352,14 @@ export function CameraSheet({ conversationId, onClose }: ComposerActionProps) {
    * alten Masse behält, zeigt im Chat ein verzerrtes Vorschaubild.
    */
   const uebernehmen = async (fertig: Blob, fertigName: string) => {
-    const prepared = await prepareImage(new File([fertig], fertigName, { type: fertig.type }));
+    // `true`: Der Editor hat schon mit WebP 0,92 kodiert. Ein zweiter Lauf
+    // durch 0,82 baute nur auf dessen Artefakten auf. Die Kantengrenze gilt
+    // trotzdem weiter – siehe `prepareImage`.
+    const prepared = await prepareImage(
+      new File([fertig], fertigName, { type: fertig.type }),
+      1920,
+      true,
+    );
     if (!aliveRef.current) return;
     setDraft((alt) =>
       alt

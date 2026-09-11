@@ -6,6 +6,7 @@ import { MediaCaption, PendingMedia } from './MediaFrame.js';
 import { buildAttachment, mediaSrc, sendMedia } from './helpers.js';
 import { prepareImage } from '../../lib/upload.js';
 import { toast } from '../../state/ui.js';
+import { MAX_KANTE } from '../bild/doc.js';
 
 function ImageTile({
   attachment,
@@ -88,7 +89,11 @@ export function ImageBubble({ message, isMine }: MessageRendererProps) {
           ablegen={async (blob, name) => {
             // Als neue Nachricht, nicht als Ersatz: Das Original bleibt im
             // Verlauf stehen, wo es steht.
-            const bild = await prepareImage(blob, 1920, true);
+            // `MAX_KANTE`, nicht 1920: Was der Editor ausgibt, geht in seiner
+            // vollen Kante weiter. (Das Argument stand vorher auf 1920 und
+            // wurde von `fertig` stillschweigend übergangen – jetzt gilt es,
+            // also muss hier stehen, was wirklich gemeint ist.)
+            const bild = await prepareImage(blob, MAX_KANTE, true);
             const gesendet = await sendMedia(message.conversationId, 'image', null, [
               buildAttachment({
                 kind: 'image',

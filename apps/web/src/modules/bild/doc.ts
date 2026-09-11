@@ -147,7 +147,15 @@ export interface PinselTeil {
  */
 export interface NetzTeil {
   art: 'netz';
-  netz: 'person' | 'object';
+  /**
+   * Welches Verfahren die Maske gerechnet hat.
+   *
+   * `birefnet` kam später dazu: Es sind dieselben Modelle wie im
+   * Sticker-Studio, und gerade die Porträt-Unschärfe lebt von seiner Kante.
+   * Der Name bleibt am Teil stehen, damit ein gespeichertes Dokument später
+   * noch sagen kann, womit es gerechnet wurde.
+   */
+  netz: 'person' | 'object' | 'birefnet';
   readonly breite: number;
   readonly hoehe: number;
   readonly alpha: Uint8Array;

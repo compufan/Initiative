@@ -182,16 +182,33 @@ export async function prepareImage(
   const source = await loadBitmap(file);
   const naturalWidth = 'width' in source ? source.width : 0;
   const naturalHeight = 'height' in source ? source.height : 0;
-  const scale = fertig ? 1 : Math.min(1, maxDimension / Math.max(naturalWidth, naturalHeight || 1));
+  /*
+   * `fertig` hebt die Kantengrenze NICHT auf.
+   *
+   * Es hiess einmal „Grösse egal, nicht anfassen“, und damit war es für die
+   * beiden Wege aus dem Bild-Editor unbrauchbar: Die hätten dann bis zu 2560
+   * Punkte Kante in den Chat geschickt, wo sonst 1920 gelten. Also blieb es
+   * dort aus – und das Bild lief ein zweites Mal durch WebP 0,82, obwohl der
+   * Editor schon mit 0,92 kodiert hatte.
+   *
+   * Richtig ist die Unterscheidung dazwischen: Passt das fertige Bild in die
+   * Grenze, geht es unangetastet durch. Passt es nicht, muss ohnehin neu
+   * gezeichnet werden – dann aber mit der Güte der zweiten Generation und
+   * nicht mit der für ein Kameraoriginal gedachten.
+   */
+  const scale = Math.min(1, maxDimension / Math.max(naturalWidth, naturalHeight || 1));
   const width = Math.round(naturalWidth * scale);
   const height = Math.round(naturalHeight * scale);
+  const unberuehrt = fertig && scale === 1;
 
-  const mime = fertig
+  const mime = unberuehrt
     ? file.type || 'image/webp'
     : (await supportsWebp())
       ? 'image/webp'
       : 'image/jpeg';
-  const full = fertig ? file : await toBlob(drawTo(source, width, height), mime, 0.82);
+  const full = unberuehrt
+    ? file
+    : await toBlob(drawTo(source, width, height), mime, fertig ? 0.92 : 0.82);
 
   const previewScale = Math.min(1, 48 / Math.max(width, height || 1));
   const preview = drawTo(source, width * previewScale, height * previewScale);

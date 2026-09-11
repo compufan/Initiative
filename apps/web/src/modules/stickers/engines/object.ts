@@ -27,7 +27,7 @@ import type { InferenceSession } from 'onnxruntime-web';
 // die Adresse.
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.wasm?url';
 import ortMjsUrl from 'onnxruntime-web/ort-wasm-simd-threaded.mjs?url';
-import { flaechenMittel } from './prepare.js';
+import { flaechenMittel, maskeSkalieren } from './prepare.js';
 
 /** Kantenlänge, mit der U²-Net trainiert wurde. */
 const EINGABE = 320;
@@ -146,17 +146,23 @@ export async function objectMask(image: ImageData, melden?: Fortschritt): Promis
   }
   const spanne = max - min || 1;
 
-  const { width, height } = image;
-  const alpha = new Uint8Array(width * height);
-  for (let y = 0; y < height; y += 1) {
-    const sy = Math.min(EINGABE - 1, Math.floor((y * EINGABE) / height));
-    for (let x = 0; x < width; x += 1) {
-      const sx = Math.min(EINGABE - 1, Math.floor((x * EINGABE) / width));
-      const wert = (roh[sy * EINGABE + sx] - min) / spanne;
-      alpha[y * width + x] = Math.max(0, Math.min(255, Math.round(wert * 255)));
-    }
-  }
-  return alpha;
+  /*
+   * Bilinear hochrechnen, nicht Blockkopie.
+   *
+   * Hier stand `Math.floor((y * EINGABE) / height)` – jeder Bildpunkt griff
+   * sich den nächstgelegenen der 320×320 Modellwerte. Bei einem 3840 Punkte
+   * breiten Foto ist ein Modellwert damit zwölf Bildpunkte breit, und die
+   * Kante bekommt eine sichtbare Treppe von genau dieser Stufenhöhe –
+   * ausgerechnet an der Stelle, für die man das Modell laufen lässt.
+   *
+   * Die Funktion daneben rechnet es richtig, samt Punktmitten, und BiRefNet
+   * benutzt sie längst. Sie erwartet Werte in 0…1, also wird erst gedehnt
+   * und dann skaliert: umgekehrt wäre über die Stufen gemittelt und die
+   * Treppe bliebe, nur verwaschen.
+   */
+  const werte = new Float32Array(EINGABE * EINGABE);
+  for (let i = 0; i < werte.length; i += 1) werte[i] = (roh[i] - min) / spanne;
+  return maskeSkalieren(werte, EINGABE, image.width, image.height);
 }
 
 /** Gibt die Modelldaten wieder frei. */

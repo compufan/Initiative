@@ -503,34 +503,56 @@
   appearance: none;
 }
 
+/*
+ * Alle sieben Werkzeuge müssen auf den Schirm.
+ *
+ * Vorher war das eine waagerechte Rolle mit `min-width: 68px` je Reiter:
+ * 7 × 68 + 6 × 4 = 500 Punkte, auf einem Telefon mit 412 Punkten Breite also
+ * zwei Reiter jenseits des Randes. Die Rollleiste war zusätzlich ausgeblendet
+ * (`scrollbar-width: none`), es gab also nicht einmal einen Hinweis darauf,
+ * dass da noch etwas kommt. Ausgerechnet „Kontur“ und „Text“ standen hinten –
+ * und wurden schlicht nicht gefunden.
+ *
+ * Jetzt teilen sich die Reiter die vorhandene Breite und rollen nicht mehr:
+ * `flex: 1 1 0` lässt sie schrumpfen, und `min-width: 0` hebt die
+ * Grundbreite auf, die das Schrumpfen sonst blockiert. Unter 44 Punkten wird
+ * kein Reiter schmal – das ist die kleinste Fläche, die ein Finger sicher
+ * trifft –, darunter rollt es wieder, dann aber mit sichtbarem Rand.
+ */
 .stk-tabs {
   flex: none;
   display: flex;
-  gap: 4px;
-  padding: 6px var(--space-2);
+  gap: 2px;
+  padding: 6px var(--space-1);
   overflow-x: auto;
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
-  scrollbar-width: none;
-}
-
-.stk-tabs::-webkit-scrollbar {
-  display: none;
+  scrollbar-width: thin;
 }
 
 .stk-tab {
-  flex: 1 0 auto;
-  min-width: 68px;
+  flex: 1 1 0;
+  min-width: 44px;
   min-height: 56px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 2px;
+  padding: 0 2px;
   border-radius: var(--radius);
   color: var(--text-muted);
-  font-size: 0.66rem;
+  font-size: 0.6rem;
   font-weight: 600;
+  /* Der Name darf schmaler werden als er ist, statt den Reiter zu weiten. */
+  overflow: hidden;
+}
+
+.stk-tab > span:last-child {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .stk-tab.is-active {
@@ -593,4 +615,18 @@
 .stk-messung {
   font-variant-numeric: tabular-nums;
   opacity: 0.85;
+}
+
+/* Ein Farbfeld für die Fläche hinter der Form. */
+.stk-farbknopf {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-full);
+  border: 2px solid var(--border);
+  flex: none;
+}
+
+.stk-farbknopf.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
 }

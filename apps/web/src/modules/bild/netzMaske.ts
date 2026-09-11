@@ -38,7 +38,29 @@ import { kanteWeichzeichnen, maskeTraegt, vorlageAus } from '../stickers/engines
 import { naechsteMarke } from './maske.js';
 import type { Maskenteil, NetzTeil } from './doc.js';
 
-export type Netzart = 'person' | 'object';
+/**
+ * Die Freisteller, die auch im Bildeditor zur Verfügung stehen.
+ *
+ * `birefnet` stand hier nicht, und dafür gab es keinen Grund ausser dem
+ * Versäumnis: Es sind dieselben Modelle über denselben `runEngine`-Aufruf wie
+ * im Sticker-Studio, und gerade die Maske für eine Porträt-Unschärfe lebt von
+ * der Kante, die nur dieses Verfahren liefert. Das Studio bot vier Verfahren
+ * an, der Editor zwei.
+ */
+export type Netzart = 'person' | 'object' | 'birefnet';
+
+/**
+ * Wie stark die Kante weichgezeichnet wird, bevor daraus ein Maskenteil wird.
+ *
+ * Ein Punkt für die harten Entscheider – eine scharfe Kante lässt eine
+ * überblendete Anpassung künstlich aussehen. Für „Hohe Qualität“ **null**:
+ * Dessen Kante ist von Haus aus weich und an Haaren, Zäunen und Brillenbügeln
+ * genau das, wofür man 78 MB herunterlädt. Sie nachträglich zu verwischen
+ * wirft den Unterschied weg, für den das Verfahren da ist.
+ */
+function weichzeichnerFuer(netz: Netzart): number {
+  return netz === 'birefnet' ? 0 : 1;
+}
 
 /** Ob das Verfahren gerade benutzt werden darf – eingeschaltet und unterstützt. */
 export function netzVerfuegbar(netz: Netzart): boolean {
@@ -101,7 +123,11 @@ export async function netzTeilRechnen(
    * Punkt Weichzeichner reicht – die Maske wird ohnehin auf ein gröberes
    * Raster gebracht und bilinear gelesen.
    */
-  const weich = kanteWeichzeichnen(roh, vorlage.image.width, vorlage.image.height, 1);
+  const radius = weichzeichnerFuer(netz);
+  const weich =
+    radius > 0
+      ? kanteWeichzeichnen(roh, vorlage.image.width, vorlage.image.height, radius)
+      : roh;
 
   if (!maskeTraegt(weich)) {
     throw new EngineError(

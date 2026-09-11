@@ -100,7 +100,68 @@ export function teileFinden(alpha: Uint8Array, width: number, height: number): T
     }
   }
 
+  randZuordnen(labels, alpha, width, height);
   return { labels, anzahl: naechste - 1, groessen, width, height };
+}
+
+/**
+ * Den weichen Saum dem Teil zuschlagen, an dem er hängt.
+ *
+ * # Warum das sein muss
+ *
+ * Die Zerlegung arbeitet mit einer Schwelle: Ab 128 gehört ein Punkt dazu,
+ * darunter nicht. Für das Finden zusammenhängender Flächen ist das richtig –
+ * für die MASKE ist es fatal. Genau der Übergangsbereich, den das Modell
+ * teuer gerechnet hat (Alpha 1 … 127: Haarspitzen, Fransen, Glasränder),
+ * trägt danach die Nummer 0 und fiel beim Antippen ersatzlos weg. Wer ein
+ * Teil auswählte, bekam dieselbe Silhouette mit einer harten Kante zurück –
+ * ausgerechnet nach dem Verfahren, das man für die weiche Kante bezahlt hat.
+ *
+ * # Wie
+ *
+ * Eine Breitensuche von den fertigen Flächen nach aussen, über alles, was
+ * noch Alpha hat. Jeder Saumpunkt bekommt die Nummer des Teils, das ihm am
+ * nächsten liegt – bei zwei Nachbarn gewinnt der, der zuerst ankommt, und das
+ * ist der nähere. Ein Durchlauf über das Bild, ein Eintrag je Punkt.
+ *
+ * Das Antippen gewinnt dasselbe: Ein Druck auf eine Haarspitze trifft jetzt
+ * das Teil, zu dem sie gehört, statt ins Leere.
+ */
+function randZuordnen(
+  labels: Int32Array,
+  alpha: Uint8Array,
+  width: number,
+  height: number,
+): void {
+  // Die Schlange als typisiertes Feld: Bei einem grossen Foto stehen hier
+  // Hunderttausende Einträge, und ein gewöhnliches Array wächst daran spürbar.
+  const schlange = new Int32Array(labels.length);
+  let kopf = 0;
+  let ende = 0;
+  for (let i = 0; i < labels.length; i += 1) {
+    if (labels[i] !== 0) schlange[ende++] = i;
+  }
+
+  while (kopf < ende) {
+    const at = schlange[kopf++];
+    const nummer = labels[at];
+    const x = at % width;
+    const y = (at - x) / width;
+
+    if (x > 0) weiter(at - 1);
+    if (x < width - 1) weiter(at + 1);
+    if (y > 0) weiter(at - width);
+    if (y < height - 1) weiter(at + width);
+
+    function weiter(nachbar: number) {
+      // Nur in den Saum hinein: Punkte ohne jedes Alpha gehören zu nichts,
+      // sonst liefe die Suche über das ganze Bild und jedes Teil wüchse bis
+      // an den Bildrand.
+      if (labels[nachbar] !== 0 || alpha[nachbar] === 0) return;
+      labels[nachbar] = nummer;
+      schlange[ende++] = nachbar;
+    }
+  }
 }
 
 /**

@@ -660,3 +660,60 @@ export function naechsteMarke(): number {
   markenZaehler += 1;
   return markenZaehler;
 }
+
+/* ---------- Was ein Teil im Verbund wirklich tut ---------- */
+
+export type Teilbefund =
+  /** Wirkt wie erwartet. */
+  | 'wirkt'
+  /**
+   * Wirkt gar nicht – und zwar unabhängig von `umkehren`.
+   *
+   * `weg` und `nur` rechnen gegen das, was VOR ihnen schon ausgewählt ist,
+   * und die Faltung beginnt bei null (siehe `teileFalten`). Steht ein solches
+   * Teil an erster Stelle – oder liegt davor kein einziges `dazu` –, ist
+   * `min(0, irgendwas)` immer null: Die Maske bleibt leer, der Schleier
+   * bleibt aus, und jeder Knopf daran scheint wirkungslos zu sein.
+   *
+   * Genau das war die Meldung „Umkehren macht manchmal nichts“. Nicht das
+   * Umkehren ist kaputt – es invertiert nachweislich jeden Wert –, sondern
+   * das Teil hat nichts, worauf es wirken könnte.
+   */
+  | 'ohne-wirkung'
+  /**
+   * Deckt das ganze Bild ab.
+   *
+   * Ein leeres Teil ist überall null; umgekehrt ist es überall 255, und
+   * `dazu` vereinigt das mit allem anderen. Ein frisch angelegtes Pinselteil
+   * ohne einen einzigen Strich markiert mit „Umkehren“ also exakt alles –
+   * die zweite Hälfte derselben Meldung, „Umkehren markiert manchmal das
+   * gesamte Bild“.
+   */
+  | 'deckt-alles';
+
+/** Ob ein Teil aus sich heraus nirgends etwas markiert. */
+function teilIstLeer(teil: Maskenteil): boolean {
+  return teil.art === 'pinsel' && teil.striche.length === 0;
+}
+
+/**
+ * Was das Teil an Position `nummer` im Verbund bewirkt.
+ *
+ * Reine Rechnung über die Liste – kein Raster, keine Bildpunkte. Sie
+ * beantwortet die Frage, die die Oberfläche bisher verschwiegen hat: Warum
+ * tut dieser Knopf nichts?
+ */
+export function teilBefund(teile: readonly Maskenteil[], nummer: number): Teilbefund {
+  const teil = teile[nummer];
+  if (!teil) return 'wirkt';
+
+  if (teil.modus !== 'dazu') {
+    const etwasDavor = teile
+      .slice(0, nummer)
+      .some((vorher) => vorher.modus === 'dazu' && (!teilIstLeer(vorher) || vorher.umkehren));
+    return etwasDavor ? 'wirkt' : 'ohne-wirkung';
+  }
+
+  if (teil.umkehren && teilIstLeer(teil)) return 'deckt-alles';
+  return 'wirkt';
+}
