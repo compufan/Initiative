@@ -319,6 +319,7 @@ Gelöschte Nachrichten verschwinden nicht aus der Liste: `deletedAt` ist gesetzt
 | GET     | `/media/{id}`                  | – (Capability) | Header `Range` erlaubt                                         | `200`/`206` Binärdaten oder `302` auf eine signierte URL |
 | GET     | `/media/{id}/bytes`            | – (Capability) | Header `Range` erlaubt                                         | wie oben, aber **nie** als Weiterleitung                 |
 | GET     | `/media/{id}/download`         | – (Capability) | –                                                              | wie oben, mit `Content-Disposition: attachment`          |
+| GET     | `/media/{id}/zugriff`          | Bearer         | –                                                              | Wer diese Datei sieht und warum – nur für den Besitzer    |
 | DELETE  | `/media/{id}`                  | Bearer         | –                                                              | `204` (nur eigene, noch nicht gesendete Anhänge)         |
 
 **Ablauf in drei Schritten**

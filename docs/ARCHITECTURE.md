@@ -46,6 +46,36 @@ PWA  ──REST /api/v1──▶  Axum (Rust)  ──SQL──▶  Postgres (im 
   jedes Ereignis über Postgres, auch wenn Sender und Empfänger derselbe
   Prozess sind – fällt der Kanal aus, steht die Echtzeit.
 
+## Besitz und Leihe
+
+Jeder Gegenstand hat einen **Besitzer** – den, der ihn angelegt oder
+hochgeladen hat – und kann **verliehen** werden: an ein Gespräch, an eine
+Sammlung, an die Eingeladenen eines Termins. Wer etwas sehen darf, ist damit
+keine Frage der Kenntnis einer Kennung, sondern eine Frage nach einer Leihe.
+
+Die Leihe wird **abgeleitet, nicht verbucht**. Eine Tabelle `leihen` wäre gut
+nachzuschlagen und schlecht zu pflegen: Jeder Beitritt zu einer Gruppe müsste
+Leihen für jeden vergangenen Anhang nachtragen, jeder Austritt sie einsammeln,
+und jede vergessene Rücknahme wäre ein stiller, offener Zugriff. Abgeleitet
+gilt die Leihe immer genau jetzt – der rückwirkende Entzug beim Verlassen
+eines Gesprächs kostet keine Zeile Pflegearbeit.
+
+Was einer Tabelle voraus wäre, ist die Nachvollziehbarkeit. Die liefert
+`services/zugriff.rs` nach:
+
+| Richtung  | Funktion                | Antwort                                  |
+| --------- | ----------------------- | ---------------------------------------- |
+| vorwärts  | `zugriff::anhang`       | darf diese Person – und **warum** (`Grund`) |
+| rückwärts | `zugriff::wer_sieht_anhang` | der ganze Kreis, je Person mit Grund   |
+
+Erreichbar über `GET /api/v1/media/{id}/zugriff`, und zwar nur für den
+Besitzer: Die Antwort ist eine Personenliste.
+
+Die Regel für Sammlungen steht als **Datenbankfunktion** (`sichtbare_sammlungen`,
+`wer_sieht_sammlung`, Migration 0015) und nicht in Rust – sie wird aus beiden
+Richtungen gebraucht, und drei Fassungen derselben rekursiven Abfrage waren
+schon einmal drei Gelegenheiten, sie unterschiedlich falsch zu beantworten.
+
 ## Erweiterungspunkte
 
 | Punkt            | Datei                                                       | Wofür                                        |

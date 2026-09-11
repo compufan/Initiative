@@ -1025,6 +1025,28 @@ async fn full_api_scenario() {
     assert_eq!(status, StatusCode::OK);
     assert!(carols_liste["items"].as_array().unwrap().is_empty());
 
+    /*
+     * Die Gegenprobe – und sie fehlte.
+     *
+     * Geprüft war nur, dass Carol NICHTS sieht. Ein solcher Test kann
+     * „richtig" nicht von „alles leer" unterscheiden: Eine Sichtbarkeitsregel,
+     * die grundsätzlich nichts zurückgibt, hätte ihn genauso bestanden.
+     * Aufgefallen ist das erst, als die Regel zum Gegenprüfen absichtlich
+     * entleert wurde – und der Durchlauf trotzdem grün blieb.
+     */
+    let (status, alices_liste) = app
+        .call("GET", "/api/v1/collections", Some(&alice_token), None)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        alices_liste["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|eintrag| eintrag["id"] == sammlung_id.as_str()),
+        "die eigene Sammlung muss in der eigenen Liste stehen: {alices_liste}"
+    );
+
     // Alice gibt Carol Lese-Recht.
     let (status, _) = app
         .call(

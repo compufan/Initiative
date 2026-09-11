@@ -231,48 +231,18 @@ pub async fn require_item(
 /// Eine einzige Abfrage statt einer je Sammlung: bei ein paar hundert Ordnern
 /// wären das sonst ein paar hundert Rundreisen zur Datenbank.
 pub async fn visible_collection_ids(pool: &PgPool, user_id: Uuid) -> AppResult<Vec<Uuid>> {
-    // Zuerst die Sammlungen mit einem unmittelbaren Recht, dann alles
-    // darunter – Kinder erben von ihren Eltern.
-    let ids: Vec<Uuid> = sqlx::query_scalar(
-        "
-with recursive wurzeln as (
-  select c.id
-    from collections c
-   where c.deleted_at is null
-     and (
-       c.created_by = $1
-       or exists (
-         select 1 from collection_grants g
-          where g.collection_id = c.id and g.user_id = $1
-       )
-       or exists (
-         select 1 from collection_grants g
-          join conversation_members m
-            on m.conversation_id = g.conversation_id and m.user_id = $1
-          where g.collection_id = c.id and g.conversation_id is not null
-       )
-       or (
-         c.member_level <> 'none'
-         and exists (
-           select 1 from conversation_members m
-            where m.conversation_id = c.conversation_id and m.user_id = $1
-         )
-       )
-     )
-),
-baum as (
-  select id from wurzeln
-  union
-  select c.id
-    from collections c
-    join baum b on c.parent_id = b.id
-   where c.deleted_at is null
-)
-select id from baum",
-    )
-    .bind(user_id)
-    .fetch_all(pool)
-    .await?;
+    // Die Regel selbst steht als Datenbankfunktion (Migration 0015).
+    //
+    // Hier stand dieselbe rekursive Abfrage noch einmal wörtlich – und die
+    // Medienprüfung trug eine dritte Fassung. Drei Fassungen einer Regel sind
+    // drei Gelegenheiten, sie unterschiedlich falsch zu beantworten; genau das
+    // war schon einmal der Fall, als die eine Rechte an einer EINZELNEN Datei
+    // kannte und die andere nicht. Die Gegenrichtung („wer sieht das hier?")
+    // braucht sie ohnehin, und die lässt sich in Rust nicht teilen.
+    let ids: Vec<Uuid> = sqlx::query_scalar("select sichtbare_sammlungen($1)")
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
     Ok(ids)
 }
 

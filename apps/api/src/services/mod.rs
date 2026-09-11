@@ -11,3 +11,4 @@ pub mod permissions;
 pub mod polls;
 pub mod stickers;
 pub mod users;
+pub mod zugriff;

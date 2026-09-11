@@ -36,6 +36,7 @@ pub fn router() -> Router<AppState> {
         .route("/media/{id}", get(deliver).delete(remove))
         .route("/media/{id}/download", get(download))
         .route("/media/{id}/bytes", get(bytes_through_api))
+        .route("/media/{id}/zugriff", get(zugriff))
 }
 
 /**
@@ -663,6 +664,33 @@ async fn download(
     headers: HeaderMap,
 ) -> AppResult<Response> {
     serve(state, id, headers, betrachter, true, true).await
+}
+
+/**
+ * Wer sieht diese Datei – und warum?
+ *
+ * Die Gegenrichtung zur Prüfung, die vor jeder Auslieferung steht. Sie ist der
+ * Teil, den eine Leihtabelle von sich aus hätte und den ein abgeleitetes
+ * Modell nachreichen muss: Ohne sie wüsste man zwar, dass die Rechte stimmen,
+ * könnte es aber niemandem zeigen.
+ *
+ * Fragen darf, wer die Datei hochgeladen hat. Die Antwort nennt Menschen samt
+ * Grund, und das ist genau die Auskunft, die man niemandem geben will, der
+ * nicht ohnehin darüber verfügt.
+ */
+async fn zugriff(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<crate::services::zugriff::Kreis>> {
+    let attachment = load_attachment(&state.pool, id).await?;
+    if attachment.uploader_id != Some(user.id()) {
+        // Wie überall auf diesen Routen: nicht verraten, dass es sie gibt.
+        return Err(AppError::not_found("Datei nicht gefunden"));
+    }
+    Ok(Json(
+        crate::services::zugriff::wer_sieht_anhang(&state.pool, id).await?,
+    ))
 }
 
 async fn remove(

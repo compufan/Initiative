@@ -389,6 +389,258 @@ async fn wer_darf_welchen_anhang_sehen() {
     );
 }
 
+/// Eine Datei in einer Sammlung folgt den Rechten der Sammlung.
+///
+/// Der Zweig war ungeprüft, und das fiel erst bei einer Gegenprobe auf: Die
+/// Sichtbarkeitsregel für Sammlungen liess sich absichtlich entleeren, ohne
+/// dass ein einziger Test rot wurde.
+#[tokio::test(flavor = "multi_thread")]
+async fn eine_datei_in_einer_sammlung_folgt_deren_rechten() {
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL nicht gesetzt – übersprungen");
+        return;
+    };
+    let n = kurz();
+    let (anna_token, _anna_id, _) = probe.konto(&format!("anna{n}")).await;
+    let (_, cleo_id, cleo_keks) = probe.konto(&format!("cleo{n}")).await;
+
+    let datei = probe.hochladen(&anna_token).await;
+    let (status, sammlung) = probe
+        .call(
+            "POST",
+            "/api/v1/collections",
+            Some(&anna_token),
+            Some(json!({ "name": "Urlaub" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{sammlung}");
+    let sammlung_id = sammlung["id"].as_str().unwrap().to_string();
+    let (status, _) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/collections/{sammlung_id}/items"),
+            Some(&anna_token),
+            Some(json!({ "attachmentId": datei })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Ohne Recht an der Sammlung: nichts.
+    assert_eq!(
+        probe.holen(&datei, Ausweis::Keks(&cleo_keks)).await,
+        StatusCode::NOT_FOUND,
+        "ohne Recht an der Sammlung ist die Datei nicht zu sehen"
+    );
+
+    // Mit Leserecht an der Sammlung: die Datei kommt.
+    let (status, _) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/collections/{sammlung_id}/grants"),
+            Some(&anna_token),
+            Some(json!({ "userId": cleo_id, "level": "view" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        probe.holen(&datei, Ausweis::Keks(&cleo_keks)).await,
+        StatusCode::OK,
+        "ein Recht an der Sammlung traegt bis zur Datei"
+    );
+
+    // Und der Kreis nennt Cleo samt Grund.
+    let (status, kreis) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/media/{datei}/zugriff"),
+            Some(&anna_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{kreis}");
+    let cleos = kreis["leihen"]
+        .as_array()
+        .expect("Liste")
+        .iter()
+        .find(|e| e["person"] == cleo_id.as_str())
+        .expect("Cleo muss im Kreis stehen");
+    assert_eq!(cleos["grund"]["art"], "sammlung");
+    assert_eq!(cleos["grund"]["sammlung"], sammlung_id.as_str());
+
+    // Recht zurueckgenommen: sofort fort, ohne dass jemand die Datei anfasst.
+    let (status, rechte) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/collections/{sammlung_id}/grants"),
+            Some(&anna_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{rechte}");
+    let recht_id = rechte["items"]
+        .as_array()
+        .expect("Liste")
+        .iter()
+        .find(|e| e["userId"] == cleo_id.as_str())
+        .and_then(|e| e["id"].as_str())
+        .expect("das eben vergebene Recht");
+    let (status, _) = probe
+        .call(
+            "DELETE",
+            &format!("/api/v1/collections/{sammlung_id}/grants/{recht_id}"),
+            Some(&anna_token),
+            None,
+        )
+        .await;
+    assert!(status.is_success(), "Zurueckziehen: {status}");
+    assert_eq!(
+        probe.holen(&datei, Ausweis::Keks(&cleo_keks)).await,
+        StatusCode::NOT_FOUND,
+        "zurueckgenommen heisst zurueckgenommen"
+    );
+}
+
+/// Besitz und Leihe lassen sich nachsehen – samt Grund.
+///
+/// Das ist der Teil, den eine Leihtabelle von sich aus hätte. Ein abgeleitetes
+/// Modell muss ihn nachreichen, sonst weiss man zwar, dass die Rechte stimmen,
+/// kann es aber niemandem zeigen.
+#[tokio::test(flavor = "multi_thread")]
+async fn wer_sieht_das_und_warum() {
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL nicht gesetzt – übersprungen");
+        return;
+    };
+    let n = kurz();
+    let (anna_token, anna_id, _) = probe.konto(&format!("anna{n}")).await;
+    let (bodo_token, bodo_id, _) = probe.konto(&format!("bodo{n}")).await;
+
+    let datei = probe.hochladen(&anna_token).await;
+
+    // Frisch hochgeladen: Besitzerin ist Anna, verliehen ist nichts.
+    let (status, kreis) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/media/{datei}/zugriff"),
+            Some(&anna_token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{kreis}");
+    assert_eq!(kreis["besitzer"], anna_id);
+    assert_eq!(kreis["alleAngemeldeten"], false);
+    let leihen = kreis["leihen"].as_array().expect("Liste");
+    assert_eq!(leihen.len(), 1, "nur die Besitzerin selbst: {kreis}");
+    assert_eq!(leihen[0]["person"], anna_id);
+    assert_eq!(leihen[0]["grund"]["art"], "besitz");
+
+    // Fremde duerfen gar nicht fragen – die Antwort waere eine Personenliste.
+    let (status, _) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/media/{datei}/zugriff"),
+            Some(&bodo_token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "wer die Datei nicht besitzt, erfaehrt auch nicht, wer sie sieht"
+    );
+
+    // Im Chat geteilt: Bodo taucht als Leihe auf, mit Grund.
+    let (status, chat) = probe
+        .call(
+            "POST",
+            "/api/v1/conversations",
+            Some(&anna_token),
+            Some(json!({ "type": "group", "title": "Runde", "memberIds": [bodo_id] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{chat}");
+    let chat_id = chat["id"].as_str().unwrap().to_string();
+    let (status, _) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/conversations/{chat_id}/messages"),
+            Some(&anna_token),
+            Some(json!({ "type": "image", "attachmentIds": [datei] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    let (_, kreis) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/media/{datei}/zugriff"),
+            Some(&anna_token),
+            None,
+        )
+        .await;
+    let leihen = kreis["leihen"].as_array().expect("Liste");
+    let bodos = leihen
+        .iter()
+        .find(|e| e["person"] == bodo_id.as_str())
+        .expect("Bodo muss im Kreis stehen");
+    assert_eq!(bodos["grund"]["art"], "gespraech");
+    assert_eq!(bodos["grund"]["gespraech"], chat_id.as_str());
+    assert!(
+        bodos["satz"].as_str().unwrap().contains("Chat"),
+        "der Grund muss auch als Satz lesbar sein: {bodos}"
+    );
+
+    // Tritt er aus, ist die Leihe fort – ohne dass jemand sie zurueckgenommen
+    // haette. Genau das kann ein abgeleitetes Modell und eine Tabelle nicht.
+    let (status, _) = probe
+        .call(
+            "DELETE",
+            &format!("/api/v1/conversations/{chat_id}/members/{bodo_id}"),
+            Some(&bodo_token),
+            None,
+        )
+        .await;
+    assert!(status.is_success(), "Verlassen: {status}");
+
+    let (_, kreis) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/media/{datei}/zugriff"),
+            Some(&anna_token),
+            None,
+        )
+        .await;
+    let leihen = kreis["leihen"].as_array().expect("Liste");
+    assert!(
+        !leihen.iter().any(|e| e["person"] == bodo_id.as_str()),
+        "nach dem Austritt steht er nicht mehr im Kreis: {kreis}"
+    );
+
+    // Als Profilbild gilt eine andere Regel – und der Kreis sagt das auch.
+    let profilbild = probe.hochladen(&anna_token).await;
+    let (status, _) = probe
+        .call(
+            "PATCH",
+            "/api/v1/users/me",
+            Some(&anna_token),
+            Some(json!({ "avatarAttachmentId": profilbild })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, kreis) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/media/{profilbild}/zugriff"),
+            Some(&anna_token),
+            None,
+        )
+        .await;
+    assert_eq!(
+        kreis["alleAngemeldeten"], true,
+        "ein Profilbild sieht jede angemeldete Person – die Liste waere sinnlos"
+    );
+}
+
 /// Das kleinstmögliche gültige PNG – ein Pixel.
 fn png_pixel() -> Vec<u8> {
     const ROH: &[u8] = &[
