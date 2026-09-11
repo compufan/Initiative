@@ -14,7 +14,7 @@ use crate::db::{MessageRow, ReactionRow};
 use crate::dto::{ListResult, MessageDto};
 use crate::error::{AppError, AppResult};
 use crate::realtime::Event;
-use crate::services::conversations::{assert_membership, member_ids};
+use crate::services::conversations::assert_membership;
 use crate::services::messages::{
     create_message, hydrate_messages, load_message, publish_message_update, require_message,
     to_reaction_dtos, NewMessage,
@@ -348,6 +348,12 @@ async fn remove(
         ));
     }
 
+    // Der Empfängerkreis wird VOR dem Löschen bestimmt: Er hängt am
+    // Erstellungszeitpunkt der Nachricht, und die Meldung geht nur an die, für
+    // die es überhaupt etwas zu löschen gab. Wer sie nie sehen durfte, erfährt
+    // sonst über die Kennung, dass es sie gab.
+    let members = crate::services::verlauf::empfaenger_fuer_nachricht(&state.pool, id).await?;
+
     sqlx::query(
         "update messages set deleted_at = now(), body = null, metadata = '{}'::jsonb where id = $1",
     )
@@ -359,7 +365,6 @@ async fn remove(
         .execute(&state.pool)
         .await?;
 
-    let members = member_ids(&state.pool, row.conversation_id).await?;
     state
         .hub
         .publish(members, Event::message_deleted(row.conversation_id, id))

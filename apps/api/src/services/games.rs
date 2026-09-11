@@ -183,8 +183,56 @@ pub async fn persist_session(
     Ok(session)
 }
 
+/// Wer die Partie sehen darf – abgeleitet aus ihrer Karte im Chat.
+///
+/// Wie bei den Umfragen: Eine Partie erreicht man über die Nachricht, die sie
+/// trägt. Vorher hing es an der blossen Mitgliedschaft, und eine Partie von
+/// vor dem eigenen Beitritt war damit offen – Spielstand, Mitspieler, Verlauf.
+/// Fehlt die Karte (gelöscht), entscheidet das Alter der Partie gegen die
+/// eigene Grenze.
+pub async fn sichtbar_fuer(pool: &sqlx::PgPool, row: &GameSessionRow) -> AppResult<Vec<Uuid>> {
+    let mut ids: Vec<Uuid> = match row.message_id {
+        Some(message_id) => {
+            crate::services::verlauf::empfaenger_fuer_nachricht(pool, message_id).await?
+        }
+        None => {
+            sqlx::query_scalar(
+                "select cm.user_id from conversation_members cm
+                  where cm.conversation_id = $1
+                    and (cm.sieht_ab is null or $2 >= cm.sieht_ab)",
+            )
+            .bind(row.conversation_id)
+            .bind(row.created_at)
+            .fetch_all(pool)
+            .await?
+        }
+    };
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
+/// Darf diese Person die Partie sehen und mitspielen?
+pub async fn assert_session_access(
+    pool: &sqlx::PgPool,
+    row: &GameSessionRow,
+    user_id: Uuid,
+) -> AppResult<()> {
+    if sichtbar_fuer(pool, row).await?.contains(&user_id) {
+        return Ok(());
+    }
+    Err(AppError::forbidden("Diese Partie gehört nicht zu dir"))
+}
+
 pub async fn broadcast_session(state: &AppState, session: &GameSessionDto) -> AppResult<()> {
-    let members = super::conversations::member_ids(&state.pool, session.conversation_id).await?;
+    let row = sqlx::query_as::<_, GameSessionRow>("select * from game_sessions where id = $1")
+        .bind(session.id)
+        .fetch_optional(&state.pool)
+        .await?;
+    let members = match row {
+        Some(row) => sichtbar_fuer(&state.pool, &row).await?,
+        None => Vec::new(),
+    };
     state
         .hub
         .publish(members, Event::game_updated(session))

@@ -1369,24 +1369,17 @@ async fn add_document(
     .await?
     .ok_or_else(|| AppError::not_found("Datei nicht gefunden oder noch nicht fertig"))?;
 
-    // Nur was man selbst hochgeladen hat oder im Chat sehen darf.
-    if attachment.uploader_id != Some(user.id()) {
-        let erlaubt: bool = sqlx::query_scalar(
-            "select exists (
-               select 1 from messages m
-                 join conversation_members cm on cm.conversation_id = m.conversation_id
-                where m.id = $1 and cm.user_id = $2
-             )",
-        )
-        .bind(attachment.message_id)
-        .bind(user.id())
-        .fetch_one(&state.pool)
-        .await?;
-        if !erlaubt {
-            return Err(AppError::forbidden(
-                "Auf diese Datei hast du keinen Zugriff",
-            ));
-        }
+    // Nur was man selbst hochgeladen hat oder wirklich sehen darf. Die Frage
+    // beantwortet `services::zugriff`, und zwar mitsamt der Verlaufsgrenze;
+    // die Abschrift, die hier stand, kannte sie nicht.
+    if !crate::services::zugriff::anhang(&state.pool, attachment.id, user.id())
+        .await?
+        .grund
+        .erlaubt()
+    {
+        return Err(AppError::forbidden(
+            "Auf diese Datei hast du keinen Zugriff",
+        ));
     }
 
     let row = sqlx::query_as::<_, EventAttachmentRow>(

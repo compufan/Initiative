@@ -203,25 +203,16 @@ async fn handle_client_event(
             {
                 return Ok(());
             }
-            sqlx::query(
-                "update conversation_members set last_read_message_id = $3
-                 where conversation_id = $1 and user_id = $2
-                   and (last_read_message_id is null or last_read_message_id < $3)",
+            // Ein Client, der etwas Unerlaubtes meldet, bekommt hier keinen
+            // Fehler zurück – der Socket soll daran nicht zerbrechen. Verbucht
+            // wird es trotzdem nicht.
+            let _ = crate::services::conversations::melde_gelesen(
+                state,
+                conversation_id,
+                user_id,
+                message_id,
             )
-            .bind(conversation_id)
-            .bind(user_id)
-            .bind(message_id)
-            .execute(&state.pool)
-            .await?;
-
-            let audience = member_ids(&state.pool, conversation_id).await?;
-            state
-                .hub
-                .publish(
-                    audience,
-                    Event::read_updated(conversation_id, user_id, message_id),
-                )
-                .await;
+            .await;
         }
         // Unknown events are ignored so new clients can talk to old servers.
         _ => {}

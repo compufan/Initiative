@@ -351,11 +351,10 @@ pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<Me
         .next()
         .ok_or_else(|| AppError::internal("Nachricht konnte nicht geladen werden"))?;
 
-    let members = super::conversations::member_ids(&state.pool, input.conversation_id).await?;
-    state
-        .hub
-        .publish(members.clone(), Event::message_new(&message))
-        .await;
+    // Eine frisch geschriebene Nachricht liegt hinter jeder Grenze, also
+    // bekommt sie jedes Mitglied – das ZITAT darin aber nicht, wenn es älter
+    // als der eigene Beitritt ist.
+    let members = ausspielen(state, &message, Event::message_new).await?;
 
     if !input.silent {
         super::notify::notify_new_message(state, &message, &members).await;
@@ -363,12 +362,75 @@ pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<Me
     Ok(message)
 }
 
+/// Eine Nachricht ausspielen – an die, die sie sehen dürfen, und jedem in der
+/// Fassung, die ihm zusteht.
+///
+/// # Zwei Fehler, die hier zusammenkamen
+///
+/// Der Empfängerkreis war die blosse Mitgliederliste. Wird eine alte Nachricht
+/// bearbeitet oder eine Karte neu ausgespielt, bekam ein Neuzugang den
+/// vollständigen `MessageDto` über den Socket – Text, Absender, Zeitpunkt,
+/// Anhänge. Die Liste in `modules::messages` filtert richtig; dieser Weg ging
+/// daran vorbei.
+///
+/// Und die Fassung war die des Absenders. `hydrate_messages` füllt `reply_to`
+/// genau dann, wenn DER ÜBERGEBENE Betrachter das Zitierte sehen darf.
+/// Antwortet ein Altmitglied auf etwas von vor dem Beitritt, trug das Ereignis
+/// das Zitat mit – die Absicherung im Zitat lief ins Leere, weil sie für den
+/// falschen Betrachter gegriffen hatte.
+///
+/// # Warum zwei Fassungen genügen
+///
+/// Am Zitat hängt die einzige Grenze, die sich zwischen den Empfängern
+/// unterscheidet. Je Empfänger neu zu hydrieren hiesse, in einer Gruppe mit
+/// zweihundert Leuten zweihundertmal dieselbe Nachricht zu laden. Stattdessen
+/// wird einmal geladen und für die, denen das Zitat nicht zusteht, gekürzt –
+/// dieselbe Blase, die auch eine gelöschte Nachricht zeigt.
+async fn ausspielen(
+    state: &AppState,
+    message: &MessageDto,
+    ereignis: impl Fn(&MessageDto) -> Event,
+) -> AppResult<Vec<Uuid>> {
+    let empfaenger =
+        crate::services::verlauf::empfaenger_fuer_nachricht(&state.pool, message.id).await?;
+    if empfaenger.is_empty() {
+        return Ok(empfaenger);
+    }
+
+    let zitat = match (message.reply_to.as_ref(), message.reply_to_id) {
+        (Some(_), Some(id)) => id,
+        _ => {
+            state
+                .hub
+                .publish(empfaenger.clone(), ereignis(message))
+                .await;
+            return Ok(empfaenger);
+        }
+    };
+
+    let darf_zitat: std::collections::HashSet<Uuid> =
+        crate::services::verlauf::empfaenger_fuer_nachricht(&state.pool, zitat)
+            .await?
+            .into_iter()
+            .collect();
+    let (mit, ohne): (Vec<Uuid>, Vec<Uuid>) = empfaenger
+        .iter()
+        .copied()
+        .partition(|id| darf_zitat.contains(id));
+
+    if !mit.is_empty() {
+        state.hub.publish(mit, ereignis(message)).await;
+    }
+    if !ohne.is_empty() {
+        let mut gekuerzt = message.clone();
+        gekuerzt.reply_to = None;
+        state.hub.publish(ohne, ereignis(&gekuerzt)).await;
+    }
+    Ok(empfaenger)
+}
+
 pub async fn publish_message_update(state: &AppState, message: &MessageDto) -> AppResult<()> {
-    let members = super::conversations::member_ids(&state.pool, message.conversation_id).await?;
-    state
-        .hub
-        .publish(members, Event::message_updated(message))
-        .await;
+    ausspielen(state, message, Event::message_updated).await?;
     Ok(())
 }
 

@@ -64,6 +64,63 @@ pub async fn member_ids(pool: &PgPool, conversation_id: Uuid) -> AppResult<Vec<U
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
+/// „Bis hierhin gelesen" verbuchen und melden.
+///
+/// # Warum das nicht zweimal dastehen darf
+///
+/// Es gibt zwei Wege hierher – das Client-Ereignis über den Socket und
+/// `POST /conversations/{id}/read`. Beide schrieben dieselbe Spalte und
+/// schickten dasselbe Ereignis, jeder mit seiner eigenen Kopie. Wer nur einen
+/// von beiden absichert, lässt den anderen offen; genau das war der Fund.
+///
+/// # Zwei Löcher, eine Stelle
+///
+/// Die gemeldete Kennung wurde ungeprüft übernommen. Ein Neuzugang konnte
+/// damit eine beliebige Kennung in den Rundruf setzen, auch eine von vor
+/// seinem Beitritt.
+///
+/// Und der Empfängerkreis war die ganze Mitgliederliste. Ein Altmitglied, das
+/// den Chat öffnet, meldet meist die Nachricht, auf der es stehengeblieben
+/// ist; liegt sie vor der Grenze eines Neuzugangs, bekam der ihre Kennung
+/// zugestellt. Aus einer v7-Kennung fällt ausserdem die Millisekunde heraus,
+/// in der sie geschrieben wurde – das Ereignis verriet also nicht nur, DASS da
+/// etwas ist, sondern auch wann.
+pub async fn melde_gelesen(
+    state: &AppState,
+    conversation_id: Uuid,
+    user_id: Uuid,
+    message_id: Uuid,
+) -> AppResult<()> {
+    if !crate::services::verlauf::darf_nachricht_sehen(&state.pool, message_id, user_id).await? {
+        return Err(AppError::forbidden("Diese Nachricht kennst du nicht"));
+    }
+
+    sqlx::query(
+        "update conversation_members set last_read_message_id = $3
+          where conversation_id = $1 and user_id = $2
+            and (last_read_message_id is null or last_read_message_id < $3)
+            -- Gemeldet werden darf nur, was auch in diesem Gespräch liegt.
+            and exists (select 1 from messages m
+                         where m.id = $3 and m.conversation_id = $1)",
+    )
+    .bind(conversation_id)
+    .bind(user_id)
+    .bind(message_id)
+    .execute(&state.pool)
+    .await?;
+
+    let empfaenger =
+        crate::services::verlauf::empfaenger_fuer_nachricht(&state.pool, message_id).await?;
+    state
+        .hub
+        .publish(
+            empfaenger,
+            Event::read_updated(conversation_id, user_id, message_id),
+        )
+        .await;
+    Ok(())
+}
+
 pub async fn touch_conversation(pool: &PgPool, conversation_id: Uuid) -> AppResult<()> {
     sqlx::query(
         "update conversations set last_message_at = now(), updated_at = now() where id = $1",
@@ -197,6 +254,39 @@ pub async fn load_conversation_dtos(
     let verdeckt: std::collections::HashSet<Uuid> =
         verdeckte_rows.into_iter().map(|(id,)| id).collect();
 
+    /*
+     * Auch das Lesezeichen der anderen hört an meiner Grenze auf.
+     *
+     * `lastReadMessageId` stand für JEDES Mitglied ungefiltert in der
+     * Chatliste. Ein Altmitglied bleibt meist auf der Nachricht stehen, bei
+     * der es aufgehört hat; liegt sie vor meinem Beitritt, hielt ich damit die
+     * Kennung einer Nachricht in der Hand, die ich nie sehen darf – und aus
+     * einer v7-Kennung fällt die Millisekunde heraus, in der sie geschrieben
+     * wurde. Wer es nicht sehen darf, sieht kein Lesezeichen; das eigene
+     * bleibt immer stehen, denn was man gelesen hat, darf man auch sehen.
+     */
+    let gelesen_ids: Vec<Uuid> = member_rows
+        .iter()
+        .filter_map(|row| row.last_read_message_id)
+        .collect();
+    let sichtbar_gelesen: std::collections::HashSet<Uuid> = if gelesen_ids.is_empty() {
+        std::collections::HashSet::new()
+    } else {
+        sqlx::query_scalar::<_, Uuid>(
+            "select m.id from messages m
+               join conversation_members cm on cm.conversation_id = m.conversation_id
+              where m.id = any($1)
+                and cm.user_id = $2
+                and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)",
+        )
+        .bind(&gelesen_ids)
+        .bind(viewer_id)
+        .fetch_all(&state.pool)
+        .await?
+        .into_iter()
+        .collect()
+    };
+
     let user_ids: Vec<Uuid> = member_rows.iter().map(|row| row.user_id).collect();
     let users = super::users::load_users_by_ids(&state.pool, &user_ids, &state.config).await?;
     let last_messages =
@@ -212,7 +302,9 @@ pub async fn load_conversation_dtos(
                 role: row.role.clone(),
                 joined_at: row.joined_at,
                 nickname: row.nickname.clone(),
-                last_read_message_id: row.last_read_message_id,
+                last_read_message_id: row
+                    .last_read_message_id
+                    .filter(|id| sichtbar_gelesen.contains(id)),
                 sieht_ab: row.sieht_ab,
                 user: users
                     .get(&row.user_id)

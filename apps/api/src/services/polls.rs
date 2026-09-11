@@ -415,46 +415,89 @@ pub async fn poll_conversation_ids(pool: &PgPool, poll: &PollRow) -> AppResult<V
     Ok(ids)
 }
 
-/// Darf diese Person die Umfrage sehen und mitmachen?
+/// Wer die Umfrage sehen darf – eine Ableitung, kein Vermerk.
 ///
-/// Es genügt, in **einem** der beteiligten Chats zu sein. Wer die Frage in
-/// seinem Einzelchat bekommen hat, muss nicht auch noch in der Gruppe sein.
-pub async fn assert_poll_access(pool: &PgPool, poll: &PollRow, user_id: Uuid) -> AppResult<()> {
-    let erlaubt: bool = sqlx::query_scalar(
-        "select exists (
-           select 1 from conversation_members m
-            where m.user_id = $2
-              and (
-                m.conversation_id = $1
-                or m.conversation_id in (
-                  select conversation_id from poll_placements where poll_id = $3
-                )
-              )
-         )",
+/// # Die Regel
+///
+/// Eine Umfrage erreicht man über die **Karte**, mit der sie im Chat steht.
+/// Wer diese Nachricht sehen darf, darf auch die Umfrage; wer sie nicht sieht,
+/// hat nichts, worüber er hineinkäme. Es genügt weiterhin **eine** Karte: Wer
+/// die Frage im Einzelchat bekommen hat, muss nicht auch in der Gruppe sein.
+///
+/// Vorher hing der Zugang an der blossen Mitgliedschaft in einem der
+/// beteiligten Chats. Eine Umfrage von vor dem eigenen Beitritt war damit
+/// offen – samt Stimmen, und bei einer offenen Umfrage samt Namen. Die
+/// Nachricht, die sie trug, blieb dabei unsichtbar; die Frage selbst nicht.
+///
+/// # Die verwaiste Umfrage
+///
+/// Wird die letzte Karte gelöscht, steht `message_id` auf `null` und es gibt
+/// nichts mehr, woran die Sichtbarkeit hinge. Dann entscheidet das Alter der
+/// Umfrage gegen die eigene Grenze – dieselbe Frage, nur ohne den Umweg über
+/// die Nachricht. Auf die Mitgliedschaft zurückzufallen hiesse, das Loch für
+/// genau die Fälle offen zu lassen, in denen jemand die Karte entfernt hat.
+async fn sichtbar_fuer(pool: &PgPool, poll: &PollRow) -> AppResult<Vec<Uuid>> {
+    let mut mitglieder: Vec<Uuid> = sqlx::query_scalar(
+        "select distinct cm.user_id
+           from conversation_members cm
+           join messages m on m.conversation_id = cm.conversation_id
+          where (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
+            and m.id in (
+              select p.message_id from polls p
+               where p.id = $1 and p.message_id is not null
+              union
+              select pp.message_id from poll_placements pp
+               where pp.poll_id = $1 and pp.message_id is not null
+            )",
     )
-    .bind(poll.conversation_id)
-    .bind(user_id)
     .bind(poll.id)
-    .fetch_one(pool)
+    .fetch_all(pool)
     .await?;
-    if erlaubt {
+
+    if mitglieder.is_empty() {
+        mitglieder = sqlx::query_scalar(
+            "select distinct cm.user_id
+               from conversation_members cm
+              where (cm.conversation_id = $1
+                     or cm.conversation_id in (
+                       select conversation_id from poll_placements where poll_id = $2
+                     ))
+                and (cm.sieht_ab is null or $3 >= cm.sieht_ab)
+                and not exists (
+                  select 1 from polls p where p.id = $2 and p.message_id is not null
+                )
+                and not exists (
+                  select 1 from poll_placements pp
+                   where pp.poll_id = $2 and pp.message_id is not null
+                )",
+        )
+        .bind(poll.conversation_id)
+        .bind(poll.id)
+        .bind(poll.created_at)
+        .fetch_all(pool)
+        .await?;
+    }
+
+    mitglieder.sort();
+    mitglieder.dedup();
+    Ok(mitglieder)
+}
+
+/// Darf diese Person die Umfrage sehen und mitmachen?
+pub async fn assert_poll_access(pool: &PgPool, poll: &PollRow, user_id: Uuid) -> AppResult<()> {
+    if sichtbar_fuer(pool, poll).await?.contains(&user_id) {
         return Ok(());
     }
     Err(AppError::forbidden("Diese Umfrage gehört nicht zu dir"))
 }
 
 /// Jede Person, die die Umfrage sieht – für den Rundruf.
+///
+/// Derselbe Kreis wie beim Lesen. Zwei getrennte Ableitungen gingen früher
+/// oder später auseinander, und zwar in die öffnende Richtung: Der Rundruf
+/// schickt von sich aus los, ohne dass jemand fragt.
 pub async fn poll_audience(pool: &PgPool, poll: &PollRow) -> AppResult<Vec<Uuid>> {
-    let ids = poll_conversation_ids(pool, poll).await?;
-    let mut mitglieder: Vec<Uuid> = sqlx::query_scalar(
-        "select distinct user_id from conversation_members where conversation_id = any($1)",
-    )
-    .bind(&ids)
-    .fetch_all(pool)
-    .await?;
-    mitglieder.sort();
-    mitglieder.dedup();
-    Ok(mitglieder)
+    sichtbar_fuer(pool, poll).await
 }
 
 /// Stellt die Umfrage in einen weiteren Chat.

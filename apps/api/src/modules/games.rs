@@ -66,11 +66,17 @@ async fn list_sessions(
     }
 
     let rows = sqlx::query_as::<_, GameSessionRow>(
+        // Die Grenze gehört in die Abfrage: Wer erst danach filtert, zählt
+        // Zeilen mit, die er gleich wieder wegwirft – und eine halbe Seite
+        // sieht dann aus wie das Ende der Liste.
         "select g.*
          from game_sessions g
          join conversation_members cm
            on cm.conversation_id = g.conversation_id and cm.user_id = $1
+         left join messages gm on gm.id = g.message_id
          where ($2::uuid is null or g.conversation_id = $2)
+           and (cm.sieht_ab is null
+                or coalesce(gm.created_at, g.created_at) >= cm.sieht_ab)
            and (($3::text is null and g.status in ('open', 'active')) or g.status = $3)
          order by g.updated_at desc
          limit 50",
@@ -122,7 +128,7 @@ async fn by_id(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<GameSessionDto>> {
     let row = require_session(&state, id).await?;
-    assert_membership(&state.pool, row.conversation_id, user.id()).await?;
+    crate::services::games::assert_session_access(&state.pool, &row, user.id()).await?;
     Ok(Json(to_session_dto(&row)))
 }
 
@@ -132,7 +138,7 @@ async fn join(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<GameSessionDto>> {
     let row = require_session(&state, id).await?;
-    assert_membership(&state.pool, row.conversation_id, user.id()).await?;
+    crate::services::games::assert_session_access(&state.pool, &row, user.id()).await?;
 
     let definition =
         get_game(&row.game_key).ok_or_else(|| AppError::bad_request("Unbekanntes Spiel"))?;
@@ -200,7 +206,7 @@ async fn make_move(
     Json(input): Json<MoveInput>,
 ) -> AppResult<Json<GameSessionDto>> {
     let row = require_session(&state, id).await?;
-    assert_membership(&state.pool, row.conversation_id, user.id()).await?;
+    crate::services::games::assert_session_access(&state.pool, &row, user.id()).await?;
 
     if input.version.is_some_and(|version| version != row.version) {
         return Err(AppError::bad_request(
@@ -285,7 +291,7 @@ async fn abort(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<GameSessionDto>> {
     let row = require_session(&state, id).await?;
-    assert_membership(&state.pool, row.conversation_id, user.id()).await?;
+    crate::services::games::assert_session_access(&state.pool, &row, user.id()).await?;
 
     let seats = seats_of(&row);
     if seat_of(&seats, user.id()).is_none() && row.created_by != Some(user.id()) {
@@ -324,7 +330,7 @@ async fn rematch(
     Path(id): Path<Uuid>,
 ) -> AppResult<(StatusCode, Json<GameSessionDto>)> {
     let row = require_session(&state, id).await?;
-    assert_membership(&state.pool, row.conversation_id, user.id()).await?;
+    crate::services::games::assert_session_access(&state.pool, &row, user.id()).await?;
 
     let opponents: Vec<Uuid> = players_of(&row)
         .into_iter()

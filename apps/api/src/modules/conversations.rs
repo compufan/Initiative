@@ -434,25 +434,7 @@ async fn mark_read(
     Json(input): Json<MarkReadInput>,
 ) -> AppResult<Json<serde_json::Value>> {
     assert_membership(&state.pool, id, user.id()).await?;
-    sqlx::query(
-        "update conversation_members set last_read_message_id = $3
-         where conversation_id = $1 and user_id = $2
-           and (last_read_message_id is null or last_read_message_id < $3)",
-    )
-    .bind(id)
-    .bind(user.id())
-    .bind(input.message_id)
-    .execute(&state.pool)
-    .await?;
-
-    let members = member_ids(&state.pool, id).await?;
-    state
-        .hub
-        .publish(
-            members,
-            Event::read_updated(id, user.id(), input.message_id),
-        )
-        .await;
+    crate::services::conversations::melde_gelesen(&state, id, user.id(), input.message_id).await?;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 

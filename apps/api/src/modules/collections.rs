@@ -540,21 +540,22 @@ async fn assert_may_use_attachment(
     if attachment.uploader_id == Some(user_id) {
         return Ok(());
     }
-    if let Some(message_id) = attachment.message_id {
-        let erlaubt: bool = sqlx::query_scalar(
-            "select exists (
-               select 1 from messages m
-                 join conversation_members cm on cm.conversation_id = m.conversation_id
-                where m.id = $1 and cm.user_id = $2
-             )",
-        )
-        .bind(message_id)
-        .bind(user_id)
-        .fetch_one(&state.pool)
-        .await?;
-        if erlaubt {
-            return Ok(());
-        }
+    /*
+     * Hier stand dieselbe Abfrage noch einmal von Hand – ohne die
+     * Verlaufsgrenze. Eine Datei aus einer Nachricht von vor dem eigenen
+     * Beitritt liess sich damit in die eigene Sammlung holen und dort ansehen:
+     * Die Nachricht blieb unsichtbar, ihr Anhang nicht.
+     *
+     * `services::zugriff` beantwortet genau diese Frage und kennt die Grenze.
+     * Eine zweite Kopie daneben geht früher oder später auseinander, und zwar
+     * in die öffnende Richtung – wie diese hier.
+     */
+    if crate::services::zugriff::anhang(&state.pool, attachment.id, user_id)
+        .await?
+        .grund
+        .erlaubt()
+    {
+        return Ok(());
     }
     // Schon irgendwo abgelegt, wo die Person hindarf – dann auch hier.
     let sichtbar = visible_collection_ids(&state.pool, user_id).await?;
