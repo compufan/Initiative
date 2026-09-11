@@ -77,6 +77,13 @@ den Link zu schicken.
 verhindert, dass der Browser den Typ rät, nicht dass er einen mitgeschickten
 befolgt.
 
+Diese Positivliste gilt auch für den **Umleitungsweg**. Mit R2/S3 antwortet
+die Medienroute sonst mit einem 307, und über Typ und Darstellung entscheidet
+allein der Speicher – ohne `nosniff`, ohne CSP, ohne Anhang-Kopfzeile. Dass
+der Eimer meist auf einer anderen Herkunft liegt, hat das entschärft; mit
+`S3_PUBLIC_BASE_URL` auf derselben Domain fiele auch das weg. Was nicht
+angezeigt werden darf, geht deshalb immer durch die API.
+
 Deshalb: eine Positivliste dessen, was dargestellt werden darf (Fotos, Videos,
 Ton, PDF). Alles andere bekommt `Content-Disposition: attachment` und eine
 `sandbox`-CSP. `image/*` steht bewusst **nicht** auf der Liste – `image/svg+xml`

