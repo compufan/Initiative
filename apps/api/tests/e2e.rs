@@ -429,12 +429,34 @@ async fn full_api_scenario() {
     assert_eq!(status, StatusCode::CREATED);
     assert_eq!(image_message["attachments"].as_array().unwrap().len(), 1);
 
-    // Capability URL: no Authorization header needed.
-    let (status, headers, bytes) = app
+    /*
+     * Die Medienroute verlangt jetzt eine angemeldete Person.
+     *
+     * Hier stand „Capability URL: no Authorization header needed" und ein
+     * Abruf mit `None` – der alte Vertrag: Wer die Kennung kennt, bekommt die
+     * Datei, ohne Konto und für immer. Seit dem Medien-Keks gilt er nicht
+     * mehr. Für `<img>` trägt der Keks die Person, hier im Test der Token.
+     */
+    let (status, _, _) = app
         .raw(
             "GET",
             &format!("/api/v1/media/{attachment_id}"),
             None,
+            vec![],
+            Body::empty(),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "ohne Ausweis gibt es die Datei nicht mehr"
+    );
+
+    let (status, headers, bytes) = app
+        .raw(
+            "GET",
+            &format!("/api/v1/media/{attachment_id}"),
+            Some(&alice_token),
             vec![],
             Body::empty(),
         )
@@ -450,7 +472,7 @@ async fn full_api_scenario() {
         .raw(
             "GET",
             &format!("/api/v1/media/{attachment_id}"),
-            None,
+            Some(&alice_token),
             vec![("range", "bytes=0-9".to_string())],
             Body::empty(),
         )

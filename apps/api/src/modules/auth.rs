@@ -1,7 +1,8 @@
 //! Registrierung, Login und Token-Rotation.
 
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -11,8 +12,8 @@ use uuid::Uuid;
 use crate::auth::password::{
     hash_password, hash_password_async, random_token, sha256_hex, verify_password_async,
 };
-use crate::auth::{jwt, AuthUser};
-use crate::config::RegistrationMode;
+use crate::auth::{jwt, medienkeks, AuthUser};
+use crate::config::{Config, RegistrationMode};
 use crate::db::UserRow;
 use crate::drossel::{regeln, Absender};
 use crate::dto::AuthSession;
@@ -116,11 +117,31 @@ pub(crate) async fn issue_session(state: &AppState, user: &UserRow) -> AppResult
     })
 }
 
+/**
+ * Die Sitzung samt Medien-Keks ausliefern.
+ *
+ * Der Keks geht bei JEDER Sitzungsantwort mit – beim Anmelden, beim
+ * Registrieren und bei jeder Erneuerung. Das ist zugleich der Übergang für
+ * Sitzungen, die es schon gibt: Sie bekommen ihn bei der nächsten Erneuerung,
+ * ohne dass sich jemand neu anmelden müsste.
+ *
+ * Bekommt er kein Beiwerk (App und API auf fremden Stellen ohne TLS), bleibt
+ * die Kopfzeile weg. Ein Keks, den der Browser ohnehin verwirft, wäre nur
+ * Rauschen in der Antwort.
+ */
+fn mit_keks(config: &Config, user_id: Uuid, sitzung: AuthSession) -> Response {
+    let rumpf = Json(sitzung);
+    match medienkeks::setzen(config, user_id) {
+        Some(keks) => ([(header::SET_COOKIE, keks)], rumpf).into_response(),
+        None => rumpf.into_response(),
+    }
+}
+
 async fn register(
     State(state): State<AppState>,
     absender: Absender,
     Json(input): Json<RegisterInput>,
-) -> AppResult<(StatusCode, Json<AuthSession>)> {
+) -> AppResult<(StatusCode, Response)> {
     // Ohne Bremse liesse sich ein Einladungscode durchprobieren – und mit ihm
     // steht die Tuer zur ganzen App offen.
     if !state
@@ -188,9 +209,10 @@ async fn register(
         redeem_invite_code(&state, &input.invite_code.unwrap_or_default(), user.id).await?;
     }
 
+    let sitzung = issue_session(&state, &user).await?;
     Ok((
         StatusCode::CREATED,
-        Json(issue_session(&state, &user).await?),
+        mit_keks(&state.config, user.id, sitzung),
     ))
 }
 
@@ -245,7 +267,7 @@ async fn login(
     State(state): State<AppState>,
     absender: Absender,
     Json(input): Json<LoginInput>,
-) -> AppResult<Json<AuthSession>> {
+) -> AppResult<Response> {
     let username = input.username.trim().to_lowercase();
 
     // Zwei Schlüssel, weil es zwei Angriffe gibt: von einer Adresse aus viele
@@ -295,14 +317,15 @@ async fn login(
         .execute(&state.pool)
         .await;
 
-    Ok(Json(issue_session(&state, &user).await?))
+    let sitzung = issue_session(&state, &user).await?;
+    Ok(mit_keks(&state.config, user.id, sitzung))
 }
 
 async fn refresh(
     State(state): State<AppState>,
     absender: Absender,
     Json(input): Json<RefreshInput>,
-) -> AppResult<Json<AuthSession>> {
+) -> AppResult<Response> {
     if !state
         .drossel
         .erlaubt(&format!("refresh:{absender}"), regeln::ERNEUERN)
@@ -377,20 +400,26 @@ async fn refresh(
     .await;
 
     let user = load_user(&state.pool, row.user_id).await?;
-    Ok(Json(issue_session(&state, &user).await?))
+    let sitzung = issue_session(&state, &user).await?;
+    Ok(mit_keks(&state.config, user.id, sitzung))
 }
 
 async fn logout(
     State(state): State<AppState>,
     Json(input): Json<RefreshInput>,
-) -> AppResult<StatusCode> {
+) -> AppResult<Response> {
     if let Some(token) = input.refresh_token {
         sqlx::query("update refresh_tokens set revoked_at = now() where token_hash = $1")
             .bind(sha256_hex(&token))
             .execute(&state.pool)
             .await?;
     }
-    Ok(StatusCode::NO_CONTENT)
+    // Der Keks geht mit. Sonst bliebe auf einem geteilten Gerät ein Ausweis
+    // liegen, der noch Wochen gilt – ausgerechnet beim Abmelden.
+    Ok(match medienkeks::loeschen(&state.config) {
+        Some(keks) => ([(header::SET_COOKIE, keks)], StatusCode::NO_CONTENT).into_response(),
+        None => StatusCode::NO_CONTENT.into_response(),
+    })
 }
 
 async fn me(

@@ -104,10 +104,12 @@ export function supportsWebp(): boolean {
  * `fetch` bekommt nichts zurueck. Beim blossen Anzeigen (`<img src>`) ist das
  * egal, beim Lesen der Bytes nicht.
  *
- * Bewusst OHNE `credentials`: Die Medienrouten kennen keinen angemeldeten
- * Benutzer, die Anhangskennung ist der Schluessel. Steht `CORS_ORIGINS` auf
- * `*`, schaltet der Server `allow_credentials(false)` (app.rs) – eine
- * Anfrage mit Anmeldedaten wuerde dann vom Browser verworfen.
+ * MIT `credentials`: Die Medienrouten verlangen seit dem Medien-Keks eine
+ * angemeldete Person. Hier stand das Gegenteil, mit der Begründung, diese
+ * Routen kennten keinen Benutzer und die Anhangskennung sei der Schlüssel –
+ * beides gilt nicht mehr. Voraussetzung ist, dass `CORS_ORIGINS` ausdrücklich
+ * gesetzt ist: Bei `*` schaltet der Server `allow_credentials(false)`
+ * (app.rs), und der Browser verwirft die Antwort.
  *
  * Nur die Bytes, nicht das Speichern: Wer erst holt und dann teilt, hat auf
  * dem iPhone die Nutzerhandlung schon verbraucht und das Teilen-Blatt geht
@@ -115,7 +117,9 @@ export function supportsWebp(): boolean {
  * Knopfdruck.
  */
 export async function stickerBytes(url: string): Promise<Blob> {
-  const antwort = await fetch(`${stickerSrc(url)}/bytes`);
+  // Wie `mediaBytes`: Der Keks geht bei einem `fetch` zu fremder Herkunft nur
+  // mit, wenn man ausdrücklich darum bittet.
+  const antwort = await fetch(`${stickerSrc(url)}/bytes`, { credentials: 'include' });
   if (!antwort.ok) throw new Error(`Der Sticker konnte nicht geladen werden (${antwort.status})`);
   return await antwort.blob();
 }

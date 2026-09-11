@@ -39,13 +39,19 @@ export function mediaSrc(attachment: AttachmentDto): string {
  * Herkunft schickt der Browser `Origin: null`, die CORS-Regel des Speichers
  * greift nicht mehr, und die Leinwand wäre anschliessend „verunreinigt“ – man
  * sähe das Bild, könnte es aber nicht speichern.
+ *
+ * `credentials: 'include'`, weil die Medienrouten seit dem Medien-Keks eine
+ * angemeldete Person verlangen. Bei einem `<img>` schickt der Browser den Keks
+ * von selbst; ein `fetch` tut das zu einer anderen Herkunft nur auf
+ * ausdrückliche Bitte. Hier stand deshalb früher das Gegenteil, mit der
+ * Begründung, diese Routen kennten keinen Benutzer.
+ *
+ * Voraussetzung dafür ist, dass `CORS_ORIGINS` ausdrücklich gesetzt ist: Bei
+ * `*` schaltet der Server `allow_credentials(false)`, und der Browser verwirft
+ * die Antwort. Dasselbe gilt für den Keks selbst.
  */
 export async function mediaBytes(attachment: AttachmentDto): Promise<Blob> {
-  // Ohne `credentials`: Die Medienrouten kennen keinen angemeldeten Benutzer,
-  // die Anhangskennung ist der Schluessel. Steht `CORS_ORIGINS` auf `*`,
-  // schaltet der Server `allow_credentials(false)` – eine Anfrage mit
-  // Anmeldedaten wuerde dann vom Browser verworfen.
-  const antwort = await fetch(`${mediaSrc(attachment)}/bytes`);
+  const antwort = await fetch(`${mediaSrc(attachment)}/bytes`, { credentials: 'include' });
   if (!antwort.ok) throw new Error(`Das Bild konnte nicht geladen werden (${antwort.status})`);
   return await antwort.blob();
 }

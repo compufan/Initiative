@@ -1,4 +1,5 @@
 pub mod jwt;
+pub mod medienkeks;
 pub mod password;
 
 use axum::extract::{FromRef, FromRequestParts, OptionalFromRequestParts};

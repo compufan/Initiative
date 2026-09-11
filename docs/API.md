@@ -345,13 +345,40 @@ Abschluss gleich mit – Schritt 3 ist dann nur für Metadaten nötig.
 | `file`    | 100 MB     | alle                                                                             |
 | `sticker` | 2 MB       | `image/webp`, `image/png`                                                        |
 
-**Warum `GET /media/{id}` ohne Token geht.** `<img src>`, `<video>` und der
-Service-Worker-Cache können keinen `Authorization`-Header setzen. Die Anhang-ID
-ist eine UUID v7 mit 74 Zufallsbits, und die URL ist damit ein
-**Zugriffsschlüssel**: Wer sie hat, bekommt die Datei – auch ohne Anmeldung,
-auch nach dem Weiterleiten. Wer sie nicht hat, findet sie nicht. Die Antwort
-trägt deshalb `X-Robots-Tag: noindex, nofollow, noarchive, noimageindex`,
-`X-Content-Type-Options: nosniff` und (außer bei PDF) eine CSP mit `sandbox`. Mit R2/S3 antwortet der Endpunkt mit einer
+**Wie sich `<img src>` ausweist.** `<img>`, `<video>`, ein Download-Anker und
+der Service Worker können keinen `Authorization`-Header setzen. Deshalb setzt
+jede Sitzungsantwort (Registrieren, Anmelden, Erneuern) zusätzlich einen
+**Medien-Keks**:
+
+```
+Set-Cookie: initiative_medien=<JWT typ=medien>; Path=/api/v1/media; HttpOnly; SameSite=Lax; Secure
+```
+
+Den schickt der Browser bei genau diesen Anfragen von selbst mit. Er trägt
+`typ: "medien"` und nicht den Zugangstoken: Wer ihn abgreift, kommt damit an
+keine andere Route, und ein Zugangstoken taugt umgekehrt nicht im Keks.
+`Path` grenzt ein, wohin er überhaupt geschickt wird; `Abmelden` nimmt ihn
+wieder weg.
+
+Liegen App und API auf **fremden Stellen**, wird daraus `SameSite=None; Secure`
+— das setzt `CORS_ORIGINS` mit ausdrücklichen Adressen voraus (bei `*` schaltet
+der Server `allow_credentials(false)` ab, und der Browser verwirft die
+Antwort). Ohne TLS ist dieser Fall nicht zu lösen; dort bleibt die
+Medienanmeldung aus, statt die Bilder zu verlieren.
+
+Wer darf was sehen? Eigene Anhänge immer; alles an einer Nachricht die
+**heutigen** Mitglieder des Gesprächs (ein Austritt entzieht rückwirkend);
+Profilbilder jede angemeldete Person; Gruppenbilder deren Mitglieder; Sticker
+wie jedes andere Medium (öffentliches Paket, eigenes Paket, oder in einer
+Nachricht eines eigenen Gesprächs); Sammlungsdateien nach den Rechten der
+Sammlung einschliesslich eines Rechts an genau dieser Datei; Termindokumente,
+wer den Termin sehen darf. Fehlt das Recht, antwortet die Route `404` – ob es
+eine Datei mit dieser Kennung gibt, geht den Fragenden nichts an.
+
+Mit `MEDIA_AUTH=false` lässt sich das abschalten; dann gilt wieder, dass die
+Kennung allein genügt. Die Antwort trägt weiterhin `X-Robots-Tag: noindex,
+nofollow, noarchive, noimageindex`, `X-Content-Type-Options: nosniff` und
+(außer bei PDF) eine CSP mit `sandbox`. Mit R2/S3 antwortet der Endpunkt mit einer
 Weiterleitung auf eine kurzlebige signierte URL (`SIGNED_URL_TTL`), lokal
 streamt er selbst – inklusive `Range`-Unterstützung, damit man in ein Video
 springen kann.

@@ -7,11 +7,16 @@
 //! Auf einem eigenen Server liegt beides unter derselben Domain. Damit ist eine
 //! hochgeladene `.html` ein Dokument **im Ursprung der App**: Es liest den
 //! Token aus dem Browserspeicher und schickt ihn weg. Die Medienadresse ist
-//! absichtlich ohne Anmeldung abrufbar, damit `<img>` und der Service Worker
+//! damals ohne Anmeldung abrufbar, damit `<img>` und der Service Worker
 //! funktionieren – es genügt also, jemandem den Link zu schicken.
 //!
 //! Der Umzug hat diese Lücke aufgemacht, nicht ein Fehler im alten Code. Diese
 //! Tests halten sie zu.
+//!
+//! Seit dem Medien-Keks verlangen die Routen zusätzlich eine angemeldete
+//! Person (siehe `medien_rechte.rs`). Hier geht es weiter um die KOPFZEILEN,
+//! nicht um die Anmeldung – deshalb fragt jeder Abruf mit dem Token dessen,
+//! der die Datei hochgeladen hat.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -220,7 +225,7 @@ async fn gefaehrliche_dateien_werden_nicht_angezeigt_harmlose_schon() {
         .roh(
             "GET",
             &format!("/api/v1/media/{kennung}"),
-            None,
+            Some(&token),
             vec![],
             Body::empty(),
         )
@@ -279,7 +284,7 @@ async fn gefaehrliche_dateien_werden_nicht_angezeigt_harmlose_schon() {
         .roh(
             "GET",
             &format!("/api/v1/media/{kennung}"),
-            None,
+            Some(&token),
             vec![],
             Body::empty(),
         )
@@ -300,7 +305,7 @@ async fn gefaehrliche_dateien_werden_nicht_angezeigt_harmlose_schon() {
         .roh(
             "GET",
             &format!("/api/v1/media/{kennung}"),
-            None,
+            Some(&token),
             vec![],
             Body::empty(),
         )
@@ -319,7 +324,7 @@ async fn gefaehrliche_dateien_werden_nicht_angezeigt_harmlose_schon() {
         .roh(
             "GET",
             &format!("/api/v1/media/{kennung}/download"),
-            None,
+            Some(&token),
             vec![],
             Body::empty(),
         )

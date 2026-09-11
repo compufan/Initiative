@@ -13,12 +13,12 @@ use std::time::Duration;
 use tokio::time::timeout;
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{medienkeks, AuthUser};
 use crate::constants::{allowed_mime, max_upload_bytes, ATTACHMENT_KINDS, PREVIEW_DATA_URL_MAX};
 use crate::db::AttachmentRow;
 use crate::dto::AttachmentDto;
 use crate::error::{AppError, AppResult};
-use crate::services::attachments::{load_attachment, to_attachment_dto};
+use crate::services::attachments::{darf_anhang_sehen, load_attachment, to_attachment_dto};
 use crate::state::AppState;
 use crate::storage::{
     extension_for, sanitise_file_name, storage_key_for, ByteRange, DownloadOptions,
@@ -343,9 +343,24 @@ fn parse_range(header: Option<&str>, total: Option<u64>) -> Option<ByteRange> {
     }
 }
 
-/// Delivery. The attachment id is a UUID v7 with 74 random bits and acts as a
-/// capability URL, so `<img>`, `<video>` and the service-worker cache work
-/// without an Authorization header.
+/**
+ * Die Auslieferung – und die Stelle, an der entschieden wird, wer etwas sieht.
+ *
+ * Lange stand hier, die Anhangskennung sei eine „capability URL": 74
+ * Zufallsbits, und wer sie kennt, bekommt die Datei. Das war die einzige
+ * Antwort, die es damals gab – `<img>`, `<video>` und der Dienst-Arbeiter
+ * können keinen `Authorization`-Kopf setzen, und ohne Ausweis lässt sich
+ * niemand fragen.
+ *
+ * Seit dem Medien-Keks (`auth::medienkeks`) gibt es diesen Ausweis: Der
+ * Browser schickt ihn bei genau diesen Anfragen von selbst mit. Damit ist ein
+ * weitergegebener Verweis nicht mehr auf Dauer gültig, und `darf_anhang_sehen`
+ * entscheidet nach der HEUTIGEN Lage – ein Austritt aus einem Gespräch entzieht
+ * den Zugriff rückwirkend.
+ *
+ * Die Kennung bleibt trotzdem schwer zu raten. Sie ist jetzt nur nicht mehr
+ * der einzige Riegel.
+ */
 async fn serve(
     state: AppState,
     id: Uuid,
@@ -355,6 +370,45 @@ async fn serve(
     direkt: bool,
 ) -> AppResult<Response> {
     let attachment = load_attachment(&state.pool, id).await?;
+
+    /*
+     * Wer darf das hier sehen?
+     *
+     * Bis hierher war die Anhangskennung der Schlüssel: Wer sie kannte, bekam
+     * die Datei – ohne Konto, ohne Ablauf, für immer. Das war kein Versehen,
+     * sondern der Preis dafür, dass `<img>`, `<video>` und der Dienst-Arbeiter
+     * keinen `Authorization`-Kopf setzen können.
+     *
+     * Der Keks löst genau diesen Knoten (siehe `auth::medienkeks`): Ihn
+     * schickt der Browser bei einem `<img>` von selbst mit. Damit lässt sich
+     * die Frage stellen, die vorher niemand stellen konnte – und `$2` ist
+     * dabei die HEUTIGE Mitgliedschaft, ein Austritt entzieht den Zugriff also
+     * rückwirkend.
+     *
+     * `not_found` statt `forbidden`: Ob es eine Datei mit dieser Kennung gibt,
+     * geht den Fragenden nichts an.
+     */
+    /*
+     * Zwei Wege zur selben Auskunft.
+     *
+     * Der Kopf trägt, was die App selbst holt (`fetch` im Foto-Editor, im
+     * Sticker-Studio). Der Keks trägt alles, was der BROWSER holt – jedes
+     * `<img>`, jedes `<video>`, jeder Herunterladen-Anker, jede Anfrage des
+     * Dienst-Arbeiters. Beide führen auf dieselbe Person; keiner taugt für den
+     * Weg des anderen (`medienkeks` prüft `typ`).
+     */
+    let wer = betrachter
+        .map(|user| user.id())
+        .or_else(|| medienkeks::betrachter(&headers, &state.config.jwt_secret));
+
+    if state.config.media_auth {
+        let Some(user) = wer else {
+            return Err(AppError::unauthorized("Nicht angemeldet"));
+        };
+        if !darf_anhang_sehen(&state.pool, attachment.id, user).await? {
+            return Err(AppError::not_found("Datei nicht gefunden"));
+        }
+    }
 
     /*
      * Ein unbestätigter Upload gehört nur dem, der ihn hochlädt.
@@ -372,8 +426,7 @@ async fn serve(
      * warum `<img>` und der Service Worker ohne Anmeldung funktionieren.
      */
     if attachment.status != "ready" {
-        let eigen = betrachter.map(|user| user.id()) == attachment.uploader_id
-            && attachment.uploader_id.is_some();
+        let eigen = wer == attachment.uploader_id && attachment.uploader_id.is_some();
         if !eigen {
             return Err(AppError::not_found("Datei nicht gefunden"));
         }
@@ -623,9 +676,9 @@ async fn remove(
 /// Auf einem eigenen Server liegen App und Dateien unter **derselben** Domain.
 /// Damit wird aus einer hochgeladenen `.html` ein Dokument im Ursprung der App:
 /// Es liest den Anmelde-Token aus dem Speicher des Browsers und schickt ihn
-/// weg. Die Medienadresse ist absichtlich ohne Anmeldung abrufbar (damit
-/// `<img>` und der Service Worker funktionieren) – man muss also nur jemanden
-/// dazu bringen, den Link anzutippen.
+/// weg. Seit dem Medien-Keks braucht es dafür zwar ein Konto – aber das hat
+/// jeder, dem man eine Datei schicken kann, und ein Angreifer schickt sie
+/// gerade jemandem, der eines hat.
 ///
 /// `nosniff` allein hilft dagegen nicht: Es verhindert, dass der Browser einen
 /// Typ *errät*, nicht dass er einen mitgeschickten befolgt. Wenn im

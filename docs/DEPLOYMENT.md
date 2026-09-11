@@ -128,6 +128,7 @@ nicht im normalen Safari-Tab.
 | `S3_PUBLIC_BASE_URL`   | leer              | Öffentliche Bucket-Domain. Gesetzt → keine signierten Download-URLs mehr.                                  |
 | `SIGNED_URL_TTL`       | `3600`            | Gültigkeit signierter URLs in Sekunden.                                                                    |
 | `MEDIA_KEY`            | leer              | 32 Bytes base64. Gesetzt → alles Neue wird verschlüsselt abgelegt (`initiative-api --generate-media-key`). |
+| `MEDIA_AUTH`           | `true`            | Medienrouten verlangen eine angemeldete Person (Medien-Keks). `false` gibt jede Datei heraus, deren Kennung man kennt. |
 
 > **`MEDIA_KEY` verschlüsselt nur, was danach hochgeladen wird.** Der Tresor
 > schiebt sich vor den eigentlichen Speicher; schon vorhandene Dateien bleiben,

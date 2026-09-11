@@ -68,9 +68,10 @@ keine – weil man sich darauf verlässt.
 Solange die App auf Vercel lag und die Dateien bei Cloudflare, waren das zwei
 Domains. Auf dem eigenen Server ist es **eine**. Damit wird aus einer
 hochgeladenen `.html` ein Dokument im Ursprung der App, das den Anmelde-Token
-aus dem Browserspeicher liest. Die Medienadresse ist absichtlich ohne Anmeldung
-abrufbar (sonst funktionieren `<img>` und der Service Worker nicht) – es genügt
-also, jemandem den Link zu schicken.
+aus dem Browserspeicher liest. Seit dem Medien-Keks braucht es dafür ein Konto
+– aber das hat jeder, dem man eine Datei schicken kann, und ein Angreifer
+schickt sie gerade jemandem, der eines hat. Es genügt also weiterhin, jemandem
+den Link zu schicken.
 
 `X-Content-Type-Options: nosniff` allein reicht dagegen **nicht**. Es
 verhindert, dass der Browser den Typ rät, nicht dass er einen mitgeschickten

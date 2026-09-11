@@ -80,6 +80,18 @@ pub struct Config {
 
     pub public_app_url: String,
     pub public_api_url: String,
+    /**
+     * Verlangen die Medienrouten eine Anmeldung?
+     *
+     * Vorgabe an. Der Schalter ist da, weil diese Prüfung an der heissesten
+     * Stelle der App sitzt: Geht in einer Installation etwas schief, soll sie
+     * sich ohne neue Fassung wieder öffnen lassen – lieber Bilder mit der
+     * alten Schwäche als eine App ohne Bilder.
+     *
+     * Aus ist sie ausserdem dort zwangsläufig, wo der Keks nicht ankommen
+     * kann: App und API auf fremden Stellen ohne TLS. Siehe `medienkeks`.
+     */
+    pub media_auth: bool,
     pub cors_origins: Vec<String>,
     /**
      * Ob `X-Forwarded-For` geglaubt werden darf.
@@ -313,6 +325,7 @@ impl Config {
 
             public_app_url: trim_slash(var_or("PUBLIC_APP_URL", "http://localhost:5173")),
             public_api_url: trim_slash(var_or("PUBLIC_API_URL", "http://localhost:8080")),
+            media_auth: flag("MEDIA_AUTH", true),
             cors_origins: list("CORS_ORIGINS").into_iter().map(trim_slash).collect(),
 
             trust_proxy: flag("TRUST_PROXY", false),
