@@ -64,6 +64,12 @@ export type ServerEvent =
         settled: boolean;
       };
     }
+  /**
+   * Ein Antrag auf den Verlauf hat sich geaendert – gestellt, beantwortet,
+   * zurueckgezogen. Bewusst ohne Inhalt: Der Client holt die Liste selbst,
+   * denn die Antwort haengt davon ab, wer fragt.
+   */
+  | { type: 'verlauf.antrag'; payload: { conversationId: string } }
   | { type: 'user.updated'; payload: { user: UserDto } }
   /** Payload too large for the broadcast bus – clients should refetch. */
   | { type: 'sync.hint'; payload: { conversationId?: string; scope: string } }

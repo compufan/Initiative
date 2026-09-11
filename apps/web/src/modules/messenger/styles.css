@@ -658,3 +658,66 @@
   color: var(--text-muted);
   line-height: 1.25;
 }
+
+/* ---------- Verlaufsgrenze ---------- */
+
+/*
+ * Der Streifen am Anfang des Verlaufs: Er erklärt, warum darüber nichts mehr
+ * kommt. Absichtlich ruhig gehalten – es ist eine Auskunft, keine Warnung.
+ */
+.verlauf-grenze {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-3) auto var(--space-4);
+  padding: var(--space-3);
+  max-width: 34rem;
+  text-align: center;
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.verlauf-grenze-text {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+/*
+ * Die Anträge sitzen unter der Kopfzeile und nicht im Verlauf: Sie verlangen
+ * eine Antwort von mir und dürfen nicht darauf warten, dass ich nach oben
+ * scrolle.
+ */
+.verlauf-antraege {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.verlauf-antrag {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-2);
+}
+
+.verlauf-antrag-text {
+  flex: 1 1 14rem;
+  margin: 0;
+  font-size: 0.84rem;
+  line-height: 1.45;
+  color: var(--text);
+}
+
+.verlauf-antrag-knoepfe {
+  display: flex;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}

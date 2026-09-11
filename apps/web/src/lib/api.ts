@@ -30,6 +30,7 @@ import type {
   UpdateCollectionInput,
   UpdateCollectionItemInput,
   UserDto,
+  VerlaufsantragDto,
 } from '@initiative/shared';
 import { API_PREFIX } from '@initiative/shared';
 
@@ -382,6 +383,25 @@ export const api = {
       del<void>(`/conversations/${id}/members/${userId}`),
     markRead: (id: string, messageId: string) =>
       post<{ ok: boolean }>(`/conversations/${id}/read`, { messageId }),
+  },
+  /**
+   * Der Verlauf vor dem eigenen Beitritt – beantragen und freigeben.
+   *
+   * Die Antworten enthalten bewusst keine Nachrichten: Freigegeben wird der
+   * Behaelter, nicht sein Inhalt. Faellt die Grenze, holt der Client den
+   * Verlauf ueber die gewohnten Wege nach.
+   */
+  verlauf: {
+    offene: (conversationId: string) =>
+      get<ListResult<VerlaufsantragDto>>(`/conversations/${conversationId}/verlauf`),
+    stellen: (conversationId: string) =>
+      post<VerlaufsantragDto>(`/conversations/${conversationId}/verlauf`, {}),
+    abstimmen: (conversationId: string, antragId: string, zustimmung: boolean) =>
+      post<VerlaufsantragDto>(`/conversations/${conversationId}/verlauf/${antragId}`, {
+        zustimmung,
+      }),
+    zurueckziehen: (conversationId: string, antragId: string) =>
+      del<void>(`/conversations/${conversationId}/verlauf/${antragId}`),
   },
   messages: {
     list: (

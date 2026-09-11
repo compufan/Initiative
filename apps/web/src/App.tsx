@@ -8,6 +8,7 @@ import { UpdateBanner } from './screens/UpdateBanner.js';
 import { initModules, moduleNavItems, moduleRoutes } from './modules/registry.js';
 import { appModules } from './modules/registry.js';
 import { connectChatRealtime, useChat } from './state/chat.js';
+import { connectVerlaufRealtime } from './state/verlauf.js';
 import { useSession } from './state/session.js';
 import { useNavVisibility } from './state/ui.js';
 
@@ -85,6 +86,10 @@ function ServiceWorkerBridge() {
 function AuthedApp() {
   useEffect(() => {
     connectChatRealtime();
+    // Die eigene Kennung wird beim Ereignis gelesen, nicht beim Verdrahten:
+    // Beim Anmelden steht sie noch nicht fest, und ein einmal eingefrorener
+    // leerer String bliebe für die ganze Sitzung falsch.
+    connectVerlaufRealtime(() => useSession.getState().user?.id ?? '');
     void useChat.getState().hydrate();
     const teardown = initModules();
     return teardown;

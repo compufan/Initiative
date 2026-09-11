@@ -396,3 +396,212 @@ async fn ein_einziges_nein_entscheidet() {
         .await;
     assert_eq!(status, StatusCode::CONFLICT);
 }
+
+/// Nach einer Ablehnung ist erst einmal Ruhe – und die App weiss, woran sie ist.
+///
+/// Beides hängt zusammen: Solange es den Knopf nur in der Schnittstelle gab,
+/// war Nachfassen Handarbeit. Mit einem Knopf in der App ist es ein
+/// Fingertipp, und jeder neue Antrag legt allen anderen wieder ein Band über
+/// den Chat. Deshalb hält ein Nein einen Tag lang.
+#[tokio::test(flavor = "multi_thread")]
+async fn nach_einer_ablehnung_haelt_das_nein() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let n = kurz();
+    let (anna, _) = probe.konto(&format!("anna{n}")).await;
+    let (bodo, bodo_id) = probe.konto(&format!("bodo{n}")).await;
+    let (cleo, cleo_id) = probe.konto(&format!("cleo{n}")).await;
+
+    let (_, chat) = probe
+        .call(
+            "POST",
+            "/api/v1/conversations",
+            Some(&anna),
+            Some(json!({ "type": "group", "title": "Runde", "memberIds": [bodo_id] })),
+        )
+        .await;
+    let chat_id = chat["id"].as_str().unwrap().to_string();
+    probe.senden(&anna, &chat_id, "Geheim").await;
+    probe
+        .call(
+            "POST",
+            &format!("/api/v1/conversations/{chat_id}/members"),
+            Some(&anna),
+            Some(json!({ "memberIds": [cleo_id] })),
+        )
+        .await;
+
+    let (_, antrag) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/conversations/{chat_id}/verlauf"),
+            Some(&cleo),
+            None,
+        )
+        .await;
+    let antrag_id = antrag["id"].as_str().unwrap().to_string();
+    let (status, _) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/conversations/{chat_id}/verlauf/{antrag_id}"),
+            Some(&bodo),
+            Some(json!({ "zustimmung": false })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Sofort wieder fragen geht nicht.
+    let (status, fehler) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/conversations/{chat_id}/verlauf"),
+            Some(&cleo),
+            None,
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "ein Nein muss halten: {fehler}"
+    );
+
+    // Und die anderen bekommen dadurch auch kein neues Band zu sehen.
+    let (status, offene) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/conversations/{chat_id}/verlauf"),
+            Some(&bodo),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        offene["items"].as_array().expect("Liste").len(),
+        0,
+        "nach der Ablehnung steht kein Antrag mehr offen: {offene}"
+    );
+}
+
+/// Die App muss wissen, dass es einen verdeckten Verlauf gibt.
+///
+/// Ohne diese Auskunft könnte sie den Knopf „Älteren Verlauf beantragen" nur
+/// raten – aus `joinedAt` folgt sie nicht: Nach einer Freigabe bleibt der
+/// Beitritt spät stehen und die Grenze fällt trotzdem.
+#[tokio::test(flavor = "multi_thread")]
+async fn der_chat_verraet_die_eigene_grenze() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let n = kurz();
+    let (anna, anna_id) = probe.konto(&format!("anna{n}")).await;
+    let (bodo, bodo_id) = probe.konto(&format!("bodo{n}")).await;
+    let (cleo, cleo_id) = probe.konto(&format!("cleo{n}")).await;
+
+    let (_, chat) = probe
+        .call(
+            "POST",
+            "/api/v1/conversations",
+            Some(&anna),
+            Some(json!({ "type": "group", "title": "Runde", "memberIds": [bodo_id] })),
+        )
+        .await;
+    let chat_id = chat["id"].as_str().unwrap().to_string();
+    probe.senden(&anna, &chat_id, "Geheim").await;
+    probe
+        .call(
+            "POST",
+            &format!("/api/v1/conversations/{chat_id}/members"),
+            Some(&anna),
+            Some(json!({ "memberIds": [cleo_id] })),
+        )
+        .await;
+
+    let grenze = |chat: &Value, wer: &str| -> Option<String> {
+        chat["members"]
+            .as_array()
+            .expect("Mitglieder")
+            .iter()
+            .find(|m| m["userId"] == wer)
+            .expect("Mitglied")["siehtAb"]
+            .as_str()
+            .map(str::to_string)
+    };
+
+    let (status, gesehen) = probe
+        .call("GET", &format!("/api/v1/conversations/{chat_id}"), Some(&cleo), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{gesehen}");
+    assert!(
+        grenze(&gesehen, &cleo_id).is_some(),
+        "Cleo kam später dazu – ihre Grenze muss dastehen: {gesehen}"
+    );
+    assert_eq!(
+        gesehen["verdeckterVerlauf"], true,
+        "vor Cleos Beitritt liegt etwas: {gesehen}"
+    );
+
+    /*
+     * Anna hat ebenfalls eine Grenze – die bekommt jeder, auch der Gründer.
+     * Entscheidend ist, dass NICHTS dahinterliegt: Wer am gesetzten Feld statt
+     * am Inhalt entscheidet, bietet Anna an, einen Verlauf zu beantragen, den
+     * es nicht gibt.
+     */
+    let (_, annas_sicht) = probe
+        .call("GET", &format!("/api/v1/conversations/{chat_id}"), Some(&anna), None)
+        .await;
+    assert!(
+        grenze(&annas_sicht, &anna_id).is_some(),
+        "auch der Gründer bekommt eine Grenze gesetzt: {annas_sicht}"
+    );
+    assert_eq!(
+        annas_sicht["verdeckterVerlauf"], false,
+        "aber dahinter liegt nichts: {annas_sicht}"
+    );
+    let (status, fehler) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/conversations/{chat_id}/verlauf"),
+            Some(&anna),
+            None,
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "und beantragen lässt sich das Nichts auch nicht: {fehler}"
+    );
+
+    // Und sie verschwindet, sobald alle zugestimmt haben.
+    let (_, antrag) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/conversations/{chat_id}/verlauf"),
+            Some(&cleo),
+            None,
+        )
+        .await;
+    let antrag_id = antrag["id"].as_str().unwrap().to_string();
+    for wer in [&anna, &bodo] {
+        probe
+            .call(
+                "POST",
+                &format!("/api/v1/conversations/{chat_id}/verlauf/{antrag_id}"),
+                Some(wer),
+                Some(json!({ "zustimmung": true })),
+            )
+            .await;
+    }
+
+    let (_, danach) = probe
+        .call("GET", &format!("/api/v1/conversations/{chat_id}"), Some(&cleo), None)
+        .await;
+    assert!(
+        grenze(&danach, &cleo_id).is_none(),
+        "nach der Freigabe steht keine Grenze mehr: {danach}"
+    );
+    assert_eq!(
+        danach["verdeckterVerlauf"], false,
+        "und verdeckt ist auch nichts mehr: {danach}"
+    );
+}

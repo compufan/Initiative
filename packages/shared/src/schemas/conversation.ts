@@ -15,7 +15,25 @@ export interface ConversationMemberDto {
   joinedAt: string;
   nickname: string | null;
   lastReadMessageId: string | null;
+  /**
+   * Ab wann dieses Mitglied den Verlauf sieht; `null` heisst „von Anfang an".
+   * Wer neu dazukommt, sieht ab dem Beitritt – alles davor gibt es nur auf
+   * Antrag, dem alle anderen zustimmen müssen.
+   */
+  siehtAb: string | null;
   user: UserDto;
+}
+
+/** Ein Antrag, den Verlauf vor dem eigenen Beitritt sehen zu dürfen. */
+export interface VerlaufsantragDto {
+  id: string;
+  conversationId: string;
+  antragsteller: string;
+  status: 'offen' | 'angenommen' | 'abgelehnt' | 'zurueckgezogen';
+  /** Wer noch nicht abgestimmt hat – aus der heutigen Mitgliederliste. */
+  offenBei: string[];
+  zugestimmt: string[];
+  abgelehnt: string[];
 }
 
 export interface ConversationDto {
@@ -30,6 +48,12 @@ export interface ConversationDto {
   members: ConversationMemberDto[];
   lastMessage: MessageDto | null;
   unreadCount: number;
+  /**
+   * Ob vor der eigenen Grenze noch Nachrichten liegen, die man nicht sieht.
+   * Nur dann lohnt ein Antrag – `siehtAb` steht auch beim Gründer, der nichts
+   * zu beantragen hat.
+   */
+  verdeckterVerlauf: boolean;
   mutedUntil: string | null;
   /** Whether the viewer archived this conversation. */
   archived: boolean;

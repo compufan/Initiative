@@ -30,6 +30,11 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 
+/// Wie lange ein abgelehnter Antrag nachwirkt, bevor erneut gefragt werden
+/// darf. Ein Tag: lang genug, dass Nachfassen Absicht verlangt, kurz genug,
+/// dass ein Sinneswandel in der Gruppe nicht wochenlang wirkungslos bleibt.
+const SPERRE_NACH_ABLEHNUNG: chrono::TimeDelta = chrono::TimeDelta::hours(24);
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Antrag {
@@ -102,8 +107,29 @@ pub async fn stellen(pool: &PgPool, conversation_id: Uuid, user_id: Uuid) -> App
     let Some(grenze) = grenze else {
         return Err(AppError::forbidden("Du bist nicht in diesem Chat"));
     };
-    if grenze.is_none() {
+    let Some(grenze) = grenze else {
         return Err(AppError::conflict("Du siehst den Verlauf bereits"));
+    };
+
+    /*
+     * Eine gesetzte Grenze heisst nicht, dass dahinter etwas liegt.
+     *
+     * Auch wer ein Gespräch gründet, bekommt eine – die Regel lautet überall
+     * „du siehst ab jetzt". Ohne diese Prüfung könnte er einen Antrag stellen,
+     * über den alle anderen abstimmen, um ihm ein leeres Nichts freizugeben.
+     */
+    let verdeckt: bool = sqlx::query_scalar(
+        "select exists (
+           select 1 from messages
+            where conversation_id = $1 and deleted_at is null and created_at < $2
+         )",
+    )
+    .bind(conversation_id)
+    .bind(grenze)
+    .fetch_one(pool)
+    .await?;
+    if !verdeckt {
+        return Err(AppError::conflict("Vor deinem Beitritt liegt hier nichts"));
     }
 
     // Alleine im Gespräch gibt es niemanden zu fragen – dann wäre ein Antrag
@@ -118,6 +144,31 @@ pub async fn stellen(pool: &PgPool, conversation_id: Uuid, user_id: Uuid) -> App
     .await?;
     if andere == 0 {
         return Err(AppError::conflict("In diesem Chat ist sonst niemand"));
+    }
+
+    // Ein Nein muss halten.
+    //
+    // Solange es den Knopf nur in der Schnittstelle gab, war das Nachfassen
+    // Handarbeit; mit einem Knopf in der App ist es ein Fingertipp, und jeder
+    // neue Antrag legt allen anderen wieder ein Band über den Chat. Wer
+    // abgelehnt wurde, wartet deshalb, bevor er erneut fragt. Zurückgezogene
+    // Anträge zählen hier nicht – die hat man sich selbst versagt.
+    let abgelehnt_am: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        "select max(entschieden_at) from verlaufsantraege
+          where conversation_id = $1 and antragsteller = $2 and status = 'abgelehnt'",
+    )
+    .bind(conversation_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+    if let Some(am) = abgelehnt_am {
+        let vergangen = chrono::Utc::now() - am;
+        if vergangen < SPERRE_NACH_ABLEHNUNG {
+            let stunden = (SPERRE_NACH_ABLEHNUNG - vergangen).num_hours() + 1;
+            return Err(AppError::conflict(format!(
+                "Dein Antrag wurde abgelehnt. Du kannst in {stunden} Stunden erneut fragen."
+            )));
+        }
     }
 
     let zeile = sqlx::query_as::<_, AntragZeile>(

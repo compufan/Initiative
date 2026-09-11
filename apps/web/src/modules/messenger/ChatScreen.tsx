@@ -9,6 +9,7 @@ import { ChatInfoSheet } from './ChatInfoSheet.js';
 import { Composer } from './Composer.js';
 import { MessageActionsSheet } from './MessageActionsSheet.js';
 import { MessageBubble } from './MessageBubble.js';
+import { VerlaufsAntraege, VerlaufsGrenze, useVerlaufsantraege } from './VerlaufBand.js';
 import {
   conversationAvatar,
   conversationTitle,
@@ -68,6 +69,7 @@ export function ChatScreen() {
   const aktuellerChat = useRef(conversationId);
   aktuellerChat.current = conversationId;
   const keyboardInset = useKeyboardInset();
+  useVerlaufsantraege(conversationId);
 
   const conversation = useChat(
     (state) => state.conversations.find((item) => item.id === conversationId) ?? null,
@@ -332,6 +334,9 @@ export function ChatScreen() {
     window.setTimeout(() => target.classList.remove('msg-row-flash'), 1400);
   }
 
+  /** Ob hinter meiner Grenze wirklich etwas liegt – ändert zwei Texte. */
+  const hatGrenze = conversation?.verdeckterVerlauf ?? false;
+
   const avatar = conversation ? conversationAvatar(conversation, myId) : null;
   const counterpart = conversation ? counterpartOf(conversation, myId) : null;
   const online = counterpart ? (presence[counterpart.userId]?.online ?? false) : false;
@@ -402,6 +407,8 @@ export function ChatScreen() {
         </button>
       </header>
 
+      <VerlaufsAntraege conversation={conversation} myId={myId} />
+
       <div className="msg-body">
         <div className="msg-scroll" ref={scrollRef} onScroll={onScroll}>
           <div className="msg-content" ref={contentRef}>
@@ -411,19 +418,41 @@ export function ChatScreen() {
               </div>
             )}
 
+            {/*
+              * Unter dem Nachlader: Erst wenn nichts Älteres mehr kommt, steht
+              * hier wirklich der Anfang dessen, was ich sehen darf. Darüber
+              * wäre der Satz „hier beginnt, was du sehen kannst" schlicht
+              * falsch, solange noch eine Seite unterwegs ist.
+              */}
+            {!hasMore && <VerlaufsGrenze conversation={conversation} myId={myId} />}
+
             {messages.length === 0 && loading && (
               <div className="msg-loader">
                 <Spinner label="Nachrichten werden geladen" />
               </div>
             )}
 
-            {messages.length === 0 && !loading && (
-              <EmptyState
-                emoji="👋"
-                title="Noch keine Nachrichten"
-                description="Schreib die erste Nachricht – sie landet sofort bei allen Mitgliedern."
-              />
-            )}
+            {/*
+              * Zwei leere Verläufe, zwei Wahrheiten. Wer gerade erst
+              * dazugekommen ist, sieht womöglich nur deshalb nichts, weil
+              * alles vor seinem Beitritt liegt – „schreib die erste
+              * Nachricht" wäre dort schlicht falsch.
+              */}
+            {messages.length === 0 &&
+              !loading &&
+              (hatGrenze ? (
+                <EmptyState
+                  emoji="🕐"
+                  title="Seit deinem Beitritt ist hier nichts geschrieben worden"
+                  description="Was davor liegt, siehst du nur, wenn alle anderen zustimmen."
+                />
+              ) : (
+                <EmptyState
+                  emoji="👋"
+                  title="Noch keine Nachrichten"
+                  description="Schreib die erste Nachricht – sie landet sofort bei allen Mitgliedern."
+                />
+              ))}
 
             {items.map((item) => {
               if (item.kind === 'day') {

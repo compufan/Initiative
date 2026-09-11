@@ -133,6 +133,13 @@ pub struct ConversationMemberDto {
     pub joined_at: DateTime<Utc>,
     pub nickname: Option<String>,
     pub last_read_message_id: Option<Uuid>,
+    /// Ab wann dieses Mitglied den Verlauf sieht; `None` heisst „von Anfang
+    /// an". Steht für **alle** Mitglieder da, nicht nur für den Betrachter:
+    /// Wer über einen Antrag abstimmen soll, muss sehen dürfen, wer heute
+    /// innerhalb der Grenze steht und wer nicht. Aus `joined_at` allein liesse
+    /// sich das nicht ableiten – nach einer Freigabe bleibt der Beitritt spät
+    /// und die Grenze fällt trotzdem.
+    pub sieht_ab: Option<DateTime<Utc>>,
     pub user: UserDto,
 }
 
@@ -149,6 +156,10 @@ pub struct ConversationDto {
     pub members: Vec<ConversationMemberDto>,
     pub last_message: Option<MessageDto>,
     pub unread_count: i64,
+    /// Ob vor der Grenze des Betrachters noch Nachrichten liegen, die er nicht
+    /// sieht. Nur dann ist ein Antrag auf den Verlauf sinnvoll – `sieht_ab`
+    /// allein steht auch beim Gründer, der nichts zu beantragen hat.
+    pub verdeckter_verlauf: bool,
     pub muted_until: Option<DateTime<Utc>>,
     pub archived: bool,
 }

@@ -165,6 +165,38 @@ pub async fn load_conversation_dtos(
     .fetch_all(&state.pool)
     .await?;
 
+    /*
+     * Liegt hinter meiner Grenze überhaupt etwas?
+     *
+     * Aus `sieht_ab` allein folgt das nicht: Auch wer ein Gespräch gründet,
+     * bekommt eine Grenze gesetzt – die Regel lautet überall „du siehst ab
+     * jetzt", und der Gründungszeitpunkt ist für ihn das Anfang. Wer die Frage
+     * am gesetzten Feld statt am Inhalt beantwortet, bietet dem Gründer an,
+     * einen Verlauf zu beantragen, den es nicht gibt.
+     *
+     * Eine Abfrage für alle Gespräche, wie bei den Ungelesenen: Ein `exists`
+     * je Gespräch wäre bei dreihundert Gesprächen dreihundert Rundreisen.
+     */
+    let verdeckte_rows: Vec<(Uuid,)> = sqlx::query_as(
+        "select cm.conversation_id
+           from conversation_members cm
+          where cm.user_id = $1
+            and cm.conversation_id = any($2)
+            and cm.sieht_ab is not null
+            and exists (
+              select 1 from messages m
+               where m.conversation_id = cm.conversation_id
+                 and m.deleted_at is null
+                 and m.created_at < cm.sieht_ab
+            )",
+    )
+    .bind(viewer_id)
+    .bind(&conversation_ids)
+    .fetch_all(&state.pool)
+    .await?;
+    let verdeckt: std::collections::HashSet<Uuid> =
+        verdeckte_rows.into_iter().map(|(id,)| id).collect();
+
     let user_ids: Vec<Uuid> = member_rows.iter().map(|row| row.user_id).collect();
     let users = super::users::load_users_by_ids(&state.pool, &user_ids, &state.config).await?;
     let last_messages =
@@ -181,6 +213,7 @@ pub async fn load_conversation_dtos(
                 joined_at: row.joined_at,
                 nickname: row.nickname.clone(),
                 last_read_message_id: row.last_read_message_id,
+                sieht_ab: row.sieht_ab,
                 user: users
                     .get(&row.user_id)
                     .cloned()
@@ -203,6 +236,7 @@ pub async fn load_conversation_dtos(
             members: members_by_conversation.remove(&row.id).unwrap_or_default(),
             last_message: last_by_conversation.remove(&row.id),
             unread_count: unread_by_conversation.get(&row.id).copied().unwrap_or(0),
+            verdeckter_verlauf: verdeckt.contains(&row.id),
             id: row.id,
             r#type: row.r#type,
             title: row.title,
