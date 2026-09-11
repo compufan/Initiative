@@ -93,11 +93,30 @@ pub async fn hydrate_messages(
 
     let mut replies: HashMap<Uuid, MessageSnippet> = HashMap::new();
     if !reply_ids.is_empty() {
-        let reply_rows =
-            sqlx::query_as::<_, MessageRow>("select * from messages where id = any($1)")
-                .bind(&reply_ids)
-                .fetch_all(&state.pool)
-                .await?;
+        /*
+         * Auch das Zitat hört an der eigenen Grenze auf.
+         *
+         * Hier stand `where id = any($1)` – ohne jede Prüfung. Antwortet
+         * jemand auf eine alte Nachricht, bekam ein Neuzugang die Antwort zu
+         * sehen UND den Text des Zitierten gleich mit. Der ganze Altverlauf
+         * wäre über Zitate scheibchenweise lesbar gewesen, und zwar auf einem
+         * Weg, den niemand als Verlaufszugriff erkennt.
+         *
+         * Fehlt das Recht, fehlt der Eintrag in `replies` – die Blase zeigt
+         * dann dasselbe wie bei einer gelöschten Nachricht, statt zu verraten,
+         * dass da etwas ist.
+         */
+        let reply_rows = sqlx::query_as::<_, MessageRow>(
+            "select m.* from messages m
+               join conversation_members cm on cm.conversation_id = m.conversation_id
+              where m.id = any($1)
+                and cm.user_id = $2
+                and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)",
+        )
+        .bind(&reply_ids)
+        .bind(viewer_id)
+        .fetch_all(&state.pool)
+        .await?;
         let reply_row_ids: Vec<Uuid> = reply_rows.iter().map(|row| row.id).collect();
         let kinds = sqlx::query_as::<_, AttachmentRow>(
             "select distinct on (message_id) * from attachments where message_id = any($1)",

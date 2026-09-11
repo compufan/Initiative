@@ -127,13 +127,21 @@ pub async fn load_conversation_dtos(
     .fetch_all(&state.pool)
     .await?;
 
+    // Auch die Vorschauzeile hört an der eigenen Grenze auf: Sonst stünde in
+    // der Chatliste der Text einer Nachricht, die sich nicht öffnen lässt.
+    // Bei einem frisch beigetretenen Chat bleibt die Zeile leer, bis das Erste
+    // ankommt – das ist die richtige Auskunft.
     let last_message_rows = sqlx::query_as::<_, MessageRow>(
-        "select distinct on (conversation_id) *
-         from messages
-         where conversation_id = any($1) and deleted_at is null
-         order by conversation_id, id desc",
+        "select distinct on (m.conversation_id) m.*
+         from messages m
+         join conversation_members cm
+           on cm.conversation_id = m.conversation_id and cm.user_id = $2
+         where m.conversation_id = any($1) and m.deleted_at is null
+           and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
+         order by m.conversation_id, m.id desc",
     )
     .bind(&conversation_ids)
+    .bind(viewer_id)
     .fetch_all(&state.pool)
     .await?;
 
@@ -145,6 +153,10 @@ pub async fn load_conversation_dtos(
           and m.deleted_at is null
           and (m.sender_id is null or m.sender_id <> cm.user_id)
           and (cm.last_read_message_id is null or m.id > cm.last_read_message_id)
+          -- Ungelesenes zählt nur, was man auch lesen darf. Sonst stünde an
+          -- einem frisch beigetretenen Chat eine Zahl, die sich durch Lesen
+          -- nicht abtragen lässt.
+          and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
          where cm.user_id = $1 and cm.conversation_id = any($2)
          group by cm.conversation_id",
     )

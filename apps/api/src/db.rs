@@ -63,6 +63,8 @@ pub struct ConversationMemberRow {
     pub muted_until: Option<DateTime<Utc>>,
     pub archived: bool,
     pub joined_at: DateTime<Utc>,
+    /// Ab wann diese Person den Verlauf sieht. `None` heisst: von Anfang an.
+    pub sieht_ab: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, FromRow)]

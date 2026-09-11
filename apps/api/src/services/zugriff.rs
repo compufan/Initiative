@@ -125,8 +125,9 @@ fn zu_grund(zeile: GrundZeile) -> Grund {
  * Die Regeln selbst sind Entscheidungen, keine technischen Zwänge, und sie
  * stehen absichtlich an genau dieser einen Stelle:
  *
- * * **Gespräch** meint die HEUTIGE Mitgliedschaft. Wer austritt, verliert den
- *   Zugriff auch auf das, was er dort einmal gesehen hat.
+ * * **Gespräch** meint die HEUTIGE Mitgliedschaft UND die eigene
+ *   Verlaufsgrenze: Wer austritt, verliert den Zugriff auch auf das, was er
+ *   dort einmal gesehen hat; wer neu dazukommt, bekommt ihn nicht rückwirkend.
  * * **Profilbild** sieht jede angemeldete Person – sonst sässe man in einer
  *   Namensliste vor lauter grauen Kreisen.
  * * **Sticker** sind Medien wie andere und bekommen keinen Freibrief.
@@ -143,6 +144,7 @@ select art, bezug from (
     join messages m on m.id = a.message_id
     join conversation_members cm on cm.conversation_id = m.conversation_id
    where a.id = $1 and cm.user_id = $2
+     and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
   union all
   select 'profilbild', null::uuid, 2
     from users u where u.avatar_attachment_id = $1
@@ -165,6 +167,7 @@ select art, bezug from (
     join messages m on m.metadata ->> 'stickerId' = s.id::text
     join conversation_members cm on cm.conversation_id = m.conversation_id
    where s.attachment_id = $1 and cm.user_id = $2
+     and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
   union all
   select 'sammlung', i.collection_id, 7
     from collection_items i
@@ -276,6 +279,7 @@ select person, art, bezug from (
     join messages m on m.id = a.message_id
     join conversation_members cm on cm.conversation_id = m.conversation_id
    where a.id = $1
+     and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
   union all
   select cm.user_id, 'gruppenbild', c.id, 3
     from conversations c
@@ -291,6 +295,7 @@ select person, art, bezug from (
     join messages m on m.metadata ->> 'stickerId' = s.id::text
     join conversation_members cm on cm.conversation_id = m.conversation_id
    where s.attachment_id = $1
+     and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
   union all
   select p, 'sammlung', i.collection_id, 7
     from collection_items i,

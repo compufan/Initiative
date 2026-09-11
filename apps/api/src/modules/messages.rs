@@ -55,19 +55,42 @@ async fn list_messages(
         .unwrap_or(MESSAGE_PAGE_SIZE)
         .clamp(1, MESSAGE_PAGE_SIZE_MAX);
 
+    /*
+     * Die Grenze des eigenen Beitritts – als SQL-Baustein, nicht als Filter in
+     * Rust.
+     *
+     * In Rust nachträglich auszusieben wäre falsch: Das Blättern zählt Zeilen,
+     * und eine Seite, aus der hinterher die Hälfte verschwindet, sieht für den
+     * Client wie das Ende des Verlaufs aus. Die Bedingung gehört also in die
+     * WHERE-Klausel, wo sie auch die Seitengrösse bestimmt.
+     *
+     * `sieht_ab is null` heisst „von Anfang an" – so stehen alle
+     * Mitgliedschaften da, die es vor dieser Regel schon gab, und so sieht es
+     * aus, wenn der Verlauf nachträglich freigegeben wurde.
+     */
+    const AB_BEITRITT: &str = "and exists (
+                  select 1 from conversation_members cm
+                   where cm.conversation_id = m.conversation_id
+                     and cm.user_id = $4
+                     and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
+                )";
+
     // `after` walks forward (catching up), everything else walks backwards.
     let rows = if let Some(after) = query.after {
         sqlx::query_as::<_, MessageRow>(
             // `not exists` statt `left join ... is null`: Es geht nur um die
             // Frage, OB eine Zeile da ist, und Postgres kann den Test an der
             // Sperre abbrechen, statt zu verknuepfen.
-            "select * from messages m
-              where m.conversation_id = $1 and m.id > $2
-                and not exists (
-                  select 1 from message_hidden h
-                   where h.message_id = m.id and h.user_id = $4
-                )
-              order by m.id asc limit $3",
+            &format!(
+                "select * from messages m
+                  where m.conversation_id = $1 and m.id > $2
+                    and not exists (
+                      select 1 from message_hidden h
+                       where h.message_id = m.id and h.user_id = $4
+                    )
+                    {AB_BEITRITT}
+                  order by m.id asc limit $3"
+            ),
         )
         .bind(id)
         .bind(after)
@@ -77,13 +100,16 @@ async fn list_messages(
         .await?
     } else {
         let mut rows = sqlx::query_as::<_, MessageRow>(
-            "select * from messages m
-              where m.conversation_id = $1 and ($2::uuid is null or m.id < $2)
-                and not exists (
-                  select 1 from message_hidden h
-                   where h.message_id = m.id and h.user_id = $4
-                )
-              order by m.id desc limit $3",
+            &format!(
+                "select * from messages m
+                  where m.conversation_id = $1 and ($2::uuid is null or m.id < $2)
+                    and not exists (
+                      select 1 from message_hidden h
+                       where h.message_id = m.id and h.user_id = $4
+                    )
+                    {AB_BEITRITT}
+                  order by m.id desc limit $3"
+            ),
         )
         .bind(id)
         .bind(query.before)
@@ -194,6 +220,12 @@ async fn by_id(
 ) -> AppResult<Json<MessageDto>> {
     let row = require_message(&state.pool, id).await?;
     assert_membership(&state.pool, row.conversation_id, user.id()).await?;
+    // Auch hier die Grenze: Diese Route ist der kürzeste Weg an der Liste
+    // vorbei – eine Kennung aus einem Zitat oder einem Ereignis genügt, und
+    // der Verlauf vor dem eigenen Beitritt stünde offen.
+    if !crate::services::verlauf::darf_nachricht_sehen(&state.pool, id, user.id()).await? {
+        return Err(AppError::not_found("Nachricht nicht gefunden"));
+    }
     load_message(&state, id, user.id())
         .await?
         .map(Json)
@@ -350,7 +382,10 @@ async fn publish_reactions(
         .fetch_all(&state.pool)
         .await?;
     let reactions = to_reaction_dtos(&rows);
-    let members = member_ids(&state.pool, conversation_id).await?;
+    // Nur an die, die diese Nachricht auch sehen dürfen. Sonst meldet das
+    // Ereignis einem Neuzugang die Kennung einer Nachricht von vor seinem
+    // Beitritt – samt der Liste derer, die darauf reagiert haben.
+    let members = crate::services::verlauf::empfaenger_fuer_nachricht(&state.pool, message_id).await?;
     state
         .hub
         .publish(
@@ -428,6 +463,10 @@ async fn search(
          join conversation_members cm
            on cm.conversation_id = m.conversation_id and cm.user_id = $1
          where m.deleted_at is null
+           -- Die Grenze kostet hier nichts: `cm` steht schon im Verbund. Ohne
+           -- sie waere die Suche der bequemste Weg in den Altverlauf – ein
+           -- Wort eingeben statt seitenweise blaettern.
+           and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
            and to_tsvector('simple', coalesce(m.body, '')) @@ websearch_to_tsquery('simple', $2)
            and ($3::uuid is null or m.conversation_id = $3)
          order by m.id desc

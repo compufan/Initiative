@@ -30,6 +30,15 @@ pub fn router() -> Router<AppState> {
             patch(update_member).delete(remove_member),
         )
         .route("/conversations/{id}/read", post(mark_read))
+        // Der Verlauf vor dem eigenen Beitritt: beantragen, abstimmen, ansehen.
+        .route(
+            "/conversations/{id}/verlauf",
+            get(verlauf_offene).post(verlauf_stellen),
+        )
+        .route(
+            "/conversations/{id}/verlauf/{antrag_id}",
+            post(verlauf_abstimmen).delete(verlauf_zurueckziehen),
+        )
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,7 +165,12 @@ async fn create(
 
     for member_id in &members {
         sqlx::query(
-            "insert into conversation_members (conversation_id, user_id, role) values ($1, $2, $3)",
+            // `sieht_ab` auch bei der Gründung: Die Regel lautet „du siehst ab
+            // deinem Beitritt", und für die Gründenden ist das die Geburt des
+            // Gesprächs – es gibt nichts davor. Eine Ausnahme hier wäre eine
+            // zweite Regel ohne Not.
+            "insert into conversation_members (conversation_id, user_id, role, sieht_ab)
+             values ($1, $2, $3, now())",
         )
         .bind(conversation_id)
         .bind(member_id)
@@ -291,8 +305,21 @@ async fn add_members(
 
     for member_id in &ids {
         sqlx::query(
-            "insert into conversation_members (conversation_id, user_id)
-             values ($1, $2) on conflict (conversation_id, user_id) do nothing",
+            /*
+             * Wer jetzt dazukommt, sieht ab jetzt.
+             *
+             * `joined_at` stand schon immer in dieser Tabelle und wurde nie
+             * ausgewertet – wer eine Gruppe nach zwei Jahren betrat, las zwei
+             * Jahre mit. Den bisherigen Verlauf gibt es auf Antrag, dem alle
+             * zustimmen müssen (siehe `services::verlauf`).
+             *
+             * `do nothing` bei Konflikt heisst hier: Eine bestehende
+             * Mitgliedschaft behält ihre Grenze. Wer austritt und neu
+             * beitritt, bekommt dagegen eine frische – die Zeile wird beim
+             * Austritt gelöscht.
+             */
+            "insert into conversation_members (conversation_id, user_id, sieht_ab)
+             values ($1, $2, now()) on conflict (conversation_id, user_id) do nothing",
         )
         .bind(id)
         .bind(member_id)
@@ -427,4 +454,76 @@ async fn mark_read(
         )
         .await;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/* ---------- Verlauf vor dem eigenen Beitritt ---------- */
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StimmeInput {
+    zustimmung: bool,
+}
+
+/// Offene Anträge dieses Gesprächs – jedes Mitglied muss sie sehen, sonst
+/// kann es nicht abstimmen.
+async fn verlauf_offene(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<ListResult<crate::services::verlauf::Antrag>>> {
+    assert_membership(&state.pool, id, user.id()).await?;
+    Ok(Json(ListResult::new(
+        crate::services::verlauf::offene(&state.pool, id).await?,
+    )))
+}
+
+/// „Ich möchte auch sehen, was vor meinem Beitritt war."
+async fn verlauf_stellen(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<(StatusCode, Json<crate::services::verlauf::Antrag>)> {
+    assert_membership(&state.pool, id, user.id()).await?;
+    let antrag = crate::services::verlauf::stellen(&state.pool, id, user.id()).await?;
+    // Alle anderen müssen davon erfahren – ein Antrag, den niemand sieht,
+    // wird nie entschieden.
+    let empfaenger = member_ids(&state.pool, id).await?;
+    state
+        .hub
+        .publish(empfaenger, Event::verlauf_antrag(id))
+        .await;
+    Ok((StatusCode::CREATED, Json(antrag)))
+}
+
+async fn verlauf_abstimmen(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((id, antrag_id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<StimmeInput>,
+) -> AppResult<Json<crate::services::verlauf::Antrag>> {
+    assert_membership(&state.pool, id, user.id()).await?;
+    let antrag =
+        crate::services::verlauf::abstimmen(&state.pool, antrag_id, user.id(), input.zustimmung)
+            .await?;
+    let empfaenger = member_ids(&state.pool, id).await?;
+    state
+        .hub
+        .publish(empfaenger, Event::verlauf_antrag(id))
+        .await;
+    Ok(Json(antrag))
+}
+
+async fn verlauf_zurueckziehen(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((id, antrag_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<StatusCode> {
+    assert_membership(&state.pool, id, user.id()).await?;
+    crate::services::verlauf::zurueckziehen(&state.pool, antrag_id, user.id()).await?;
+    let empfaenger = member_ids(&state.pool, id).await?;
+    state
+        .hub
+        .publish(empfaenger, Event::verlauf_antrag(id))
+        .await;
+    Ok(StatusCode::NO_CONTENT)
 }

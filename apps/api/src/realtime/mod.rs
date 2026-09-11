@@ -71,6 +71,16 @@ impl Event {
         )
     }
 
+    /// Ein Antrag auf den Verlauf hat sich geändert – gestellt, beantwortet,
+    /// zurückgezogen. Bewusst ohne Inhalt: Der Client holt sich die Liste, und
+    /// die Antwort hängt ohnehin davon ab, wer fragt.
+    pub fn verlauf_antrag(conversation_id: uuid::Uuid) -> Self {
+        Self::new(
+            "verlauf.antrag",
+            json!({ "conversationId": conversation_id }),
+        )
+    }
+
     pub fn conversation_updated(conversation: &crate::dto::ConversationDto) -> Self {
         Self::new(
             "conversation.updated",
