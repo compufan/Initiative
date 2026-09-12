@@ -16,6 +16,16 @@
  * liegt in `tonGpu.ts` – vor beziehungsweise nach der Tabelle.
  */
 
+import { halten, weich } from './grund.js';
+import {
+  BAENDER_NEUTRAL,
+  KURVEN_NEUTRAL,
+  baenderNeutral,
+  kurvenNeutral,
+  type Farbband,
+  type Kurven,
+} from './fein.js';
+
 /**
  * Die neun Regler, die allein von der FARBE abhängen.
  *
@@ -77,6 +87,17 @@ export interface Anpassung extends Farbanpassung {
   schaerfe: number;
   /** Positiv dunkelt die Ecken ab, negativ hellt sie auf. Braucht den ORT. */
   vignette: number;
+  /**
+   * Die vier Gradationskurven. Leere Listen heissen „gerade“.
+   *
+   * KEINE Zahl, und deshalb ausserhalb der Schleifen über `Object.keys`:
+   * `tonSchluessel` machte daraus sonst `kurven:[object Object]`, und zwei
+   * verschiedene Kurven hätten denselben Merkzettelschlüssel. Nichts sähe
+   * kaputt aus – es käme nur das vorige Bild zurück.
+   */
+  kurven: Kurven;
+  /** Die acht Farbbänder, immer acht und immer in der Reihenfolge von `BAENDER`. */
+  baender: readonly Farbband[];
 }
 
 export const FARB_NEUTRAL: Farbanpassung = {
@@ -99,11 +120,44 @@ export const FARB_NEUTRAL: Farbanpassung = {
  * vertauschtes Feld machte jeden Merkzettel im Bestand ungültig, ohne dass
  * irgendetwas kaputt aussähe – es würde nur alles neu gerechnet.
  */
-export const NEUTRAL: Anpassung = { ...FARB_NEUTRAL, schaerfe: 0, vignette: 0 };
+export const NEUTRAL: Anpassung = {
+  ...FARB_NEUTRAL,
+  schaerfe: 0,
+  vignette: 0,
+  kurven: KURVEN_NEUTRAL,
+  baender: BAENDER_NEUTRAL,
+};
+
+/**
+ * Die Felder von `Anpassung`, die einfache Zahlen sind.
+ *
+ * Ausgeschrieben und nicht aus `Object.keys(NEUTRAL)` gewonnen: Seit Kurven
+ * und Bänder dazugehören, enthält `NEUTRAL` auch Felder, die keine Zahlen
+ * sind. Jede Schleife, die alle Schlüssel auf `=== 0` prüft oder in einen
+ * String schreibt, muss genau diese Liste nehmen – und wer ein neues
+ * Zahlenfeld hinzufügt, ohne es hier einzutragen, bekommt einen Regler ohne
+ * Wirkung auf den Merkzettel.
+ */
+export type Zahlfeld = keyof Farbanpassung | 'schaerfe' | 'vignette';
+
+export const ZAHLFELDER = [
+  ...(Object.keys(FARB_NEUTRAL) as (keyof Farbanpassung)[]),
+  'schaerfe',
+  'vignette',
+] as const satisfies readonly Zahlfeld[];
 
 /** Ob überhaupt etwas eingestellt ist – sonst wird die ganze Kette übersprungen. */
 export function istNeutral(a: Anpassung): boolean {
-  return (Object.keys(NEUTRAL) as (keyof Anpassung)[]).every((schlüssel) => a[schlüssel] === 0);
+  return (
+    ZAHLFELDER.every((schlüssel) => a[schlüssel] === 0) &&
+    kurvenNeutral(a.kurven ?? KURVEN_NEUTRAL) &&
+    baenderNeutral(a.baender ?? BAENDER_NEUTRAL)
+  );
+}
+
+/** Ob der Feinschliff – Kurven und Bänder – überhaupt etwas zu tun hat. */
+export function feinNeutral(a: Anpassung): boolean {
+  return kurvenNeutral(a.kurven ?? KURVEN_NEUTRAL) && baenderNeutral(a.baender ?? BAENDER_NEUTRAL);
 }
 
 /** Dasselbe für die elf Farbregler allein. */
@@ -127,7 +181,7 @@ export function farbSchluessel(a: Farbanpassung): string {
 
 /** Ob etwas eingestellt ist, das sich in eine Farbtabelle fassen lässt. */
 export function brauchtTabelle(a: Anpassung): boolean {
-  return (Object.keys(NEUTRAL) as (keyof Anpassung)[]).some(
+  return ZAHLFELDER.some(
     (schlüssel) => schlüssel !== 'schaerfe' && schlüssel !== 'vignette' && a[schlüssel] !== 0,
   );
 }
@@ -138,9 +192,27 @@ export function brauchtTabelle(a: Anpassung): boolean {
  * Damit erkennen die Zwischenspeicher weiter oben, ob ihr Inhalt noch gilt.
  */
 export function tonSchluessel(a: Anpassung): string {
-  return (Object.keys(NEUTRAL) as (keyof Anpassung)[])
-    .map((schlüssel) => `${schlüssel}:${a[schlüssel]}`)
-    .join('|');
+  const zahlen = ZAHLFELDER.map((schlüssel) => `${schlüssel}:${a[schlüssel]}`).join('|');
+  return `${zahlen}|${feinSchluessel(a)}`;
+}
+
+/**
+ * Die Kennung von Kurven und Bändern.
+ *
+ * Ausgeschrieben, weil es hier nichts zu raten gibt: Zwei Stützpunkte, die
+ * sich um ein Tausendstel unterscheiden, sind zwei verschiedene Kurven. Die
+ * Zahlen werden dabei NICHT gerundet – ein gerundeter Schlüssel hielte zwei
+ * verschiedene Bilder für dasselbe, und das ist der Fehler, den niemand
+ * findet.
+ */
+export function feinSchluessel(a: Anpassung): string {
+  const k = a.kurven ?? KURVEN_NEUTRAL;
+  const kurve = (punkte: readonly { x: number; y: number }[]) =>
+    punkte.map((p) => `${p.x},${p.y}`).join(';');
+  const baender = (a.baender ?? BAENDER_NEUTRAL)
+    .map((b) => `${b.farbton},${b.saettigung},${b.helligkeit}`)
+    .join(';');
+  return `k:${kurve(k.gesamt)}/${kurve(k.rot)}/${kurve(k.gruen)}/${kurve(k.blau)}|b:${baender}`;
 }
 
 /* ---------- Farbraum ---------- */
@@ -199,22 +271,12 @@ export function gewichteteLuminanz(
   return (wr * r + wg * g + wb * b) / summe;
 }
 
-function halten(wert: number): number {
-  return wert < 0 ? 0 : wert > 1 ? 1 : wert;
-}
-
-/**
- * Der weiche Übergang von 0 auf 1 – dieselbe Kurve, die GLSL `smoothstep`
- * heisst.
- *
- * Ausgeführt, damit `maske.ts` sie benutzt statt eine zweite hinzuschreiben:
- * Die Kanten einer Maske und die Kanten von Lichtern/Tiefen sollen sich
- * gleich anfühlen, und zwei Fassungen derselben Kurve driften auseinander.
+/*
+ * `halten` und `weich` stehen in `grund.ts` – und werden hier
+ * weitergereicht, damit die vorhandenen Aufrufer (`maske.ts`) unverändert
+ * bleiben. Warum sie umgezogen sind, steht dort.
  */
-export function weich(von: number, bis: number, wert: number): number {
-  const t = halten((wert - von) / (bis - von || 1));
-  return t * t * (3 - 2 * t);
-}
+export { weich };
 
 /* ---------- die Rechnung ---------- */
 

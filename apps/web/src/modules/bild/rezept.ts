@@ -81,6 +81,14 @@ import {
   type Schriftzug,
 } from './doc.js';
 import { naechsteMarke } from './maske.js';
+import {
+  BAENDER,
+  BAENDER_NEUTRAL,
+  KURVEN_NEUTRAL,
+  type Farbband,
+  type Kurven,
+  type Kurvenpunkt,
+} from './fein.js';
 import { FARB_NEUTRAL, NEUTRAL, istNeutral, type Anpassung, type Farbanpassung } from './ton.js';
 
 /** Die Fassung des Formats. Steht in jeder Datei und wird beim Lesen geprüft. */
@@ -195,6 +203,72 @@ export interface RezeptDatei {
 
 const FARB_SCHLUESSEL = Object.keys(FARB_NEUTRAL) as (keyof Farbanpassung)[];
 const TON_SCHLUESSEL = Object.keys(NEUTRAL) as (keyof Anpassung)[];
+
+/**
+ * Kurven und Bänder – die einzigen Felder von `Anpassung`, die keine Zahlen
+ * sind, und deshalb die einzigen mit eigener Behandlung.
+ *
+ * Ohne sie gingen sie beim Rezept UND beim Entwurf still verloren: Beide
+ * Wege laufen durch `anpassungNachRoh`, und das kennt nur Zahlen. Ein
+ * Entwurf mit einer sorgfältig gesetzten Kurve käme als gerade Kurve zurück,
+ * und niemand käme auf die Idee, das Format zu verdächtigen.
+ */
+function kurvenNachRoh(kurven: Kurven): unknown {
+  const liste = (punkte: readonly { x: number; y: number }[]) => punkte.map((p) => [p.x, p.y]);
+  return {
+    gesamt: liste(kurven.gesamt),
+    rot: liste(kurven.rot),
+    gruen: liste(kurven.gruen),
+    blau: liste(kurven.blau),
+  };
+}
+
+/** Wieviele Stützpunkte eine Kurve aus fremder Hand höchstens haben darf. */
+const KURVENPUNKTE_MAX = 32;
+
+function kurveAusRoh(roh: unknown): Kurvenpunkt[] {
+  const raus: Kurvenpunkt[] = [];
+  for (const p of liste(roh, KURVENPUNKTE_MAX)) {
+    if (!Array.isArray(p) || p.length < 2) continue;
+    raus.push({ x: zahl(p[0], 0, 1, 0), y: zahl(p[1], 0, 1, 0) });
+  }
+  return raus;
+}
+
+function kurvenAusRoh(roh: unknown): Kurven {
+  const q = (roh ?? {}) as Record<string, unknown>;
+  return {
+    gesamt: kurveAusRoh(q.gesamt),
+    rot: kurveAusRoh(q.rot),
+    gruen: kurveAusRoh(q.gruen),
+    blau: kurveAusRoh(q.blau),
+  };
+}
+
+function baenderNachRoh(baender: readonly Farbband[]): unknown {
+  return baender.map((b) => [b.farbton, b.saettigung, b.helligkeit]);
+}
+
+function baenderAusRoh(roh: unknown): Farbband[] {
+  const gelesen = liste(roh, BAENDER.length);
+  /*
+   * Immer acht, egal was in der Datei steht.
+   *
+   * Die Zahl der Bänder ist eine Eigenschaft des PROGRAMMS, nicht der Datei –
+   * `bandGewichte` läuft über `BAENDER`, und ein Feld mit sieben Einträgen
+   * läse beim achten daneben. Eine Datei mit zu wenigen bekommt neutrale
+   * aufgefüllt, eine mit zu vielen die überzähligen abgeschnitten.
+   */
+  return BAENDER.map((_, i) => {
+    const b = gelesen[i];
+    if (!Array.isArray(b)) return { farbton: 0, saettigung: 0, helligkeit: 0 };
+    return {
+      farbton: zahl(b[0], -1, 1, 0),
+      saettigung: zahl(b[1], -1, 1, 0),
+      helligkeit: zahl(b[2], -1, 1, 0),
+    };
+  });
+}
 
 function anpassungNachRoh(a: Farbanpassung, schluessel: readonly string[]): Record<string, number> {
   const raus: Record<string, number> = {};
@@ -497,7 +571,12 @@ export function docNachRoh(doc: BildDoc): RohDoc {
     zuschnitt: { ...doc.zuschnitt },
     striche: doc.striche.map(strichNachRoh),
     texte: doc.texte.map((t) => ({ ...t })),
-    anpassung: anpassungNachRoh(doc.anpassung, TON_SCHLUESSEL),
+    anpassung: {
+      ...anpassungNachRoh(doc.anpassung, TON_SCHLUESSEL),
+      // Zwei Felder, die keine Zahlen sind – als eigene Zweige, siehe oben.
+      kurven: kurvenNachRoh(doc.anpassung.kurven ?? KURVEN_NEUTRAL),
+      baender: baenderNachRoh(doc.anpassung.baender ?? BAENDER_NEUTRAL),
+    } as unknown as Record<string, number>,
     bereiche: doc.bereiche.map(bereichNachRoh),
   };
 }
@@ -541,7 +620,12 @@ export function docAusRoh(roh: unknown, breite: number, hoehe: number): BildDoc 
     const schrift = textAusRoh(t, breite, hoehe);
     if (schrift) doc.texte.push(schrift);
   }
-  doc.anpassung = anpassungAusRoh<Anpassung>(q.anpassung, NEUTRAL, TON_SCHLUESSEL);
+  const rohAnpassung = (q.anpassung ?? {}) as Record<string, unknown>;
+  doc.anpassung = {
+    ...anpassungAusRoh<Anpassung>(q.anpassung, NEUTRAL, TON_SCHLUESSEL),
+    kurven: kurvenAusRoh(rohAnpassung.kurven),
+    baender: baenderAusRoh(rohAnpassung.baender),
+  };
   for (const b of liste(q.bereiche, REZEPT_GRENZEN.bereiche)) {
     const bereich = bereichAusRoh(b, breite, hoehe, zaehler);
     if (bereich) doc.bereiche.push(bereich);

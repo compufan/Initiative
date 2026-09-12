@@ -1,4 +1,4 @@
-import { NEUTRAL, type Anpassung } from './ton.js';
+import { NEUTRAL, ZAHLFELDER, type Anpassung } from './ton.js';
 
 /**
  * Vorlagen – benannte Reglerstellungen, kein eigener Rechenweg.
@@ -150,7 +150,14 @@ export const VORLAGEN: Vorlage[] = [
 export function vorlageAnwenden(vorlage: Vorlage, staerke: number): Anpassung {
   const t = staerke < 0 ? 0 : staerke > 1 ? 1 : staerke;
   const aus = { ...NEUTRAL };
-  for (const schluessel of Object.keys(NEUTRAL) as (keyof Anpassung)[]) {
+  /*
+   * Nur die Zahlenfelder – Kurven und Bänder bringt keine Vorlage mit.
+   *
+   * Vorher lief die Schleife über `Object.keys(NEUTRAL)`. Seit dort auch
+   * Kurven und Bänder stehen, hiesse das `{gesamt: […]} * 0,5`, also `NaN` –
+   * und in `Anpassung` läge danach eine Kurve, die keine mehr ist.
+   */
+  for (const schluessel of ZAHLFELDER) {
     const wert = vorlage.anpassung[schluessel] * t;
     /*
      * Minus null zu plus null glattziehen.

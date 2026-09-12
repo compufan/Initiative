@@ -486,8 +486,17 @@ test('der Ton-Reiter im Bildeditor verändert das Bild wirklich', async ({ brows
   const belichtung = alicePage.getByRole('slider', { name: /Belichtung/ });
   await expect(belichtung).toBeVisible();
   await expect(belichtung).toHaveValue('0');
-  // Elf Regler, nicht zehn und nicht zwölf.
-  await expect(alicePage.locator('.bild-panel.ist-ton .bild-schieber')).toHaveCount(11);
+  /*
+   * Vierzehn Schieber, davon drei in einem aufklappbaren Abschnitt.
+   *
+   * Hier stand „elf, nicht zehn und nicht zwölf". Die elf globalen Regler
+   * sind unverändert da; seit es Farbbänder gibt, stehen in „Farben einzeln"
+   * drei weitere im selben Feld. Die gehören nicht zu den elf – sie wirken
+   * auf einen Farbbereich und nicht auf das ganze Bild – und werden deshalb
+   * getrennt gezählt.
+   */
+  await expect(alicePage.locator('.bild-panel.ist-ton details .bild-schieber')).toHaveCount(3);
+  await expect(alicePage.locator('.bild-panel.ist-ton .bild-schieber')).toHaveCount(14);
 
   /** Die mittlere Helligkeit dessen, was auf der Leinwand steht. */
   const helligkeit = async () =>

@@ -361,3 +361,196 @@ test('das Foto geht einmal auf die Grafikeinheit, nicht bei jeder Reglerraste', 
   // Aber eine neue Arbeitsgrösse braucht wirklich eine neue Textur.
   expect(ergebnis.nachGroesse).toBe(1);
 });
+
+/**
+ * Dieselbe Prüfung für den Feinschliff: Kurven und Farbbänder.
+ *
+ * Eine eigene Prüfung und keine weiteren Fälle in der oberen: Dort wird gegen
+ * `tonPunkt` gehalten, und der Feinschliff steht ausdrücklich NACH der Kette –
+ * er gehört nicht in `tonPunkt`, weil eine Kurve keine Zahl ist und nicht in
+ * die Farbtabelle je Bereich passt.
+ *
+ * Was hier auseinanderlaufen kann, ist mehr als bei den elf Reglern: Die
+ * Kurve wird auf beiden Wegen aus DERSELBEN Tabelle gelesen (das ist der
+ * Zweck der Tabelle), aber die HSL-Rechnung der Bänder steht zweimal – einmal
+ * in TypeScript, einmal in GLSL, mit Verzweigungen über `max` und `==`. Genau
+ * dort driftet es, wenn jemand eine Zeile ändert.
+ */
+test('Kurven und Farbbänder rechnen auf beiden Wegen dasselbe', async ({ page }) => {
+  await page.goto('/');
+
+  const ergebnis = await page.evaluate(async () => {
+    const ladeTon = '/src/modules/bild/ton.ts';
+    const ladeFein = '/src/modules/bild/fein.ts';
+    const ladeGpu = '/src/modules/bild/tonGpu.ts';
+    const ton = (await import(
+      /* @vite-ignore */ ladeTon
+    )) as typeof import('../src/modules/bild/ton.js');
+    const fein = (await import(
+      /* @vite-ignore */ ladeFein
+    )) as typeof import('../src/modules/bild/fein.js');
+    const gpu = (await import(
+      /* @vite-ignore */ ladeGpu
+    )) as typeof import('../src/modules/bild/tonGpu.js');
+
+    const kante = 64;
+    const quelle = document.createElement('canvas');
+    quelle.width = kante;
+    quelle.height = kante;
+    const qctx = quelle.getContext('2d');
+    if (!qctx) return { fehler: 'keine Leinwand' };
+    const bild = qctx.createImageData(kante, kante);
+    for (let i = 0; i < kante * kante; i += 1) {
+      bild.data[i * 4] = (i % 16) * 17;
+      bild.data[i * 4 + 1] = (Math.floor(i / 16) % 16) * 17;
+      bild.data[i * 4 + 2] = (Math.floor(i / 256) % 16) * 17;
+      bild.data[i * 4 + 3] = 255;
+    }
+    qctx.putImageData(bild, 0, 0);
+
+    const band = (index: number, werte: Partial<import('../src/modules/bild/fein.js').Farbband>) =>
+      fein.BAENDER.map((_, i) =>
+        i === index
+          ? { farbton: 0, saettigung: 0, helligkeit: 0, ...werte }
+          : { farbton: 0, saettigung: 0, helligkeit: 0 },
+      );
+
+    const sKurve = [
+      { x: 0, y: 0 },
+      { x: 0.25, y: 0.16 },
+      { x: 0.75, y: 0.86 },
+      { x: 1, y: 1 },
+    ];
+
+    const faelle: { name: string; a: import('../src/modules/bild/ton.js').Anpassung }[] = [
+      {
+        name: 'S-Kurve gesamt',
+        a: { ...ton.NEUTRAL, kurven: { ...fein.KURVEN_NEUTRAL, gesamt: sKurve } },
+      },
+      {
+        name: 'Blaukurve angehoben',
+        a: {
+          ...ton.NEUTRAL,
+          kurven: {
+            ...fein.KURVEN_NEUTRAL,
+            blau: [
+              { x: 0, y: 0.12 },
+              { x: 1, y: 0.94 },
+            ],
+          },
+        },
+      },
+      {
+        name: 'alle vier Kurven',
+        a: {
+          ...ton.NEUTRAL,
+          kurven: {
+            gesamt: sKurve,
+            rot: [{ x: 0.5, y: 0.58 }],
+            gruen: [{ x: 0.5, y: 0.44 }],
+            blau: [{ x: 0.25, y: 0.33 }],
+          },
+        },
+      },
+      { name: 'Grün kräftiger', a: { ...ton.NEUTRAL, baender: band(3, { saettigung: 0.8 }) } },
+      { name: 'Blau dunkler', a: { ...ton.NEUTRAL, baender: band(5, { helligkeit: -0.6 }) } },
+      { name: 'Orange gedreht', a: { ...ton.NEUTRAL, baender: band(1, { farbton: -0.9 }) } },
+      {
+        name: 'alle Bänder an den Anschlägen',
+        a: {
+          ...ton.NEUTRAL,
+          baender: fein.BAENDER.map((_, i) => ({
+            farbton: i % 2 === 0 ? 1 : -1,
+            saettigung: i % 3 === 0 ? 1 : -0.7,
+            helligkeit: i % 2 === 0 ? -0.5 : 0.5,
+          })),
+        },
+      },
+      {
+        name: 'Regler, Kurve und Bänder zusammen',
+        a: {
+          ...ton.NEUTRAL,
+          belichtung: 0.5,
+          kontrast: 0.3,
+          saettigung: 0.2,
+          kurven: { ...fein.KURVEN_NEUTRAL, gesamt: sKurve },
+          baender: band(4, { saettigung: -0.8, helligkeit: 0.4 }),
+        },
+      },
+    ];
+
+    const berichte: { name: string; weg: string; max: number; mittel: number }[] = [];
+    const wege = new Set<string>();
+    /*
+     * BEIDE Wege, in einem Durchgang.
+     *
+     * Der Rückfallweg wendet den Feinschliff an einer anderen Stelle an – im
+     * Prozessorcode, nach der Bereichsschleife. Ein Fehler dort (gar nicht
+     * angewandt, oder vor den Bereichen statt danach) stünde in keiner
+     * anderen Prüfung, weil alle anderen auf der Grafikeinheit rechnen.
+     */
+    for (const ohneGpu of [false, true]) {
+      gpu.gpuAbschalten(ohneGpu);
+      for (const fall of faelle) {
+        const flaeche = gpu.getoentesBild(quelle, kante, kante, fall.a);
+        wege.add(gpu.letzterWeg);
+        if (flaeche === quelle) return { fehler: `${fall.name}: nichts gerechnet` };
+        const zctx = document.createElement('canvas').getContext('2d', {
+          willReadFrequently: true,
+        });
+        if (!zctx) return { fehler: 'keine Leinwand' };
+        zctx.canvas.width = kante;
+        zctx.canvas.height = kante;
+        zctx.drawImage(flaeche as CanvasImageSource, 0, 0);
+        const raus = zctx.getImageData(0, 0, kante, kante).data;
+
+        const feld = fein.kurvenFeld(fall.a.kurven);
+        let max = 0;
+        let summe = 0;
+        let n = 0;
+        for (let i = 0; i < kante * kante; i += 1) {
+          const roh: [number, number, number] = [
+            bild.data[i * 4] / 255,
+            bild.data[i * 4 + 1] / 255,
+            bild.data[i * 4 + 2] / 255,
+          ];
+          const soll = fein.feinPunkt(ton.tonPunkt(roh, fall.a), feld, fall.a.baender);
+          for (let k = 0; k < 3; k += 1) {
+            const fehler = Math.abs(raus[i * 4 + k] - soll[k] * 255);
+            max = Math.max(max, fehler);
+            summe += fehler;
+            n += 1;
+          }
+        }
+        berichte.push({ name: fall.name, weg: gpu.letzterWeg, max, mittel: summe / n });
+      }
+    }
+    gpu.gpuAbschalten(false);
+    return { wege: [...wege], berichte };
+  });
+
+  expect(ergebnis.fehler).toBeUndefined();
+  expect(ergebnis.wege, 'es wurden nicht beide Wege genommen').toEqual(['gpu', 'leinwand']);
+  expect(ergebnis.berichte?.length).toBe(16);
+
+  for (const bericht of ergebnis.berichte ?? []) {
+    /*
+     * Auf der Grafikeinheit zwei Stufen von 255, auf dem Rückfallweg sechs.
+     *
+     * Die zwei sind nicht grosszügiger, obwohl die HSL-Rechnung mehr
+     * Gelegenheiten zum Abweichen hat als die elf Regler – gerade deshalb.
+     * Wäre die Grenze weit, ginge genau der Fehler durch, den es zu finden
+     * gilt: eine Zeile, die nur auf einem der beiden Wege geändert wurde.
+     *
+     * Die sechs auf dem Rückfallweg sind keine Nachlässigkeit, sondern die
+     * Farbtabelle: Sie steht vor dem Feinschliff und bringt ihre eigenen
+     * Stufen mit – dieselbe Zahl, die schon die Prüfung „ohne Grafikeinheit
+     * rechnet der Prozessor dasselbe“ festhält.
+     */
+    const grenze = bericht.weg === 'gpu' ? 2 : 6;
+    expect(bericht.max, `${bericht.name} (${bericht.weg}): grösster Fehler`).toBeLessThanOrEqual(
+      grenze,
+    );
+    expect(bericht.mittel, `${bericht.name} (${bericht.weg}): mittlerer Fehler`).toBeLessThan(0.6);
+  }
+});

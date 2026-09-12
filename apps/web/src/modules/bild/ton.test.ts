@@ -17,6 +17,7 @@ import {
   tonSchluessel,
   vignetteFaktor,
   weissFaktoren,
+  ZAHLFELDER,
   zuLinear,
   zuSrgb,
   type Anpassung,
@@ -379,7 +380,23 @@ describe('Farbanpassung und bereichePunkt', () => {
     expect(Object.keys(FARB_NEUTRAL)).not.toContain('schaerfe');
     expect(Object.keys(FARB_NEUTRAL)).not.toContain('vignette');
     // Und `Anpassung` bleibt die Vereinigung, in genau dieser Reihenfolge.
-    expect(Object.keys(NEUTRAL)).toEqual([...Object.keys(FARB_NEUTRAL), 'schaerfe', 'vignette']);
+    /*
+     * `ZAHLFELDER` ist die Vereinigung – und nicht mehr `Object.keys(NEUTRAL)`.
+     *
+     * Seit `NEUTRAL` auch Kurven und Bänder trägt, sind nicht alle seine
+     * Felder Zahlen. An `ZAHLFELDER` hängt jede Schleife, die auf `=== 0`
+     * prüft oder in einen Schlüssel schreibt; wer ein Zahlenfeld hinzufügt
+     * und hier nicht einträgt, bekommt einen Regler, den der Merkzettel nicht
+     * sieht.
+     */
+    expect(ZAHLFELDER).toEqual([...Object.keys(FARB_NEUTRAL), 'schaerfe', 'vignette']);
+    expect(Object.keys(NEUTRAL)).toEqual([
+      ...Object.keys(FARB_NEUTRAL),
+      'schaerfe',
+      'vignette',
+      'kurven',
+      'baender',
+    ]);
   });
 
   it('nagelt die Schlüsselreihenfolge fest', () => {
@@ -391,7 +408,8 @@ describe('Farbanpassung und bereichePunkt', () => {
      */
     expect(tonSchluessel(NEUTRAL)).toBe(
       'belichtung:0|kontrast:0|lichter:0|tiefen:0|schwarz:0|waerme:0|toenung:0|' +
-        'saettigung:0|dynamik:0|swRot:0|swGruen:0|schaerfe:0|vignette:0',
+        'saettigung:0|dynamik:0|swRot:0|swGruen:0|schaerfe:0|vignette:0|' +
+        'k:///|b:0,0,0;0,0,0;0,0,0;0,0,0;0,0,0;0,0,0;0,0,0;0,0,0',
     );
     expect(farbSchluessel(NEUTRAL)).toBe(
       'belichtung:0|kontrast:0|lichter:0|tiefen:0|schwarz:0|waerme:0|toenung:0|' +

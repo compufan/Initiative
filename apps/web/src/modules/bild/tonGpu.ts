@@ -37,6 +37,17 @@ import {
   type Farbanpassung,
   type Anpassung,
 } from './ton.js';
+import {
+  BAENDER,
+  BAENDER_NEUTRAL,
+  FARBTON_HUB,
+  KURVEN_NEUTRAL,
+  KURVE_STUETZEN,
+  baenderNeutral,
+  feinPunkt,
+  kurvenFeld,
+  kurvenNeutral,
+} from './fein.js';
 
 /* ---------- GLSL ---------- */
 
@@ -47,6 +58,19 @@ void main() {
   vUv = aOrt * 0.5 + 0.5;
   gl_Position = vec4(aOrt, 0.0, 1.0);
 }`;
+
+/**
+ * Eine Zahl als GLSL-Gleitkommaliteral.
+ *
+ * `0` allein waere in GLSL eine ganze Zahl, und `const float x = 0;` ist ein
+ * Uebersetzungsfehler – nicht irgendwann zur Laufzeit, sondern beim Bau des
+ * Schattierers, also fuer jedes Bild auf jedem Geraet. Die Bandmitte von Rot
+ * ist genau diese Null.
+ */
+function glslZahl(wert: number): string {
+  const text = String(wert);
+  return text.includes('.') || text.includes('e') ? text : `${text}.0`;
+}
 
 /**
  * Der Bildpunkt-Schattierer.
@@ -90,6 +114,19 @@ uniform float uVignette;
  * gehört zu Bereich i, ausgewählt per Skalarprodukt mit „uKanal[i]“.
  */
 #define BEREICHE 4
+
+/*
+ * Der Feinschliff in Zahlen – aus „fein.ts“ eingesetzt, nicht abgeschrieben.
+ *
+ * Eine zweite Stelle, an der dieselben Konstanten stehen, ist eine zweite
+ * Stelle, an der sie auseinanderlaufen koennen. Hier stehen sie nur einmal.
+ */
+#define STUETZEN ${KURVE_STUETZEN}
+#define KURVEN_LAENGE ${KURVE_STUETZEN * 4}
+#define BAENDER ${BAENDER.length}
+const float FARBTON_HUB = ${glslZahl(FARBTON_HUB)};
+const float BAND_MITTE[BAENDER] = float[BAENDER](${BAENDER.map((b) => glslZahl(b.winkel / 360)).join(', ')});
+
 uniform sampler2D uMasken;
 uniform vec4 uKanal[BEREICHE];
 uniform int uAnzahl;
@@ -106,6 +143,20 @@ uniform float uSwGruenB[BEREICHE];
 uniform float uUnschaerfeB[BEREICHE];
 /** Der Bokeh-Radius in Texturkoordinaten. Null heisst: kein Bokeh. */
 uniform vec2 uBokeh;
+
+/*
+ * Der Feinschliff: vier Kurven zu je STUETZEN Werten, acht Farbbaender.
+ *
+ * Die Kurven kommen als TABELLE und nicht als Stuetzpunkte. Ein monotones
+ * Spline je Bildpunkt auszuwerten hiesse, die Stuetzpunkte zu durchsuchen –
+ * und vor allem: Prozessor und Grafikeinheit haetten zwei Auswertungen
+ * derselben Kurve. Gerechnet wird sie genau einmal, in „fein.ts“.
+ */
+uniform float uKurven[KURVEN_LAENGE];
+uniform bool uHatKurven;
+/** Je Band: x = Farbton, y = Saettigung, z = Helligkeit. */
+uniform vec3 uBand[BAENDER];
+uniform bool uHatBaender;
 
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
 
@@ -310,6 +361,102 @@ vec3 zerstreuen(vec2 uv, float weite) {
   return zuSrgb(sqrt(sqrt(max(summe / gewicht, 0.0))));
 }
 
+/** Aus der Kurventabelle lesen – linear, genau wie „kurveAn" in fein.ts. */
+float kurveAn(int kurve, float x) {
+  float letzte = float(STUETZEN - 1);
+  float f = clamp(x, 0.0, 1.0) * letzte;
+  int i0 = int(min(floor(f), letzte));
+  int i1 = min(i0 + 1, STUETZEN - 1);
+  float t = f - float(i0);
+  int at = kurve * STUETZEN;
+  return mix(uKurven[at + i0], uKurven[at + i1], t);
+}
+
+/**
+ * RGB → HSL. Wort fuer Wort „zuHsl" aus fein.ts.
+ *
+ * Ohne Verzweigung ueber „step" und „mix": Ein „if" je Kanal waere hier
+ * derselbe Text, aber auf einer Grafikeinheit mit Sprungvorhersage teurer –
+ * und vor allem laesst sich die Fassung ohne Verzweigung Zeile fuer Zeile
+ * gegen die TypeScript-Fassung halten.
+ */
+vec3 zuHsl(vec3 c) {
+  float mx = max(c.r, max(c.g, c.b));
+  float mn = min(c.r, min(c.g, c.b));
+  float l = (mx + mn) * 0.5;
+  float d = mx - mn;
+  if (d < 1e-7) return vec3(0.0, 0.0, l);
+  float s = l > 0.5 ? d / max(1e-7, 2.0 - mx - mn) : d / max(1e-7, mx + mn);
+  float h;
+  if (mx == c.r) h = (c.g - c.b) / d + (c.g < c.b ? 6.0 : 0.0);
+  else if (mx == c.g) h = (c.b - c.r) / d + 2.0;
+  else h = (c.r - c.g) / d + 4.0;
+  return vec3(h / 6.0, s, l);
+}
+
+float hslKanal(float p, float q, float t) {
+  float x = t;
+  if (x < 0.0) x += 1.0;
+  if (x > 1.0) x -= 1.0;
+  if (x < 1.0 / 6.0) return p + (q - p) * 6.0 * x;
+  if (x < 0.5) return q;
+  if (x < 2.0 / 3.0) return p + (q - p) * (2.0 / 3.0 - x) * 6.0;
+  return p;
+}
+
+vec3 ausHsl(vec3 hsl) {
+  if (hsl.y < 1e-7) return vec3(hsl.z);
+  float q = hsl.z < 0.5 ? hsl.z * (1.0 + hsl.y) : hsl.z + hsl.y - hsl.z * hsl.y;
+  float p = 2.0 * hsl.z - q;
+  return vec3(
+    hslKanal(p, q, hsl.x + 1.0 / 3.0),
+    hslKanal(p, q, hsl.x),
+    hslKanal(p, q, hsl.x - 1.0 / 3.0)
+  );
+}
+
+/**
+ * Das gemittelte Bandergebnis fuer diesen Farbton.
+ *
+ * Zwischen zwei benachbarten Bandmitten wird ueberblendet – Wort fuer Wort
+ * „bandGewichte" aus fein.ts, nur ohne das Feld: Es wirken immer genau zwei
+ * Baender, und ihre Gewichte sind t und 1 − t.
+ */
+vec3 bandMittel(float h) {
+  for (int i = 0; i < BAENDER; i++) {
+    float a = BAND_MITTE[i];
+    // Nicht „BAND_MITTE[i + 1]": Beim letzten Band laege das ausserhalb des
+    // Feldes, und ein Zugriff daneben ist in GLSL nicht definiert.
+    float b = i + 1 < BAENDER ? BAND_MITTE[min(i + 1, BAENDER - 1)] : 1.0;
+    if (h >= a && h < b) {
+      float t = smoothstep(0.0, 1.0, b > a ? (h - a) / (b - a) : 0.0);
+      return mix(uBand[i], uBand[(i + 1) % BAENDER], t);
+    }
+  }
+  return uBand[BAENDER - 1];
+}
+
+/** Kurven und Baender – dieselbe Reihenfolge wie „feinPunkt" in fein.ts. */
+vec3 fein(vec3 c) {
+  if (uHatKurven) {
+    c = vec3(kurveAn(1, c.r), kurveAn(2, c.g), kurveAn(3, c.b));
+    c = vec3(kurveAn(0, c.r), kurveAn(0, c.g), kurveAn(0, c.b));
+  }
+  if (uHatBaender) {
+    vec3 hsl = zuHsl(c);
+    float flaute = smoothstep(0.04, 0.18, hsl.y);
+    if (flaute > 0.0) {
+      vec3 d = bandMittel(hsl.x);
+      float h = hsl.x + d.x * FARBTON_HUB * flaute;
+      h -= floor(h);
+      float sn = clamp(hsl.y * max(0.0, 1.0 + d.y * flaute), 0.0, 1.0);
+      float ln = clamp(biegen(vec3(hsl.z), d.z * flaute, 1.0).x, 0.0, 1.0);
+      c = ausHsl(vec3(h, sn, ln));
+    }
+  }
+  return clamp(c, 0.0, 1.0);
+}
+
 void main() {
   vec3 scharf = texture(uBild, vUv).rgb;
   vec3 c = scharf;
@@ -368,6 +515,10 @@ void main() {
                       uSwRotB[i], uSwGruenB[i]);
     c = mix(c, voll, w);
   }
+
+  // Der Feinschliff: nach den Bereichen, vor der Vignette. Warum genau dort,
+  // steht bei „feinPunkt“ im Rückfallweg.
+  if (uHatKurven || uHatBaender) c = fein(c);
 
   // Vignette – als Letztes, weil sie vom Ort abhängt und nicht von der Farbe.
   if (uVignette != 0.0) {
@@ -552,7 +703,19 @@ function werkzeug(): Werk | null {
       'uMasken',
       'uAnzahl',
       'uBokeh',
+      /*
+       * Das GANZE Kurvenfeld unter EINEM Namen.
+       *
+       * `uKurven` allein bezeichnet in WebGL2 das Feld ab Index 0, und
+       * `uniform1fv` schreibt dann alle 132 Werte auf einen Schlag. Die
+       * Alternative wären 132 einzeln abgefragte Orte und 132 Aufrufe je
+       * Bild – für dieselbe Wirkung.
+       */
+      'uKurven',
+      'uHatKurven',
+      'uHatBaender',
     ];
+    for (let i = 0; i < BAENDER.length; i += 1) namen.push(`uBand[${i}]`);
     for (let i = 0; i < BEREICHE_MAX; i += 1) {
       namen.push(
         `uKanal[${i}]`,
@@ -685,6 +848,32 @@ function aufGpu(
     gl.uniform1f(orte.uSwGruen, a.swGruen);
     gl.uniform1f(orte.uSchaerfe, a.schaerfe);
     gl.uniform1f(orte.uVignette, a.vignette);
+
+    /*
+     * Der Feinschliff.
+     *
+     * Die Schalter `uHatKurven`/`uHatBaender` stehen nicht aus Sparsamkeit
+     * da: Ohne sie liefe die Bandschleife für JEDEN Bildpunkt eines
+     * unbearbeiteten Fotos – acht Durchgänge mit einer HSL-Hin- und
+     * Rückrechnung, für ein Ergebnis, das sich nicht von der Eingabe
+     * unterscheidet. Die Kurvenwerte werden trotzdem immer geschrieben:
+     * Ein Uniform, das von einem vorigen Bild stehengeblieben ist, wäre
+     * genau die Sorte Fehler, die nur beim zweiten Bild auftritt.
+     */
+    const kurven = a.kurven ?? KURVEN_NEUTRAL;
+    const baender = a.baender ?? BAENDER_NEUTRAL;
+    gl.uniform1fv(orte.uKurven, kurvenFeld(kurven));
+    gl.uniform1i(orte.uHatKurven, kurvenNeutral(kurven) ? 0 : 1);
+    gl.uniform1i(orte.uHatBaender, baenderNeutral(baender) ? 0 : 1);
+    for (let i = 0; i < BAENDER.length; i += 1) {
+      const band = baender[i];
+      gl.uniform3f(
+        orte[`uBand[${i}]`],
+        band ? band.farbton : 0,
+        band ? band.saettigung : 0,
+        band ? band.helligkeit : 0,
+      );
+    }
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     if (gl.isContextLost()) return null;
@@ -936,6 +1125,17 @@ function aufLeinwand(
 
   const lut = lutHolen(a);
   /*
+   * Die Kurventabelle einmal je Bild, nicht einmal je Bildpunkt.
+   *
+   * `null`, wenn die Kurven gerade sind: Dann läuft die Auswertung gar nicht
+   * erst an, und bei einem Foto von zwölf Megapunkten sind das sechsunddreissig
+   * Millionen Tabellenzugriffe, die niemand braucht.
+   */
+  const feinFeld = kurvenNeutral(a.kurven ?? KURVEN_NEUTRAL)
+    ? null
+    : kurvenFeld(a.kurven ?? KURVEN_NEUTRAL);
+  const feinBaender = baenderNeutral(a.baender ?? BAENDER_NEUTRAL) ? null : a.baender;
+  /*
    * Je Bereich EINE Farbtabelle und EIN auf Bildgrösse gezogenes Gewicht.
    *
    * Das Ausdehnen ist bilinear und damit dasselbe, was die Grafikeinheit mit
@@ -981,6 +1181,20 @@ function aufLeinwand(
         r += (vr - r) * t;
         g += (vg - g) * t;
         b += (vb - b) * t;
+      }
+      if (feinFeld || feinBaender) {
+        /*
+         * Der Feinschliff NACH den Bereichen, vor der Vignette.
+         *
+         * Nach den Bereichen, weil eine Kurve das letzte Wort über die
+         * Gradation hat – genau wie in jedem Bearbeitungsprogramm, in dem die
+         * Kurve unter den Grundreglern sitzt. Vor der Vignette, weil die vom
+         * ORT abhängt und nicht von der Farbe: Sie gehört ganz ans Ende.
+         */
+        const [fr, fg, fb] = feinPunkt([r / 255, g / 255, b / 255], feinFeld, feinBaender);
+        r = fr * 255;
+        g = fg * 255;
+        b = fb * 255;
       }
       const faktor = a.vignette === 0 ? 1 : vignetteFaktor((x + 0.5) / breite, v, a.vignette);
       daten[at] = r * faktor;

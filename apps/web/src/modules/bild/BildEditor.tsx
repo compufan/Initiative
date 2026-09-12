@@ -48,6 +48,7 @@ import {
   istNeutral,
   type Anpassung,
   type Farbanpassung,
+  type Zahlfeld,
 } from './ton.js';
 import {
   fangBereich,
@@ -67,6 +68,15 @@ import type { EngineKey } from '../stickers/engines/types.js';
 import { writeEngineSetting } from '../stickers/engines/settings.js';
 import { SCHRIFTEN, trifftText, zeichneAnsicht, zeichneAusgabe } from './zeichnen.js';
 import { rezeptHindernis, rezeptLohnt, rezeptMoeglich, rezeptSchreiben } from './rezept.js';
+import { Kurvenfeld } from './Kurvenfeld.js';
+import {
+  BAENDER,
+  BAENDER_NEUTRAL,
+  KURVEN_NEUTRAL,
+  type Farbband,
+  type Kurven,
+  type Kurvenpunkt,
+} from './fein.js';
 import {
   bildKennung,
   entwurfAlter,
@@ -127,8 +137,38 @@ function neueId(vorsatz: string): string {
   return `${vorsatz}${Date.now().toString(36)}${Math.round(Math.random() * 1e6).toString(36)}`;
 }
 
+/** Die vier Kurven, in der Reihenfolge, in der man sie anfasst. */
+const KURVENKANAELE: { key: keyof Kurven; label: string; farbe: string }[] = [
+  { key: 'gesamt', label: 'Gesamt', farbe: 'currentColor' },
+  { key: 'rot', label: 'Rot', farbe: '#ef4444' },
+  { key: 'gruen', label: 'Grün', farbe: '#22c55e' },
+  { key: 'blau', label: 'Blau', farbe: '#3b82f6' },
+];
+
+/** Die drei Regler eines Farbbandes. */
+const BANDREGLER: { key: keyof Farbband; label: string; tipp: string }[] = [
+  {
+    key: 'farbton',
+    label: 'Farbton',
+    tipp: 'Dreht diesen Farbbereich in Richtung seiner Nachbarn – Laub ins Gelbe oder ins Blaue',
+  },
+  {
+    key: 'saettigung',
+    label: 'Sättigung',
+    tipp: 'Nur dieser Farbbereich wird kräftiger oder blasser',
+  },
+  {
+    key: 'helligkeit',
+    label: 'Helligkeit',
+    tipp: 'Nur dieser Farbbereich wird heller oder dunkler – ein blauer Himmel ohne alles andere',
+  },
+];
+
 const TONREGLER: {
-  key: keyof Anpassung;
+  /* `Zahlfeld` und nicht `keyof Anpassung`: Seit Kurven und Bänder dazugehören,
+     sind nicht mehr alle Felder von `Anpassung` Zahlen, und ein Schieber kann
+     nur eine Zahl. */
+  key: Zahlfeld;
   label: string;
   min: number;
   max: number;
@@ -383,6 +423,8 @@ export function BildEditor({
    * anzuzeigen, die längst nicht mehr das ist, was im Bild steht.
    */
   const [vorlageId, setVorlageId] = useState<string | null>(null);
+  const [kurvenKanal, setKurvenKanal] = useState<keyof Kurven>('gesamt');
+  const [bandIndex, setBandIndex] = useState(0);
   const [vorlageStaerke, setVorlageStaerke] = useState(1);
   const pinselAbziehen = pinselModus === 'radieren';
   const [schleier, setSchleier] = useState(true);
@@ -1561,8 +1603,44 @@ export function BildEditor({
    * erzeugt hundert Änderungen. Ohne die Bündelung wäre der Verlauf nach
    * einem Zug voll und alles davor fort.
    */
+  /**
+   * Eine Kurve oder ein Band ändern.
+   *
+   * Getrennt von `tonSetzen`, weil es etwas anderes setzt als eine Zahl – und
+   * weil hier NICHT gebündelt wird: Ein Reglerzug erzeugt dutzende Werte und
+   * soll ein Rückgängig-Schritt sein, das Setzen eines Kurvenpunktes ist
+   * einer. Der Zug am Punkt bündelt sich über `merkenGebuendelt` im
+   * Kurvenfeld selbst.
+   */
+  const feinSetzen = useCallback((aenderung: Partial<Pick<Anpassung, 'kurven' | 'baender'>>) => {
+    setVorlageId(null);
+    setDoc((alt) => (alt ? { ...alt, anpassung: { ...alt.anpassung, ...aenderung } } : alt));
+  }, []);
+
+  const kurveSetzen = useCallback(
+    (kanal: keyof Kurven, punkte: Kurvenpunkt[]) => {
+      const jetzt = docRef.current?.anpassung.kurven ?? KURVEN_NEUTRAL;
+      feinSetzen({ kurven: { ...jetzt, [kanal]: punkte } });
+    },
+    [feinSetzen],
+  );
+
+  const bandSetzen = useCallback(
+    (index: number, feld: keyof Farbband, wert: number) => {
+      merkenGebuendelt(`band-${index}-${feld}`);
+      const jetzt = docRef.current?.anpassung.baender ?? BAENDER_NEUTRAL;
+      feinSetzen({
+        baender: BAENDER.map((_, i) => {
+          const b = jetzt[i] ?? { farbton: 0, saettigung: 0, helligkeit: 0 };
+          return i === index ? { ...b, [feld]: wert } : { ...b };
+        }),
+      });
+    },
+    [feinSetzen, merkenGebuendelt],
+  );
+
   const tonSetzen = useCallback(
-    (welcher: keyof Anpassung, wert: number) => {
+    (welcher: Zahlfeld, wert: number) => {
       merkenGebuendelt(`ton-${welcher}`);
       // Ein einzelner Regler löst die Vorlage ab: Was jetzt im Bild steht,
       // ist nicht mehr das, was auf dem Knopf steht.
@@ -2416,6 +2494,99 @@ export function BildEditor({
               Doppeltippen auf einen Regler stellt ihn zurück. Die Regler wirken auf das Foto, nicht
               auf das Gemalte oder die Schrift.
             </p>
+
+            {/*
+              Zwei aufklappbare Abschnitte und keine zwei weiteren Reiter.
+
+              Kurven und Farbbänder sind Werkzeuge für den zweiten Durchgang:
+              Erst stellt man Licht und Farbe grob, dann feilt man. Als eigene
+              Reiter stünden sie gleichberechtigt neben „Ton“ und drängten
+              sich jedem auf, der nur ein Foto aufhellen will. Zugeklappt
+              kosten sie eine Zeile.
+            */}
+            <details className="bild-klapp">
+              <summary>Kurven</summary>
+              <div className="bild-reihe" role="group" aria-label="Kanal der Kurve">
+                {KURVENKANAELE.map((kanal) => (
+                  <button
+                    key={kanal.key}
+                    type="button"
+                    className={`btn btn-sm ${kurvenKanal === kanal.key ? 'is-active' : ''}`}
+                    aria-pressed={kurvenKanal === kanal.key}
+                    onClick={() => setKurvenKanal(kanal.key)}
+                  >
+                    {kanal.label}
+                  </button>
+                ))}
+              </div>
+              <Kurvenfeld
+                label={`Kurve ${KURVENKANAELE.find((k) => k.key === kurvenKanal)?.label ?? ''}`}
+                farbe={KURVENKANAELE.find((k) => k.key === kurvenKanal)?.farbe}
+                punkte={(doc.anpassung.kurven ?? KURVEN_NEUTRAL)[kurvenKanal]}
+                onBeginn={() => merkenGebuendelt(`kurve-${kurvenKanal}`)}
+                onAendern={(punkte) => kurveSetzen(kurvenKanal, punkte)}
+              />
+              <p className="bild-hinweis">
+                Tippen setzt einen Punkt, Ziehen verschiebt ihn. Die gestrichelte Linie ist „nichts
+                tun“: Was darüber liegt, wird heller, was darunter liegt, dunkler. Die Enden bleiben
+                links und rechts – ihre Höhe ist der Schwarz- und der Weisspunkt.
+              </p>
+            </details>
+
+            <details className="bild-klapp">
+              <summary>Farben einzeln</summary>
+              <div className="bild-reihe" role="group" aria-label="Farbband">
+                {BAENDER.map((band, i) => (
+                  <button
+                    key={band.key}
+                    type="button"
+                    className={`btn btn-sm ${bandIndex === i ? 'is-active' : ''}`}
+                    aria-pressed={bandIndex === i}
+                    onClick={() => setBandIndex(i)}
+                    style={{
+                      // Der Knopf trägt seine eigene Farbe – acht Wörter
+                      // untereinander wären eine Liste, keine Farbauswahl.
+                      borderColor: `hsl(${band.winkel} 70% 50%)`,
+                    }}
+                  >
+                    {band.label}
+                  </button>
+                ))}
+              </div>
+              {BANDREGLER.map((regler) => {
+                const band = (doc.anpassung.baender ?? BAENDER_NEUTRAL)[bandIndex] ?? {
+                  farbton: 0,
+                  saettigung: 0,
+                  helligkeit: 0,
+                };
+                const wert = band[regler.key];
+                return (
+                  <label className="bild-schieber" key={regler.key} data-tipp={regler.tipp}>
+                    <span>{regler.label}</span>
+                    <input
+                      type="range"
+                      min={-1}
+                      max={1}
+                      step={0.01}
+                      value={wert}
+                      onChange={(event) =>
+                        bandSetzen(bandIndex, regler.key, Number(event.target.value))
+                      }
+                      onDoubleClick={() => bandSetzen(bandIndex, regler.key, 0)}
+                    />
+                    <span className="bild-wert">
+                      {wert > 0 ? '+' : ''}
+                      {Math.round(wert * 100)}
+                    </span>
+                  </label>
+                );
+              })}
+              <p className="bild-hinweis">
+                Wirkt nur auf den gewählten Farbbereich – Laub grüner machen, ohne die Haut
+                anzufassen. Graue und sehr blasse Stellen bleiben, wie sie sind: Dort gibt es keinen
+                Farbton, an dem sich etwas festmachen liesse.
+              </p>
+            </details>
           </>
         )}
 

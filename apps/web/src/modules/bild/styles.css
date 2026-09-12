@@ -216,3 +216,44 @@
 .bild-hinweis-warn {
   color: var(--warn, #ff9500);
 }
+
+/*
+ * Kurvenfeld und aufklappbare Abschnitte im Ton-Reiter.
+ */
+.bild-klapp {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-top: 8px;
+}
+
+.bild-klapp > summary {
+  cursor: pointer;
+  font-weight: 600;
+  /* Genug Fläche für einen Finger: Ein „summary“ ist von Haus aus eine
+     Textzeile hoch, und auf dem Telefon trifft man das nicht. */
+  padding: 6px 0;
+  list-style-position: inside;
+}
+
+.bild-kurve {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.bild-kurve-feld {
+  /* Quadratisch: Eine Kurve, deren Achsen verschieden skaliert sind, liest
+     man falsch – eine Gerade sähe nicht wie eine Gerade aus. */
+  aspect-ratio: 1 / 1;
+  width: 100%;
+  max-width: 260px;
+  align-self: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.1));
+  /* Ohne das scrollt das Blatt, statt den Punkt zu ziehen. */
+  touch-action: none;
+  --bild-kurve-gitter: rgba(128, 128, 128, 0.3);
+}
