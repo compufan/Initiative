@@ -90,6 +90,23 @@ async function chatMit(page: Page, gegenueber: string) {
   await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
 }
 
+/**
+ * Nach einem Neuladen wieder im Chat stehen.
+ *
+ * Die App merkt sich, wo sie war: Nach `reload` kann der Chat schon offen
+ * sein oder die Liste stehen. Beides ist richtig, und der Test soll nicht an
+ * der einen oder anderen Wahl hängen.
+ */
+async function wiederImChat(page: Page, gegenueber: string) {
+  const schreiben = page.getByPlaceholder('Nachricht schreiben');
+  const liste = page.getByText(gegenueber).first();
+  await expect
+    .poll(async () => (await schreiben.count()) + (await liste.count()), { timeout: 30_000 })
+    .toBeGreaterThan(0);
+  if ((await schreiben.count()) === 0) await liste.click();
+  await expect(schreiben).toBeVisible({ timeout: 30_000 });
+}
+
 /** Die mittlere Helligkeit eines angezeigten Bildes, so wie es auf dem Schirm steht. */
 async function helligkeit(page: Page, waehler: string): Promise<number> {
   return await page
@@ -233,6 +250,118 @@ test('was Bildinhalt entfernt, wird nicht zum Rezept', async ({ browser }) => {
 
   await expect(alicePage.getByRole('button', { name: /Als Rezept/ })).toHaveCount(0);
   await expect(alicePage.getByText(/Kein Rezept möglich/)).toBeVisible();
+
+  await alicePage.context().close();
+});
+
+test('ein Entwurf überlebt das Schliessen – und den ganzen Browser', async ({ browser }) => {
+  /*
+   * Die Frage beim Schliessen hilft gegen den falschen Fingertipp. Sie hilft
+   * nicht gegen den abgestürzten Browser, den geschlossenen Tab oder ein
+   * Telefon, das die Seite aus dem Speicher wirft.
+   *
+   * Deshalb wird hier NEU GELADEN, statt nur den Editor zu schliessen: Das
+   * ist die Lage, in der die Arbeit bisher ohne jede Rückfrage verschwand.
+   * Ein Entwurf, der nur ein Schliessen überlebt, könnte auch im
+   * Arbeitsspeicher stehen – und stünde beim nächsten Mal nicht mehr da.
+   */
+  const alice = credentials('entw');
+  const bob = credentials('entwempf');
+  const alicePage = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await chatMit(alicePage, bob.displayName);
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'grau.png',
+    mimeType: 'image/png',
+    buffer: grauesPng(320, 240),
+  });
+  await alicePage.locator('.media-tile-knopf').first().click();
+  await expect(alicePage.locator('.bild-leinwand')).toBeVisible({ timeout: 30_000 });
+
+  await alicePage.getByRole('button', { name: /Ton$/ }).click();
+  const belichtung = alicePage.getByLabel('Belichtung').first();
+  await belichtung.fill('1.75');
+  await belichtung.dispatchEvent('change');
+  // Der Entwurf wird nach einer Dreiviertelsekunde Ruhe geschrieben.
+  await alicePage.waitForTimeout(1500);
+
+  // Und jetzt ist der Browser weg. Kein Schliessen, kein Verwerfen, nichts.
+  await alicePage.reload();
+  await wiederImChat(alicePage, bob.displayName);
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'grau.png',
+    mimeType: 'image/png',
+    buffer: grauesPng(320, 240),
+  });
+  await alicePage.locator('.media-tile-knopf').first().click();
+
+  // Gefragt wird, nicht angewandt.
+  await expect(alicePage.getByText('Entwurf weiterführen?')).toBeVisible({ timeout: 30_000 });
+  await alicePage.getByRole('button', { name: 'Weiterführen' }).click();
+
+  await alicePage.getByRole('button', { name: /Ton$/ }).click();
+  await expect(alicePage.getByLabel('Belichtung').first()).toHaveValue(/^1\.75/);
+
+  await alicePage.context().close();
+});
+
+test('„Neu anfangen" lässt den Entwurf nicht wiederkommen', async ({ browser }) => {
+  /*
+   * Wer „Neu anfangen" sagt, hat entschieden. Bliebe der Entwurf liegen,
+   * käme dieselbe Frage beim nächsten Aufmachen wieder – und das ist genau
+   * die Sorte Beharrlichkeit, die man einem Werkzeug übelnimmt.
+   */
+  const alice = credentials('entwneu');
+  const bob = credentials('entwneuempf');
+  const alicePage = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await chatMit(alicePage, bob.displayName);
+
+  const aufmachen = async () => {
+    await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+    await alicePage.getByText('Foto/Video').click();
+    await alicePage.locator('input[type=file]').setInputFiles({
+      name: 'grau.png',
+      mimeType: 'image/png',
+      buffer: grauesPng(320, 240),
+    });
+    await alicePage.locator('.media-tile-knopf').first().click();
+  };
+
+  await aufmachen();
+  await expect(alicePage.locator('.bild-leinwand')).toBeVisible({ timeout: 30_000 });
+  await alicePage.getByRole('button', { name: /Ton$/ }).click();
+  const belichtung = alicePage.getByLabel('Belichtung').first();
+  await belichtung.fill('1.75');
+  await belichtung.dispatchEvent('change');
+  await alicePage.waitForTimeout(1500);
+  await alicePage.reload();
+  await wiederImChat(alicePage, bob.displayName);
+
+  await aufmachen();
+  await expect(alicePage.getByText('Entwurf weiterführen?')).toBeVisible({ timeout: 30_000 });
+  await alicePage.getByRole('button', { name: 'Neu anfangen' }).click();
+  await alicePage.getByRole('button', { name: /Ton$/ }).click();
+  await expect(alicePage.getByLabel('Belichtung').first()).toHaveValue(/^0/);
+
+  /*
+   * Schliessen und noch einmal aufmachen – die Frage darf nicht wiederkommen.
+   *
+   * Das Auswahlblatt steht dahinter noch offen (es ist nur beiseitegetreten),
+   * also geht es hier direkt über den Stift an der Kachel und nicht noch
+   * einmal über „Mehr hinzufügen".
+   */
+  await alicePage.getByRole('button', { name: 'Schließen' }).first().click();
+  await alicePage.locator('.media-tile-knopf').first().click();
+  await expect(alicePage.locator('.bild-leinwand')).toBeVisible({ timeout: 30_000 });
+  await alicePage.waitForTimeout(1000);
+  await expect(alicePage.getByText('Entwurf weiterführen?')).toHaveCount(0);
 
   await alicePage.context().close();
 });

@@ -225,7 +225,16 @@ function strichNachRoh(s: Malstrich): unknown {
   return {
     farbe: s.farbe,
     breite: s.breite,
-    punkte: s.punkte,
+    /*
+     * `slice` und nicht die Liste selbst.
+     *
+     * Die Rohform ist reines JSON und wird weitergereicht – in eine Datei, in
+     * den Entwurfsspeicher. Bliebe hier die LEBENDE Liste des Dokuments
+     * stehen, änderte der nächste Pinselstrich rückwirkend etwas, das längst
+     * abgelegt sein sollte. `JSON.stringify` gleich danach würde das
+     * verdecken; jeder andere Weg nicht.
+     */
+    punkte: s.punkte.slice(),
     art: s.art ?? 'farbe',
     quelle: s.quelle ? { x: s.quelle.x, y: s.quelle.y } : undefined,
   };
@@ -298,7 +307,7 @@ function teilNachRoh(teil: Maskenteil): unknown {
         ...kopf,
         art: 'pinsel',
         striche: teil.striche.map((s) => ({
-          punkte: s.punkte,
+          punkte: s.punkte.slice(),
           breite: s.breite,
           haerte: s.haerte,
           abziehen: s.abziehen,

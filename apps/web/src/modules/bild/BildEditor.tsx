@@ -67,6 +67,13 @@ import type { EngineKey } from '../stickers/engines/types.js';
 import { writeEngineSetting } from '../stickers/engines/settings.js';
 import { SCHRIFTEN, trifftText, zeichneAnsicht, zeichneAusgabe } from './zeichnen.js';
 import { rezeptHindernis, rezeptLohnt, rezeptMoeglich, rezeptSchreiben } from './rezept.js';
+import {
+  bildKennung,
+  entwurfAlter,
+  entwurfHolen,
+  entwurfLoeschen,
+  entwurfSichern,
+} from './entwurf.js';
 import './styles.css';
 
 type Werkzeug = 'zuschnitt' | 'ton' | 'bereich' | 'malen' | 'text';
@@ -321,6 +328,16 @@ export function BildEditor({
    * und ob es WebAssembly gibt, nicht ob eine Grafikeinheit da ist.
    */
   const [schliessFrage, setSchliessFrage] = useState(false);
+  /*
+   * Die Kennung des Bildes, an der der Entwurf hängt.
+   *
+   * Sie steht erst fest, wenn die Bytes gelesen sind – bis dahin wird nichts
+   * gespeichert. Ein Zustand und keine Referenz: Der Speicher-Effekt muss
+   * anspringen, sobald sie da ist, sonst ginge der erste Zug am Regler
+   * verloren.
+   */
+  const [kennung, setKennung] = useState<string | null>(null);
+  const [entwurfsfrage, setEntwurfsfrage] = useState<{ doc: BildDoc; alter: string } | null>(null);
   const [grafikAus, setGrafikAus] = useState<{ grund: string } | null>(null);
   /* Zählt hoch, wenn ein Verfahren von hier aus eingeschaltet wurde: Die
      Einstellung liegt im Gerätespeicher und nicht im Zustand, also braucht
@@ -663,6 +680,25 @@ export function BildEditor({
           );
         }
         setDoc(frisch);
+
+        /*
+         * Nach einem liegengebliebenen Entwurf sehen – aber nur, wenn keiner
+         * mitgebracht wurde.
+         *
+         * Ein `startDoc` kommt aus einem Rezept und ist die ausdrückliche
+         * Absicht des Anwenders („diese Bearbeitung weiterdrehen"). Sie mit
+         * einer Frage nach einem alten Entwurf zu überschreiben, wäre die
+         * falsche Reihenfolge.
+         */
+        void (async () => {
+          const id = await bildKennung(quelle);
+          if (weg) return;
+          setKennung(id);
+          if (passt) return;
+          const fund = await entwurfHolen(id, geladen.naturalWidth, geladen.naturalHeight);
+          if (weg || !fund) return;
+          setEntwurfsfrage({ doc: fund.doc, alter: entwurfAlter(fund.stand) });
+        })();
       })
       .catch((error: unknown) => {
         if (weg) return;
@@ -681,6 +717,27 @@ export function BildEditor({
     // und `startDoc` ist ein Objekt, das bei jedem Rahmen neu entsteht.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quelle, onClose]);
+
+  /*
+   * Der Entwurf wird beim ARBEITEN fortgeschrieben, nicht beim Verlassen.
+   *
+   * Das ist der ganze Punkt: Gegen den falschen Fingertipp hilft die Frage
+   * beim Schliessen. Gegen einen abgestürzten Browser, einen geschlossenen
+   * Tab oder ein Telefon, das die Seite aus dem Speicher wirft, hilft nur
+   * etwas, das schon vorher auf der Platte liegt.
+   *
+   * Eine Dreiviertelsekunde Ruhe: Ein Reglerzug löst dutzende Änderungen
+   * aus, und jede einzelne zu schreiben hiesse, während des Ziehens dutzende
+   * Male eine Netzmaske zu packen. Am Ende eines Zuges steht genau ein
+   * Schreibvorgang.
+   */
+  useEffect(() => {
+    if (!kennung || !doc || !bild) return undefined;
+    const timer = window.setTimeout(() => {
+      void entwurfSichern(kennung, doc, bild.naturalWidth, bild.naturalHeight, name ?? null);
+    }, 750);
+    return () => window.clearTimeout(timer);
+  }, [kennung, doc, bild, name]);
 
   /** Merkt den Stand für „Rückgängig“. */
   const merken = useCallback(() => {
@@ -2025,6 +2082,9 @@ export function BildEditor({
     try {
       const rezept = await rezeptSchreiben(doc, bild.naturalWidth, bild.naturalHeight);
       await onRezept(quelle, rezept, name ?? 'bild');
+      // Draussen ist draussen: Ein Entwurf zu etwas, das schon verschickt ist,
+      // fragte beim nächsten Aufmachen nach einer Arbeit, die längst getan ist.
+      if (kennung) await entwurfLoeschen(kennung);
       onClose();
     } catch (error) {
       toast(errorMessage(error, 'Das Rezept konnte nicht erzeugt werden'), 'error');
@@ -2040,6 +2100,7 @@ export function BildEditor({
       const fertig = await ergebnis();
       if (!fertig) return;
       await onFertig(fertig.blob, fertig.name);
+      if (kennung) await entwurfLoeschen(kennung);
       onClose();
     } catch (error) {
       toast(errorMessage(error, 'Speichern fehlgeschlagen'), 'error');
@@ -3196,7 +3257,50 @@ export function BildEditor({
         onCancel={() => setSchliessFrage(false)}
         onConfirm={() => {
           setSchliessFrage(false);
+          /*
+           * „Verwerfen" heisst verwerfen – auch den Entwurf.
+           *
+           * Ohne das stünde die Bearbeitung beim nächsten Aufmachen wieder da,
+           * obwohl gerade jemand ausdrücklich das Gegenteil gesagt hat. Das
+           * wäre schlimmer als gar kein Entwurf.
+           */
+          if (kennung) void entwurfLoeschen(kennung);
           onClose();
+        }}
+      />
+
+      {/*
+       * Gefragt wird, nicht angewandt.
+       *
+       * Ein Entwurf, der sich beim Aufmachen von selbst über das Bild legt,
+       * ist eine Überraschung – und wer nur schnell etwas anderes machen
+       * wollte, müsste erst herausfinden, woher die Regler kommen. Deshalb
+       * die Frage, und deshalb steht das Alter darin: „von vor drei Minuten"
+       * beantwortet sie meistens von allein.
+       */}
+      <ConfirmDialog
+        open={entwurfsfrage !== null}
+        title="Entwurf weiterführen?"
+        description={`Zu diesem Bild liegt eine unfertige Bearbeitung ${entwurfsfrage?.alter ?? ''} – aus einer Sitzung, die nicht zu Ende gebracht wurde.`}
+        confirmLabel="Weiterführen"
+        cancelLabel="Neu anfangen"
+        onCancel={() => {
+          setEntwurfsfrage(null);
+          if (kennung) void entwurfLoeschen(kennung);
+        }}
+        onConfirm={() => {
+          const gefunden = entwurfsfrage?.doc;
+          setEntwurfsfrage(null);
+          if (!gefunden) return;
+          /*
+           * Der Verlauf bekommt den Stand VOR dem Entwurf.
+           *
+           * Damit führt ein einzelnes „Rückgängig" zurück auf das unbearbeitete
+           * Bild. Ohne das wäre der Entwurf der Anfang der Welt, und wer ihn
+           * versehentlich angenommen hat, käme nicht mehr davon los.
+           */
+          merken();
+          setDoc(gefunden);
         }}
       />
     </div>,

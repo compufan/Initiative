@@ -35,8 +35,35 @@ export interface OutboxEntry {
   lastError: string | null;
 }
 
+/**
+ * Ein liegengebliebener Entwurf aus dem Fotoeditor.
+ *
+ * Was hier NICHT drinsteht, ist das Bild. Ein Foto von zwölf Megapunkten
+ * wäre ein Vielfaches von allem anderen in dieser Datenbank, und es liegt ja
+ * schon irgendwo – als Anhang auf dem Server oder als Datei im Gerät. Der
+ * Entwurf ist die ANWEISUNG dazu, in genau der Form, in der sie auch
+ * verschickt wird (`docNachRoh` in `rezept.ts`).
+ *
+ * Der Schlüssel ist deshalb eine Kennung des BILDES und nicht des Editors:
+ * Wer dasselbe Foto wieder aufmacht, soll seinen Entwurf wiederfinden, egal
+ * über welchen Weg er hereinkommt.
+ */
+export interface Bildentwurf {
+  /** Kennung des Bildes – siehe `bildKennung` in `entwurf.ts`. */
+  id: string;
+  /** Das Dokument als reines JSON. */
+  doc: unknown;
+  /** Die Masse, zu denen es gehört. Passen sie nicht, gilt der Entwurf nicht. */
+  breite: number;
+  hoehe: number;
+  /** Wann zuletzt geschrieben, in Millisekunden. */
+  stand: number;
+  name: string | null;
+}
+
 interface InitiativeDB extends DBSchema {
   conversations: { key: string; value: ConversationDto };
+  entwuerfe: { key: string; value: Bildentwurf };
   messages: {
     key: string;
     value: MessageDto;
@@ -50,7 +77,15 @@ let dbPromise: Promise<IDBPDatabase<InitiativeDB>> | null = null;
 
 function getDb(): Promise<IDBPDatabase<InitiativeDB>> {
   if (!dbPromise) {
-    dbPromise = openDB<InitiativeDB>('initiative', 1, {
+    /*
+     * Fassung 2 bringt `entwuerfe`.
+     *
+     * `upgrade` läuft bei JEDER Erhöhung und legt nur an, was fehlt – die
+     * vorhandenen Abfragen bleiben unangetastet. Wer die Zahl vergisst und
+     * nur den Aufruf hinzufügt, bekommt einen Speicher, den es in schon
+     * geöffneten Datenbanken nie geben wird.
+     */
+    dbPromise = openDB<InitiativeDB>('initiative', 2, {
       upgrade(db) {
         if (!db.objectStoreNames.contains('conversations')) {
           db.createObjectStore('conversations', { keyPath: 'id' });
@@ -64,6 +99,9 @@ function getDb(): Promise<IDBPDatabase<InitiativeDB>> {
           store.createIndex('by-conversation', 'conversationId');
         }
         if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta');
+        if (!db.objectStoreNames.contains('entwuerfe')) {
+          db.createObjectStore('entwuerfe', { keyPath: 'id' });
+        }
       },
     }).catch((error) => {
       // Safari private mode and locked-down browsers: degrade to online-only.
@@ -204,6 +242,57 @@ export async function clearOfflineData(): Promise<void> {
       db.clear('messages'),
       db.clear('outbox'),
       db.clear('meta'),
+      // Auch die Entwürfe: Sie tragen zwar kein Bild, aber sie verraten, was
+      // jemand an einem Bild gemacht hat – wo ein Balken lag, was
+      // weggeschnitten wurde.
+      db.clear('entwuerfe'),
     ]);
+  }, undefined);
+}
+
+/* ---------- Entwürfe aus dem Fotoeditor ---------- */
+
+/**
+ * Wieviele Entwürfe höchstens liegenbleiben, und wie lange.
+ *
+ * Beides, weil beides allein danebengeht: Eine reine Anzahl hielte einen
+ * Entwurf von vor zwei Jahren, ein reines Alter liesse hundert Entwürfe eines
+ * geschäftigen Tages nebeneinander stehen. Ein Entwurf mit Netzmaske ist
+ * einige Dutzend Kilobyte gross.
+ */
+const ENTWUERFE_MAX = 20;
+const ENTWURF_TAGE = 30;
+
+export async function entwurfLesen(id: string): Promise<Bildentwurf | null> {
+  return safe(async () => {
+    const db = await getDb();
+    return (await db.get('entwuerfe', id)) ?? null;
+  }, null);
+}
+
+export async function entwurfSchreiben(entwurf: Bildentwurf): Promise<void> {
+  await safe(async () => {
+    const db = await getDb();
+    await db.put('entwuerfe', entwurf);
+    // Aufräumen im selben Zug: Ein eigener Zeitgeber dafür wäre ein Dienst,
+    // der läuft, wenn niemand ihn braucht.
+    const alle = await db.getAll('entwuerfe');
+    const grenze = Date.now() - ENTWURF_TAGE * 24 * 60 * 60 * 1000;
+    const weg = alle
+      .filter((e) => e.stand < grenze)
+      .concat(
+        alle
+          .filter((e) => e.stand >= grenze)
+          .sort((a, b) => b.stand - a.stand)
+          .slice(ENTWUERFE_MAX),
+      );
+    await Promise.all(weg.map((e) => db.delete('entwuerfe', e.id)));
+  }, undefined);
+}
+
+export async function entwurfLoeschen(id: string): Promise<void> {
+  await safe(async () => {
+    const db = await getDb();
+    await db.delete('entwuerfe', id);
   }, undefined);
 }
