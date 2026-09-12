@@ -309,10 +309,18 @@ function unkenntlich(
   // voller. Beides kommt hier an, also muss der Ausschnitt umgerechnet
   // werden – sonst läse ein Balken bei halbem Massstab an der doppelten
   // Stelle, also meist neben dem Bild.
+  /*
+   * Der Stempel liest woanders.
+   *
+   * Für Verpixeln und Weichzeichnen ist die Quelle die Stelle selbst. Der
+   * Klonstempel holt dieselbe Form von einem anderen Fleck desselben Bildes –
+   * das ist der ganze Unterschied, und er steckt in diesen zwei Zahlen.
+   */
+  const quellVersatz = strich.art === 'klon' && strich.quelle ? strich.quelle : { x: 0, y: 0 };
   hctx.drawImage(
     bild,
-    x0 * quellSkalaX,
-    y0 * quellSkalaY,
+    (x0 + quellVersatz.x) * quellSkalaX,
+    (y0 + quellVersatz.y) * quellSkalaY,
     bw * quellSkalaX,
     bh * quellSkalaY,
     0,
@@ -324,7 +332,16 @@ function unkenntlich(
   // Kachel und Radius wandern in denselben Massstab wie die Fläche, sonst
   // wäre die Verpixelung in der Ansicht gröber oder feiner als im Ergebnis.
   const kachel = Math.max(2, Math.round((strich.breite * skala) / 2));
-  if (strich.art === 'pixel') {
+  if (strich.art === 'klon') {
+    /*
+     * Nichts zu rechnen – die Bildpunkte stehen schon da.
+     *
+     * Der Ausschnitt wurde oben bereits um den Versatz verschoben aus dem
+     * Quellbild geholt; hier bleibt er, wie er ist, und wird gleich von der
+     * Strichform beschnitten. Verpixeln und Weichzeichnen verändern an dieser
+     * Stelle ihre Daten, der Stempel nicht.
+     */
+  } else if (strich.art === 'pixel') {
     // Kachelweise Mittelwert – die klassische Verpixelung.
     for (let ky = 0; ky < ph; ky += kachel) {
       for (let kx = 0; kx < pw; kx += kachel) {
@@ -408,6 +425,19 @@ function unkenntlich(
     });
   }
   ctx.drawImage(hilf, x0, y0, bw, bh);
+}
+
+/**
+ * Ob der Strich das BILD bearbeitet, statt Farbe darüberzulegen.
+ *
+ * Diese drei laufen über `unkenntlich`: Sie lesen aus dem Quellbild, rechnen
+ * daran und legen das Ergebnis durch die Strichform zurück. Die Unterscheidung
+ * stand an zwei Stellen als Aufzählung – jede neue Art hätte man an beiden
+ * nachtragen müssen, und genau so entsteht ein Strich, der gezeichnet UND
+ * gerechnet wird.
+ */
+export function istBildstrich(strich: Malstrich): boolean {
+  return strich.art === 'pixel' || strich.art === 'weich' || strich.art === 'klon';
 }
 
 /** Kastenweichzeichner, waagerecht und senkrecht getrennt. */
@@ -511,13 +541,13 @@ function malen(
    */
   for (const strich of doc.striche) {
     if (strich.punkte.length < 2) continue;
-    if (strich.art === 'pixel' || strich.art === 'weich') {
+    if (istBildstrich(strich)) {
       unkenntlich(ctx, bild, strich, width, height, skala, quellSkalaX, quellSkalaY);
     }
   }
   for (const strich of doc.striche) {
     if (strich.punkte.length < 2) continue;
-    if (strich.art === 'pixel' || strich.art === 'weich') continue;
+    if (istBildstrich(strich)) continue;
     ctx.strokeStyle = strich.farbe;
     ctx.fillStyle = strich.farbe;
     ctx.lineWidth = strich.breite;

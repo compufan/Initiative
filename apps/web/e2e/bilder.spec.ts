@@ -44,6 +44,32 @@ function motivPng(breite: number, hoehe: number): Buffer {
 }
 
 /**
+ * Ein Bild mit genau einem Fleck – der Testfall für den Klonstempel.
+ *
+ * # Warum drei Helligkeiten und nicht zwei
+ *
+ * Ein Bild aus „überall sauber, hier ein Fleck“ ist zu nachsichtig: Der
+ * Stempel liest dann fast überall etwas Richtiges, auch wenn er an der
+ * falschen Stelle liest. Genau daran ging die erste Fassung dieser Reihe
+ * vorbei – eine Quelle im falschen Koordinatenraum bestand sie anstandslos.
+ *
+ * Deshalb hat das Bild eine helle obere und eine mittlere untere Hälfte, und
+ * der Fleck sitzt unten. Nur wer von OBEN liest, bekommt 245; wer irgendwo
+ * anders liest, bekommt 110 oder wieder den Fleck. Die Messung unterscheidet
+ * damit „richtig gestempelt“ von „irgendwie gestempelt“.
+ */
+function fleckPng(breite: number, hoehe: number): Buffer {
+  const fleckX0 = Math.round(breite * 0.55);
+  const fleckX1 = Math.round(breite * 0.8);
+  const fleckY0 = Math.round(hoehe * 0.62);
+  const fleckY1 = Math.round(hoehe * 0.78);
+  return pngAus(breite, hoehe, (x, y) => {
+    if (x >= fleckX0 && x < fleckX1 && y >= fleckY0 && y < fleckY1) return [20, 20, 20];
+    return y < hoehe / 2 ? [245, 245, 245] : [110, 110, 110];
+  });
+}
+
+/**
  * Ein Bild mit einem HORIZONT, der um `grad` schief steht.
  *
  * Oben hell, unten dunkel, dazwischen eine harte Kante. Genau das, wofür es
@@ -1790,4 +1816,152 @@ test('„Vorher" zeigt das unbearbeitete Bild, solange man drückt', async ({ br
   // Loslassen: das neue wieder.
   await alicePage.mouse.up();
   await expect.poll(helligkeit, { timeout: 5_000 }).toBeGreaterThan(bearbeitet - 10);
+});
+
+test('der Stempel holt Bildpunkte von woanders – ein Fleck verschwindet', async ({ browser }) => {
+  /*
+   * Der Fotoeditor konnte bisher zwei Dinge mit dem, was im Bild steht:
+   * unkenntlich machen (verpixeln, verwischen) und übermalen. Beides
+   * VERDECKT. Was fehlte, war das Werkzeug, mit dem etwas verschwindet – ein
+   * Fleck, ein Mülleimer, eine Stromleitung.
+   *
+   * Modellbasiertes Auffüllen scheidet aus Lizenzgründen aus (die
+   * verbreiteten LaMa-Veröffentlichungen stehen ganz oder teilweise unter
+   * nicht-kommerziellen Bedingungen), und PatchMatch zusätzlich wegen Adobes
+   * Patent US 8.571.328. Der Klonstempel mit Versatzquelle braucht weder
+   * Gewichte noch Patent – und er ist ohnehin das Werkzeug, mit dem so etwas
+   * seit dreissig Jahren gemacht wird.
+   *
+   * Gemessen wird der Fleck selbst: Er muss deutlich heller werden.
+   */
+  const alice = credentials('klon');
+  const bob = credentials('klziel');
+  const alicePage = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await alicePage.getByRole('button', { name: 'Neuer Chat' }).click();
+  await alicePage.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await alicePage.getByText(bob.displayName).first().click();
+  await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'fleck.png',
+    mimeType: 'image/png',
+    /*
+     * Gross genug, dass die Leinwand herunterskalieren MUSS.
+     *
+     * Bei 320 × 240 fielen Ansichts- und Originalraum praktisch zusammen –
+     * eine Quelle, die im falschen Raum gemerkt wird, ergab denselben Versatz
+     * und der Test bestand trotzdem. Erst wenn der Massstab nicht 1 ist,
+     * trennt die Messung die beiden Räume.
+     */
+    buffer: fleckPng(1280, 960),
+  });
+  await alicePage.getByRole('button', { name: /^Senden \(/ }).click();
+
+  const bild = alicePage.locator('.media-image').first();
+  await expect(bild).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => bild.evaluate((el: HTMLImageElement) => el.naturalWidth), {
+      timeout: 30_000,
+    })
+    .toBeGreaterThan(0);
+
+  await bild.click();
+  await alicePage.getByRole('button', { name: 'Bild bearbeiten' }).click();
+  const leinwand = alicePage.locator('.bild-leinwand');
+  await expect(leinwand).toBeVisible({ timeout: 30_000 });
+
+  /** Die mittlere Helligkeit in einem Rechteck der Leinwand, in Anteilen. */
+  const helligkeitIn = async (u0: number, v0: number, u1: number, v1: number) =>
+    leinwand.evaluate(
+      (el, r: { u0: number; v0: number; u1: number; v1: number }) => {
+        const c = el as HTMLCanvasElement;
+        const ctx = c.getContext('2d');
+        if (!ctx) return -1;
+        const x = Math.round(r.u0 * c.width);
+        const y = Math.round(r.v0 * c.height);
+        const w = Math.max(1, Math.round((r.u1 - r.u0) * c.width));
+        const h = Math.max(1, Math.round((r.v1 - r.v0) * c.height));
+        const d = ctx.getImageData(x, y, w, h).data;
+        let summe = 0;
+        for (let i = 0; i < d.length; i += 4) summe += (d[i] + d[i + 1] + d[i + 2]) / 3;
+        return summe / (d.length / 4);
+      },
+      { u0, v0, u1, v1 },
+    );
+
+  /*
+   * Erst drehen, dann stempeln.
+   *
+   * Ohne Drehung fallen Ansichts- und Originalraum zusammen: `ansichtsPunkt`
+   * teilt bereits durch den Massstab, also liefert `nachOriginal` dasselbe
+   * zurück, und eine im falschen Raum gemerkte Quelle bestünde den Test.
+   * Gedreht trennen sich die beiden, und die Umrechnung wird zur Bedingung.
+   */
+  await alicePage.getByRole('button', { name: '↻ Rechts' }).click();
+  await alicePage.waitForTimeout(200);
+
+  await alicePage.getByRole('button', { name: /Malen$/ }).click();
+  await alicePage.getByRole('button', { name: /Stempel/ }).click();
+
+  /*
+   * Nach der Vierteldrehung nach rechts steht das Bild quer.
+   *
+   * Ein Originalpunkt (ox, oy) liegt danach in der Ansicht bei
+   * (H − oy, ox), bezogen auf die Originalhöhe H. Der Fleck (x 0,55…0,80;
+   * y 0,62…0,78) landet damit bei u 0,22…0,38 und v 0,55…0,80 – und die
+   * helle obere Hälfte des Originals liegt in der Ansicht RECHTS, bei
+   * u > 0,5.
+   */
+  const vorher = await helligkeitIn(0.25, 0.6, 0.35, 0.75);
+  expect(vorher).toBeLessThan(80);
+
+  /*
+   * Das Rechteck der Leinwand ERST JETZT holen: Die Werkzeugwahl blendet eine
+   * andere Bedienleiste ein, und die Leinwand bekommt dadurch eine andere
+   * Höhe. Ein vorher gemerkter Kasten zeigt dann neben das Bild – so lief die
+   * erste Fassung dieses Tests ins Leere, und zwar lautlos.
+   */
+  const kasten = (await leinwand.boundingBox())!;
+  expect(kasten).not.toBeNull();
+
+  /*
+   * Erst die Quelle auf die saubere Fläche links, dann über den Fleck malen.
+   * Der Versatz ergibt sich aus beidem: Gelesen wird um denselben Abstand
+   * versetzt, den Quelle und erster Strichpunkt hatten.
+   */
+  const bei = (u: number, v: number) => ({
+    x: kasten.x + u * kasten.width,
+    y: kasten.y + v * kasten.height,
+  });
+
+  // Ein breiter Strich, damit der Fleck in wenigen Zügen gedeckt ist.
+  await alicePage.getByRole('slider', { name: 'Strich' }).fill('60');
+
+  // Die Quelle in die helle Hälfte – die liegt im gedrehten Bild rechts.
+  const quelle = bei(0.75, 0.66);
+  await alicePage.mouse.click(quelle.x, quelle.y);
+  await expect(alicePage.getByText(/Die Quelle steht/)).toBeVisible();
+
+  for (const u of [0.26, 0.3, 0.34]) {
+    await alicePage.mouse.move(bei(u, 0.58).x, bei(u, 0.58).y);
+    await alicePage.mouse.down();
+    await alicePage.mouse.move(bei(u, 0.77).x, bei(u, 0.77).y, { steps: 12 });
+    await alicePage.mouse.up();
+    await alicePage.waitForTimeout(200);
+  }
+
+  /*
+   * Nicht „heller als vorher“, sondern SO hell wie die obere Hälfte.
+   *
+   * Das ist der Unterschied, der die Quelle prüft: Wer irgendwo anders liest,
+   * holt die mittlere Hälfte (110) oder wieder den Fleck – beides bleibt weit
+   * unter 200.
+   */
+  await expect
+    .poll(() => helligkeitIn(0.27, 0.62, 0.33, 0.74), { timeout: 10_000 })
+    .toBeGreaterThan(200);
 });

@@ -265,8 +265,18 @@ export function BildEditor({
    */
   const [verhaeltnis, setVerhaeltnis] = useState<number | null>(startVerhaeltnis ?? null);
   /** Was der Pinsel tut: malen, verpixeln oder verwischen. */
-  const [malart, setMalart] = useState<'farbe' | 'pixel' | 'weich'>('farbe');
+  const [malart, setMalart] = useState<'farbe' | 'pixel' | 'weich' | 'klon'>('farbe');
   const malartRef = useRef(malart);
+  /*
+   * Der Quellpunkt des Klonstempels, in Originalpunkten.
+   *
+   * Erst setzen, dann malen – wie in jedem Bildprogramm. Der Strich merkt
+   * sich daraus einen VERSATZ, keinen festen Punkt: Wer eine Leitung
+   * entlangfährt, nimmt fortlaufend den Himmel daneben, statt immer denselben
+   * Fleck zu stempeln. Ein fester Punkt gäbe eine sichtbar wiederholte Kachel.
+   */
+  const [klonQuelle, setKlonQuelle] = useState<{ x: number; y: number } | null>(null);
+  const klonQuelleRef = useRef(klonQuelle);
   /**
    * Die Lupe: reine Ansicht, nicht Teil des Bildes.
    *
@@ -492,6 +502,10 @@ export function BildEditor({
   useEffect(() => {
     malartRef.current = malart;
   }, [malart]);
+  useEffect(() => {
+    klonQuelleRef.current = klonQuelle;
+    planenRef.current?.();
+  }, [klonQuelle]);
 
   useEffect(() => {
     lupeRef.current = lupe;
@@ -762,6 +776,20 @@ export function BildEditor({
         (Math.max(quellBild.naturalWidth, quellBild.naturalHeight) / 20),
       punkte,
       art: malartRef.current,
+      /*
+       * Der Versatz wird beim ERSTEN Punkt festgelegt und gilt für den ganzen
+       * Strich. So wandert die Quelle mit der Hand mit – zieht man nach
+       * rechts, wandert auch die gelesene Stelle nach rechts, und der
+       * geklonte Bereich bleibt in sich stimmig.
+       */
+      ...(malartRef.current === 'klon' && klonQuelleRef.current
+        ? {
+            quelle: {
+              x: klonQuelleRef.current.x - punkte[0],
+              y: klonQuelleRef.current.y - punkte[1],
+            },
+          }
+        : {}),
     };
   }
 
@@ -911,6 +939,31 @@ export function BildEditor({
     }
 
     if (werkzeugRef.current === 'malen') {
+      /*
+       * Beim Stempel setzt der erste Druck die Quelle, statt zu malen.
+       *
+       * Solange keine Quelle steht, weiss das Werkzeug nicht, woher es lesen
+       * soll – ein Strich wäre dann entweder wirkungslos oder eine Kopie der
+       * Stelle auf sich selbst, also sichtbar nichts. Ein Werkzeug, das beim
+       * ersten Versuch nichts tut, hält man für kaputt. Deshalb ist der erste
+       * Druck die Quellwahl und nicht ein leerer Strich.
+       */
+      if (malartRef.current === 'klon' && !klonQuelleRef.current) {
+        /*
+         * In ORIGINALpunkten merken, nicht in Ansichtspunkten.
+         *
+         * Die Strichpunkte gehen durch `nachOriginal`; der Versatz wird aus
+         * beiden gebildet. Ohne Drehung, Spiegelung und Zuschnitt fallen die
+         * beiden Räume zusammen, und der Unterschied fällt nicht auf – genau
+         * deshalb dreht der Test das Bild, bevor er stempelt. Mit Drehung
+         * läse die Quelle sonst an einer ganz anderen Stelle als der, auf die
+         * getippt wurde.
+         */
+        const amBild = nachOriginal(punkt, W, H, aktuell);
+        setKlonQuelle({ x: amBild.x, y: amBild.y });
+        zug.current = { ...zug.current, art: 'keiner', begonnen: false };
+        return;
+      }
       zug.current = {
         art: 'malen',
         griff: '',
@@ -2713,6 +2766,7 @@ export function BildEditor({
                   ['farbe', '✏️ Malen'],
                   ['pixel', '▦ Verpixeln'],
                   ['weich', '💧 Verwischen'],
+                  ['klon', '🩹 Stempel'],
                 ] as const
               ).map(([wert, beschriftung]) => (
                 <button
@@ -2726,6 +2780,22 @@ export function BildEditor({
                 </button>
               ))}
             </div>
+            {malart === 'klon' && (
+              <p className="bild-hinweis">
+                {klonQuelle
+                  ? 'Die Quelle steht. Mal jetzt über die Stelle, die verschwinden soll – gelesen wird vom gesetzten Punkt aus, im selben Abstand.'
+                  : 'Tipp zuerst auf eine saubere Stelle, von der kopiert werden soll. Danach malst du damit über den Fleck.'}{' '}
+                {klonQuelle && (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => setKlonQuelle(null)}
+                  >
+                    Quelle neu setzen
+                  </button>
+                )}
+              </p>
+            )}
             {malart === 'farbe' && (
               <div className="bild-farben">
                 {FARBEN.map((wert) => (

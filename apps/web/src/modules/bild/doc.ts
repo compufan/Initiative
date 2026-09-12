@@ -45,10 +45,23 @@ export interface Malstrich {
    * oder ein fremdes Gesicht unkenntlich macht, ohne einen schwarzen Balken
    * über das halbe Bild zu ziehen.
    *
+   * `klon` holt Bildpunkte von einer ANDEREN Stelle desselben Bildes herüber –
+   * das Werkzeug, mit dem man einen Fleck, einen Mülleimer oder eine
+   * Stromleitung verschwinden lässt, statt sie nur unkenntlich zu machen.
+   *
    * Wahlfrei, damit vorhandene Striche (und die Tests dazu) unverändert
    * gelten: ohne Angabe wird gemalt.
    */
-  art?: 'farbe' | 'pixel' | 'weich';
+  art?: 'farbe' | 'pixel' | 'weich' | 'klon';
+  /**
+   * Woher `klon` liest – als VERSATZ in Originalpunkten, nicht als fester
+   * Punkt.
+   *
+   * Ein Versatz wandert mit dem Strich mit: Wer eine Leitung entlangfährt,
+   * nimmt fortlaufend den Himmel daneben, statt immer denselben Fleck zu
+   * stempeln. Ein fester Quellpunkt gäbe eine sichtbar wiederholte Kachel.
+   */
+  quelle?: { x: number; y: number };
 }
 
 export interface Schriftzug {
