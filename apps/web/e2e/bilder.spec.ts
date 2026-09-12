@@ -1718,3 +1718,76 @@ test('ein einzelner Strich lässt sich entfernen, ohne alles danach zurückzuneh
 
   await alicePage.context().close();
 });
+
+test('„Vorher" zeigt das unbearbeitete Bild, solange man drückt', async ({ browser }) => {
+  /*
+   * Der Vergleich ist das Werkzeug, mit dem man entscheidet, ob eine
+   * Bearbeitung besser ist. Ohne ihn schiebt man Regler und glaubt. Jede
+   * Vergleichsapp hat ihn; diese hatte ihn nicht.
+   *
+   * Gemessen wird die Leinwand, nicht ein Zustandsflag: „Vorher" muss das
+   * Bild wirklich zurücksetzen und danach wieder freigeben.
+   */
+  const alice = credentials('vgl');
+  const bob = credentials('vglemp');
+  const alicePage = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await alicePage.getByRole('button', { name: 'Neuer Chat' }).click();
+  await alicePage.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await alicePage.getByText(bob.displayName).first().click();
+  await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'grau.png',
+    mimeType: 'image/png',
+    buffer: GRAU_PNG,
+  });
+  await alicePage.getByRole('button', { name: /^Senden \(/ }).click();
+
+  const bild = alicePage.locator('.media-image').first();
+  await expect(bild).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => bild.evaluate((el: HTMLImageElement) => el.naturalWidth), {
+      timeout: 30_000,
+    })
+    .toBeGreaterThan(0);
+
+  await bild.click();
+  await alicePage.getByRole('button', { name: 'Bild bearbeiten' }).click();
+  const leinwand = alicePage.locator('.bild-leinwand');
+  await expect(leinwand).toBeVisible({ timeout: 30_000 });
+
+  const helligkeit = async () =>
+    leinwand.evaluate((el) => {
+      const c = el as HTMLCanvasElement;
+      const ctx = c.getContext('2d');
+      const d = ctx?.getImageData(0, 0, c.width, c.height).data;
+      if (!d) return -1;
+      let summe = 0;
+      for (let i = 0; i < d.length; i += 4) summe += d[i] + d[i + 1] + d[i + 2];
+      return summe / (d.length / 4) / 3;
+    });
+
+  const vorherKnopf = alicePage.getByRole('button', { name: /Original zeigen/ });
+  // Ohne Bearbeitung gibt es nichts zu vergleichen – der Knopf sagt das.
+  await expect(vorherKnopf).toBeDisabled();
+
+  await alicePage.getByRole('button', { name: /Ton$/ }).click();
+  const unbearbeitet = await helligkeit();
+  await alicePage.getByRole('slider', { name: /Belichtung/ }).fill('2');
+  await expect.poll(helligkeit, { timeout: 5_000 }).toBeGreaterThan(unbearbeitet + 50);
+  const bearbeitet = await helligkeit();
+
+  // Halten: das alte Bild.
+  await expect(vorherKnopf).toBeEnabled();
+  await vorherKnopf.hover();
+  await alicePage.mouse.down();
+  await expect.poll(helligkeit, { timeout: 5_000 }).toBeLessThan(unbearbeitet + 10);
+
+  // Loslassen: das neue wieder.
+  await alicePage.mouse.up();
+  await expect.poll(helligkeit, { timeout: 5_000 }).toBeGreaterThan(bearbeitet - 10);
+});

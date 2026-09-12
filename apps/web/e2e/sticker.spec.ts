@@ -792,3 +792,100 @@ test('die Arbeit im Studio geht nicht mehr versehentlich verloren', async ({ bro
   // Zurück im Chat, nicht ausserhalb der App.
   await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible({ timeout: 10_000 });
 });
+
+test('Kontur und Schatten: Farbe, Schatten – und genug Rand für beide', async ({ browser }) => {
+  /*
+   * Der Ablauf für die Kontur – ausweiten, weichzeichnen, einfärben,
+   * darunterlegen – konnte immer schon mehr, als er durfte: Farbe, Versatz
+   * und Stärke standen als feste Zahlen im Zeichencode. Damit gab es genau
+   * einen weissen Rand und keinen Schatten.
+   *
+   * Und `FORM_RAND` stand auf 6, während der Stärkeregler bis 26 geht: Auf
+   * Kreis, Karte und Sprechblase lagen zwanzig Punkte Kontur ausserhalb der
+   * Fläche und wurden abgeschnitten – genau das, was dieser Rand verhindern
+   * sollte.
+   */
+  const alice = credentials('kont');
+  const bob = credentials('kziel');
+  const page = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await page.getByRole('button', { name: 'Neuer Chat' }).click();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await page.getByText(bob.displayName).first().click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await page.getByRole('button', { name: 'Sticker', exact: true }).click();
+  await page.getByRole('button', { name: /Sticker erstellen/ }).click();
+
+  const leinwand = page.locator('.stk-canvas, canvas').first();
+  await expect(leinwand).toBeVisible();
+  await expect
+    .poll(async () => leinwand.evaluate((el: HTMLCanvasElement) => el.width), { timeout: 15_000 })
+    .toBeGreaterThan(200);
+
+  /** Deckung und Farbe an einer Stelle, in Anteilen der Kantenlänge. */
+  const punkt = async (u: number, v: number) =>
+    leinwand.evaluate((el: HTMLCanvasElement, stelle: { u: number; v: number }) => {
+      const ctx = el.getContext('2d');
+      if (!ctx) return { a: -1, r: -1, g: -1, b: -1 };
+      const x = Math.min(el.width - 1, Math.round(stelle.u * el.width));
+      const y = Math.min(el.height - 1, Math.round(stelle.v * el.height));
+      const d = ctx.getImageData(x, y, 1, 1).data;
+      return { r: d[0], g: d[1], b: d[2], a: d[3] };
+    }, { u, v });
+
+  await page.locator('.stk-emoji-btn').first().click();
+  await expect.poll(async () => (await punkt(0.5, 0.5)).a, { timeout: 15_000 }).toBeGreaterThan(200);
+
+  await page.getByRole('tab', { name: 'Kontur' }).click();
+
+  /*
+   * Die Konturfarbe.
+   *
+   * Nicht „steht irgendwo Gelb" – ein Emoji ist selbst gelb, und die erste
+   * Fassung dieses Tests fand genau das. Gemessen wird deshalb DIESELBE
+   * Stelle über einen Farbwechsel hinweg: Erst wird ein Punkt im weissen Saum
+   * gesucht, dann die Kontur auf Schwarz gestellt, und derselbe Punkt muss
+   * dunkel geworden sein. Damit kann kein Bildinhalt den Test bestehen.
+   */
+  const saumPunkt = await (async () => {
+    for (const v of [0.5, 0.4, 0.6]) {
+      for (const u of [0.7, 0.74, 0.78, 0.82, 0.86, 0.9]) {
+        const f = await punkt(u, v);
+        if (f.a > 200 && f.r > 200 && f.g > 200 && f.b > 200) return { u, v };
+      }
+    }
+    return null;
+  })();
+  expect(saumPunkt, 'kein weisser Saum gefunden').not.toBeNull();
+
+  await page.getByRole('button', { name: 'Kontur Schwarz' }).click();
+  await expect
+    .poll(
+      async () => {
+        const f = await punkt(saumPunkt!.u, saumPunkt!.v);
+        return f.a > 150 && f.r < 100 && f.g < 100 && f.b < 100;
+      },
+      { timeout: 10_000 },
+    )
+    .toBe(true);
+
+  // Der Schatten.
+  await page.getByRole('button', { name: /Schatten aus/ }).click();
+  await expect(page.getByRole('button', { name: /Schatten an/ })).toBeVisible();
+  await expect(page.getByRole('slider', { name: 'Weite' })).toBeVisible();
+
+  /*
+   * Genug Rand: Volle Konturstärke auf einer Sprechblase. Ohne den
+   * abgeleiteten Rand schnitte die Fläche den Saum an der Kante ab – dann
+   * stünde am äussersten Bildpunkt der Leinwand noch Farbe. Mit Rand ist die
+   * äusserste Zeile frei.
+   */
+  await page.getByRole('slider', { name: 'Stärke' }).fill('26');
+  await page.getByRole('tab', { name: 'Form' }).click();
+  await page.getByRole('button', { name: /Sprechblase/ }).click();
+  await expect.poll(async () => (await punkt(0.5, 0.06)).a, { timeout: 10_000 }).toBeGreaterThan(0);
+  // Die äusserste Zeile bleibt frei – die Form endet davor.
+  expect((await punkt(0.5, 0.999)).a).toBeLessThan(30);
+  expect((await punkt(0.999, 0.5)).a).toBeLessThan(30);
+});

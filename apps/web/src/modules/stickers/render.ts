@@ -236,6 +236,13 @@ export interface StickerDoc {
   formFuellung: string | null;
   outline: boolean;
   outlineWidth: number;
+  /** Die Farbe des Saums. Weiss ist der klassische Sticker-Rand. */
+  outlineColor: string;
+  /**
+   * Ein Schlagschatten – derselbe Ablauf wie die Kontur, nur versetzt,
+   * dunkel und schwächer. `null` heisst: keiner.
+   */
+  schatten: { farbe: string; x: number; y: number; weite: number } | null;
   strokes: Stroke[];
   texte: StickerText[];
 }
@@ -267,6 +274,8 @@ export function createDoc(): StickerDoc {
     formFuellung: null,
     outline: true,
     outlineWidth: 10,
+    outlineColor: '#ffffff',
+    schatten: null,
     strokes: [],
     texte: [],
   };
@@ -584,8 +593,43 @@ function blurAlpha(mask: Uint8Array, width: number, height: number, radius: numb
   return result;
 }
 
-/** Puts a soft white sticker border underneath whatever is on the canvas. */
-function applyOutline(canvas: HTMLCanvasElement, radius: number): void {
+/** Eine Farbe als `#rrggbb` in ihre drei Kanäle. */
+function farbkanaele(farbe: string): [number, number, number] {
+  const kurz = /^#([0-9a-f])([0-9a-f])([0-9a-f])$/i.exec(farbe);
+  if (kurz) {
+    return [
+      parseInt(kurz[1] + kurz[1], 16),
+      parseInt(kurz[2] + kurz[2], 16),
+      parseInt(kurz[3] + kurz[3], 16),
+    ];
+  }
+  const lang = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(farbe);
+  if (lang) {
+    return [parseInt(lang[1], 16), parseInt(lang[2], 16), parseInt(lang[3], 16)];
+  }
+  // Unbekannte Schreibweise: weiss, wie es immer war.
+  return [255, 255, 255];
+}
+
+/**
+ * Legt einen weichen Saum unter das, was auf der Fläche steht.
+ *
+ * # Was hier dazugekommen ist
+ *
+ * Der Ablauf – ausweiten, weichzeichnen, einfärben, darunterlegen – stand
+ * schon; fest verdrahtet waren nur Farbe (weiss), Versatz (keiner) und der
+ * Verstärkungsfaktor. Damit konnte die Kontur genau eines: einen weissen
+ * Sticker-Rand. Derselbe Ablauf mit einer Farbe, einem Versatz und weniger
+ * Verstärkung ist ein Schlagschatten – das zweite Ding, das jede Sticker-App
+ * kann und das hier nur an drei Zahlen scheiterte.
+ */
+function applyOutline(
+  canvas: HTMLCanvasElement,
+  radius: number,
+  farbe = '#ffffff',
+  versatz: { x: number; y: number } = { x: 0, y: 0 },
+  verstaerkung = 1.8,
+): void {
   const ctx = canvas.getContext('2d');
   if (!ctx || radius < 1) return;
   const { width, height } = canvas;
@@ -603,13 +647,14 @@ function applyOutline(canvas: HTMLCanvasElement, radius: number): void {
   const dilated = dilateAlpha(alpha, width, height, radius);
   const soft = blurAlpha(dilated, width, height, Math.max(1, Math.round(radius / 3)));
 
+  const [r, g, b] = farbkanaele(farbe);
   const outline = new ImageData(width, height);
   for (let i = 0; i < soft.length; i += 1) {
     const at = i * 4;
-    outline.data[at] = 255;
-    outline.data[at + 1] = 255;
-    outline.data[at + 2] = 255;
-    outline.data[at + 3] = Math.min(255, Math.round(soft[i] * 1.8));
+    outline.data[at] = r;
+    outline.data[at + 1] = g;
+    outline.data[at + 2] = b;
+    outline.data[at + 3] = Math.min(255, Math.round(soft[i] * verstaerkung));
   }
 
   const layer = document.createElement('canvas');
@@ -617,7 +662,9 @@ function applyOutline(canvas: HTMLCanvasElement, radius: number): void {
   layer.height = height;
   const layerCtx = layer.getContext('2d');
   if (!layerCtx) return;
-  layerCtx.putImageData(outline, 0, 0);
+  // Der Versatz gilt dem SAUM, nicht dem Motiv: Der Schatten wandert, das
+  // Bild bleibt stehen. Andersherum sähe es aus, als rutsche der Sticker.
+  layerCtx.putImageData(outline, Math.round(versatz.x), Math.round(versatz.y));
   layerCtx.drawImage(canvas, 0, 0);
 
   ctx.clearRect(0, 0, width, height);
@@ -1050,13 +1097,55 @@ function drawSource(ctx: CanvasRenderingContext2D, source: EditorSource, doc: St
 }
 
 /**
- * Der Rand, den jede Form freilässt.
+ * Der kleinste Rand, den jede Form freilässt.
  *
  * Ohne ihn stiesse die Form an die Kante der Fläche, und die Kontur, die
  * danach nach aussen wächst, hätte keinen Platz mehr – der Sticker bekäme
  * eine an drei Seiten abgeschnittene Umrandung.
+ *
+ * Sechs war zu wenig, und zwar nachweisbar: Der Regler für die Konturstärke
+ * geht bis 26. Wer ihn aufdrehte, bekam auf Kreis, Karte oder Sprechblase
+ * genau die abgeschnittene Umrandung, die dieser Rand verhindern soll –
+ * zwanzig Punkte davon lagen ausserhalb der Fläche. Die Zahl war eine
+ * Schätzung, wo eine Ableitung hingehört: `formRand` rechnet sie aus dem
+ * aus, was wirklich Platz braucht.
  */
 const FORM_RAND = 6;
+
+/**
+ * Wieviel Rand diese Fassung des Dokuments wirklich braucht.
+ *
+ * Kontur und Schatten wachsen beide nach aussen; der Schatten zusätzlich um
+ * seinen Versatz. Gedeckelt auf ein Viertel der Kante, damit ein
+ * übertriebener Schatten nicht den ganzen Sticker zusammenschnurren lässt.
+ */
+function formRand(doc: StickerDoc): number {
+  /*
+   * Wie weit ein Saum wirklich reicht.
+   *
+   * `applyOutline` weitet um `w` aus und zeichnet das Ergebnis DANACH mit
+   * `w/3` weich – der Saum endet also nicht bei `w`, sondern rund ein Drittel
+   * weiter. Wer nur `w` freilässt, schneidet genau diesen weichen Ausklang
+   * ab, und die Kante sieht abgehackt statt weich aus. (Erst gemessen, dann
+   * gerechnet: Bei Stärke 26 stand am äussersten Bildpunkt noch volle Farbe.)
+   */
+  const reichweite = (w: number) => Math.ceil((w * 4) / 3) + 2;
+  const kontur = doc.outline ? reichweite(doc.outlineWidth) : 0;
+  const schatten = doc.schatten
+    ? reichweite(doc.schatten.weite) +
+      Math.max(Math.abs(doc.schatten.x), Math.abs(doc.schatten.y))
+    : 0;
+  /*
+   * Die beiden ADDIEREN sich, sie stehen nicht nebeneinander.
+   *
+   * Der Schatten wird aus der Fläche gerechnet, die die Kontur schon
+   * vergrössert hat – er wächst also nicht vom Motiv aus, sondern vom Rand
+   * der Kontur. Das Maximum der beiden zu nehmen war die naheliegende und
+   * falsche Rechnung: Bei Stärke 26 plus Schatten stand am äussersten
+   * Bildpunkt weiterhin Farbe, nur etwas weniger.
+   */
+  return Math.min(STICKER_SIZE / 4, Math.max(FORM_RAND, kontur + schatten));
+}
 
 /** Ein abgerundetes Rechteck als Pfad – ohne `roundRect`, das ist jünger. */
 function abgerundet(
@@ -1110,9 +1199,13 @@ export function hatFreistellung(doc: StickerDoc): boolean {
   );
 }
 
-export function formPfad(ctx: CanvasRenderingContext2D, shape: ShapeKind): boolean {
+export function formPfad(
+  ctx: CanvasRenderingContext2D,
+  shape: ShapeKind,
+  rand = FORM_RAND,
+): boolean {
   const s = STICKER_SIZE;
-  const r = FORM_RAND;
+  const r = rand;
   if (shape === 'circle') {
     ctx.beginPath();
     ctx.arc(s / 2, s / 2, s / 2 - r, 0, Math.PI * 2);
@@ -1152,11 +1245,12 @@ function formFuellen(
   ctx: CanvasRenderingContext2D,
   shape: ShapeKind,
   farbe: string | null,
+  rand: number,
 ): void {
   if (!farbe) return;
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  if (formPfad(ctx, shape)) {
+  if (formPfad(ctx, shape, rand)) {
     ctx.globalCompositeOperation = 'destination-over';
     ctx.fillStyle = farbe;
     ctx.fill();
@@ -1164,10 +1258,10 @@ function formFuellen(
   ctx.restore();
 }
 
-function applyShape(ctx: CanvasRenderingContext2D, shape: ShapeKind): void {
+function applyShape(ctx: CanvasRenderingContext2D, shape: ShapeKind, rand: number): void {
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  const gibtEs = formPfad(ctx, shape);
+  const gibtEs = formPfad(ctx, shape, rand);
   if (gibtEs) {
     ctx.globalCompositeOperation = 'destination-in';
     ctx.fillStyle = '#000000';
@@ -1707,20 +1801,45 @@ export function renderSticker(
     if (zeigeAuswahl && doc.autoMask) markiereAbgewaehltes(ctx, source, doc, doc.autoMask);
   }
 
-  applyShape(ctx, doc.shape);
+  const rand = formRand(doc);
+  applyShape(ctx, doc.shape, rand);
   applyStrokes(ctx, doc.strokes, original, source, doc);
   // Nach dem Radieren, nicht davor: Der Radiergummi gilt dem Motiv, nicht
   // dem Körper der Blase – wer im Blaseninneren radiert, will das Bild
   // wegnehmen und kein Loch in die Blase schneiden.
-  formFuellen(ctx, doc.shape, doc.formFuellung);
+  formFuellen(ctx, doc.shape, doc.formFuellung, rand);
 
+  /*
+   * Erst die Kontur, dann der Schatten – in dieser Reihenfolge, und das ist
+   * kein Geschmack.
+   *
+   * `applyOutline` liest die Deckung der FLÄCHE und legt das Ergebnis
+   * darunter. Läuft der Schatten zuerst, enthält die Deckung ihn danach, und
+   * die Kontur zöge ihren Rand um Motiv UND Schatten – ein weisser Saum um
+   * einen Schatten ist nichts, was jemand haben will.
+   *
+   * Andersherum stimmt beides: Der Schatten wird aus der Silhouette samt
+   * Kontur gerechnet, also aus dem Umriss des fertigen Stickers, und landet
+   * zuunterst.
+   */
   if (!options.fast && doc.outline && doc.outlineWidth > 0) {
-    applyOutline(canvas, Math.round(doc.outlineWidth));
+    applyOutline(canvas, Math.round(doc.outlineWidth), doc.outlineColor);
+  }
+  if (!options.fast && doc.schatten && doc.schatten.weite > 0) {
+    applyOutline(
+      canvas,
+      Math.round(doc.schatten.weite),
+      doc.schatten.farbe,
+      { x: doc.schatten.x, y: doc.schatten.y },
+      // Schwächer als die Kontur: Ein Schatten mit voller Deckkraft ist ein
+      // zweiter Umriss, kein Schatten.
+      0.9,
+    );
   }
 
   // Der Schleier zuletzt: nach der Kontur, damit er nicht umrandet wird, und
   // vor der Schrift, damit die lesbar bleibt.
-  if (schleier) schleierZeichnen(ctx, schleier, doc.shape);
+  if (schleier) schleierZeichnen(ctx, schleier, doc.shape, rand);
 
   for (const text of doc.texte) drawStickerText(ctx, text, STICKER_SIZE);
 }
@@ -1738,6 +1857,7 @@ function schleierZeichnen(
   ctx: CanvasRenderingContext2D,
   weggenommen: ImageData,
   shape: ShapeKind,
+  rand: number,
 ): void {
   const flaeche = schleierflaeche();
   const sctx = flaeche.getContext('2d');
@@ -1756,7 +1876,7 @@ function schleierZeichnen(
   // Der Schleier hält sich an die gewählte Form. Sonst füllte er bei Kreis
   // oder Sprechblase genau die Ecken, die die Form eben weggeschnitten hat –
   // der Sticker sähe wieder quadratisch aus, nur grau.
-  if (formPfad(ctx, shape)) ctx.clip();
+  if (formPfad(ctx, shape, rand)) ctx.clip();
   // `destination-over`: der Schleier legt sich UNTER das schon Gezeichnete.
   // So überdeckt er das Motiv nicht und füllt nur die Lücken.
   ctx.globalCompositeOperation = 'destination-over';

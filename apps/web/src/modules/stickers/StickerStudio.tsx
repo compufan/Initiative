@@ -77,6 +77,24 @@ const TABS: { key: Tab; icon: string; label: string }[] = [
   { key: 'text', icon: '🅣', label: 'Text' },
 ];
 
+/** Die Farben für den Saum. Weiss bleibt der klassische Sticker-Rand. */
+const KONTUR_FARBEN: { wert: string; label: string }[] = [
+  { wert: '#ffffff', label: 'Weiss' },
+  { wert: '#111827', label: 'Schwarz' },
+  { wert: '#fde047', label: 'Gelb' },
+  { wert: '#f43f5e', label: 'Rot' },
+  { wert: '#22d3ee', label: 'Türkis' },
+];
+
+/**
+ * Der Schatten, wenn man ihn einschaltet.
+ *
+ * Nach unten und leicht nach rechts, wie Licht von links oben – die
+ * Blickgewohnheit, auf die jede Oberfläche baut. Weit genug, um zu wirken,
+ * ohne dass es wie ein zweiter Umriss aussieht.
+ */
+const SCHATTEN_VORGABE = { farbe: '#111827', x: 4, y: 8, weite: 12 };
+
 /** Die Farben für die Fläche hinter der Form – wenige, dafür brauchbare. */
 const FORM_FARBEN: { wert: string; label: string }[] = [
   { wert: '#ffffff', label: 'Weiss' },
@@ -838,7 +856,23 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     lastCommit.current = { label: '', at: 0 };
     setCanUndo(false);
     setSource(next);
-    setDoc(createDoc());
+    /*
+     * Was am BILD hängt, geht; was am STICKER hängt, bleibt.
+     *
+     * Freistellung, Tipps und Striche beziehen sich auf das alte Motiv und
+     * wären auf einem neuen sinnlos – die müssen weg. Form, Kontur und die
+     * Fläche dahinter sind dagegen Entscheidungen über den fertigen Sticker,
+     * nicht über das Bild darin. Sie mitzulöschen hiess: Wer erst „Sprechblase"
+     * wählte und dann sein Foto aussuchte, stand wieder beim Quadrat, ohne
+     * dass ihm jemand gesagt hätte, warum.
+     */
+    setDoc((alt) => ({
+      ...createDoc(),
+      shape: alt.shape,
+      formFuellung: alt.formFuellung,
+      outline: alt.outline,
+      outlineWidth: alt.outlineWidth,
+    }));
     setTool('move');
     setLupe({ zoom: 1, x: STICKER_SIZE / 2, y: STICKER_SIZE / 2 });
     // Die Messzeile gehört zum Lauf auf dem alten Bild. Bliebe sie stehen,
@@ -2521,6 +2555,91 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
               />
               <span className="stk-slider-value">{doc.outlineWidth}</span>
             </label>
+
+            {/*
+                Die Farbe des Saums. Der Ablauf konnte sie immer – sie stand
+                nur als `255,255,255` fest im Zeichencode.
+            */}
+            {doc.outline && (
+              <div className="stk-btn-row">
+                {KONTUR_FARBEN.map((farbe) => (
+                  <button
+                    key={farbe.wert}
+                    type="button"
+                    aria-label={`Kontur ${farbe.label}`}
+                    className={`stk-farbknopf ${doc.outlineColor === farbe.wert ? 'is-active' : ''}`}
+                    style={{ background: farbe.wert }}
+                    onClick={() => {
+                      commit();
+                      setDoc((value) => ({ ...value, outlineColor: farbe.wert }));
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/*
+                Der Schatten: derselbe Ablauf wie die Kontur, nur versetzt und
+                dunkel. Er hebt den Sticker von einem unruhigen Hintergrund ab,
+                wo ein weisser Rand allein untergeht.
+            */}
+            <div className="stk-btn-row">
+              <button
+                type="button"
+                className={`btn btn-sm ${doc.schatten ? 'stk-chip-active' : ''}`}
+                onClick={() => {
+                  commit();
+                  setDoc((value) => ({
+                    ...value,
+                    schatten: value.schatten ? null : { ...SCHATTEN_VORGABE },
+                  }));
+                }}
+              >
+                🌑 Schatten {doc.schatten ? 'an' : 'aus'}
+              </button>
+            </div>
+            {doc.schatten && (
+              <>
+                <label className="stk-slider">
+                  <span>Weite</span>
+                  <input
+                    type="range"
+                    min={2}
+                    max={40}
+                    value={doc.schatten.weite}
+                    onChange={(event) => {
+                      commit('schatten-weite');
+                      const weite = Number(event.target.value);
+                      setDoc((value) => ({
+                        ...value,
+                        schatten: value.schatten ? { ...value.schatten, weite } : value.schatten,
+                      }));
+                    }}
+                  />
+                  <span className="stk-slider-value">{doc.schatten.weite}</span>
+                </label>
+                <label className="stk-slider">
+                  <span>Versatz</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={30}
+                    value={doc.schatten.y}
+                    onChange={(event) => {
+                      commit('schatten-versatz');
+                      const versatz = Number(event.target.value);
+                      setDoc((value) => ({
+                        ...value,
+                        schatten: value.schatten
+                          ? { ...value.schatten, x: Math.round(versatz / 2), y: versatz }
+                          : value.schatten,
+                      }));
+                    }}
+                  />
+                  <span className="stk-slider-value">{doc.schatten.y}</span>
+                </label>
+              </>
+            )}
           </>
         )}
 

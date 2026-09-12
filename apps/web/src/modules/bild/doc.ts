@@ -538,3 +538,26 @@ export function weiterdrehen(drehung: Drehung, schritte: number): Drehung {
   const grad = (((drehung / 90 + schritte) % 4) + 4) % 4;
   return (grad * 90) as Drehung;
 }
+
+/**
+ * Dasselbe Bild, nur ohne Bearbeitung – für den Vorher-Vergleich.
+ *
+ * # Was bleibt und was geht
+ *
+ * Der Zuschnitt bleibt, ebenso Drehung, Neigung und Spiegelung. Wer ein
+ * Hochformat zurechtgeschnitten hat und dann auf „Vorher“ drückt, will nicht,
+ * dass ihm das ganze Bild entgegenspringt – er will denselben Ausschnitt ohne
+ * die Regler. Genau so machen es Lightroom und Snapseed, und aus demselben
+ * Grund: Ein Vergleich, bei dem das Bild springt, vergleicht nichts.
+ *
+ * Alles andere geht: Tonwerte, örtliche Bereiche, Striche, Schrift.
+ */
+export function docOhneBearbeitung(doc: BildDoc): BildDoc {
+  return {
+    ...doc,
+    striche: [],
+    texte: [],
+    bereiche: [],
+    anpassung: { ...NEUTRAL },
+  };
+}

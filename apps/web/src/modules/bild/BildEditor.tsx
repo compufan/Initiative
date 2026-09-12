@@ -17,6 +17,7 @@ import {
   aufVerhaeltnis,
   docKopie,
   docUnberuehrt,
+  docOhneBearbeitung,
   nachAnsicht,
   nachOriginal,
   neuesDoc,
@@ -451,6 +452,42 @@ export function BildEditor({
     return { klein: Math.max(8, kante / 60), gross: kante / 3 };
   }, [bild]);
 
+  /*
+   * „Vorher“ – halten, um das unbearbeitete Bild zu sehen.
+   *
+   * Der Vergleich ist das Werkzeug, mit dem man entscheidet, ob eine
+   * Bearbeitung besser ist; ohne ihn schiebt man Regler und glaubt. Jede
+   * Vergleichsapp hat ihn, diese hatte ihn nicht.
+   *
+   * Als Ref UND als Zustand: Der Ref wird beim Zeichnen gelesen (das läuft
+   * ausserhalb von React), der Zustand färbt den Knopf.
+   */
+  const vergleichRef = useRef(false);
+  const [vergleich, setVergleich] = useState(false);
+  /**
+   * Gibt es überhaupt eine Bearbeitung zu vergleichen?
+   *
+   * Ohne das wäre „Vorher" bei einem frisch geöffneten Bild ein Knopf, der
+   * sichtbar nichts tut – und ein Knopf, der nichts tut, ist schlimmer als
+   * keiner. Der Zuschnitt zählt hier NICHT: Er bleibt im Vergleich stehen
+   * (siehe `docOhneBearbeitung`), also gäbe es auch nichts zu sehen.
+   */
+  const hatBearbeitung = useMemo(() => {
+    if (!doc) return false;
+    return (
+      !istNeutral(doc.anpassung) ||
+      doc.bereiche.length > 0 ||
+      doc.striche.length > 0 ||
+      doc.texte.length > 0
+    );
+  }, [doc]);
+
+  const vergleichSetzen = useCallback((an: boolean) => {
+    vergleichRef.current = an;
+    setVergleich(an);
+    planenRef.current?.();
+  }, []);
+
   const planenRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     malartRef.current = malart;
@@ -466,19 +503,28 @@ export function BildEditor({
     const quellBild = bildRef.current;
     const aktuell = docRef.current;
     if (!canvas || !quellBild || !aktuell) return;
+    /*
+     * Beim Vergleich dasselbe Bild ohne Bearbeitung – und ohne Beiwerk.
+     *
+     * Der Zuschnitt bleibt (siehe `docOhneBearbeitung`), Griffe und
+     * Maskenschleier gehen weg: Wer vergleicht, will zwei Bilder sehen und
+     * nicht zwei Bilder mit Werkzeugkram darüber.
+     */
+    const vergleich = vergleichRef.current;
+    const gezeigt = vergleich ? docOhneBearbeitung(aktuell) : aktuell;
     const mass = zeichneAnsicht(
       canvas,
       quellBild,
       quellBild.naturalWidth,
       quellBild.naturalHeight,
-      aktuell,
+      gezeigt,
       {
         maxKante: ansichtsKante(),
-        zuschnittZeigen: werkzeugRef.current === 'zuschnitt',
+        zuschnittZeigen: !vergleich && werkzeugRef.current === 'zuschnitt',
         zoom: lupeRef.current.zoom,
         versatz: { x: lupeRef.current.x, y: lupeRef.current.y },
         bereichZeigen:
-          werkzeugRef.current === 'bereich'
+          !vergleich && werkzeugRef.current === 'bereich'
             ? {
                 maske: bereichMaske(aktuell, quellBild.naturalWidth, quellBild.naturalHeight),
                 teil: teilFinden(aktuell),
@@ -1884,6 +1930,36 @@ export function BildEditor({
           aria-label="Wiederherstellen"
         >
           ↻
+        </button>
+        {/*
+            „Vorher“ – halten, nicht umschalten.
+
+            Halten ist die richtige Geste dafür: Man will das alte Bild sehen,
+            solange man hinsieht, und danach wieder das neue. Ein Umschalter
+            liesse einen versehentlich im Vorher-Zustand weiterarbeiten, und
+            dann wundert man sich, warum die Regler nichts tun.
+
+            Deshalb auch `onPointerLeave` und `onPointerCancel`: Wer mit dem
+            Finger vom Knopf rutscht, bekommt sonst nie wieder sein
+            bearbeitetes Bild zu sehen.
+        */}
+        <button
+          type="button"
+          className={`btn btn-sm ${vergleich ? 'is-active' : ''}`}
+          aria-label="Original zeigen, solange gedrückt"
+          aria-pressed={vergleich}
+          disabled={!doc || !hatBearbeitung}
+          onPointerDown={() => vergleichSetzen(true)}
+          onPointerUp={() => vergleichSetzen(false)}
+          onPointerLeave={() => vergleichSetzen(false)}
+          onPointerCancel={() => vergleichSetzen(false)}
+          onKeyDown={(ereignis) => {
+            if (ereignis.key === ' ' || ereignis.key === 'Enter') vergleichSetzen(true);
+          }}
+          onKeyUp={() => vergleichSetzen(false)}
+          onBlur={() => vergleichSetzen(false)}
+        >
+          👁 Vorher
         </button>
         {/* Nur sichtbar, wenn herangezoomt ist – ein Knopf, der immer „1×“
             sagt, ist Zierrat. Antippen setzt zurück. */}
