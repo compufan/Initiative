@@ -1965,3 +1965,69 @@ test('der Stempel holt Bildpunkte von woanders – ein Fleck verschwindet', asyn
     .poll(() => helligkeitIn(0.27, 0.62, 0.33, 0.74), { timeout: 10_000 })
     .toBeGreaterThan(200);
 });
+
+test('der Fotoeditor fragt, bevor er eine Bearbeitung wegwirft', async ({ browser }) => {
+  /*
+   * Der Editor ging wortlos zu – über das ✕ wie über die Zurück-Geste. Was
+   * dabei verschwand, ist mehr als ein paar Reglerstände: Ein Tiefenmodell
+   * rechnet drei Sekunden, ein Freisteller ebenso, und beides ist danach noch
+   * einmal fällig.
+   *
+   * Ohne Bearbeitung wird NICHT gefragt: Eine Frage mit nur einer sinnvollen
+   * Antwort ist keine Frage, sondern eine Hürde.
+   */
+  const alice = credentials('verw');
+  const bob = credentials('vwziel');
+  const alicePage = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await alicePage.getByRole('button', { name: 'Neuer Chat' }).click();
+  await alicePage.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await alicePage.getByText(bob.displayName).first().click();
+  await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'grau.png',
+    mimeType: 'image/png',
+    buffer: GRAU_GROSS_PNG,
+  });
+  await alicePage.getByRole('button', { name: /^Senden \(/ }).click();
+
+  const bild = alicePage.locator('.media-image').first();
+  await expect(bild).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => bild.evaluate((el: HTMLImageElement) => el.naturalWidth), {
+      timeout: 30_000,
+    })
+    .toBeGreaterThan(0);
+
+  await bild.click();
+  await alicePage.getByRole('button', { name: 'Bild bearbeiten' }).click();
+  await expect(alicePage.locator('.bild-leinwand')).toBeVisible({ timeout: 30_000 });
+
+  // Ohne Bearbeitung: keine Frage, der Editor geht einfach zu.
+  await alicePage.locator('.bild-editor, .bild-kopf').getByRole('button', { name: 'Schließen' }).first().click();
+  await expect(alicePage.locator('.bild-leinwand')).toHaveCount(0, { timeout: 10_000 });
+
+  // Noch einmal hinein, diesmal mit einer Änderung.
+  await alicePage.getByRole('button', { name: 'Bild bearbeiten' }).click();
+  await expect(alicePage.locator('.bild-leinwand')).toBeVisible({ timeout: 30_000 });
+  await alicePage.getByRole('button', { name: /Ton$/ }).click();
+  await alicePage.getByRole('slider', { name: /Belichtung/ }).fill('1');
+
+  await alicePage.locator('.bild-editor, .bild-kopf').getByRole('button', { name: 'Schließen' }).first().click();
+  await expect(alicePage.getByText('Bearbeitung verwerfen?')).toBeVisible({ timeout: 10_000 });
+
+  // „Weiter bearbeiten" lässt alles stehen.
+  await alicePage.getByRole('button', { name: 'Weiter bearbeiten' }).click();
+  await expect(alicePage.getByText('Bearbeitung verwerfen?')).toHaveCount(0);
+  await expect(alicePage.getByRole('slider', { name: /Belichtung/ })).toHaveValue('1');
+
+  // Und die Zurück-Geste fragt dasselbe.
+  await alicePage.goBack();
+  await expect(alicePage.getByText('Bearbeitung verwerfen?')).toBeVisible({ timeout: 10_000 });
+  await alicePage.getByRole('button', { name: 'Verwerfen' }).click();
+  await expect(alicePage.locator('.bild-leinwand')).toHaveCount(0, { timeout: 10_000 });
+});

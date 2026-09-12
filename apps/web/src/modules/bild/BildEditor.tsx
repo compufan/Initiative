@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { dialogAnmelden } from '../../lib/dialogVerlauf.js';
+import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 import { herunterladen } from '../../lib/herunterladen.js';
 import { toast, useHideNav } from '../../state/ui.js';
 import { errorMessage, loadImageFromBlob } from '../stickers/helpers.js';
@@ -300,6 +301,7 @@ export function BildEditor({
    * `netzVerfuegbar` allein genügt dafür nicht – es fragt nur den Schalter
    * und ob es WebAssembly gibt, nicht ob eine Grafikeinheit da ist.
    */
+  const [schliessFrage, setSchliessFrage] = useState(false);
   const [grafikAus, setGrafikAus] = useState<{ grund: string } | null>(null);
   /* Zählt hoch, wenn ein Verfahren von hier aus eingeschaltet wurde: Die
      Einstellung liegt im Gerätespeicher und nicht im Zustand, also braucht
@@ -579,8 +581,42 @@ export function BildEditor({
     planen();
   }, [werkzeug, bereichId, teilId, planen]);
 
+  /*
+   * Schliessen fragt nach, wenn etwas zu verlieren ist.
+   *
+   * Der Editor ging bisher wortlos zu – über das ✕ wie über die
+   * Zurück-Geste. Was dabei verschwand, ist mehr als ein paar Reglerstände:
+   * Ein Tiefenmodell rechnet drei Sekunden, ein Freisteller ebenso, und
+   * beides ist danach noch einmal fällig. Dieselbe Rückfrage wie im
+   * Sticker-Studio, aus demselben Grund.
+   *
+   * Gefragt wird nur, wenn es etwas zu verlieren gibt: `hatBearbeitung`
+   * deckt Regler, Bereiche, Striche und Schrift ab, der Zuschnitt kommt hier
+   * dazu – er ist beim Vergleich zwar keine Änderung, beim Verwerfen aber
+   * sehr wohl eine.
+   */
+  const etwasZuVerlieren = useCallback(() => {
+    if (!docRef.current) return false;
+    const d = docRef.current;
+    return (
+      hatBearbeitung ||
+      d.drehung !== 0 ||
+      d.neigung !== 0 ||
+      d.spiegel ||
+      kannZurueck
+    );
+  }, [hatBearbeitung, kannZurueck]);
+
+  const schliessenVersuchen = useCallback(() => {
+    if (!etwasZuVerlieren()) {
+      onClose();
+      return;
+    }
+    setSchliessFrage(true);
+  }, [etwasZuVerlieren, onClose]);
+
   // Zurück-Taste schliesst den Editor, statt aus der App zu fallen.
-  useEffect(() => dialogAnmelden(onClose), [onClose]);
+  useEffect(() => dialogAnmelden(schliessenVersuchen), [schliessenVersuchen]);
 
   useEffect(() => {
     let weg = false;
@@ -1962,7 +1998,12 @@ export function BildEditor({
   return createPortal(
     <div className="bild-editor" role="dialog" aria-modal="true" aria-label="Bild bearbeiten">
       <header className="bild-kopf">
-        <button type="button" className="icon-btn" onClick={onClose} aria-label="Schließen">
+        <button
+          type="button"
+          className="icon-btn"
+          onClick={schliessenVersuchen}
+          aria-label="Schließen"
+        >
           ✕
         </button>
         <strong className="truncate">Bild bearbeiten</strong>
@@ -3054,6 +3095,20 @@ export function BildEditor({
           </p>
         )}
       </div>
+
+      <ConfirmDialog
+        open={schliessFrage}
+        title="Bearbeitung verwerfen?"
+        description="Regler, Bereiche, Striche und Schrift gehen verloren. Ein Modelllauf, der schon gerechnet hat, ist danach noch einmal fällig."
+        confirmLabel="Verwerfen"
+        cancelLabel="Weiter bearbeiten"
+        danger
+        onCancel={() => setSchliessFrage(false)}
+        onConfirm={() => {
+          setSchliessFrage(false);
+          onClose();
+        }}
+      />
     </div>,
     document.body,
   );
