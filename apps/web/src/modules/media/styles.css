@@ -787,3 +787,44 @@
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
   cursor: pointer;
 }
+
+/*
+ * Die zweite Blase eines Rezepts.
+ *
+ * Sie hängt unter dem Bild und sieht ausdrücklich NICHT wie das Bild aus: Sie
+ * ist kein Teil des Fotos, sondern die Anweisung daneben. Deshalb ein eigener
+ * Grund und eine eigene Kante, statt einer Knopfreihe, die über dem Bild
+ * schwebt.
+ */
+.rezept-leiste {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+  /* Umbrechen statt abschneiden: Auf einem schmalen Telefon stehen zwei
+     Knöpfe und zwei Zeilen Text nebeneinander sonst nicht. */
+  flex-wrap: wrap;
+}
+
+.rezept-marke {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.rezept-text {
+  display: flex;
+  flex-direction: column;
+  /* `min-width: 0` und nicht `width: auto`: Ohne das wächst ein langer Satz
+     den Flex-Kasten über die Blasenbreite hinaus, statt umzubrechen. */
+  min-width: 0;
+  flex: 1 1 140px;
+  font-size: 13px;
+}
+
+.rezept-klein {
+  opacity: 0.75;
+  font-size: 12px;
+}

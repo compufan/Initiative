@@ -5,8 +5,13 @@ pub const API_PREFIX: &str = "/api/v1";
 pub const REALTIME_PATH: &str = "/ws";
 pub const PROTOCOL_VERSION: u8 = 1;
 
+/// Muss mit `MESSAGE_TYPES` im gemeinsamen Paket uebereinstimmen.
+///
+/// `rezept` ist ein Foto, dem seine Bearbeitung als Anweisung beiliegt statt
+/// eingerechnet zu sein – siehe `rezept.ts` im Web-Fotoeditor.
 pub const MESSAGE_TYPES: &[&str] = &[
-    "text", "image", "video", "audio", "file", "sticker", "poll", "event", "game", "system",
+    "text", "image", "video", "audio", "file", "sticker", "rezept", "poll", "event", "game",
+    "system",
 ];
 pub const ATTACHMENT_KINDS: &[&str] = &["image", "video", "audio", "file", "sticker"];
 pub const CONVERSATION_TYPES: &[&str] = &["direct", "group"];
@@ -124,6 +129,7 @@ pub fn message_preview(message_type: &str, body: Option<&str>, deleted: bool) ->
         "audio" => "🎤 Sprachnachricht".to_string(),
         "file" => "📎 Datei".to_string(),
         "sticker" => "🌟 Sticker".to_string(),
+        "rezept" => "📷 Foto mit Bearbeitung".to_string(),
         "poll" => "📊 Umfrage".to_string(),
         "event" => "📅 Termin".to_string(),
         "game" => "🎮 Spiel".to_string(),

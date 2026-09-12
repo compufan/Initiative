@@ -4,6 +4,7 @@ import type { MessageRendererProps } from '../types.js';
 import { Lightbox } from './Lightbox.js';
 import { MediaCaption, PendingMedia } from './MediaFrame.js';
 import { buildAttachment, mediaSrc, sendMedia } from './helpers.js';
+import { rezeptSenden } from './RezeptBubble.js';
 import { prepareImage } from '../../lib/upload.js';
 import { toast } from '../../state/ui.js';
 import { MAX_KANTE } from '../bild/doc.js';
@@ -86,6 +87,28 @@ export function ImageBubble({ message, isMine }: MessageRendererProps) {
           index={openIndex}
           onClose={() => setOpenIndex(null)}
           zielName="In den Chat"
+          alsRezept={async (original, rezept, name) => {
+            /*
+             * Das Original geht hinaus, wie es angekommen ist – hier steht
+             * bewusst kein `prepareImage` mit einer eigenen Kante daneben:
+             * `rezeptSenden` macht genau einen Lauf und schreibt die Masse,
+             * die dabei herauskommen, ins Rezept.
+             */
+            const gesendet = await rezeptSenden(
+              message.conversationId,
+              original,
+              rezept,
+              name,
+              images[0],
+            );
+            if (gesendet) {
+              toast(
+                'Liegt im Chat – mit dem Original und der Bearbeitung als Anweisung daneben.',
+                'success',
+              );
+              setOpenIndex(null);
+            }
+          }}
           ablegen={async (blob, name) => {
             // Als neue Nachricht, nicht als Ersatz: Das Original bleibt im
             // Verlauf stehen, wo es steht.

@@ -772,3 +772,28 @@ canvas {
   white-space: nowrap;
   border: 0;
 }
+
+/*
+ * Ein Blatt, aus dem heraus etwas Ganzseitiges aufgegangen ist.
+ *
+ * Die Ebenen oben sind als STAPEL gedacht: Der Betrachter liegt unter der
+ * Werkstatt, weil die Werkstatt aus ihm heraus aufgeht – und das Blatt über
+ * der Werkstatt, weil ein Blatt aus ihr heraus aufgeht. Beim Fotoeditor im
+ * Auswahlblatt läuft es andersherum, und dann stimmt keine feste Zahl mehr:
+ * Der Editor lag mit 75 unter dem Blatt mit 77, also hinter der Dateiliste,
+ * aus der man ihn gerade geöffnet hatte. Man sah ihn nicht und traf ihn
+ * nicht.
+ *
+ * Deshalb tritt das Blatt zur Seite, statt sich vorzudrängeln. Eine höhere
+ * Zahl für die Werkstatt wäre der falsche Weg: Dann läge der
+ * Bestätigungsdialog DES EDITORS wieder darunter.
+ *
+ * `visibility` und nicht `display`: Der Zustand des Blattes bleibt so stehen
+ * – die Auswahl, die Bildunterschrift, die Bildlaufstelle. Mit `display: none`
+ * fiele die Liste zusammen und stünde nach dem Schliessen wieder oben.
+ */
+.sheet.is-beiseite,
+.modal.is-beiseite,
+.backdrop.is-beiseite {
+  visibility: hidden;
+}

@@ -12,6 +12,15 @@ export const MESSAGE_TYPES = [
   'audio',
   'file',
   'sticker',
+  /*
+   * Ein Foto mit seiner Bearbeitung als ANWEISUNG daneben.
+   *
+   * Eigener Typ und nicht `image` mit einem Merker: Wer den Typ nicht kennt,
+   * soll gar nichts zeigen statt das unbearbeitete Original – siehe
+   * `rezept.ts` im Fotoeditor. Ein Merker, den ein Leser übersieht, hiesse
+   * genau das Gegenteil dessen, was der Absender gesehen hat.
+   */
+  'rezept',
   'poll',
   'event',
   'game',

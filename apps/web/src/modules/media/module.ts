@@ -5,6 +5,7 @@ import { FileBubble } from './FileBubble.js';
 import { FileSheet } from './FileSheet.js';
 import { GallerySheet } from './GallerySheet.js';
 import { ImageBubble } from './ImageBubble.js';
+import { RezeptBubble } from './RezeptBubble.js';
 import { VideoBubble } from './VideoBubble.js';
 import { VoiceSheet } from './VoiceSheet.js';
 import './styles.css';
@@ -21,6 +22,7 @@ export default defineWebModule({
   description: 'Kamera, Fotos, Videos, Sprachnachrichten und Dateien im Chat.',
   messageRenderers: {
     image: ImageBubble,
+    rezept: RezeptBubble,
     video: VideoBubble,
     audio: AudioBubble,
     file: FileBubble,

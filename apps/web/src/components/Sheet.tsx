@@ -10,10 +10,28 @@ interface SheetProps {
   actions?: ReactNode;
   /** Centered dialog instead of a bottom sheet (better on wide screens). */
   variant?: 'sheet' | 'modal';
+  /**
+   * Tritt zur Seite, solange aus dem Blatt heraus etwas Ganzseitiges offen
+   * ist – der Fotoeditor zum Beispiel.
+   *
+   * Die Ebenen sind als Stapel gedacht, und beim Editor IM Blatt läuft der
+   * Stapel andersherum als sonst: Das Blatt liegt über der Werkstatt, der
+   * Editor ginge also dahinter auf. Der Zustand des Blattes bleibt dabei
+   * stehen – siehe `.is-beiseite` in `global.css`.
+   */
+  beiseite?: boolean;
 }
 
 /** Bottom sheet / modal with backdrop, escape handling and scroll locking. */
-export function Sheet({ open, onClose, title, children, actions, variant = 'sheet' }: SheetProps) {
+export function Sheet({
+  open,
+  onClose,
+  title,
+  children,
+  actions,
+  variant = 'sheet',
+  beiseite = false,
+}: SheetProps) {
   // Ein `role="dialog"` ohne Beschriftung meldet sich bei einem Screenreader
   // als „Dialog“ und sonst nichts. Der Titel stand bisher in einem schmucklosen
   // `span`, also nirgends, wo eine Vorlesehilfe ihn findet. Als Ueberschrift
@@ -67,7 +85,7 @@ export function Sheet({ open, onClose, title, children, actions, variant = 'shee
        * Klick INS Fenster darf es nicht schliessen.
        */
       <div
-        className="modal"
+        className={beiseite ? 'modal is-beiseite' : 'modal'}
         role="dialog"
         aria-modal="true"
         aria-labelledby={title ? titleId : undefined}
@@ -97,7 +115,7 @@ export function Sheet({ open, onClose, title, children, actions, variant = 'shee
       </div>
     ) : (
       <div
-        className="sheet"
+        className={beiseite ? 'sheet is-beiseite' : 'sheet'}
         role="dialog"
         aria-modal="true"
         aria-labelledby={title ? titleId : undefined}
@@ -121,7 +139,7 @@ export function Sheet({ open, onClose, title, children, actions, variant = 'shee
 
   return createPortal(
     <>
-      <div className="backdrop" onClick={onClose} />
+      <div className={beiseite ? 'backdrop is-beiseite' : 'backdrop'} onClick={onClose} />
       {content}
     </>,
     document.body,

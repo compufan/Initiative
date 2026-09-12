@@ -4,6 +4,7 @@ import { Sheet } from '../../components/Sheet.js';
 import { EmptyState, Spinner } from '../../components/Feedback.js';
 import { prepareImage, videoPreview } from '../../lib/upload.js';
 import { BildBearbeiten } from '../bild/BildBearbeiten.js';
+import { rezeptSenden } from './RezeptBubble.js';
 import type { ComposerActionProps } from '../types.js';
 import { toast } from '../../state/ui.js';
 import {
@@ -49,6 +50,13 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
   const [caption, setCaption] = useState('');
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  /*
+   * Solange der Fotoeditor offen ist, tritt dieses Blatt zur Seite.
+   *
+   * Sonst läge es darüber: Ein Blatt liegt mit Absicht über der Werkstatt,
+   * weil aus der Werkstatt heraus Blätter aufgehen – hier ist es umgekehrt.
+   */
+  const [editorOffen, setEditorOffen] = useState(false);
   const itemsRef = useRef<GalleryItem[]>([]);
 
   useEffect(() => {
@@ -232,7 +240,7 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
   const totalSize = items.reduce((sum, item) => sum + item.size, 0);
 
   return (
-    <Sheet open onClose={onClose} title="Foto oder Video">
+    <Sheet open onClose={onClose} title="Foto oder Video" beiseite={editorOffen}>
       <label className="btn btn-primary btn-block">
         {items.length === 0 ? 'Dateien auswählen' : 'Weitere auswählen'}
         <input
@@ -283,6 +291,32 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
                       className="media-tile-knopf"
                       tipp="Zuschneiden, geraderichten, Licht und Farbe – vor dem Senden"
                       onFertig={(fertig, fertigName) => ersetzen(item.id, fertig, fertigName)}
+                      onOffen={setEditorOffen}
+                      /*
+                       * Nur bei genau EINEM Bild in der Auswahl.
+                       *
+                       * Eine Rezeptnachricht trägt ein Bild und eine
+                       * Anweisung. Bei drei Bildern bliebe offen, zu welchem
+                       * die Anweisung gehört – und der Empfänger sähe zwei
+                       * unbearbeitete Fotos neben einem bearbeiteten.
+                       */
+                      alsRezept={
+                        items.length === 1
+                          ? async (original, rezept, rezeptName) => {
+                              setSending(true);
+                              const ok = await rezeptSenden(
+                                conversationId,
+                                original,
+                                rezept,
+                                rezeptName,
+                                item,
+                                caption,
+                              );
+                              setSending(false);
+                              if (ok) onClose();
+                            }
+                          : undefined
+                      }
                     />
                   </span>
                 )}

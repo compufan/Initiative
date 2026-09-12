@@ -13,6 +13,13 @@ interface FotoWerkstattProps {
    * nichts tut.
    */
   ablegen?: (blob: Blob, name: string) => Promise<void>;
+  /**
+   * Wohin ein REZEPT geht – das unberührte Bild und die Bearbeitung daneben.
+   *
+   * Getrennt von `ablegen`, weil es etwas anderes abgibt: zwei Dateien statt
+   * einer. Fehlt es, gibt es den Knopf im Editor nicht.
+   */
+  alsRezept?: (original: Blob, rezept: Blob, name: string) => Promise<void>;
   /** Was auf dem Speichern-Knopf steht, z. B. „In den Chat“. */
   zielName?: string;
   /** Wird gerufen, sobald eine Werkstatt aufgeht – damit der Betrachter Platz macht. */
@@ -27,7 +34,7 @@ interface FotoWerkstattProps {
  * überschreibt nie das Original. Deshalb steht es hier an einer Stelle und
  * nicht zweimal, einmal im Chat und einmal in den Sammlungen.
  */
-export function FotoWerkstatt({ foto, ablegen, zielName, onOffen }: FotoWerkstattProps) {
+export function FotoWerkstatt({ foto, ablegen, alsRezept, zielName, onOffen }: FotoWerkstattProps) {
   /*
    * Die Bytes MIT ihrer Anhangkennung merken.
    *
@@ -95,6 +102,7 @@ export function FotoWerkstatt({ foto, ablegen, zielName, onOffen }: FotoWerkstat
           name={foto.fileName}
           onClose={schliessen}
           onFertig={ablegen}
+          onRezept={alsRezept}
           zielName={zielName}
         />
       )}

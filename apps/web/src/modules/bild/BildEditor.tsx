@@ -66,6 +66,7 @@ import { engineInfo, firstUseMb } from '../stickers/engines/index.js';
 import type { EngineKey } from '../stickers/engines/types.js';
 import { writeEngineSetting } from '../stickers/engines/settings.js';
 import { SCHRIFTEN, trifftText, zeichneAnsicht, zeichneAusgabe } from './zeichnen.js';
+import { rezeptHindernis, rezeptLohnt, rezeptMoeglich, rezeptSchreiben } from './rezept.js';
 import './styles.css';
 
 type Werkzeug = 'zuschnitt' | 'ton' | 'bereich' | 'malen' | 'text';
@@ -227,6 +228,22 @@ interface BildEditorProps {
    * mittig beschneidet, ohne zu fragen.
    */
   startVerhaeltnis?: number;
+  /**
+   * Ein Dokument, mit dem der Editor aufgeht, statt mit einem leeren.
+   *
+   * Damit lässt sich ein Rezept weiterbearbeiten: Das unberührte Bild kommt
+   * als `quelle`, die Bearbeitung als Dokument – und beides passt zusammen,
+   * weil alles darin in Originalpunkten steht.
+   */
+  startDoc?: BildDoc | null;
+  /**
+   * Wohin ein REZEPT geht: das unberührte Bild und die Anweisung daneben.
+   *
+   * Getrennt von `onFertig`, weil es etwas anderes verschickt – nicht ein
+   * gerechnetes Ergebnis, sondern zwei Dateien. Fehlt es, gibt es den Knopf
+   * nicht; er verspräche sonst etwas, das niemand entgegennimmt.
+   */
+  onRezept?: (original: Blob, rezept: Blob, name: string) => Promise<void> | void;
 }
 
 /** `foto.jpg` → `foto-bearbeitet.webp`. Das Original behält seinen Namen. */
@@ -250,6 +267,8 @@ export function BildEditor({
   onFertig,
   zielName,
   startVerhaeltnis,
+  startDoc,
+  onRezept,
 }: BildEditorProps) {
   useHideNav(true);
 
@@ -598,13 +617,7 @@ export function BildEditor({
   const etwasZuVerlieren = useCallback(() => {
     if (!docRef.current) return false;
     const d = docRef.current;
-    return (
-      hatBearbeitung ||
-      d.drehung !== 0 ||
-      d.neigung !== 0 ||
-      d.spiegel ||
-      kannZurueck
-    );
+    return hatBearbeitung || d.drehung !== 0 || d.neigung !== 0 || d.spiegel || kannZurueck;
   }, [hatBearbeitung, kannZurueck]);
 
   const schliessenVersuchen = useCallback(() => {
@@ -624,7 +637,22 @@ export function BildEditor({
       .then((geladen) => {
         if (weg) return;
         setBild(geladen);
-        const frisch = neuesDoc(geladen.naturalWidth, geladen.naturalHeight);
+        /*
+         * Ein mitgebrachtes Dokument gilt – aber nur, wenn es zu DIESEM Bild
+         * gehört.
+         *
+         * Es kommt aus einem Rezept, also von einem anderen Gerät, und alles
+         * darin steht in Originalpunkten. Passten die Masse nicht, läge jeder
+         * Verlauf, jede Ellipse und jeder Zuschnitt an der falschen Stelle –
+         * und zwar plausibel falsch, nicht sichtbar kaputt.
+         */
+        const passt =
+          startDoc &&
+          startDoc.zuschnitt.x + startDoc.zuschnitt.w <= geladen.naturalWidth &&
+          startDoc.zuschnitt.y + startDoc.zuschnitt.h <= geladen.naturalHeight;
+        const frisch = passt
+          ? docKopie(startDoc)
+          : neuesDoc(geladen.naturalWidth, geladen.naturalHeight);
         if (startVerhaeltnis) {
           verhaeltnisRef.current = startVerhaeltnis;
           frisch.zuschnitt = aufVerhaeltnis(
@@ -647,9 +675,10 @@ export function BildEditor({
     return () => {
       weg = true;
     };
-    // `startVerhaeltnis` gehört bewusst nicht in die Abhängigkeiten: Es gibt
-    // die ANFANGSform vor. Stünde es hier, würde ein Wechsel das Bild neu
-    // laden und jede Bearbeitung wegwerfen.
+    // `startVerhaeltnis` und `startDoc` gehören bewusst nicht in die
+    // Abhängigkeiten: Beide geben den ANFANGSstand vor. Stünden sie hier,
+    // würde ein Wechsel das Bild neu laden und jede Bearbeitung wegwerfen –
+    // und `startDoc` ist ein Objekt, das bei jedem Rahmen neu entsteht.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quelle, onClose]);
 
@@ -1978,6 +2007,32 @@ export function BildEditor({
     }
   }
 
+  /**
+   * Das Rezept: zwei Dateien statt einer.
+   *
+   * Das Bild geht UNVERÄNDERT hinaus – `quelle` selbst, nicht neu gerechnet.
+   * Jede Umkodierung wäre hier ein Widerspruch: Der ganze Sinn ist, dass beim
+   * Empfänger das Original liegt.
+   */
+  async function alsRezept() {
+    if (!onRezept || !bild || !doc) return;
+    const hindernis = rezeptHindernis(doc, bild.naturalWidth, bild.naturalHeight);
+    if (hindernis) {
+      toast(hindernis, 'error');
+      return;
+    }
+    setSpeichert(true);
+    try {
+      const rezept = await rezeptSchreiben(doc, bild.naturalWidth, bild.naturalHeight);
+      await onRezept(quelle, rezept, name ?? 'bild');
+      onClose();
+    } catch (error) {
+      toast(errorMessage(error, 'Das Rezept konnte nicht erzeugt werden'), 'error');
+    } finally {
+      setSpeichert(false);
+    }
+  }
+
   async function inDieApp() {
     if (!onFertig) return;
     setSpeichert(true);
@@ -1994,6 +2049,22 @@ export function BildEditor({
   }
 
   const unberuehrt = bild && doc ? docUnberuehrt(doc, bild.naturalWidth, bild.naturalHeight) : true;
+
+  /*
+   * Warum das Rezept gerade nicht geht – oder null.
+   *
+   * Drei Gründe, und sie sagen Verschiedenes: kein Empfänger (dann gibt es
+   * den Knopf gar nicht), ein Browser ohne `CompressionStream`, oder eine
+   * Bearbeitung, die Bildinhalt entfernt. Nur der letzte ist eine Nachricht
+   * wert – die anderen beiden kann niemand ändern.
+   */
+  const rezeptSperre =
+    !onRezept || !bild || !doc
+      ? ''
+      : !rezeptMoeglich()
+        ? 'Dieser Browser kann keine Rezepte packen.'
+        : (rezeptHindernis(doc, bild.naturalWidth, bild.naturalHeight) ?? '');
+  const rezeptGeht = Boolean(onRezept && bild && doc && rezeptSperre === '' && rezeptLohnt(doc));
 
   return createPortal(
     <div className="bild-editor" role="dialog" aria-modal="true" aria-label="Bild bearbeiten">
@@ -2423,8 +2494,8 @@ export function BildEditor({
             */}
             {!netzVerfuegbar('object') && (
               <p className="bild-hinweis">
-                „Motiv“ ist abgeschaltet und lädt beim ersten Mal{' '}
-                {firstUseMb(engineInfo('object'))} MB.{' '}
+                „Motiv“ ist abgeschaltet und lädt beim ersten Mal {firstUseMb(engineInfo('object'))}{' '}
+                MB.{' '}
                 <button type="button" className="btn btn-sm" onClick={() => einschalten('object')}>
                   Einschalten
                 </button>
@@ -2570,9 +2641,9 @@ export function BildEditor({
                     if (befund === 'ohne-wirkung') {
                       return (
                         <p className="bild-hinweis">
-                          Diese Maske wirkt noch nicht: „{aktivesTeil.modus === 'weg' ? 'Weg' : 'Nur'}
-                          “ nimmt von dem weg, was vorher ausgewählt ist – und davor ist noch
-                          nichts.{' '}
+                          Diese Maske wirkt noch nicht: „
+                          {aktivesTeil.modus === 'weg' ? 'Weg' : 'Nur'}“ nimmt von dem weg, was
+                          vorher ausgewählt ist – und davor ist noch nichts.{' '}
                           <button
                             type="button"
                             className="btn btn-sm"
@@ -2827,11 +2898,7 @@ export function BildEditor({
                   ? 'Die Quelle steht. Mal jetzt über die Stelle, die verschwinden soll – gelesen wird vom gesetzten Punkt aus, im selben Abstand.'
                   : 'Tipp zuerst auf eine saubere Stelle, von der kopiert werden soll. Danach malst du damit über den Fleck.'}{' '}
                 {klonQuelle && (
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    onClick={() => setKlonQuelle(null)}
-                  >
+                  <button type="button" className="btn btn-sm" onClick={() => setKlonQuelle(null)}>
                     Quelle neu setzen
                   </button>
                 )}
@@ -3088,10 +3155,33 @@ export function BildEditor({
               {speichert ? '…' : (zielName ?? 'Als neue Datei sichern')}
             </button>
           )}
+          {rezeptGeht && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => void alsRezept()}
+              disabled={laedt || speichert}
+              title="Das Original mit der Bearbeitung als Anweisung daneben – der Empfänger kann sie weiterdrehen"
+            >
+              🧪 Als Rezept
+            </button>
+          )}
         </div>
         {unberuehrt && !laedt && (
           <p className="bild-hinweis">
             Noch nichts geändert – gespeichert würde eine Kopie des Originals.
+          </p>
+        )}
+        {!unberuehrt && !laedt && onRezept && rezeptSperre !== '' && (
+          <p className="bild-hinweis">
+            <strong>Kein Rezept möglich.</strong> {rezeptSperre} Die Kopie geht wie immer.
+          </p>
+        )}
+        {rezeptGeht && (
+          <p className="bild-hinweis">
+            „Als Rezept“ schickt das <strong>unbearbeitete</strong> Bild und die Bearbeitung als
+            Anweisung daneben. Der Empfänger sieht dasselbe Ergebnis, kann aber das Original ansehen
+            und die Regler weiterschieben.
           </p>
         )}
       </div>

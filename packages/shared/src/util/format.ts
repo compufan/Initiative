@@ -37,6 +37,8 @@ export function messagePreview(message: {
       return '📎 Datei';
     case 'sticker':
       return '🌟 Sticker';
+    case 'rezept':
+      return '📷 Foto mit Bearbeitung';
     case 'poll':
       return '📊 Umfrage';
     case 'event':

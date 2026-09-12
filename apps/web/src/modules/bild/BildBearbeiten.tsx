@@ -7,6 +7,15 @@ interface BildBearbeitenProps {
   name?: string | null;
   /** Bekommt die bearbeitete Fassung. Das Original bleibt unangetastet. */
   onFertig: (blob: Blob, name: string) => Promise<void> | void;
+  /**
+   * Bekommt statt dessen das unberührte Bild UND die Bearbeitung als Rezept.
+   *
+   * Fehlt es, gibt es den Knopf im Editor nicht. Die Auswahlblätter reichen es
+   * nur durch, solange genau EIN Bild in der Auswahl liegt: Ein Rezept gehört
+   * zu einem Bild, und eine Nachricht mit drei Bildern und einer Anweisung
+   * liesse offen, zu welchem.
+   */
+  alsRezept?: (original: Blob, rezept: Blob, name: string) => Promise<void> | void;
   /** Beschriftung des Knopfes. Nur ein Symbol, wenn leer. */
   label?: string;
   /** Was auf dem Speichern-Knopf im Editor steht. */
@@ -17,6 +26,14 @@ interface BildBearbeitenProps {
   className?: string;
   /** Der Tooltip. Sagt, was passiert – nicht, wie der Knopf heisst. */
   tipp?: string;
+  /**
+   * Meldet, ob der Editor gerade offen ist.
+   *
+   * Wer diesen Knopf in ein Blatt setzt, MUSS darauf hören: Ein Blatt liegt
+   * über der Werkstatt, der Editor ginge sonst dahinter auf. Siehe
+   * `.is-beiseite` in `global.css`.
+   */
+  onOffen?: (offen: boolean) => void;
 }
 
 /**
@@ -32,20 +49,28 @@ export function BildBearbeiten({
   blob,
   name,
   onFertig,
+  alsRezept,
   label,
   zielName,
   startVerhaeltnis,
   className,
   tipp,
+  onOffen,
 }: BildBearbeitenProps) {
   const [offen, setOffen] = useState(false);
+
+  // Den Melder an EINER Stelle bedienen, nicht an jedem der vier Wege hinaus.
+  const setzen = (wert: boolean) => {
+    setOffen(wert);
+    onOffen?.(wert);
+  };
 
   return (
     <>
       <button
         type="button"
         className={className ?? 'btn btn-sm'}
-        onClick={() => setOffen(true)}
+        onClick={() => setzen(true)}
         aria-label={label ? undefined : 'Bild bearbeiten'}
         data-tipp={tipp ?? 'Zuschneiden, geraderichten, Licht und Farbe – bevor du es sendest'}
       >
@@ -56,11 +81,19 @@ export function BildBearbeiten({
         <BildEditor
           quelle={blob}
           name={name}
-          onClose={() => setOffen(false)}
+          onClose={() => setzen(false)}
           onFertig={async (fertig, fertigName) => {
             await onFertig(fertig, fertigName);
-            setOffen(false);
+            setzen(false);
           }}
+          onRezept={
+            alsRezept
+              ? async (original, rezept, rezeptName) => {
+                  await alsRezept(original, rezept, rezeptName);
+                  setzen(false);
+                }
+              : undefined
+          }
           zielName={zielName ?? 'Übernehmen'}
           startVerhaeltnis={startVerhaeltnis}
         />

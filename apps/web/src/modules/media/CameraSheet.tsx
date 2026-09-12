@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { BildBearbeiten } from '../bild/BildBearbeiten.js';
+import { rezeptSenden } from './RezeptBubble.js';
 import type { ComposerActionProps } from '../types.js';
 import { prepareImage, videoPreview } from '../../lib/upload.js';
 import { toast, useHideNav } from '../../state/ui.js';
@@ -524,6 +525,20 @@ export function CameraSheet({ conversationId, onClose }: ComposerActionProps) {
                   label="Bearbeiten"
                   tipp="Zuschneiden, geraderichten, Licht und Farbe – bevor du sendest"
                   onFertig={uebernehmen}
+                  alsRezept={async (original, rezept, rezeptName) => {
+                    setSending(true);
+                    const ok = await rezeptSenden(
+                      conversationId,
+                      original,
+                      rezept,
+                      rezeptName,
+                      draft,
+                      caption,
+                    );
+                    if (!aliveRef.current) return;
+                    setSending(false);
+                    if (ok) onClose();
+                  }}
                 />
               )}
               <button

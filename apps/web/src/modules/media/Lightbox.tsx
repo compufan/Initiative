@@ -14,6 +14,7 @@ interface LightboxProps {
    * das Speichern aufs Telefon.
    */
   ablegen?: (blob: Blob, name: string) => Promise<void>;
+  alsRezept?: (original: Blob, rezept: Blob, name: string) => Promise<void>;
   zielName?: string;
 }
 
@@ -47,7 +48,7 @@ function distanceBetween(touches: TouchList): number {
  * Full screen photo viewer: pinch and double tap to zoom, drag to pan, swipe
  * down to close. `touch-action: none` keeps Safari from hijacking the gesture.
  */
-export function Lightbox({ items, index, onClose, ablegen, zielName }: LightboxProps) {
+export function Lightbox({ items, index, onClose, ablegen, alsRezept, zielName }: LightboxProps) {
   const [current, setCurrent] = useState(index);
   const [scale, setScale] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
@@ -240,6 +241,7 @@ export function Lightbox({ items, index, onClose, ablegen, zielName }: LightboxP
           <FotoWerkstatt
             foto={item}
             ablegen={ablegen}
+            alsRezept={alsRezept}
             zielName={zielName}
             onOffen={setWerkstattOffen}
           />
