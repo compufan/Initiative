@@ -738,3 +738,57 @@ test('die Sprechblase bekommt einen Körper – vorher war sie ein unsichtbarer 
   await page.getByRole('button', { name: 'Ohne Fläche' }).click();
   await expect.poll(() => deckung(0.28, 0.9), { timeout: 10_000 }).toBeLessThan(40);
 });
+
+test('die Arbeit im Studio geht nicht mehr versehentlich verloren', async ({ browser }) => {
+  /*
+   * Drei Wege, auf denen ein halb fertiger Sticker bisher verschwand:
+   *
+   *   1. Ein Druck zu viel auf ↶ – es gab kein Wiederherstellen. Wer sich
+   *      vertippte, baute seine Arbeit nach, im Zweifel samt Modelllauf.
+   *   2. Ein Druck auf ✕ – ohne Rückfrage, sofort weg.
+   *   3. Die Zurück-Geste – die verliess die ganze App, weil das Studio
+   *      keinen Verlaufseintrag anmeldete.
+   */
+  const alice = credentials('verl');
+  const bob = credentials('vziel');
+  const page = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await page.getByRole('button', { name: 'Neuer Chat' }).click();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await page.getByText(bob.displayName).first().click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await page.getByRole('button', { name: 'Sticker', exact: true }).click();
+  await page.getByRole('button', { name: /Sticker erstellen/ }).click();
+
+  // Etwas Arbeit hineinlegen: ein Emoji und ein Schriftzug.
+  await page.locator('.stk-emoji-btn').first().click();
+  await page.getByRole('tab', { name: 'Text' }).click();
+  await page.getByRole('button', { name: '＋ Text' }).click();
+  const feld = page.getByLabel('Text', { exact: true });
+  await feld.fill('HALLO');
+  await expect(feld).toHaveValue('HALLO');
+
+  // 1. Zurück und wieder vor.
+  const zurueck = page.getByRole('button', { name: 'Rückgängig' });
+  const vor = page.getByRole('button', { name: 'Wiederherstellen' });
+  await expect(vor).toBeDisabled();
+  await zurueck.click();
+  await expect(vor).toBeEnabled();
+  await vor.click();
+  await expect(feld).toHaveValue('HALLO');
+
+  // 2. Das ✕ fragt nach – und „Weiter bearbeiten" lässt alles stehen.
+  await page.getByRole('button', { name: 'Editor schließen' }).click();
+  await expect(page.getByText('Sticker verwerfen?')).toBeVisible();
+  await page.getByRole('button', { name: 'Weiter bearbeiten' }).click();
+  await expect(page.getByText('Sticker verwerfen?')).toHaveCount(0);
+  await expect(feld).toHaveValue('HALLO');
+
+  // 3. Die Zurück-Geste bleibt in der App und fragt dasselbe.
+  await page.goBack();
+  await expect(page.getByText('Sticker verwerfen?')).toBeVisible({ timeout: 10_000 });
+  await page.getByRole('button', { name: 'Verwerfen' }).click();
+  // Zurück im Chat, nicht ausserhalb der App.
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible({ timeout: 10_000 });
+});

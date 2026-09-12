@@ -12,6 +12,7 @@ import { toast, useHideNav } from '../../state/ui.js';
 import { clamp, errorMessage, firstEmoji, loadImageFromBlob, supportsWebp } from './helpers.js';
 import { SavePackSheet } from './SavePackSheet.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
+import { dialogAnmelden } from '../../lib/dialogVerlauf.js';
 import {
   MAX_SCALE,
   MIN_SCALE,
@@ -37,6 +38,7 @@ import {
   type StickerText,
 } from './render.js';
 import {
+  AbbruchError,
   EngineError,
   engineAvailable,
   engineInfo,
@@ -197,6 +199,9 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
    */
   const [messung, setMessung] = useState<Messung | null>(null);
   const [canUndo, setCanUndo] = useState(false);
+  /** Der Vor-Stapel: was ein „Zurück" weggenommen hat. */
+  const vorStapel = useRef<StickerDoc[]>([]);
+  const [canRedo, setCanRedo] = useState(false);
   const [result, setResult] = useState<{ blob: Blob; mime: string } | null>(null);
 
   const docRef = useRef(doc);
@@ -319,6 +324,36 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
    * übertragen wird. Die Prüfung selbst lädt kein Modell und keine Laufzeit,
    * sie fragt nur die Grafikeinheit nach ihren Grenzen.
    */
+  /*
+   * Der Abbruch für den laufenden Modelllauf.
+   *
+   * „Hohe Qualität“ zieht beim ersten Mal 78 MB und rechnet danach auf der
+   * Grafikeinheit. Wer versehentlich darauf tippt, sass bis eben fest: kein
+   * Weg zurück, und auch das Schliessen half nicht – der Arbeiter samt Modell
+   * lief weiter.
+   */
+  const abbruchRef = useRef<AbortController | null>(null);
+  /** Wie weit der Lauf ist, 0…1 – oder `null`, solange es niemand weiss. */
+  const [modellAnteil, setModellAnteil] = useState<number | null>(null);
+
+  /*
+   * Beim Schliessen wirklich aufräumen.
+   *
+   * `releaseEngines()` gab es seit je, und der Kommentar darüber behauptete
+   * den Aufruf beim Schliessen des Studios – nur rief es niemand:
+   * `grep -rn releaseEngines apps/web/src` fand die Definition und einen
+   * Kommentar. Auf einem Telefon ist das der Unterschied zwischen „langsam“
+   * und „die Seite ist weg“: Die Laufzeit belegt zweistellige Megabyte, das
+   * grosse Modell dreistellige, und iOS beendet Seiten, die zu viel halten,
+   * kommentarlos.
+   */
+  useEffect(() => {
+    return () => {
+      abbruchRef.current?.abort();
+      void import('./engines/index.js').then((modul) => modul.releaseEngines());
+    };
+  }, []);
+
   const [grafikAus, setGrafikAus] = useState<{ grund: string; gemerkt: boolean } | null>(null);
   const grafikPruefen = useCallback(() => {
     let gilt = true;
@@ -426,6 +461,14 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   const push = useCallback((snapshot: StickerDoc) => {
     history.current = [...history.current, snapshot].slice(-HISTORY_MAX);
     setCanUndo(true);
+    /*
+     * Jede neue Handlung verwirft den Vor-Stapel.
+     *
+     * Sonst führte „zurück, etwas anderes tun, vor" in einen Zustand, den es
+     * nie gegeben hat – zusammengesetzt aus zwei Ästen der Bearbeitung.
+     */
+    vorStapel.current = [];
+    setCanRedo(false);
   }, []);
 
   /**
@@ -464,7 +507,29 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     history.current = history.current.slice(0, -1);
     lastCommit.current = { label: '', at: 0 };
     setCanUndo(history.current.length > 0);
+    // Der jetzige Stand wandert auf den Vor-Stapel, bevor er ersetzt wird.
+    vorStapel.current = [...vorStapel.current, cloneDoc(docRef.current)].slice(-HISTORY_MAX);
+    setCanRedo(true);
     setDoc(previous);
+  }, []);
+
+  /**
+   * Wiederherstellen.
+   *
+   * Gab es im Studio nicht – nur `undo`. Wer einmal zu oft auf ↶ drückte,
+   * hatte seine Arbeit verloren und musste sie nachbauen, im Zweifel samt
+   * einem mehrsekündigen Modelllauf. Im Foto-Editor gibt es den Weg zurück
+   * seit je; hier fehlte er.
+   */
+  const redo = useCallback(() => {
+    const naechster = vorStapel.current[vorStapel.current.length - 1];
+    if (!naechster) return;
+    vorStapel.current = vorStapel.current.slice(0, -1);
+    setCanRedo(vorStapel.current.length > 0);
+    history.current = [...history.current, cloneDoc(docRef.current)].slice(-HISTORY_MAX);
+    setCanUndo(true);
+    lastCommit.current = { label: '', at: 0 };
+    setDoc(naechster);
   }, []);
 
   const reset = useCallback(() => {
@@ -673,9 +738,20 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
          * hätte „Gesicht“ also stillschweigend auf ein einziges Gesicht
          * verengt, sobald die Punkte nicht mehr zurückgesetzt werden.
          */
+        const steuerung = new AbortController();
+        abbruchRef.current?.abort();
+        abbruchRef.current = steuerung;
+
         const roh = await runEngine(key, {
           image,
-          fortschritt: (_anteil, text) => setModellStand(text),
+          // Der Anteil wurde bisher weggeworfen (`_anteil`), obwohl er
+          // gerechnet wird. Bei 78 MB ist „wie lange noch“ die Frage, die
+          // zählt – ein Text allein beantwortet sie nicht.
+          fortschritt: (anteil, text) => {
+            setModellStand(text);
+            setModellAnteil(anteil > 0 ? anteil : null);
+          },
+          abbruch: steuerung.signal,
         });
         // Der Weichzeichner glättet die harte Treppe, die die kleineren Netze
         // an der Kante hinterlassen. Bei „Hohe Qualität“ ist er schädlich:
@@ -720,14 +796,29 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
         if (toolRef.current !== 'keep') setTool(teile.anzahl > 1 ? 'teile' : 'move');
         gelungen = true;
       } catch (error) {
+        /*
+         * Ein Abbruch ist kein Fehler.
+         *
+         * Wer selbst auf „Abbrechen“ gedrückt hat, weiss, was passiert ist;
+         * ihm danach eine rote Zeile hinzustellen wäre eine Anschuldigung für
+         * etwas, das er gewollt hat.
+         */
+        const abgebrochen =
+          error instanceof AbbruchError ||
+          (error instanceof DOMException && error.name === 'AbortError') ||
+          (error instanceof EngineError && error.message === 'Abgebrochen');
         setModellFehler(
-          error instanceof EngineError
-            ? error.message
-            : `Freistellen fehlgeschlagen: ${errorMessage(error, 'Unbekannter Fehler')}`,
+          abgebrochen
+            ? null
+            : error instanceof EngineError
+              ? error.message
+              : `Freistellen fehlgeschlagen: ${errorMessage(error, 'Unbekannter Fehler')}`,
         );
       } finally {
+        abbruchRef.current = null;
         setRechnet(null);
         setModellStand(null);
+        setModellAnteil(null);
         // Nur „Hohe Qualität" misst – die anderen Verfahren rechnen ohnehin
         // in Sekundenbruchteilen, dort wäre die Zeile nur Rauschen. Und nur
         // ein gelungener Lauf: Nach einem Abbruch beschriebe die Zeile den
@@ -742,6 +833,8 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
 
   function applySource(next: EditorSource | null) {
     history.current = [];
+    vorStapel.current = [];
+    setCanRedo(false);
     lastCommit.current = { label: '', at: 0 };
     setCanUndo(false);
     setSource(next);
@@ -782,6 +875,47 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
    * ohne Frage und ohne Weg zurück, denn der Rückgängig-Verlauf ging mit.
    * Auf einem Telefon liegen diese Knöpfe zudem dicht an den Reitern.
    */
+  /** Ob gerade eine Rückfrage vor dem Verwerfen läuft. */
+  const [schliessFrage, setSchliessFrage] = useState(false);
+
+  /**
+   * Ob im Dokument Arbeit steckt, die beim Schliessen verloren ginge.
+   *
+   * Ein leeres Studio darf ohne Rückfrage zugehen – eine Frage, auf die es nur
+   * eine sinnvolle Antwort gibt, ist keine Frage, sondern eine Hürde.
+   */
+  const gibtEsArbeit = useCallback(() => {
+    const d = docRef.current;
+    return Boolean(
+      sourceRef.current ||
+        d.autoMask ||
+        d.tippGruppen.length > 0 ||
+        d.keep.length > 0 ||
+        d.strokes.length > 0 ||
+        d.texte.length > 0,
+    );
+  }, []);
+
+  const schliessenVersuchen = useCallback(() => {
+    if (!gibtEsArbeit()) {
+      onClose();
+      return;
+    }
+    setSchliessFrage(true);
+  }, [gibtEsArbeit, onClose]);
+
+  /*
+   * Die Zurück-Geste schliesst das Studio, nicht die App.
+   *
+   * Vorher lag hier nichts: `StickerPickerSheet` rendert das Studio ANSTELLE
+   * des Blattes, und das Blatt meldet beim Verschwinden seinen Verlaufseintrag
+   * ab – `StickerLibraryScreen` legte gar keinen an. Wer auf einem Telefon
+   * von rechts wischte, flog aus der App heraus, mitsamt seiner Arbeit.
+   *
+   * `dialogAnmelden` ruft den Schliesser, und der fragt erst nach.
+   */
+  useEffect(() => dialogAnmelden(schliessenVersuchen), [schliessenVersuchen]);
+
   const [quellWechsel, setQuellWechsel] = useState<{ quelle: EditorSource; reiter: Tab } | null>(
     null,
   );
@@ -1439,7 +1573,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
         <button
           type="button"
           className="stk-round-btn"
-          onClick={onClose}
+          onClick={schliessenVersuchen}
           aria-label="Editor schließen"
         >
           ✕
@@ -1452,6 +1586,15 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
           aria-label="Rückgängig"
         >
           ↶
+        </button>
+        <button
+          type="button"
+          className="stk-round-btn"
+          onClick={redo}
+          disabled={!canRedo}
+          aria-label="Wiederherstellen"
+        >
+          ↷
         </button>
         <button type="button" className="stk-round-btn" onClick={reset} aria-label="Zurücksetzen">
           ⟲
@@ -2000,9 +2143,40 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
               </>
             )}
             {modellStand && (
-              <p className="stk-hint" role="status">
-                {modellStand}
-              </p>
+              <div className="stk-lauf" role="status">
+                <p className="stk-hint">
+                  {modellStand}
+                  {modellAnteil !== null && ` — ${Math.round(modellAnteil * 100)} %`}
+                </p>
+                {/*
+                    Ein Balken, wo ein Anteil bekannt ist, sonst keiner. Ein
+                    Balken ohne Wert, der bei null steht, sagt „es geht nicht
+                    voran“ – und das ist meistens falsch.
+                */}
+                {modellAnteil !== null && (
+                  <div
+                    className="stk-balken"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={Math.round(modellAnteil * 100)}
+                  >
+                    <span style={{ width: `${Math.round(modellAnteil * 100)}%` }} />
+                  </div>
+                )}
+                {/*
+                    Der Abbruch. Vorher gab es ihn nicht: Ein versehentlicher
+                    Druck auf „Hohe Qualität“ kostete 78 MB und einen Lauf auf
+                    der Grafikeinheit, beides ohne Weg zurück.
+                */}
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => abbruchRef.current?.abort()}
+                >
+                  Abbrechen
+                </button>
+              </div>
             )}
             {modellFehler && (
               <p className="stk-hint stk-hint-warn" role="status">
@@ -2489,6 +2663,20 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
           }}
         />
       )}
+
+      <ConfirmDialog
+        open={schliessFrage}
+        title="Sticker verwerfen?"
+        description="Freistellung, Striche und Schrift gehen verloren. Ein Modelllauf, der schon gerechnet hat, ist danach noch einmal fällig."
+        confirmLabel="Verwerfen"
+        cancelLabel="Weiter bearbeiten"
+        danger
+        onCancel={() => setSchliessFrage(false)}
+        onConfirm={() => {
+          setSchliessFrage(false);
+          onClose();
+        }}
+      />
 
       <ConfirmDialog
         open={quellWechsel !== null}

@@ -131,8 +131,12 @@ function kanalHolen(): BirefnetKanal | false {
  * geben – im Speicher kostet das nichts extra, sie würde sie ohnehin ganz
  * einlesen.
  */
-async function modellHolen(melden?: Fortschritt): Promise<Uint8Array> {
-  const antwort = await fetch(MODEL_URL);
+async function modellHolen(melden?: Fortschritt, abbruch?: AbortSignal): Promise<Uint8Array> {
+  // Das Signal geht an `fetch` UND wird in der Leseschleife geprüft: Ein
+  // abgebrochenes `fetch` bricht den offenen Lesevorgang zwar mit, aber erst
+  // beim nächsten Netzstück – bei einer stockenden Verbindung kann das
+  // dauern, und bis dahin soll wenigstens nichts mehr angesammelt werden.
+  const antwort = await fetch(MODEL_URL, { signal: abbruch });
   if (antwort.status === 404) {
     throw new Error(
       'Das Modell für „Hohe Qualität“ ist in dieser Fassung der App nicht vorhanden. Nimm solange „Niedrige Qualität“.',
@@ -147,6 +151,10 @@ async function modellHolen(melden?: Fortschritt): Promise<Uint8Array> {
   const stuecke: Uint8Array[] = [];
   let gelesen = 0;
   for (;;) {
+    if (abbruch?.aborted) {
+      await leser.cancel().catch(() => {});
+      throw new DOMException('Abgebrochen', 'AbortError');
+    }
     const { done, value } = await leser.read();
     if (done) break;
     stuecke.push(value);
@@ -166,7 +174,7 @@ async function modellHolen(melden?: Fortschritt): Promise<Uint8Array> {
   return daten;
 }
 
-async function loadSession(melden?: Fortschritt): Promise<InferenceSession> {
+async function loadSession(melden?: Fortschritt, abbruch?: AbortSignal): Promise<InferenceSession> {
   if (session) return session;
   if (!ladend) {
     ladend = (async () => {
@@ -180,7 +188,7 @@ async function loadSession(melden?: Fortschritt): Promise<InferenceSession> {
       // Serverprozessor. Siehe ort-laufzeit.ts.
       await ortVorbereiten(ort.env, { wasm: ortWasmUrl, mjs: ortMjsUrl });
 
-      const daten = await modellHolen(melden);
+      const daten = await modellHolen(melden, abbruch);
 
       /*
        * Absichtlich EIN Rechenweg, und absichtlich OHNE eigenes Gerät.
@@ -245,7 +253,11 @@ function vorbereiten(image: ImageData): Float32Array {
  *
  * Rückgabe: ein Wert je Bildpunkt, 0 = weg, 255 = bleibt, in Bildgrösse.
  */
-export async function birefnetMask(image: ImageData, melden?: Fortschritt): Promise<Uint8Array> {
+export async function birefnetMask(
+  image: ImageData,
+  melden?: Fortschritt,
+  abbruch?: AbortSignal,
+): Promise<Uint8Array> {
   /*
    * Die Gerätefrage zuerst, und zwar HIER.
    *
@@ -263,7 +275,29 @@ export async function birefnetMask(image: ImageData, melden?: Fortschritt): Prom
   }
 
   const draht = kanalHolen();
-  const roh = draht ? await imArbeiter(draht, image, melden) : await imHauptfaden(image, melden);
+  /*
+   * Abbruch im Arbeiter heisst: Arbeiter weg.
+   *
+   * Ein laufender Modelldurchlauf lässt sich nicht anhalten – WebGPU kennt
+   * dafür nichts. Was geht, ist den Arbeiter samt seiner Sitzung zu beenden;
+   * `freigeben()` tut genau das und bricht das offene Versprechen ab. Der
+   * Weg war fertig gebaut und hatte bis hierher keinen Aufrufer.
+   */
+  const aufAbbruch = () => {
+    if (draht) draht.freigeben();
+  };
+  abbruch?.addEventListener('abort', aufAbbruch, { once: true });
+  try {
+    const roh = draht
+      ? await imArbeiter(draht, image, melden)
+      : await imHauptfaden(image, melden, abbruch);
+    return await nachbereiten(roh, image);
+  } finally {
+    abbruch?.removeEventListener('abort', aufAbbruch);
+  }
+}
+
+async function nachbereiten(roh: Float32Array, image: ImageData): Promise<Uint8Array> {
 
   // Erst die Kurve über die Modellwerte, dann daraus abtasten. Vorher lief
   // `Math.exp` je AUSGABEpunkt statt je Modellpunkt – dasselbe Ergebnis, nur
@@ -337,10 +371,14 @@ async function imArbeiter(
  * weil mit ihm zu rechnen wäre: Ein Browser mit WebGPU und ohne Modul-
  * Arbeiter ist eine sehr schmale Schnittmenge.
  */
-async function imHauptfaden(image: ImageData, melden?: Fortschritt): Promise<Float32Array> {
+async function imHauptfaden(
+  image: ImageData,
+  melden?: Fortschritt,
+  abbruch?: AbortSignal,
+): Promise<Float32Array> {
   const ort = await import('onnxruntime-web/webgpu');
   const geladenBegonnen = Date.now();
-  const runner = await loadSession(melden);
+  const runner = await loadSession(melden, abbruch);
   const ladeMs = Date.now() - geladenBegonnen;
   melden?.(1, 'Wird freigestellt …');
 

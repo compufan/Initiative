@@ -33,6 +33,33 @@ export interface MaskRequest {
    * Rueckmeldung steht der Anwender vor einem Knopf, der nichts tut.
    */
   fortschritt?: (anteil: number, text: string) => void;
+  /**
+   * Abbruch – für alles, was Minuten dauern kann.
+   *
+   * „Hohe Qualität“ zieht beim ersten Mal 78 MB und rechnet danach auf der
+   * Grafikeinheit. Wer versehentlich darauf tippt, sass bis eben fest: Es gab
+   * keinen Weg zurück, und auch das Schliessen des Studios half nicht, weil
+   * der Arbeiter samt Modell weiterlief.
+   *
+   * Der Abbruch kann nicht überall sofort greifen – ein laufender
+   * Modelldurchlauf im Arbeiter lässt sich nur beenden, indem man den
+   * Arbeiter wegwirft; genau das tut `releaseEngines`. Was er zuverlässig
+   * tut: den Download abbrechen und das Ergebnis verwerfen, statt es in eine
+   * Oberfläche zu schreiben, die längst weitergezogen ist.
+   */
+  abbruch?: AbortSignal;
+}
+
+/** Wurde abgebrochen? Dann keine Fehlermeldung, sondern Stille. */
+export class AbbruchError extends Error {
+  constructor() {
+    super('Abgebrochen');
+    this.name = 'AbbruchError';
+  }
+}
+
+function abbruchPruefen(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new AbbruchError();
 }
 
 /** Was beim Freistellen schiefgehen kann – mit einem Satz, den man zeigen kann. */
@@ -90,33 +117,52 @@ export async function runEngine(key: EngineKey, request: MaskRequest): Promise<U
     );
   }
 
+  abbruchPruefen(request.abbruch);
+
   try {
-    switch (key) {
-      case 'person': {
-        const { personMask } = await import('./person.js');
-        return await personMask(request.image);
-      }
-      case 'face': {
-        const { faceMask } = await import('./face.js');
-        return await faceMask(request.image, request.seed);
-      }
-      case 'tippen': {
-        const { tippenMask } = await import('./tippen.js');
-        return await tippenMask(request.image, request.seeds ?? [], request.fortschritt);
-      }
-      case 'object': {
-        const { objectMask } = await import('./object.js');
-        return await objectMask(request.image, request.fortschritt);
-      }
-      case 'birefnet': {
-        const { birefnetMask } = await import('./birefnet.js');
-        return await birefnetMask(request.image, request.fortschritt);
-      }
-    }
+    const maske = await rechnen(key, request);
+    /*
+     * Nach dem Lauf noch einmal fragen.
+     *
+     * Ein Modelldurchlauf lässt sich nicht mitten im Rechnen anhalten. Was
+     * sich verhindern lässt: dass ein Ergebnis, auf das niemand mehr wartet,
+     * in eine Oberfläche geschrieben wird, die inzwischen etwas anderes
+     * zeigt – oder in ein Dokument, das der Anwender längst verworfen hat.
+     */
+    abbruchPruefen(request.abbruch);
+    return maske;
   } catch (error) {
+    if (error instanceof AbbruchError) throw error;
     if (error instanceof EngineError) throw error;
     const grund = error instanceof Error ? error.message : 'Unbekannter Fehler';
     throw new EngineError(grund, key);
+  }
+}
+
+async function rechnen(key: EngineKey, request: MaskRequest): Promise<Uint8Array> {
+  switch (key) {
+    case 'person': {
+      const { personMask } = await import('./person.js');
+      return await personMask(request.image);
+    }
+    case 'face': {
+      const { faceMask } = await import('./face.js');
+      return await faceMask(request.image, request.seed);
+    }
+    case 'tippen': {
+      const { tippenMask } = await import('./tippen.js');
+      return await tippenMask(request.image, request.seeds ?? [], request.fortschritt);
+    }
+    case 'object': {
+      const { objectMask } = await import('./object.js');
+      return await objectMask(request.image, request.fortschritt, request.abbruch);
+    }
+    case 'birefnet': {
+      const { birefnetMask } = await import('./birefnet.js');
+      return await birefnetMask(request.image, request.fortschritt, request.abbruch);
+    }
+    default:
+      throw new EngineError('Unbekanntes Verfahren.', key);
   }
 }
 

@@ -42,7 +42,22 @@ let ladend: Promise<InferenceSession> | null = null;
 
 export type Fortschritt = (anteil: number, text: string) => void;
 
-async function loadSession(melden?: Fortschritt): Promise<InferenceSession> {
+/**
+ * `abbruch` kann hier weniger als bei „Hohe Qualität“ – und das ist ehrlich so.
+ *
+ * Dieses Verfahren gibt der Laufzeit nur die Adresse; das Holen übernimmt sie
+ * selbst, und ein laufendes `InferenceSession.create` lässt sich nicht
+ * anhalten. Geprüft wird deshalb davor und danach: Wer abbricht, wartet
+ * höchstens noch diesen einen Ladevorgang ab, bekommt aber kein Ergebnis mehr
+ * in eine Oberfläche geschrieben, die längst weitergezogen ist. Bei 4 MB und
+ * wenigen Sekunden ist das der richtige Aufwand – bei 78 MB wäre es zu wenig,
+ * und dort ist es auch anders gebaut.
+ */
+async function loadSession(
+  melden?: Fortschritt,
+  abbruch?: AbortSignal,
+): Promise<InferenceSession> {
+  if (abbruch?.aborted) throw new DOMException('Abgebrochen', 'AbortError');
   if (session) return session;
   if (!ladend) {
     ladend = (async () => {
@@ -124,8 +139,12 @@ function vorbereiten(image: ImageData): Float32Array {
  *
  * Rückgabe: ein Wert je Bildpunkt, 0 = weg, 255 = bleibt, in Bildgrösse.
  */
-export async function objectMask(image: ImageData, melden?: Fortschritt): Promise<Uint8Array> {
-  const runner = await loadSession(melden);
+export async function objectMask(
+  image: ImageData,
+  melden?: Fortschritt,
+  abbruch?: AbortSignal,
+): Promise<Uint8Array> {
+  const runner = await loadSession(melden, abbruch);
   melden?.(1, 'Wird freigestellt …');
   const ort = await import('onnxruntime-web/wasm');
 
