@@ -566,10 +566,15 @@ export function StickerLibraryScreen() {
       {studioOpen && (
         <StickerStudio
           onClose={() => setStudioOpen(false)}
-          onSaved={(pack) => {
-            replacePack(pack);
-            setStudioOpen(false);
-          }}
+          /*
+              Nur übernehmen, nicht schliessen.
+
+              Ob das Studio zu ist, weiss das Studio – es arbeitet seit dem
+              Paketbau eine Reihe von Bildern ab und ruft `onClose` selbst,
+              wenn nichts mehr wartet. Wer hier zumacht, beendet die Reihe
+              nach dem ersten Sticker.
+          */
+          onSaved={(pack) => replacePack(pack)}
         />
       )}
     </Screen>

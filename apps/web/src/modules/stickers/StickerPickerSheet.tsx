@@ -136,10 +136,11 @@ export function StickerPickerSheet({ conversationId, onClose }: ComposerActionPr
     return (
       <StickerStudio
         onClose={() => setStudioOpen(false)}
-        onSaved={(pack) => {
-          mergePack(pack);
-          setStudioOpen(false);
-        }}
+        /*
+            Nur übernehmen, nicht schliessen – siehe `StickerLibraryScreen`.
+            Das Studio ruft `onClose` selbst, wenn seine Reihe durch ist.
+        */
+        onSaved={(pack) => mergePack(pack)}
       />
     );
   }

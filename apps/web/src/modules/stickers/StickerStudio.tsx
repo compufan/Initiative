@@ -33,6 +33,7 @@ import {
   type EditorSource,
   type ShapeKind,
   FORM_FUELLUNG_VORGABE,
+  STICKER_SCHRIFTEN,
   hatFreistellung,
   type StickerDoc,
   trifftText,
@@ -231,6 +232,18 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
    * unverändert weiterreichen, statt sie zu zeichnen. Das schliesst
    * Bearbeiten aus, und genau das steht dann auch da.
    */
+  /*
+   * Ein Paket baut man aus vielen Stickern – also nimmt man viele Bilder.
+   *
+   * Vorher ging genau eins: kein `multiple` an den Dateieingängen, und nach
+   * jedem gespeicherten Sticker schloss sich das Studio. Wer zwölf Sticker
+   * wollte, durchlief zwölfmal Chat → Sticker → Erstellen → Galerie. Das ist
+   * kein Paketbau, das ist eine Strafe.
+   */
+  const [warteschlange, setWarteschlange] = useState<File[]>([]);
+  /** Wohin der vorige Sticker ging – die Vorgabe für den nächsten. */
+  const [zuletztPaket, setZuletztPaket] = useState<string | null>(null);
+
   const [bewegteQuelle, setBewegteQuelle] = useState<{
     datei: Blob;
     format: 'gif' | 'webp';
@@ -1034,9 +1047,12 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   }, [startBild]);
 
   async function pickImage(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
+    const dateien = Array.from(event.target.files ?? []);
     event.target.value = '';
+    const file = dateien[0];
     if (!file) return;
+    // Der Rest wartet – abgearbeitet wird nach jedem gespeicherten Sticker.
+    setWarteschlange(dateien.slice(1));
     setBusy(true);
     try {
       const image = await loadImageFromBlob(file);
@@ -1056,6 +1072,39 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       );
     } catch (error) {
       toast(errorMessage(error, 'Das Bild konnte nicht geladen werden'), 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Das nächste Bild aus der Warteschlange laden.
+   *
+   * Ohne Rückfrage: Der vorige Sticker ist gespeichert, es gibt nichts mehr
+   * zu verlieren. `applySource` räumt den Verlauf ohnehin ab.
+   */
+  async function naechstesBild(datei: File, verbleibend: number) {
+    setBusy(true);
+    try {
+      const image = await loadImageFromBlob(datei);
+      const lage = await bildlage(datei);
+      setBewegteQuelle(
+        lage.bewegt ? { datei, format: lage.format, bilder: lage.bilder } : null,
+      );
+      applySource(
+        { kind: 'image', image, width: image.naturalWidth, height: image.naturalHeight },
+        lage.bewegt,
+      );
+      setTab(lage.bewegt ? 'source' : 'move');
+      toast(
+        verbleibend > 0
+          ? `Gespeichert. Noch ${verbleibend + 1} Bilder in der Reihe.`
+          : 'Gespeichert. Das ist das letzte Bild.',
+        'success',
+      );
+    } catch (error) {
+      toast(errorMessage(error, 'Das nächste Bild konnte nicht geladen werden'), 'error');
+      setWarteschlange([]);
     } finally {
       setBusy(false);
     }
@@ -1727,7 +1776,28 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
         <button type="button" className="stk-round-btn" onClick={reset} aria-label="Zurücksetzen">
           ⟲
         </button>
-        <span className="stk-studio-title truncate">Sticker erstellen</span>
+        <span className="stk-studio-title truncate">
+          {/*
+              Steht in der Kopfzeile und nicht im Quellen-Reiter: Die Reihe
+              gilt für die ganze Sitzung, und nach dem Einladen steht man im
+              Reiter „Bewegen“ – dort wäre der Hinweis unsichtbar gewesen.
+          */}
+          {warteschlange.length > 0 ? (
+            <>
+              Noch {warteschlange.length} in der Reihe{' '}
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setWarteschlange([])}
+                title="Die restlichen Bilder verwerfen"
+              >
+                Beenden
+              </button>
+            </>
+          ) : (
+            'Sticker erstellen'
+          )}
+        </span>
         <button
           type="button"
           className="btn btn-primary btn-sm"
@@ -1784,6 +1854,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                   <input
                     type="file"
                     accept="image/*"
+                    multiple
                     className="stk-file"
                     onChange={(event) => void pickImage(event)}
                   />
@@ -1840,6 +1911,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                 <input
                   type="file"
                   accept="image/*"
+                  multiple
                   className="stk-file"
                   onChange={(event) => void pickImage(event)}
                 />
@@ -2818,6 +2890,30 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                   />
                   <span className="stk-slider-value">{layer.drehung}°</span>
                 </label>
+                {/*
+                    Die Schriftwahl – fünf Systemschriften, dieselben wie im
+                    Fotoeditor. Für ein Meme ist die Schrift nicht Beiwerk:
+                    Dasselbe Wort in „Rund" und in „Technisch" sagt zwei
+                    verschiedene Dinge.
+                */}
+                <div className="stk-btn-row">
+                  {STICKER_SCHRIFTEN.map((schrift) => (
+                    <button
+                      key={schrift.key}
+                      type="button"
+                      className={`btn btn-sm ${
+                        (layer.schrift ?? 'system') === schrift.key ? 'stk-chip-active' : ''
+                      }`}
+                      style={{ fontFamily: schrift.stack }}
+                      onClick={() => {
+                        commit();
+                        updateText({ schrift: schrift.key });
+                      }}
+                    >
+                      {schrift.label}
+                    </button>
+                  ))}
+                </div>
                 <div className="stk-btn-row">
                   {TEXT_COLORS.map((color) => (
                     <button
@@ -2889,9 +2985,22 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
           blob={result.blob}
           mime={result.mime}
           onClose={() => setResult(null)}
+          vorgabePaket={zuletztPaket}
           onSaved={(pack) => {
             setResult(null);
+            setZuletztPaket(pack.id);
             onSaved?.(pack);
+            /*
+             * Wartet noch etwas, bleibt das Studio offen und lädt das
+             * nächste Bild. Erst wenn nichts mehr da ist, ist der Auftrag
+             * erledigt – und dann geht es zu.
+             */
+            const naechste = warteschlange[0];
+            if (naechste) {
+              setWarteschlange((rest) => rest.slice(1));
+              void naechstesBild(naechste, warteschlange.length - 1);
+              return;
+            }
             onClose();
           }}
         />

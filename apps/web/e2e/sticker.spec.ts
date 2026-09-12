@@ -897,6 +897,9 @@ test('Kontur und Schatten: Farbe, Schatten – und genug Rand für beide', async
  * Teilbildern sind zweihundert Byte, und eine Abhängigkeit dafür wäre mehr
  * als die Sache selbst.
  */
+/** Ein einfarbiges Bild – für alles, wo der Inhalt nicht zählt. */
+const EIN_PNG = pngAus(64, 64, () => [120, 160, 200]);
+
 const BEWEGT_GIF = Buffer.from(
   'R0lGODlhCAAIAIEAAP8AAAD/AAAA/wAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQAMgAAACwAAAAACAAIAAACGQQA' +
     'AAAAAAAAAAAAAAAAAAAAAAAAAAAAACgAIfkEADIAAAAsAAAAAAgACAAAAhlMkiRJkiRJkiRJkiRJkiRJkiRJkiRJ' +
@@ -953,4 +956,111 @@ test('ein bewegtes Bild bleibt bewegt – und sagt, wenn es das nicht kann', asy
   await page.getByRole('button', { name: /Weiße Kontur an/ }).click();
   await page.getByRole('tab', { name: 'Quelle' }).click();
   await expect(page.getByText(/und bleibt so/)).toBeVisible({ timeout: 10_000 });
+});
+
+test('ein Paket baut man aus vielen Bildern – die Reihe läuft durch', async ({ browser }) => {
+  /*
+   * Ein Paket fasst 120 Sticker. Bauen liess es sich trotzdem nicht: Die
+   * Dateieingänge nahmen genau ein Bild, und nach jedem gespeicherten Sticker
+   * schloss sich das Studio. Wer zwölf Sticker wollte, durchlief zwölfmal
+   * Chat → Sticker → Erstellen → Galerie und tippte jedes Mal dasselbe Paket
+   * an. Das ist kein Paketbau.
+   *
+   * Geprüft wird die Reihe: drei Bilder auf einmal, und nach dem ersten
+   * Speichern muss das Studio offen bleiben und beim zweiten weitermachen.
+   */
+  const alice = credentials('reihe');
+  const bob = credentials('rziel');
+  const page = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await page.getByRole('button', { name: 'Neuer Chat' }).click();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await page.getByText(bob.displayName).first().click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await page.getByRole('button', { name: 'Sticker', exact: true }).click();
+  await page.getByRole('button', { name: /Sticker erstellen/ }).click();
+
+  await page.getByRole('tab', { name: 'Quelle' }).click();
+  // Der zweite Eingang ist die Galerie; die Kamera nimmt bewusst nur eines.
+  await page.locator('.stk-file').nth(1).setInputFiles([
+    { name: 'a.png', mimeType: 'image/png', buffer: EIN_PNG },
+    { name: 'b.png', mimeType: 'image/png', buffer: EIN_PNG },
+    { name: 'c.png', mimeType: 'image/png', buffer: EIN_PNG },
+  ]);
+
+  await expect(page.getByText(/Noch 2 in der Reihe/)).toBeVisible({ timeout: 15_000 });
+
+  // Erster Sticker: speichern. Das Blatt braucht einen Paketnamen.
+  await page.getByRole('button', { name: 'Weiter' }).click();
+  const blatt = page.locator('.sheet').last();
+  await expect(blatt.getByRole('heading', { name: 'Sticker speichern' })).toBeVisible({
+    timeout: 15_000,
+  });
+  await blatt.getByPlaceholder('z. B. Familie').fill('Reihenpaket');
+  await blatt.getByRole('button', { name: 'Speichern', exact: true }).click();
+
+  /*
+   * Das Studio bleibt offen und zählt herunter – vorher wäre hier der Chat
+   * zu sehen gewesen.
+   */
+  await expect(page.getByText(/Noch 1 in der Reihe/)).toBeVisible({ timeout: 30_000 });
+  // Das Studio steht noch – vorher wäre hier der Chat zu sehen gewesen.
+  await expect(page.locator('.stk-studio')).toHaveCount(1);
+});
+
+test('Sticker-Text kennt dieselben fünf Schriften wie der Fotoeditor', async ({ browser }) => {
+  /*
+   * Der Fotoeditor bietet fünf Schriften an, das Studio hatte eine – fest im
+   * Zeichencode. Für ein Meme ist die Schrift nicht Beiwerk: Dasselbe Wort in
+   * „Rund" und in „Technisch" sagt zwei verschiedene Dinge.
+   *
+   * Gemessen wird nicht der Knopf, sondern das Bild: Nach dem Wechsel auf
+   * eine andere Schrift muss die Leinwand anders aussehen.
+   */
+  const alice = credentials('schr');
+  const bob = credentials('sziel');
+  const page = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await page.getByRole('button', { name: 'Neuer Chat' }).click();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await page.getByText(bob.displayName).first().click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await page.getByRole('button', { name: 'Sticker', exact: true }).click();
+  await page.getByRole('button', { name: /Sticker erstellen/ }).click();
+
+  await page.getByRole('tab', { name: 'Text' }).click();
+  await page.getByRole('button', { name: '＋ Text' }).click();
+  await page.getByLabel('Text', { exact: true }).fill('HALLO');
+
+  const leinwand = page.locator('.stk-canvas, canvas').first();
+  await expect
+    .poll(async () => leinwand.evaluate((el: HTMLCanvasElement) => el.width), { timeout: 15_000 })
+    .toBeGreaterThan(200);
+
+  /** Ein grober Fingerabdruck der Leinwand – zum Vergleichen, nicht zum Deuten. */
+  const abdruck = async () =>
+    leinwand.evaluate((el: HTMLCanvasElement) => {
+      const ctx = el.getContext('2d');
+      if (!ctx) return '';
+      const d = ctx.getImageData(0, 0, el.width, el.height).data;
+      let summe = 0;
+      let gesetzt = 0;
+      for (let i = 3; i < d.length; i += 4) {
+        if (d[i] > 8) {
+          gesetzt += 1;
+          summe += i;
+        }
+      }
+      return `${gesetzt}:${summe % 1000003}`;
+    });
+
+  for (const name of ['Normal', 'Serifen', 'Technisch', 'Rund', 'Schmal']) {
+    await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
+  }
+
+  const normal = await abdruck();
+  await page.getByRole('button', { name: 'Serifen', exact: true }).click();
+  await expect.poll(abdruck, { timeout: 10_000 }).not.toBe(normal);
 });

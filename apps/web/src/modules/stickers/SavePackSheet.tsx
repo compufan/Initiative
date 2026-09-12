@@ -17,14 +17,28 @@ interface SavePackSheetProps {
   mime: string;
   onClose: () => void;
   onSaved: (pack: StickerPackDto) => void;
+  /**
+   * Das Paket, in das der vorige Sticker ging.
+   *
+   * Wer eine Reihe Sticker macht, macht sie fast immer für DASSELBE Paket.
+   * Ohne diese Vorgabe fängt die Auswahl bei jedem Sticker wieder von vorn
+   * an – und beim zehnten hat man neunmal dieselbe Kachel angetippt.
+   */
+  vorgabePaket?: string | null;
 }
 
 /** Second half of the studio: pick a pack (or create one) and upload. */
-export function SavePackSheet({ blob, mime, onClose, onSaved }: SavePackSheetProps) {
+export function SavePackSheet({
+  blob,
+  mime,
+  onClose,
+  onSaved,
+  vorgabePaket,
+}: SavePackSheetProps) {
   const myId = useMyId();
   const [packs, setPacks] = useState<StickerPackDto[]>([]);
   const [loading, setLoading] = useState(true);
-  const [target, setTarget] = useState<string>('new');
+  const [target, setTarget] = useState<string>(vorgabePaket ?? 'new');
   const [name, setName] = useState('Meine Sticker');
   const [emoji, setEmoji] = useState('');
   const [saving, setSaving] = useState(false);
@@ -45,7 +59,13 @@ export function SavePackSheet({ blob, mime, onClose, onSaved }: SavePackSheetPro
         if (!active) return;
         const own = items.filter((pack) => pack.ownerId === myId);
         setPacks(own);
-        const usable = own.find((pack) => pack.stickerCount < LIMITS.stickersPerPackMax);
+        // Die Vorgabe schlägt die Suche nach einem freien Paket: Sie kommt vom
+        // Sticker davor, und wer gerade eine Reihe baut, will dort weiter.
+        const vorgabe = vorgabePaket
+          ? own.find((pack) => pack.id === vorgabePaket && pack.stickerCount < LIMITS.stickersPerPackMax)
+          : undefined;
+        const usable =
+          vorgabe ?? own.find((pack) => pack.stickerCount < LIMITS.stickersPerPackMax);
         if (usable) setTarget(usable.id);
       } catch (error) {
         if (!active) return;
@@ -57,7 +77,7 @@ export function SavePackSheet({ blob, mime, onClose, onSaved }: SavePackSheetPro
     return () => {
       active = false;
     };
-  }, [myId]);
+  }, [myId, vorgabePaket]);
 
   const trimmedName = name.trim();
   const canSave = useMemo(() => {

@@ -20,6 +20,35 @@ export const MAX_SCALE = 5;
 const FONT_STACK =
   "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
 
+/**
+ * Die Schriftwahl – dieselbe wie im Fotoeditor.
+ *
+ * Dort stehen fünf Schriften zur Auswahl (`bild/zeichnen.ts`), hier stand
+ * eine, fest verdrahtet. Für ein Meme ist die Schrift nicht Beiwerk, sondern
+ * die halbe Aussage: Dasselbe Wort in „Rund" und in „Technisch" sagt zwei
+ * verschiedene Dinge.
+ *
+ * Bewusst nur Systemschriften und keine mitgelieferten Schriftdateien: Die
+ * müssten geladen werden, kosteten Bytes beim ersten Sticker und brächten je
+ * eine eigene Lizenzfrage mit. Was auf dem Gerät liegt, liegt schon da.
+ */
+export const STICKER_SCHRIFTEN: { key: string; label: string; stack: string }[] = [
+  { key: 'system', label: 'Normal', stack: FONT_STACK },
+  { key: 'serif', label: 'Serifen', stack: 'Georgia, "Times New Roman", Times, serif' },
+  { key: 'mono', label: 'Technisch', stack: '"SF Mono", "Roboto Mono", Menlo, Consolas, monospace' },
+  { key: 'rund', label: 'Rund', stack: '"Comic Sans MS", "Chalkboard SE", "Comic Neue", cursive' },
+  {
+    key: 'schmal',
+    label: 'Schmal',
+    stack: '"Arial Narrow", "Roboto Condensed", "Helvetica Neue", Arial, sans-serif',
+  },
+];
+
+/** Der Schriftsatz zu einem Schlüssel – Unbekanntes fällt auf „Normal". */
+export function stickerSchrift(key: string | undefined): string {
+  return (STICKER_SCHRIFTEN.find((e) => e.key === key) ?? STICKER_SCHRIFTEN[0]).stack;
+}
+
 export type ShapeKind = 'square' | 'rounded' | 'circle' | 'bubble' | 'free';
 
 /**
@@ -47,6 +76,11 @@ export interface StickerText {
   outline: boolean;
   /** Drehung im Uhrzeigersinn, in Grad. */
   drehung: number;
+  /**
+   * Der Schlüssel aus `STICKER_SCHRIFTEN`. Wahlfrei, damit ältere Dokumente
+   * ohne Angabe weiterhin „Normal" bekommen.
+   */
+  schrift?: string;
 }
 
 /**
@@ -707,11 +741,12 @@ export function textMass(
   const wert = text.value.trim();
   const skala = kante / STICKER_SIZE;
   const maxBreite = kante - 24 * skala;
+  const satz = stickerSchrift(text.schrift);
   let groesse = Math.max(8, text.size * skala);
-  ctx.font = `800 ${groesse}px ${FONT_STACK}`;
+  ctx.font = `800 ${groesse}px ${satz}`;
   while (groesse > 12 * skala && ctx.measureText(wert).width > maxBreite) {
     groesse -= 2 * skala;
-    ctx.font = `800 ${groesse}px ${FONT_STACK}`;
+    ctx.font = `800 ${groesse}px ${satz}`;
   }
   return { breite: ctx.measureText(wert).width, hoehe: groesse, groesse, wert };
 }
@@ -748,7 +783,7 @@ function drawStickerText(ctx: CanvasRenderingContext2D, text: StickerText, kante
   if (text.drehung !== 0) ctx.rotate((text.drehung * Math.PI) / 180);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = `800 ${mass.groesse}px ${FONT_STACK}`;
+  ctx.font = `800 ${mass.groesse}px ${stickerSchrift(text.schrift)}`;
   if (text.outline) {
     ctx.lineJoin = 'round';
     ctx.miterLimit = 2;
