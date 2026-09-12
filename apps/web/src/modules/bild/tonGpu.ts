@@ -22,7 +22,8 @@
 import { BEREICHE_MAX } from './doc.js';
 import type { Szene } from './maskenSpeicher.js';
 import { maskeUmrastern } from './maske.js';
-import { bokehRadius, kastenWeichRgba } from './weich.js';
+import { bokehRgba } from './bokeh.js';
+import { bokehRadius } from './weich.js';
 import {
   LUT_KANTE,
   formHin,
@@ -224,8 +225,15 @@ float bokehAn(vec2 uv) {
 }
 
 const int TUPFEN = 48;
-/** Wie stark ein Lichtpunkt im Unscharfen aufblueht. */
-const float GLANZ = 3.0;
+
+/**
+ * Die Spreizung: „SPREIZUNG" aus „bokeh.ts", als Multiplikation
+ * ausgeschrieben. Die Umkehr ist zweimal die Quadratwurzel.
+ */
+vec3 spreizen(vec3 lin) {
+  vec3 q = lin * lin;
+  return q * q;
+}
 
 /**
  * Die Zerstreuungsscheibe.
@@ -235,7 +243,7 @@ const float GLANZ = 3.0;
  * Bokeh, und genau das ist der Unterschied zwischen "unscharf" und "schoen
  * unscharf".
  *
- * Zwei Feinheiten, ohne die es nicht aussieht:
+ * Drei Feinheiten, ohne die es nicht aussieht:
  *
  * 1. Die Tupfen liegen auf einer Spirale im goldenen Winkel, mit „sqrt“ im
  *    Radius – sonst haeuft sich alles in der Mitte und der Rand der Scheibe
@@ -247,6 +255,16 @@ const float GLANZ = 3.0;
  *    nach aussen. Ohne das bekaeme jedes freigestellte Motiv einen
  *    Heiligenschein – den Fehler sieht man auf jedem Portraetmodus, der ihn
  *    nicht vermeidet.
+ * 3. Gemittelt wird im LINEAREN Licht und mit Spreizung – nicht ueber
+ *    Anzeigewerte. Eine Linse verteilt Licht, keine Bildschirmzahlen, und
+ *    genau daran haengt, ob ein Lichtpunkt im Unscharfen ein Lichtpunkt
+ *    bleibt. Vorher stand hier ein gewichtetes Mittel ueber Anzeigewerte mit
+ *    einem Glanzfaktor von 3; nachgemessen an einem Punkt 255 auf Grund 10,
+ *    Radius 24, blieben davon 24 von 255 uebrig – ein grauer Schleier. Mit
+ *    linearem Licht sind es 152, und der Prozessorweg, der dasselbe rechnet,
+ *    kommt auf 105. Es kostet 15 Prozent (975 ms → 1122 ms auf 1200 × 1200
+ *    unter SwiftShader, wo eine Potenz teuer und eine Texturabfrage billig
+ *    ist; auf echter Hardware faellt es schwaecher aus).
  *
  * „weite“ ist der Anteil des vollen Radius fuer DIESEN Bildpunkt. Die Maske
  * bestimmt also, wie GROSS die Scheibe ist – nicht, wie stark ein Bild mit
@@ -282,14 +300,14 @@ vec3 zerstreuen(vec2 uv, float weite) {
      * Motivs.
      */
     float wp = bokehAn(p);
-    float g = (wp >= r * weite ? wp : 0.0) * (1.0 + GLANZ * pow(dot(f, LUMA), 4.0));
-    summe += f * g;
+    float g = wp >= r * weite ? wp : 0.0;
+    summe += spreizen(zuLinear(f)) * g;
     gewicht += g;
   }
   // Faellt jeder Tupfen durch die Pruefung, bleibt der Punkt, wie er war -
   // sonst stuende hier Schwarz.
   if (gewicht <= 1e-4) return texture(uBild, uv).rgb;
-  return summe / gewicht;
+  return zuSrgb(sqrt(sqrt(max(summe / gewicht, 0.0))));
 }
 
 void main() {
@@ -824,11 +842,19 @@ function aufLeinwand(
   /*
    * Die Tiefenschärfe auf dem Prozessor: DREI Stufen statt einer.
    *
-   * Ehrlich ungleich zur Grafikeinheit: Dort ist es eine Scheibe mit 48
-   * Tupfen und Glanzlichtern, hier ein Kasten. Ein Lichtpunkt wird also nicht
-   * zum Kreis. Das steht so auch im Vergleichstest, der Bereiche mit
-   * Unschärfe ausdrücklich AUSNIMMT – eine Gleichheit zu behaupten, die nicht
-   * gilt, wäre schlimmer als der Unterschied.
+   * Näher an der Grafikeinheit, als es hier lange stand – aber immer noch
+   * nicht gleich. Dort ist es eine Scheibe aus 48 Tupfen, hier ein Sechseck
+   * aus drei gerichteten Kästen. Was inzwischen auf BEIDEN Wegen gilt: Beide
+   * mitteln im linearen Licht und spreizen helle Stellen mit derselben
+   * vierten Potenz, ein Lichtpunkt bleibt also auf beiden Wegen ein
+   * Lichtpunkt. Solange hier ein Kastenmittel über Anzeigewerten stand, war
+   * das der eine Unterschied, den man sofort sah – aus demselben Bild wurde
+   * auf dem einen Gerät ein Licht und auf dem anderen ein grauer Schleier.
+   *
+   * Der Vergleichstest nimmt Bereiche mit Unschärfe trotzdem weiter AUS:
+   * Sechseck und Scheibe verteilen dasselbe Licht anders, und eine
+   * Gleichheit zu behaupten, die nicht gilt, wäre schlimmer als der
+   * Unterschied.
    *
    * Was hier aber gleich sein MUSS, ist die Regel: Das Maskengewicht steuert
    * die GRÖSSE der Unschärfe, nicht die Durchsichtigkeit eines Bildes mit
@@ -869,7 +895,23 @@ function aufLeinwand(
     const stufen: Uint8ClampedArray[] = [];
     for (let k = 1; k <= STUFEN; k += 1) {
       const kopie = new Uint8ClampedArray(daten);
-      kastenWeichRgba(kopie, breite, hoehe, (vollerRadius * k) / STUFEN);
+      /*
+       * Hier stand ein Kastenweichzeichner – und damit rechnete der
+       * Rückfallweg etwas anderes als der Schattierer.
+       *
+       * Auf der Grafikeinheit zerstreut `zerstreuen` über eine SCHEIBE im
+       * linearen Licht; ohne Grafikeinheit kam ein quadratisches Mittel über
+       * Anzeigewerte heraus. Aus einem Lichtpunkt wurde dort ein heller Fleck
+       * und hier ein grauer Schleier – gemessen 142 gegen 11 von 255.
+       * Dasselbe Bild, zwei Geräte, zwei Ergebnisse.
+       *
+       * `bokehRgba` schliesst den Abstand: Sechseck statt Quadrat, lineares
+       * Licht statt Anzeigewerte, und helle Stellen wiegen schwerer. Es
+       * kostet rund das Dreieinhalbfache (gemessen 150 ms gegen 42 ms bei
+       * 1200 × 900) – und dieser Weg läuft ohnehin nur dort, wo keine
+       * Grafikeinheit da ist.
+       */
+      bokehRgba(kopie, breite, hoehe, (vollerRadius * k) / STUFEN);
       stufen.push(kopie);
     }
     for (let i = 0; i < bokehGewicht.length; i += 1) {

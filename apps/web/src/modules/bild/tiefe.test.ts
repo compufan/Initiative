@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { netzGroesse, tiefeNormalisieren, tiefenFeld, unschaerfeAn } from './tiefe.js';
+import {
+  anteilZuTiefe,
+  netzGroesse,
+  tiefeNormalisieren,
+  tiefenFeld,
+  tiefenVerteilung,
+  unschaerfeAn,
+  type Tiefenkarte,
+} from './tiefe.js';
 
 describe('tiefeNormalisieren', () => {
   it('zieht den Wertebereich auf 0 bis 255', () => {
@@ -102,7 +110,17 @@ describe('tiefenFeld', () => {
      * bekommt einen durchgehend unscharfen Streifen, wo der scharfe Bereich
      * sein müsste. Genau diese Reihenfolge prüft der Test.
      */
-    const karte = { breite: 2, hoehe: 1, feld: new Uint8Array([0, 255]) };
+    /*
+     * Die Karte trägt jetzt auch die Mitte.
+     *
+     * Der Fokusregler läuft über die VERTEILUNG der Tiefen im Bild (siehe
+     * `anteilZuTiefe`). Bei einer Karte aus nur zwei Werten gibt es keine
+     * Mitte, auf die er zeigen könnte – die Hälfte des Bildes liegt vorn, die
+     * andere hinten, und der Median ist einer der beiden. Mit einem dritten
+     * Punkt bei 128 ist die Mitte vorhanden, und der Test prüft wieder das,
+     * wofür er da ist: die Reihenfolge von Ausdehnen und Kurve.
+     */
+    const karte = { breite: 3, hoehe: 1, feld: new Uint8Array([0, 128, 255]) };
     const feld = tiefenFeld(karte, 0.5, 0.5, 9, 1);
     expect(feld[0]).toBeGreaterThan(200);
     expect(feld[8]).toBeGreaterThan(200);
@@ -167,5 +185,113 @@ describe('netzGroesse', () => {
     const { w, h } = netzGroesse(0, 0);
     expect(w).toBe(518);
     expect(h).toBe(518);
+  });
+});
+
+describe('Die Staffelung: der Regler folgt dem Bild, nicht der Kehrwertskala', () => {
+  /**
+   * Die gemeldete Szene: Tisch im Vordergrund, Person am Tisch, Himmel dahinter.
+   *
+   * Gebaut aus echten Entfernungen über den Kehrwert – so, wie das Netz sie
+   * ausgibt. Die Flächenanteile sind grob realistisch: Der Tisch füllt das
+   * untere Drittel, die Person steht mittig, der Himmel nimmt den Rest.
+   */
+  function tischSzene(): Tiefenkarte {
+    const breite = 60;
+    const hoehe = 60;
+    const roh = new Float32Array(breite * hoehe);
+    for (let y = 0; y < hoehe; y += 1) {
+      for (let x = 0; x < breite; x += 1) {
+        let meter: number;
+        if (y > 40)
+          meter = 0.4 + ((y - 40) / 20) * 0.4; // Tisch, 0,4 … 0,8 m
+        else if (y > 18 && x > 20 && x < 40)
+          meter = 3; // Person
+        else meter = 1000; // Himmel
+        roh[y * breite + x] = 1 / meter;
+      }
+    }
+    return tiefeNormalisieren(roh, breite, hoehe);
+  }
+
+  it('quetscht Person und Himmel in der ROHEN Karte dicht zusammen', () => {
+    const karte = tischSzene();
+    const person = karte.feld[30 * 60 + 30];
+    const himmel = karte.feld[5 * 60 + 5];
+    const tischVorn = karte.feld[59 * 60 + 30];
+    /*
+     * Der gemeldete Befund, in Zahlen: Der Tisch nimmt den Löwenanteil der
+     * Skala (137 von 255 für vierzig Zentimeter), Person und Himmel teilen
+     * sich den Rest (36). Zwischen der Person und dem Unendlichen liegen
+     * damit weniger Stufen als zwischen Tischkante und Tischmitte.
+     */
+    expect(tischVorn - person).toBeGreaterThan(90);
+    expect(person - himmel).toBeLessThan(50);
+  });
+
+  /*
+   * Und das ist die Abhilfe: Über die Verteilung bekommt jede Raste denselben
+   * ANTEIL DES BILDES. Person und Himmel rücken dadurch auf der Reglerskala
+   * weit auseinander, obwohl sich an der Karte nichts geändert hat.
+   */
+  it('legt Person und Himmel auf dem Regler weit auseinander', () => {
+    const karte = tischSzene();
+    const verteilung = tiefenVerteilung(karte.feld);
+
+    /** Bei welcher Raste liegt dieser Tiefenwert? */
+    const rasteVon = (wert: number) => {
+      let beste = 0;
+      for (let r = 0; r <= 100; r += 1) {
+        if (anteilZuTiefe(verteilung, r / 100) * 255 <= wert) beste = r;
+      }
+      return beste;
+    };
+
+    const person = rasteVon(karte.feld[30 * 60 + 30]);
+    const himmel = rasteVon(karte.feld[5 * 60 + 5]);
+    // Vorher lagen zwischen beiden dreizehn Rasten von hundert.
+    expect(person - himmel).toBeGreaterThan(25);
+  });
+
+  it('lässt bei Fokus auf der Person den Himmel unscharf und den Tisch auch', () => {
+    const karte = tischSzene();
+    const verteilung = tiefenVerteilung(karte.feld);
+
+    // Die Raste, die auf der Person sitzt: Der Himmel füllt rund die Hälfte
+    // des Bildes, die Person liegt gleich darüber.
+    let fokusRaste = 0;
+    for (let r = 0; r <= 100; r += 1) {
+      const t = anteilZuTiefe(verteilung, r / 100) * 255;
+      if (
+        Math.abs(t - karte.feld[30 * 60 + 30]) <
+        Math.abs(anteilZuTiefe(verteilung, fokusRaste / 100) * 255 - karte.feld[30 * 60 + 30])
+      ) {
+        fokusRaste = r;
+      }
+    }
+
+    const feld = tiefenFeld(karte, fokusRaste / 100, 0.2, 60, 60);
+    const person = feld[30 * 60 + 30];
+    const himmel = feld[5 * 60 + 5];
+    const tisch = feld[59 * 60 + 30];
+
+    expect(person).toBeLessThan(40);
+    expect(himmel).toBeGreaterThan(150);
+    expect(tisch).toBeGreaterThan(150);
+  });
+
+  it('gibt bei einem flachen Bild eine brauchbare Verteilung zurück', () => {
+    const feld = new Uint8Array(100).fill(128);
+    const verteilung = tiefenVerteilung(feld);
+    expect(verteilung[255]).toBeCloseTo(1, 5);
+    // Jeder Anteil landet auf demselben Wert – es gibt ja nur einen.
+    expect(anteilZuTiefe(verteilung, 0.5) * 255).toBe(128);
+    expect(anteilZuTiefe(verteilung, 0) * 255).toBe(128);
+    expect(anteilZuTiefe(verteilung, 1) * 255).toBe(128);
+  });
+
+  it('verschluckt sich nicht an einem leeren Feld', () => {
+    const verteilung = tiefenVerteilung(new Uint8Array(0));
+    expect(anteilZuTiefe(verteilung, 0.5)).toBeGreaterThanOrEqual(0);
   });
 });
