@@ -13,6 +13,7 @@ import { clamp, errorMessage, firstEmoji, loadImageFromBlob, supportsWebp } from
 import { SavePackSheet } from './SavePackSheet.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 import { dialogAnmelden } from '../../lib/dialogVerlauf.js';
+import { bildlage } from './bewegt.js';
 import {
   MAX_SCALE,
   MIN_SCALE,
@@ -221,6 +222,20 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   const vorStapel = useRef<StickerDoc[]>([]);
   const [canRedo, setCanRedo] = useState(false);
   const [result, setResult] = useState<{ blob: Blob; mime: string } | null>(null);
+  /*
+   * Die Originaldatei, wenn sie sich bewegt.
+   *
+   * Eine Leinwand nimmt genau ein Teilbild auf – wer ein bewegtes GIF in den
+   * Editor gab, bekam wortlos ein Standbild und merkte es erst am fertigen
+   * Sticker im Gespräch. Bewegt bleibt es nur auf einem Weg: Die Datei
+   * unverändert weiterreichen, statt sie zu zeichnen. Das schliesst
+   * Bearbeiten aus, und genau das steht dann auch da.
+   */
+  const [bewegteQuelle, setBewegteQuelle] = useState<{
+    datei: Blob;
+    format: 'gif' | 'webp';
+    bilder: number | null;
+  } | null>(null);
 
   const docRef = useRef(doc);
   const sourceRef = useRef(source);
@@ -849,7 +864,17 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
 
   /* ---------- source ---------- */
 
-  function applySource(next: EditorSource | null) {
+  /**
+   * `bewegt` schaltet die Kontur ab – und das ist kein Beiwerk.
+   *
+   * Ab Werk steht `outline: true`. Für ein Standbild ist das der richtige
+   * Anfang; für ein bewegtes Bild hiesse es, dass der einzige Weg, auf dem
+   * die Bewegung überlebt, von vornherein versperrt ist – jede Kontur zwingt
+   * auf die Leinwand, und die nimmt ein Teilbild. Wer ein bewegtes Bild
+   * einlädt, will zuallererst, dass es sich weiter bewegt; die Kontur kann er
+   * danach einschalten und bekommt dann gesagt, was ihn das kostet.
+   */
+  function applySource(next: EditorSource | null, bewegt = false) {
     history.current = [];
     vorStapel.current = [];
     setCanRedo(false);
@@ -866,13 +891,17 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
      * wählte und dann sein Foto aussuchte, stand wieder beim Quadrat, ohne
      * dass ihm jemand gesagt hätte, warum.
      */
-    setDoc((alt) => ({
-      ...createDoc(),
-      shape: alt.shape,
-      formFuellung: alt.formFuellung,
-      outline: alt.outline,
-      outlineWidth: alt.outlineWidth,
-    }));
+    setDoc((alt) =>
+      bewegt
+        ? { ...createDoc(), outline: false }
+        : {
+            ...createDoc(),
+            shape: alt.shape,
+            formFuellung: alt.formFuellung,
+            outline: alt.outline,
+            outlineWidth: alt.outlineWidth,
+          },
+    );
     setTool('move');
     setLupe({ zoom: 1, x: STICKER_SIZE / 2, y: STICKER_SIZE / 2 });
     // Die Messzeile gehört zum Lauf auf dem alten Bild. Bliebe sie stehen,
@@ -950,16 +979,20 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
    */
   useEffect(() => dialogAnmelden(schliessenVersuchen), [schliessenVersuchen]);
 
-  const [quellWechsel, setQuellWechsel] = useState<{ quelle: EditorSource; reiter: Tab } | null>(
+  const [quellWechsel, setQuellWechsel] = useState<{
+    quelle: EditorSource;
+    reiter: Tab;
+    bewegt: boolean;
+  } | null>(
     null,
   );
 
-  function quelleWechseln(quelle: EditorSource, reiter: Tab) {
+  function quelleWechseln(quelle: EditorSource, reiter: Tab, bewegt = false) {
     if (hatArbeit()) {
-      setQuellWechsel({ quelle, reiter });
+      setQuellWechsel({ quelle, reiter, bewegt });
       return;
     }
-    applySource(quelle);
+    applySource(quelle, bewegt);
     setTab(reiter);
   }
 
@@ -1007,6 +1040,10 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     setBusy(true);
     try {
       const image = await loadImageFromBlob(file);
+      const lage = await bildlage(file);
+      setBewegteQuelle(
+        lage.bewegt ? { datei: file, format: lage.format, bilder: lage.bilder } : null,
+      );
       quelleWechseln(
         {
           kind: 'image',
@@ -1014,7 +1051,8 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
           width: image.naturalWidth,
           height: image.naturalHeight,
         },
-        'move',
+        lage.bewegt ? 'source' : 'move',
+        lage.bewegt,
       );
     } catch (error) {
       toast(errorMessage(error, 'Das Bild konnte nicht geladen werden'), 'error');
@@ -1563,6 +1601,37 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
 
   /* ---------- export ---------- */
 
+  /**
+   * Ob am bewegten Bild etwas geändert wurde, das gezeichnet werden muss.
+   *
+   * Bewegt bleibt es nur, wenn die Datei unverändert durchgereicht wird –
+   * jede Bearbeitung zwingt auf die Leinwand und damit auf ein Teilbild.
+   * Verschoben, gedreht oder skaliert zählt dazu; ein Sticker, der die Datei
+   * durchreicht, kann diese Angaben nicht mit einbacken.
+   *
+   * Das Dokument kommt als Parameter und NICHT aus `docRef`: Der Ref wird
+   * erst in einem Effekt nachgeführt, also nach dem Zeichnen. Wer ihn beim
+   * Zeichnen liest, sieht den Stand von davor – der Hinweis behauptete
+   * dadurch „du hast es bearbeitet", während der Anwender gerade erst die
+   * Datei ausgewählt hatte.
+   */
+  function bewegtUnveraendert(d: StickerDoc): boolean {
+    if (!bewegteQuelle) return false;
+    return (
+      !hatFreistellung(d) &&
+      d.strokes.length === 0 &&
+      d.texte.length === 0 &&
+      d.shape === 'square' &&
+      d.formFuellung === null &&
+      !d.outline &&
+      d.schatten === null &&
+      d.drehung === 0 &&
+      d.scale === 1 &&
+      d.offsetX === 0 &&
+      d.offsetY === 0
+    );
+  }
+
   async function openSave() {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -1578,6 +1647,31 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
         cancelAnimationFrame(frame.current);
         frame.current = null;
       }
+      /*
+       * Unverändert durchreichen, wenn nichts zu zeichnen ist.
+       *
+       * Das ist der einzige Weg, auf dem ein Sticker sich bewegt: Ein
+       * Kodierer für bewegte Bilder steckt nicht in der App, und die Leinwand
+       * kann es von sich aus nicht.
+       */
+      if (bewegteQuelle && bewegtUnveraendert(docRef.current)) {
+        const durchgereicht = {
+          blob: bewegteQuelle.datei,
+          mime: bewegteQuelle.format === 'gif' ? 'image/gif' : 'image/webp',
+        };
+        if (durchgereicht.blob.size > LIMITS.maxUploadBytes.sticker) {
+          toast(
+            `Der bewegte Sticker ist zu groß (${formatBytes(
+              durchgereicht.blob.size,
+            )}, erlaubt sind ${formatBytes(LIMITS.maxUploadBytes.sticker)})`,
+            'error',
+          );
+          return;
+        }
+        setResult(durchgereicht);
+        return;
+      }
+
       renderSticker(canvas, sourceRef.current, docRef.current, { fast: false });
       const exported = await exportSticker(canvas, supportsWebp());
       if (exported.blob.size > LIMITS.maxUploadBytes.sticker) {
@@ -1758,6 +1852,26 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                 🅣 Text
               </button>
             </div>
+
+            {/*
+                Bewegte Bilder: sagen, was Sache ist.
+                
+                Vorher wurde ein GIF wortlos zum Standbild – gemerkt hat man
+                es erst am fertigen Sticker im Gespräch. Der Satz wechselt
+                mit der Lage, weil es zwei verschiedene Lagen sind: „bleibt
+                bewegt" ist eine gute Nachricht, „wird zum Standbild" eine
+                Warnung, und beides zur selben Zeit zu behaupten wäre
+                nutzlos.
+            */}
+            {bewegteQuelle && (
+              <p className={`stk-hint ${bewegtUnveraendert(doc) ? '' : 'stk-hint-warn'}`}>
+                {bewegtUnveraendert(doc)
+                  ? `Dieses Bild bewegt sich${
+                      bewegteQuelle.bilder ? ` (${bewegteQuelle.bilder} Teilbilder)` : ''
+                    } und bleibt so – es wird unverändert übernommen. Sobald du etwas daran änderst, wird ein Standbild daraus.`
+                  : 'Dieses Bild bewegt sich, aber du hast es bearbeitet – daraus wird ein Standbild. Nimm die Änderungen zurück, wenn die Bewegung bleiben soll.'}
+              </p>
+            )}
             <div className="stk-emoji-row">
               {START_EMOJI.map((value) => (
                 <button
@@ -2807,7 +2921,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
         onCancel={() => setQuellWechsel(null)}
         onConfirm={() => {
           if (!quellWechsel) return;
-          applySource(quellWechsel.quelle);
+          applySource(quellWechsel.quelle, quellWechsel.bewegt);
           setTab(quellWechsel.reiter);
           setQuellWechsel(null);
         }}

@@ -72,7 +72,13 @@ export const LIMITS = {
     video: 200 * 1024 * 1024,
     audio: 50 * 1024 * 1024,
     file: 100 * 1024 * 1024,
-    sticker: 2 * 1024 * 1024,
+    /*
+     * Vier statt zwei Megabyte: Bewegung kostet Bytes, und ein bewegter
+     * Sticker mit zwanzig Teilbildern sprengt zwei Megabyte mühelos. Vier
+     * ist immer noch klein genug, dass eine Paketübersicht mit 120 Stickern
+     * kein Mobilfunkvolumen verbrennt.
+     */
+    sticker: 4 * 1024 * 1024,
   } as Record<AttachmentKind, number>,
 } as const;
 
@@ -80,7 +86,16 @@ export const ALLOWED_MIME: Record<AttachmentKind, string[]> = {
   image: ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/avif', 'image/heic'],
   video: ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-matroska'],
   audio: ['audio/webm', 'audio/ogg', 'audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/wav'],
-  sticker: ['image/webp', 'image/png'],
+  /*
+   * GIF ist dazugekommen, damit bewegte Sticker überhaupt möglich sind.
+   *
+   * Ein animiertes WebP trägt denselben Typ wie ein ruhendes, war also nie
+   * gesperrt – gescheitert ist es an etwas anderem: Wer ein bewegtes Bild in
+   * den Editor gab, bekam ein Standbild, weil eine Leinwand nur ein Teilbild
+   * aufnimmt. Bewegt bleibt es nur, wenn die Datei UNVERÄNDERT durchgereicht
+   * wird, und dafür muss ihr Typ erlaubt sein.
+   */
+  sticker: ['image/webp', 'image/png', 'image/gif'],
   file: [],
 };
 

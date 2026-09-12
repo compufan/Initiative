@@ -889,3 +889,68 @@ test('Kontur und Schatten: Farbe, Schatten – und genug Rand für beide', async
   expect((await punkt(0.5, 0.999)).a).toBeLessThan(30);
   expect((await punkt(0.999, 0.5)).a).toBeLessThan(30);
 });
+
+/**
+ * Ein echtes bewegtes GIF: 8 × 8, drei Teilbilder, Netscape-Schleife.
+ *
+ * Von Hand gebaut statt aus einer Bibliothek – ein GIF mit drei einfarbigen
+ * Teilbildern sind zweihundert Byte, und eine Abhängigkeit dafür wäre mehr
+ * als die Sache selbst.
+ */
+const BEWEGT_GIF = Buffer.from(
+  'R0lGODlhCAAIAIEAAP8AAAD/AAAA/wAAACH/C05FVFNDQVBFMi4wAwEAAAAh+QQAMgAAACwAAAAACAAIAAACGQQA' +
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAACgAIfkEADIAAAAsAAAAAAgACAAAAhlMkiRJkiRJkiRJkiRJkiRJkiRJkiRJ' +
+    'kiQpACH5BAAyAAAALAAAAAAIAAgAAAIZlCRJkiRJkiRJkiRJkiRJkiRJkiRJkiRJKgA7',
+  'base64',
+);
+
+test('ein bewegtes Bild bleibt bewegt – und sagt, wenn es das nicht kann', async ({ browser }) => {
+  /*
+   * Bewegte Sticker fehlten ganz. Nicht, weil sie verboten waren – ein
+   * animiertes WebP trug schon immer denselben Typ wie ein ruhendes –,
+   * sondern weil eine Leinwand genau ein Teilbild aufnimmt. Wer ein GIF in
+   * den Editor gab, bekam wortlos ein Standbild und merkte es erst am
+   * fertigen Sticker im Gespräch.
+   *
+   * Bewegt bleibt es nur auf einem Weg: die Datei unverändert weiterreichen.
+   * Das schliesst Bearbeiten aus, und genau das muss dastehen.
+   */
+  const alice = credentials('bewg');
+  const bob = credentials('bwziel');
+  const page = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await page.getByRole('button', { name: 'Neuer Chat' }).click();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await page.getByText(bob.displayName).first().click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await page.getByRole('button', { name: 'Sticker', exact: true }).click();
+  await page.getByRole('button', { name: /Sticker erstellen/ }).click();
+
+  await page.getByRole('tab', { name: 'Quelle' }).click();
+  await page.locator('.stk-file').first().setInputFiles({
+    name: 'wackel.gif',
+    mimeType: 'image/gif',
+    buffer: BEWEGT_GIF,
+  });
+
+  // Erkannt, samt Zahl der Teilbilder – und die gute Nachricht zuerst.
+  await expect(page.getByText(/bewegt sich \(3 Teilbilder\) und bleibt so/)).toBeVisible({
+    timeout: 15_000,
+  });
+
+  /*
+   * Jetzt etwas ändern: Die Kontur zwingt auf die Leinwand, und damit ist
+   * die Bewegung fort. Der Satz muss sich umdrehen.
+   */
+  await page.getByRole('tab', { name: 'Kontur' }).click();
+  await page.getByRole('button', { name: /Weiße Kontur aus/ }).click();
+  await page.getByRole('tab', { name: 'Quelle' }).click();
+  await expect(page.getByText(/daraus wird ein Standbild/)).toBeVisible({ timeout: 10_000 });
+
+  // Und zurückgenommen ist die Bewegung wieder da.
+  await page.getByRole('tab', { name: 'Kontur' }).click();
+  await page.getByRole('button', { name: /Weiße Kontur an/ }).click();
+  await page.getByRole('tab', { name: 'Quelle' }).click();
+  await expect(page.getByText(/und bleibt so/)).toBeVisible({ timeout: 10_000 });
+});

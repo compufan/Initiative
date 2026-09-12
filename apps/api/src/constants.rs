@@ -58,7 +58,10 @@ pub fn max_upload_bytes(kind: &str) -> i64 {
         "image" => 25 * 1024 * 1024,
         "video" => 200 * 1024 * 1024,
         "audio" => 50 * 1024 * 1024,
-        "sticker" => 2 * 1024 * 1024,
+        // Vier statt zwei Megabyte, seit ein Sticker sich bewegen darf.
+        // Muss mit LIMITS.maxUploadBytes.sticker im gemeinsamen Paket
+        // übereinstimmen – der Client prüft vorab, der Server entscheidet.
+        "sticker" => 4 * 1024 * 1024,
         _ => 100 * 1024 * 1024,
     }
 }
@@ -88,7 +91,8 @@ pub fn allowed_mime(kind: &str) -> &'static [&'static str] {
             "audio/aac",
             "audio/wav",
         ],
-        "sticker" => &["image/webp", "image/png"],
+        // GIF für bewegte Sticker – siehe `ALLOWED_MIME` im gemeinsamen Paket.
+        "sticker" => &["image/webp", "image/png", "image/gif"],
         _ => &[],
     }
 }
