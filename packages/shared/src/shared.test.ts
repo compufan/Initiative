@@ -6,7 +6,22 @@
  * entsprechen eins zu eins den Rust-Unit-Tests (`services::polls::tests`,
  * `recurrence::tests`, `games::*::tests`, `constants::accent_for`).
  */
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
+import {
+  ATTACHMENT_KINDS,
+  CONVERSATION_TYPES,
+  GAME_STATUSES,
+  MEMBER_ROLES,
+  MESSAGE_TYPES,
+  POLL_KINDS,
+  RSVP_STATUSES,
+  VOTE_VALUES,
+} from './constants.js';
+import { messagePreview } from './util/format.js';
 import { accentFor, initialsFor } from './schemas/user.js';
 import { bestOption, tallyVotes } from './util/poll.js';
 import { describeRrule, expandOccurrences } from './util/recurrence.js';
@@ -249,5 +264,81 @@ describe('Darstellung', () => {
     expect(accentFor('a')).toMatch(/^#[0-9a-f]{6}$/);
     expect(initialsFor('Anna Berger')).toBe('AB');
     expect(initialsFor('anna')).toBe('AN');
+  });
+});
+
+/*
+ * Die Listen selbst, nicht nur ihre Wirkung.
+ *
+ * Jede dieser Aufzählungen steht zweimal: einmal hier, einmal in
+ * `apps/api/src/constants.rs`, und dort steht „Muss mit MESSAGE_TYPES im
+ * gemeinsamen Paket uebereinstimmen“ – ein Satz, den bisher niemand geprüft
+ * hat. Läuft eine Seite vor, ist der Schaden still und einseitig:
+ *
+ *   * Nur hier ergänzt: Der Client schickt den Typ, die API weist ihn mit
+ *     „ungültig“ ab. Die Nachricht geht nicht raus, und im Editor steht ein
+ *     Fehler, der nach einem Netzproblem aussieht.
+ *   * Nur dort ergänzt: Die API liefert den Typ aus, das Zod-Schema des
+ *     Clients verwirft die ganze NACHRICHT – nicht nur das unbekannte Feld.
+ *     Im Verlauf fehlt dann eine Nachricht, die es gibt.
+ *
+ * Deshalb wird die Rust-Datei hier gelesen. Ein Test, der eine zweite
+ * TypeScript-Kopie mit der ersten vergleicht, prüfte gar nichts.
+ */
+describe('Aufzählungen, die auf beiden Seiten stehen', () => {
+  const rost = readFileSync(
+    resolve(dirname(fileURLToPath(import.meta.url)), '../../../apps/api/src/constants.rs'),
+    'utf8',
+  );
+
+  /** Eine `pub const NAME: &[&str] = &[...]`-Liste aus der Rust-Datei. */
+  function rostListe(name: string): string[] {
+    const treffer = new RegExp(`pub const ${name}: &\\[&str\\] = &\\[([^\\]]*)\\]`).exec(rost);
+    if (!treffer) throw new Error(`${name} steht nicht in constants.rs`);
+    return Array.from(treffer[1].matchAll(/"([^"]*)"/g), (m) => m[1]);
+  }
+
+  const paare: [string, readonly string[]][] = [
+    ['MESSAGE_TYPES', MESSAGE_TYPES],
+    ['ATTACHMENT_KINDS', ATTACHMENT_KINDS],
+    ['CONVERSATION_TYPES', CONVERSATION_TYPES],
+    ['MEMBER_ROLES', MEMBER_ROLES],
+    ['RSVP_STATUSES', RSVP_STATUSES],
+    ['POLL_KINDS', POLL_KINDS],
+    ['VOTE_VALUES', VOTE_VALUES],
+    ['GAME_STATUSES', GAME_STATUSES],
+  ];
+
+  it.each(paare)('%s steht in beiden Sprachen gleich', (name, hier) => {
+    // Die Reihenfolge zählt mit: Sie steht in Fehlermeldungen und in der
+    // Datenbank-Prüfbedingung.
+    expect(rostListe(name)).toEqual([...hier]);
+  });
+
+  it('findet die Listen überhaupt – sonst prüfte der Test nichts', () => {
+    expect(() => rostListe('GIBT_ES_NICHT')).toThrow();
+    expect(rostListe('MESSAGE_TYPES').length).toBeGreaterThan(5);
+  });
+
+  it('beschreibt jede Nachrichtenart auf beiden Seiten gleich', () => {
+    /*
+     * Die Vorschau steht in der Benachrichtigung auf dem Sperrbildschirm –
+     * die schreibt der Server – und in der Gesprächsliste, die schreibt der
+     * Client. Zwei Texte für dieselbe Nachricht fallen niemandem auf, der
+     * nur eines von beidem ansieht.
+     */
+    const körper = rost.slice(rost.indexOf('pub fn message_preview'));
+    const rostVorschau = new Map(
+      Array.from(körper.slice(0, körper.indexOf('\n}')).matchAll(
+        /"([a-z]+)" => "([^"]*)"\.to_string\(\)/g,
+      ), (m) => [m[1], m[2]] as const),
+    );
+    expect(rostVorschau.size).toBeGreaterThan(5);
+    for (const art of MESSAGE_TYPES) {
+      if (art === 'text' || art === 'system') continue;
+      expect(rostVorschau.get(art), `keine Vorschau für „${art}" in constants.rs`).toBe(
+        messagePreview({ type: art }),
+      );
+    }
   });
 });

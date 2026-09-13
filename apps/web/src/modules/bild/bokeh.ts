@@ -87,7 +87,8 @@ function zuSrgbByte(v: number): number {
 }
 
 /**
- * Ein Kastenmittel entlang einer Richtung, mit laufender Summe.
+ * Ein Kastenmittel entlang einer Richtung, mit laufender Summe – für EINEN
+ * Kanal.
  *
  * Der Kern des Sechsecks: Drei solche Durchgänge, um 60° gegeneinander
  * gedreht, falten sich zu einem Sechseck. Ein einzelner waagerechter und ein
@@ -117,13 +118,12 @@ function richtungsMittel(
   const quer = flach ? hoehe : breite;
 
   /*
-   * Die Stellen einer Linie einmal vorrechnen, dann dreimal benutzen.
+   * Die Stellen einer Linie einmal vorrechnen, dann durchlaufen.
    *
    * Hier stand erst eine Hilfsfunktion, die je Bildpunkt, Kanal und Richtung
    * viermal gerufen wurde – rund vierzig Millionen Aufrufe für ein Foto von
    * 1200 × 900. Gemessen kostete allein das den Löwenanteil: 800 ms gegen
-   * 40 ms beim Kastenweichzeichner. Die Linie hängt aber gar nicht vom Kanal
-   * ab; einmal ausgerechnet, tragen alle drei Kanäle sie gemeinsam.
+   * 40 ms beim Kastenweichzeichner.
    */
   const stellen = new Int32Array(laenge);
 
@@ -134,40 +134,38 @@ function richtungsMittel(
       const x = flach ? i : j + versatz;
       const y = flach ? j + versatz : i;
       const drin = x >= 0 && y >= 0 && x < breite && y < hoehe;
-      stellen[i] = drin ? (y * breite + x) * 3 : -1;
+      stellen[i] = drin ? y * breite + x : -1;
       if (drin) gueltig += 1;
     }
     if (gueltig === 0) continue;
 
-    for (let k = 0; k < 3; k += 1) {
-      let summe = 0;
-      let zaehler = 0;
-      // Das Fenster für die erste Stelle füllen – am Rand auf die Linie
-      // geklemmt, damit die Zahl der Stützstellen sich nicht bei jedem
-      // Schritt ändert.
-      for (let i = -radius; i <= radius; i += 1) {
-        const at = stellen[i < 0 ? 0 : i >= laenge ? laenge - 1 : i];
-        if (at >= 0) {
-          summe += quelle[at + k];
-          zaehler += 1;
-        }
+    let summe = 0;
+    let zaehler = 0;
+    // Das Fenster für die erste Stelle füllen – am Rand auf die Linie
+    // geklemmt, damit die Zahl der Stützstellen sich nicht bei jedem
+    // Schritt ändert.
+    for (let i = -radius; i <= radius; i += 1) {
+      const at = stellen[i < 0 ? 0 : i >= laenge ? laenge - 1 : i];
+      if (at >= 0) {
+        summe += quelle[at];
+        zaehler += 1;
       }
-      for (let i = 0; i < laenge; i += 1) {
-        const hier = stellen[i];
-        if (hier >= 0) ziel[hier + k] = zaehler > 0 ? summe / zaehler : 0;
+    }
+    for (let i = 0; i < laenge; i += 1) {
+      const hier = stellen[i];
+      if (hier >= 0) ziel[hier] = zaehler > 0 ? summe / zaehler : 0;
 
-        const rausAt = i - radius;
-        const raus = stellen[rausAt < 0 ? 0 : rausAt >= laenge ? laenge - 1 : rausAt];
-        if (raus >= 0) {
-          summe -= quelle[raus + k];
-          zaehler -= 1;
-        }
-        const reinAt = i + radius + 1;
-        const rein = stellen[reinAt < 0 ? 0 : reinAt >= laenge ? laenge - 1 : reinAt];
-        if (rein >= 0) {
-          summe += quelle[rein + k];
-          zaehler += 1;
-        }
+      const rausAt = i - radius;
+      const raus = stellen[rausAt < 0 ? 0 : rausAt >= laenge ? laenge - 1 : rausAt];
+      if (raus >= 0) {
+        summe -= quelle[raus];
+        zaehler -= 1;
+      }
+      const reinAt = i + radius + 1;
+      const rein = stellen[reinAt < 0 ? 0 : reinAt >= laenge ? laenge - 1 : reinAt];
+      if (rein >= 0) {
+        summe += quelle[rein];
+        zaehler += 1;
       }
     }
   }
@@ -190,42 +188,54 @@ export function bokehRgba(
   const anzahl = breite * hoehe;
   if (daten.length < anzahl * 4) return;
 
-  // Ins lineare Licht, und dabei gleich spreizen.
-  let a = new Float32Array(anzahl * 3);
-  let b = new Float32Array(anzahl * 3);
-  for (let i = 0; i < anzahl; i += 1) {
-    const at = i * 4;
-    for (let k = 0; k < 3; k += 1) {
+  /*
+   * Ein Kanal nach dem anderen, nicht alle drei nebeneinander.
+   *
+   * Mit `anzahl * 3` je Puffer stünden bei einem Foto von zwölf Megapunkten
+   * zweimal 144 MB gleichzeitig im Speicher – 288 MB für die Unschärfe
+   * allein, und dazu kommen die drei Stufenkopien und das Bild selbst. Genau
+   * dieser Weg läuft aber nur dort, wo KEINE Grafikeinheit da ist, also auf
+   * dem schwächeren Gerät. Dort ist das der Unterschied zwischen „dauert“ und
+   * „der Reiter ist weg“.
+   *
+   * Einzeln sind es zweimal 48 MB. Bezahlt wird es damit, dass die Linien in
+   * `richtungsMittel` dreimal statt einmal gerechnet werden; gemessen an
+   * 1200 × 900 kostet das rund ein Fünftel mehr Zeit. Auf einem Gerät ohne
+   * Grafikeinheit ist das der richtige Tausch.
+   */
+  let a = new Float32Array(anzahl);
+  let b = new Float32Array(anzahl);
+
+  for (let k = 0; k < 3; k += 1) {
+    // Ins lineare Licht, und dabei gleich spreizen.
+    for (let i = 0; i < anzahl; i += 1) {
       // `v*v*v*v` statt `Math.pow(v, 4)`: dreimal so schnell, und die
       // Spreizung ist eine feste ganze Zahl.
-      const v = ZU_LINEAR[daten[at + k]];
+      const v = ZU_LINEAR[daten[i * 4 + k]];
       const q = v * v;
-      a[i * 3 + k] = q * q;
+      a[i] = q * q;
     }
-  }
 
-  /*
-   * Drei Richtungen, 60° auseinander – das Sechseck.
-   *
-   * Nicht 0°/90°: Zwei rechtwinklige Durchgänge ergeben ein Quadrat, und
-   * genau das ist der Kastenweichzeichner, den dies hier ablöst.
-   */
-  for (let s = 0; s < ECKEN / 2; s += 1) {
-    const winkel = (Math.PI * s) / (ECKEN / 2);
-    richtungsMittel(a, b, breite, hoehe, Math.cos(winkel), Math.sin(winkel), radius);
-    const zwischen = a;
-    a = b;
-    b = zwischen;
-  }
+    /*
+     * Drei Richtungen, 60° auseinander – das Sechseck.
+     *
+     * Nicht 0°/90°: Zwei rechtwinklige Durchgänge ergeben ein Quadrat, und
+     * genau das ist der Kastenweichzeichner, den dies hier ablöst.
+     */
+    for (let s = 0; s < ECKEN / 2; s += 1) {
+      const winkel = (Math.PI * s) / (ECKEN / 2);
+      richtungsMittel(a, b, breite, hoehe, Math.cos(winkel), Math.sin(winkel), radius);
+      const zwischen = a;
+      a = b;
+      b = zwischen;
+    }
 
-  // Zurücknehmen und wieder in den Anzeigeraum.
-  for (let i = 0; i < anzahl; i += 1) {
-    const at = i * 4;
-    for (let k = 0; k < 3; k += 1) {
-      const wert = a[i * 3 + k];
+    // Zurücknehmen und wieder in den Anzeigeraum.
+    for (let i = 0; i < anzahl; i += 1) {
+      const wert = a[i];
       // Die vierte Wurzel ist zweimal die Quadratwurzel – und die kann der
       // Prozessor unmittelbar.
-      daten[at + k] = zuSrgbByte(wert > 0 ? Math.sqrt(Math.sqrt(wert)) : 0);
+      daten[i * 4 + k] = zuSrgbByte(wert > 0 ? Math.sqrt(Math.sqrt(wert)) : 0);
     }
   }
 }
