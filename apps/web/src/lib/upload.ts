@@ -1,4 +1,5 @@
 import type { AttachmentDto } from '@initiative/shared';
+import { flaeche2d } from '../modules/bild/farbraum.js';
 import { api } from './api.js';
 import type { OutboxAttachment } from './db.js';
 import { videoBereinigen } from './videoMetadaten.js';
@@ -134,7 +135,15 @@ function drawTo(
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(width));
   canvas.height = Math.max(1, Math.round(height));
-  const context = canvas.getContext('2d');
+  /*
+   * Im Arbeitsraum, nicht in sRGB.
+   *
+   * Hier wird ein Foto neu kodiert, bevor es hochgeht. Läge diese eine
+   * Leinwand in sRGB, wäre der weite Farbraum genau hier verloren – nachdem
+   * der Editor ihn die ganze Kette hindurch gehalten hat, und ohne dass
+   * irgendwo etwas danach aussähe. Siehe `modules/bild/farbraum.ts`.
+   */
+  const context = flaeche2d(canvas);
   if (!context) throw new Error('Canvas nicht verfügbar');
   context.imageSmoothingQuality = 'high';
   context.drawImage(source as CanvasImageSource, 0, 0, canvas.width, canvas.height);

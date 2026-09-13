@@ -23,6 +23,7 @@ import { BEREICHE_MAX } from './doc.js';
 import type { Szene } from './maskenSpeicher.js';
 import { maskeUmrastern } from './maske.js';
 import { bokehRgba } from './bokeh.js';
+import { flaeche2d, glRaum } from './farbraum.js';
 import { bokehRadius } from './weich.js';
 import {
   LUT_KANTE,
@@ -598,7 +599,7 @@ function verkleinern(bild: CanvasImageSource, breite: number, hoehe: number): Ca
   const flaeche = verkleinerCanvas;
   if (flaeche.width !== breite) flaeche.width = breite;
   if (flaeche.height !== hoehe) flaeche.height = hoehe;
-  const ctx = flaeche.getContext('2d');
+  const ctx = flaeche2d(flaeche);
   if (!ctx) return bild;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.globalCompositeOperation = 'copy';
@@ -640,6 +641,15 @@ function werkzeug(): Werk | null {
       preserveDrawingBuffer: true,
     });
     if (!gl) return null;
+    /*
+     * Sofort nach dem Anlegen, vor der ersten Textur.
+     *
+     * `unpackColorSpace` gilt beim Hochladen, `drawingBufferColorSpace` bei
+     * der Ausgabe – siehe `farbraum.ts`. Später gesetzt wären die schon
+     * hochgeladenen Texturen im falschen Raum, und der Werkzeugkasten hält
+     * genau eine Textur über die ganze Lebenszeit.
+     */
+    glRaum(gl);
 
     const ecken = uebersetzen(gl, gl.VERTEX_SHADER, ECKPUNKTE);
     const farben = uebersetzen(gl, gl.FRAGMENT_SHADER, FARBEN);
@@ -1022,7 +1032,7 @@ function aufLeinwand(
   const flaeche = document.createElement('canvas');
   flaeche.width = breite;
   flaeche.height = hoehe;
-  const ctx = flaeche.getContext('2d', { willReadFrequently: true });
+  const ctx = flaeche2d(flaeche, { willReadFrequently: true });
   if (!ctx) return null;
   ctx.drawImage(bild, 0, 0, breite, hoehe);
   const bilddaten = ctx.getImageData(0, 0, breite, hoehe);
@@ -1301,7 +1311,7 @@ export function bildRechnen(
   const eigen = document.createElement('canvas');
   eigen.width = breite;
   eigen.height = hoehe;
-  const ectx = eigen.getContext('2d');
+  const ectx = flaeche2d(eigen);
   if (!ectx) return fertig;
   ectx.drawImage(fertig, 0, 0);
   gemerkt = { flaeche: eigen, schluessel, breite, hoehe, quelle: bild };

@@ -29,7 +29,19 @@ test('GLSL und TypeScript rechnen auch mit Bereichen dieselben Farben', async ({
     const quelle = document.createElement('canvas');
     quelle.width = kante;
     quelle.height = kante;
-    const qctx = quelle.getContext('2d');
+    /*
+     * Quelle UND Ablesen im Arbeitsraum – nicht in sRGB.
+     *
+     * Seit die Kette in Display-P3 rechnet, sind „die Zahlen im Bild" und
+     * „die Zahlen, die der Schattierer sieht" nicht mehr dasselbe, solange
+     * eine sRGB-Leinwand dazwischenliegt. Geprüft wird hier die FORMEL: Also
+     * bekommt `tonPunkt` genau die Zahlen, mit denen auch gerechnet wurde.
+     */
+    const ladeRaum = '/src/modules/bild/farbraum.ts';
+    const raum = (await import(
+      /* @vite-ignore */ ladeRaum
+    )) as typeof import('../src/modules/bild/farbraum.js');
+    const qctx = raum.flaeche2d(quelle);
     if (!qctx) return { fehler: 'keine Leinwand' };
     const bild = qctx.createImageData(kante, kante);
     for (let i = 0; i < kante * kante; i += 1) {
@@ -127,7 +139,7 @@ test('GLSL und TypeScript rechnen auch mit Bereichen dieselben Farben', async ({
       };
       const flaeche = gpu.bildRechnen(quelle, kante, kante, global, szene);
       if (flaeche === quelle) return { fehler: 'Kurzschluss trotz Bereichen' };
-      const zctx = document.createElement('canvas').getContext('2d', {
+      const zctx = raum.flaeche2d(document.createElement('canvas'), {
         willReadFrequently: true,
       });
       if (!zctx) return { fehler: 'keine Leinwand' };
@@ -299,7 +311,19 @@ test('Grafikeinheit und Prozessor kommen zum selben Bild', async ({ page }) => {
     const quelle = document.createElement('canvas');
     quelle.width = kante;
     quelle.height = kante;
-    const qctx = quelle.getContext('2d');
+    /*
+     * Quelle UND Ablesen im Arbeitsraum – nicht in sRGB.
+     *
+     * Seit die Kette in Display-P3 rechnet, sind „die Zahlen im Bild" und
+     * „die Zahlen, die der Schattierer sieht" nicht mehr dasselbe, solange
+     * eine sRGB-Leinwand dazwischenliegt. Geprüft wird hier die FORMEL: Also
+     * bekommt `tonPunkt` genau die Zahlen, mit denen auch gerechnet wurde.
+     */
+    const ladeRaum = '/src/modules/bild/farbraum.ts';
+    const raum = (await import(
+      /* @vite-ignore */ ladeRaum
+    )) as typeof import('../src/modules/bild/farbraum.js');
+    const qctx = raum.flaeche2d(quelle);
     if (!qctx) return { fehler: 'keine Leinwand' };
     const bild = qctx.createImageData(kante, kante);
     for (let i = 0; i < kante * kante; i += 1) {
@@ -333,7 +357,7 @@ test('Grafikeinheit und Prozessor kommen zum selben Bild', async ({ page }) => {
     };
 
     const lesen = () => {
-      const zctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+      const zctx = raum.flaeche2d(document.createElement('canvas'), { willReadFrequently: true });
       if (!zctx) return null;
       zctx.canvas.width = kante;
       zctx.canvas.height = kante;

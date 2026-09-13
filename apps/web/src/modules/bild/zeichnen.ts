@@ -7,6 +7,7 @@
  * Art, eine Vorschau zu bauen, die nicht zeigt, was am Ende herauskommt.
  */
 
+import { flaeche2d } from './farbraum.js';
 import {
   ansichtGroesse,
   ausgabeGroesse,
@@ -300,7 +301,7 @@ function unkenntlich(
    * wird das Foto, nicht die Kringel, die jemand darübergemalt hat.
    */
   const hilf = arbeitsflaeche(pw, ph);
-  const hctx = hilf.getContext('2d', { willReadFrequently: true });
+  const hctx = flaeche2d(hilf, { willReadFrequently: true });
   if (!hctx) return;
   hctx.setTransform(1, 0, 0, 1, 0, 0);
   hctx.globalCompositeOperation = 'source-over';
@@ -410,7 +411,7 @@ function unkenntlich(
   const eigen = document.createElement('canvas');
   eigen.width = pw;
   eigen.height = ph;
-  const ectx = eigen.getContext('2d');
+  const ectx = flaeche2d(eigen);
   if (ectx) {
     ectx.drawImage(hilf, 0, 0);
     gemerkt.set(strich, {
@@ -636,7 +637,7 @@ export function zeichneAnsicht(
   };
   if (canvas.width !== breite) canvas.width = breite;
   if (canvas.height !== hoehe) canvas.height = hoehe;
-  const ctx = canvas.getContext('2d');
+  const ctx = flaeche2d(canvas);
   if (!ctx) return null;
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -702,7 +703,7 @@ function zeichneBereich(
   if (schleier && maske && maske.feld.length > 0) {
     const { breite: rb, hoehe: rh } = maske.raster;
     const flaeche = maskenflaeche(rb, rh);
-    const mctx = flaeche.getContext('2d');
+    const mctx = flaeche2d(flaeche);
     if (mctx) {
       const bild = mctx.createImageData(rb, rh);
       for (let i = 0; i < maske.feld.length; i += 1) {
@@ -853,7 +854,7 @@ export function zeichneAusgabe(
   const canvas = document.createElement('canvas');
   canvas.width = mass.w;
   canvas.height = mass.h;
-  const ctx = canvas.getContext('2d');
+  const ctx = flaeche2d(canvas);
   if (!ctx) return canvas;
   ctx.imageSmoothingQuality = 'high';
   const ausschnitt = zuschnittInAnsicht(wirksamerZuschnitt(doc, width, height), width, height, doc);

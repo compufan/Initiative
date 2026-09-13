@@ -44,7 +44,23 @@ test('GLSL und TypeScript rechnen dieselben Farben', async ({ page }) => {
     const quelle = document.createElement('canvas');
     quelle.width = kante;
     quelle.height = kante;
-    const qctx = quelle.getContext('2d');
+    /*
+     * Quelle UND Ablesen im Arbeitsraum – nicht in sRGB.
+     *
+     * Geprüft wird die FORMEL, nicht der Farbraum: `tonPunkt` soll genau die
+     * Zahlen bekommen, die auch der Schattierer sieht. Läge die Quelle in
+     * sRGB und die Kette in Display-P3, rechnete der Browser zweimal um, und
+     * der Vergleich mässe die Umrechnung statt der Formel – gemessen 127
+     * Stufen von 255, und keine einzige davon wäre ein Fehler in der
+     * Rechnung.
+     */
+    // Der Pfad steht in einer Variablen, damit TypeScript ihn nicht
+    // aufzulösen versucht – wie bei den Modulen darüber.
+    const ladeRaum = '/src/modules/bild/farbraum.ts';
+    const raum = (await import(
+      /* @vite-ignore */ ladeRaum
+    )) as typeof import('../src/modules/bild/farbraum.js');
+    const qctx = raum.flaeche2d(quelle);
     if (!qctx) return { fehler: 'keine Leinwand' };
     const bild = qctx.createImageData(kante, kante);
     for (let i = 0; i < kante * kante; i += 1) {
@@ -109,7 +125,7 @@ test('GLSL und TypeScript rechnen dieselben Farben', async ({ page }) => {
       const flaeche = gpu.getoentesBild(quelle, kante, kante, fall.a);
       wege.add(gpu.letzterWeg);
       if (flaeche === quelle) break;
-      const zctx = document.createElement('canvas').getContext('2d', {
+      const zctx = raum.flaeche2d(document.createElement('canvas'), {
         willReadFrequently: true,
       });
       if (!zctx) return { fehler: 'keine Leinwand' };
@@ -397,7 +413,13 @@ test('Kurven und Farbbänder rechnen auf beiden Wegen dasselbe', async ({ page }
     const quelle = document.createElement('canvas');
     quelle.width = kante;
     quelle.height = kante;
-    const qctx = quelle.getContext('2d');
+    // Der Pfad steht in einer Variablen, damit TypeScript ihn nicht
+    // aufzulösen versucht – wie bei den Modulen darüber.
+    const ladeRaum = '/src/modules/bild/farbraum.ts';
+    const raum = (await import(
+      /* @vite-ignore */ ladeRaum
+    )) as typeof import('../src/modules/bild/farbraum.js');
+    const qctx = raum.flaeche2d(quelle);
     if (!qctx) return { fehler: 'keine Leinwand' };
     const bild = qctx.createImageData(kante, kante);
     for (let i = 0; i < kante * kante; i += 1) {
@@ -495,7 +517,7 @@ test('Kurven und Farbbänder rechnen auf beiden Wegen dasselbe', async ({ page }
         const flaeche = gpu.getoentesBild(quelle, kante, kante, fall.a);
         wege.add(gpu.letzterWeg);
         if (flaeche === quelle) return { fehler: `${fall.name}: nichts gerechnet` };
-        const zctx = document.createElement('canvas').getContext('2d', {
+        const zctx = raum.flaeche2d(document.createElement('canvas'), {
           willReadFrequently: true,
         });
         if (!zctx) return { fehler: 'keine Leinwand' };

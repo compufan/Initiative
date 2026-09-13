@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'reac
 import { createPortal } from 'react-dom';
 import { BildBearbeiten } from '../bild/BildBearbeiten.js';
 import { rezeptSenden } from './RezeptBubble.js';
+import { flaeche2d } from '../bild/farbraum.js';
 import type { ComposerActionProps } from '../types.js';
 import { prepareImage, videoPreview } from '../../lib/upload.js';
 import { toast, useHideNav } from '../../state/ui.js';
@@ -186,7 +187,13 @@ export function CameraSheet({ conversationId, onClose }: ComposerActionProps) {
       const canvas = document.createElement('canvas');
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
-      const context = canvas.getContext('2d');
+      /*
+       * Auch die Aufnahme im Arbeitsraum.
+       *
+       * Eine Kamera liefert auf modernen Geräten mehr als sRGB. Was hier
+       * beschnitten wird, bekommt kein Editor der Welt zurück.
+       */
+      const context = flaeche2d(canvas);
       if (!context) throw new Error('Canvas ist nicht verfügbar');
       context.drawImage(video, 0, 0, canvas.width, canvas.height);
       const raw = await new Promise<Blob>((resolve, reject) => {

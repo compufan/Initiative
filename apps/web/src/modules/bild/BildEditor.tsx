@@ -69,6 +69,7 @@ import { writeEngineSetting } from '../stickers/engines/settings.js';
 import { SCHRIFTEN, trifftText, zeichneAnsicht, zeichneAusgabe } from './zeichnen.js';
 import { rezeptHindernis, rezeptLohnt, rezeptMoeglich, rezeptSchreiben } from './rezept.js';
 import { Kurvenfeld } from './Kurvenfeld.js';
+import { flaeche2d } from './farbraum.js';
 import {
   BAENDER,
   BAENDER_NEUTRAL,
@@ -1158,7 +1159,7 @@ export function BildEditor({
 
     // Text: einen vorhandenen greifen, sonst den gewählten beim Loslassen
     // dorthin setzen. Ein leerer `griff` heisst „setzen“.
-    const ctx = canvasRef.current?.getContext('2d');
+    const ctx = canvasRef.current ? flaeche2d(canvasRef.current) : null;
     const getroffen = ctx
       ? [...aktuell.texte]
           .reverse()
@@ -1665,7 +1666,15 @@ export function BildEditor({
     const flaeche = document.createElement('canvas');
     flaeche.width = kante;
     flaeche.height = kante;
-    const ctx = flaeche.getContext('2d', { willReadFrequently: true });
+    /*
+     * Diese eine Leinwand bleibt ABSICHTLICH sRGB.
+     *
+     * Sie liefert das Histogramm für die Automatik, und das ist eine
+     * Schätzung über die Verteilung der Helligkeiten. Sie in P3 zu nehmen
+     * hiesse, die Schwellen in `autoAnpassung` gegen einen anderen Raum zu
+     * halten, als sie gemessen wurden.
+     */
+    const ctx = flaeche.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
     if (!ctx) return;
     ctx.drawImage(quellBild, 0, 0, kante, kante);
     const daten = ctx.getImageData(0, 0, kante, kante).data;

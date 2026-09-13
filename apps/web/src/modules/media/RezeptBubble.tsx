@@ -7,6 +7,7 @@ import { BildEditor } from '../bild/BildEditor.js';
 import { MAX_KANTE, type BildDoc } from '../bild/doc.js';
 import { REZEPT_DATEINAME, REZEPT_MIME, rezeptLesen } from '../bild/rezept.js';
 import { zeichneAusgabe } from '../bild/zeichnen.js';
+import { flaeche2d } from '../bild/farbraum.js';
 import { prepareImage } from '../../lib/upload.js';
 import { loadImageFromBlob } from '../stickers/helpers.js';
 import { toast } from '../../state/ui.js';
@@ -319,7 +320,7 @@ async function verkleinern(
   const flaeche = document.createElement('canvas');
   flaeche.width = breite;
   flaeche.height = hoehe;
-  const ctx = flaeche.getContext('2d');
+  const ctx = flaeche2d(flaeche);
   if (!ctx) return { bild, breite: bild.naturalWidth, hoehe: bild.naturalHeight, faktor: 1 };
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(bild, 0, 0, breite, hoehe);
