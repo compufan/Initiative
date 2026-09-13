@@ -294,8 +294,15 @@ describe('docAusRoh glaubt der Datei nichts', () => {
       art: 'netz',
       breite: 2,
       hoehe: 2,
-      // vier Bytes, Base64
-      alpha: btoa(' '),
+      /*
+       * Vier Bytes als Escape-Folge und nicht als Zeichen.
+       *
+       * Mit den Steuerzeichen im Quelltext hielt git die ganze Datei fuer
+       * eine Binaerdatei: kein Unterschied in der Durchsicht, kein Treffer
+       * bei der Suche. Eine Testdatei, die man nicht lesen kann, ist die
+       * Haelfte weniger wert.
+       */
+      alpha: btoa('\u0000\u0001\u0002\u0003'),
     };
     const doc = docAusRoh(
       {
