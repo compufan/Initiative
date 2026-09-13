@@ -828,3 +828,19 @@
   opacity: 0.75;
   font-size: 12px;
 }
+
+/* Der Stand einer Reihe über mehrere Bilder, mit Abbruch. */
+.media-reihe {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.85rem;
+}
+
+.media-reihe > progress {
+  /* `flex: 1 1 120px` und keine feste Breite: Auf einem schmalen Telefon
+     steht der Abbrechen-Knopf sonst ausserhalb des Blatts. */
+  flex: 1 1 120px;
+  min-width: 80px;
+}

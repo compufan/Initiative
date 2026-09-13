@@ -292,6 +292,16 @@ interface BildEditorProps {
    * nicht; er verspräche sonst etwas, das niemand entgegennimmt.
    */
   onRezept?: (original: Blob, rezept: Blob, name: string) => Promise<void> | void;
+  /**
+   * Wieviele WEITERE Bilder danebenliegen – für „auf alle übertragen“.
+   *
+   * Null oder fehlend heisst: Es gibt keinen Stapel, und der Knopf erscheint
+   * gar nicht. Ein Knopf „auf alle 0 übertragen“ wäre eine Frage, die sich
+   * selbst beantwortet.
+   */
+  stapelAnzahl?: number;
+  /** Überträgt Licht und Farbe auf die anderen Bilder der Auswahl. */
+  onStapel?: (anpassung: Anpassung) => Promise<void> | void;
 }
 
 /** `foto.jpg` → `foto-bearbeitet.webp`. Das Original behält seinen Namen. */
@@ -317,6 +327,8 @@ export function BildEditor({
   startVerhaeltnis,
   startDoc,
   onRezept,
+  stapelAnzahl = 0,
+  onStapel,
 }: BildEditorProps) {
   useHideNav(true);
 
@@ -2180,6 +2192,26 @@ export function BildEditor({
     }
   }
 
+  /**
+   * Licht und Farbe auf die anderen Bilder der Auswahl.
+   *
+   * Der Editor bleibt danach offen. Das ist Absicht: „Übertragen“ und
+   * „Übernehmen“ sind zwei Entscheidungen, und wer die eine trifft, hat die
+   * andere noch nicht getroffen. Ein Knopf, der beides täte, nähme einem das
+   * Nachjustieren an genau dem Bild weg, an dem man gerade eingestellt hat.
+   */
+  async function stapelUebertragen() {
+    if (!onStapel || !doc) return;
+    setSpeichert(true);
+    try {
+      await onStapel(doc.anpassung);
+    } catch (error) {
+      toast(errorMessage(error, 'Das Übertragen ist fehlgeschlagen'), 'error');
+    } finally {
+      setSpeichert(false);
+    }
+  }
+
   async function inDieApp() {
     if (!onFertig) return;
     setSpeichert(true);
@@ -3394,6 +3426,17 @@ export function BildEditor({
               disabled={laedt || speichert}
             >
               {speichert ? '…' : (zielName ?? 'Als neue Datei sichern')}
+            </button>
+          )}
+          {onStapel && stapelAnzahl > 0 && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => void stapelUebertragen()}
+              disabled={laedt || speichert || istNeutral(doc?.anpassung ?? NEUTRAL)}
+              data-tipp="Belichtung, Farbe, Kurven und Farbbänder auf die anderen Bilder der Auswahl – Zuschnitt, Striche und Bereiche bleiben, wo sie sind"
+            >
+              ✨ Auf alle {stapelAnzahl + 1}
             </button>
           )}
           {rezeptGeht && (

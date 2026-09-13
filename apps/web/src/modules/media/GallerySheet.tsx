@@ -5,6 +5,8 @@ import { EmptyState, Spinner } from '../../components/Feedback.js';
 import { prepareImage, videoPreview } from '../../lib/upload.js';
 import { BildBearbeiten } from '../bild/BildBearbeiten.js';
 import { rezeptSenden } from './RezeptBubble.js';
+import { StapelAbbruch, stapelAnwenden } from '../bild/stapel.js';
+import type { Anpassung } from '../bild/ton.js';
 import type { ComposerActionProps } from '../types.js';
 import { toast } from '../../state/ui.js';
 import {
@@ -20,6 +22,14 @@ interface GalleryItem {
   id: string;
   kind: 'image' | 'video';
   blob: Blob;
+  /**
+   * Die Datei, wie sie hereinkam – vor jeder Bearbeitung.
+   *
+   * Nur dafür da, dass „auf alle übertragen" auf einem BEREITS bearbeiteten
+   * Bild nicht doppelt rechnet: Ohne sie läge der Kontrast des einen Laufs
+   * noch in den Bildpunkten, und der des zweiten käme obendrauf.
+   */
+  original: Blob;
   mime: string;
   fileName: string;
   url: string;
@@ -57,6 +67,9 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
    * weil aus der Werkstatt heraus Blätter aufgehen – hier ist es umgekehrt.
    */
   const [editorOffen, setEditorOffen] = useState(false);
+  /** Der Stand der Reihe: `null` heisst, es läuft gerade keine. */
+  const [reihe, setReihe] = useState<{ fertig: number; gesamt: number } | null>(null);
+  const reihenAbbruch = useRef<AbortController | null>(null);
   const itemsRef = useRef<GalleryItem[]>([]);
 
   useEffect(() => {
@@ -107,6 +120,7 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
               id: `${file.name}-${file.lastModified}-${naechsteKennung()}`,
               kind,
               blob: prepared.blob,
+              original: prepared.blob,
               mime: prepared.mime,
               fileName: file.name,
               url: URL.createObjectURL(prepared.blob),
@@ -123,6 +137,7 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
               id: `${file.name}-${file.lastModified}-${naechsteKennung()}`,
               kind,
               blob: file,
+              original: file,
               mime: mimeForFile(file),
               fileName: file.name,
               url: URL.createObjectURL(file),
@@ -182,6 +197,61 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
       }),
     );
     toast('Bearbeitete Fassung übernommen.', 'success');
+  };
+
+  /**
+   * Licht und Farbe eines Bildes auf alle anderen Bilder der Auswahl.
+   *
+   * Gerechnet wird vom ORIGINAL jedes Eintrags, nicht von seiner
+   * möglicherweise schon bearbeiteten Fassung – sonst läge bei einem Bild,
+   * an dem vorher jemand gedreht hat, beides übereinander.
+   *
+   * Videos bleiben aussen vor: Sie durch die Farbkette zu schicken hiesse,
+   * sie neu zu kodieren, und das ist etwas völlig anderes als ein Foto
+   * durchzurechnen.
+   */
+  const uebertragen = async (anpassung: Anpassung) => {
+    const ziele = itemsRef.current.filter((item) => item.kind === 'image');
+    if (ziele.length === 0) return;
+    const steuerung = new AbortController();
+    reihenAbbruch.current = steuerung;
+    setReihe({ fertig: 0, gesamt: ziele.length });
+    try {
+      const ergebnis = await stapelAnwenden(
+        ziele.map((item) => ({ id: item.id, quelle: item.original })),
+        anpassung,
+        (fertig, gesamt) => setReihe({ fertig, gesamt }),
+        steuerung.signal,
+      );
+      setItems((alt) =>
+        alt.map((eintrag) => {
+          const neu = ergebnis.get(eintrag.id);
+          if (!neu) return eintrag;
+          URL.revokeObjectURL(eintrag.url);
+          return {
+            ...eintrag,
+            blob: neu.blob,
+            mime: neu.mime,
+            url: URL.createObjectURL(neu.blob),
+            width: neu.breite,
+            height: neu.hoehe,
+            size: neu.blob.size,
+            // Die Vorschau stimmt nicht mehr; sie entsteht beim Senden neu.
+            previewDataUrl: undefined,
+          };
+        }),
+      );
+      toast(
+        `Licht und Farbe auf ${ziele.length} ${ziele.length === 1 ? 'Bild' : 'Bilder'} übertragen.`,
+        'success',
+      );
+    } catch (error) {
+      if (error instanceof StapelAbbruch) toast('Abgebrochen – nichts geändert.', 'info');
+      else toast(errorMessage(error, 'Das Übertragen ist fehlgeschlagen'), 'error');
+    } finally {
+      reihenAbbruch.current = null;
+      setReihe(null);
+    }
   };
 
   const send = async () => {
@@ -292,6 +362,8 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
                       tipp="Zuschneiden, geraderichten, Licht und Farbe – vor dem Senden"
                       onFertig={(fertig, fertigName) => ersetzen(item.id, fertig, fertigName)}
                       onOffen={setEditorOffen}
+                      stapelAnzahl={items.filter((e) => e.kind === 'image').length - 1}
+                      onStapel={uebertragen}
                       /*
                        * Nur bei genau EINEM Bild in der Auswahl.
                        *
@@ -339,6 +411,31 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
             {items.length} {items.length === 1 ? 'Datei' : 'Dateien'} · {formatBytes(totalSize)}
           </p>
 
+          {/*
+            Der Stand der Reihe – mit Abbruch.
+
+            Eine Reihe über zwanzig Fotos dauert auf einem Telefon spürbar
+            lange. Ohne Anzeige sähe es aus, als hänge die App; ohne Abbruch
+            wäre man ihr ausgeliefert. Das `<progress>` ist bewusst das
+            eingebaute Element und kein nachgebauter Balken: Es meldet sich
+            bei einer Vorlesehilfe von selbst.
+          */}
+          {reihe && (
+            <div className="media-reihe" role="status">
+              <progress value={reihe.fertig} max={reihe.gesamt} />
+              <span>
+                Licht und Farbe übertragen … {reihe.fertig} von {reihe.gesamt}
+              </span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => reihenAbbruch.current?.abort()}
+              >
+                Abbrechen
+              </button>
+            </div>
+          )}
+
           <input
             className="input"
             value={caption}
@@ -351,7 +448,7 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
             type="button"
             className="btn btn-primary btn-block"
             onClick={() => void send()}
-            disabled={sending}
+            disabled={sending || reihe !== null}
           >
             {sending ? 'Wird gesendet …' : `Senden (${items.length})`}
           </button>

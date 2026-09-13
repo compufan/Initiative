@@ -243,3 +243,119 @@ test('ein Farbband trifft nur seine Farbe', async ({ browser }) => {
 
   await page.context().close();
 });
+
+/**
+ * Die mittlere Helligkeit jeder Kachel in der Auswahl.
+ *
+ * Gelesen wird aus dem `<img>` der Kachel, also aus genau dem, was der
+ * Anwender sieht – nicht aus einem Zwischenstand im Speicher.
+ */
+async function kachelHelligkeiten(page: Page): Promise<number[]> {
+  return await page.locator('.media-tile img').evaluateAll((els) =>
+    els.map((el) => {
+      const bild = el as HTMLImageElement;
+      const c = document.createElement('canvas');
+      c.width = 16;
+      c.height = 16;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return -1;
+      ctx.drawImage(bild, 0, 0, 16, 16);
+      const d = ctx.getImageData(0, 0, 16, 16).data;
+      let summe = 0;
+      for (let i = 0; i < 16 * 16; i += 1) summe += d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2];
+      return summe / (16 * 16) / 3;
+    }),
+  );
+}
+
+test('Licht und Farbe lassen sich auf die ganze Auswahl übertragen', async ({ browser }) => {
+  /*
+   * Stapelarbeit: zwanzig Aufnahmen im selben Licht, eine eingestellt, alle
+   * bekommen es.
+   *
+   * Der Test prüft zwei Dinge, und das zweite ist das wichtigere:
+   *
+   *   1. Die anderen Bilder ändern sich überhaupt.
+   *   2. Sie ändern sich GENAUSO STARK wie das eine, an dem eingestellt
+   *      wurde. Würde die Reihe auf der schon bearbeiteten Fassung statt auf
+   *      dem Original rechnen, käme beim ersten Bild alles doppelt heraus –
+   *      und das sähe nach „wirkt“ aus, nicht nach einem Fehler.
+   */
+  const alice = credentials('stap');
+  const bob = credentials('stape');
+  const page = await signUp(browser, alice);
+  await signUp(browser, bob);
+  await page.getByRole('button', { name: 'Neuer Chat' }).click();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await page.getByText(bob.displayName).first().click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await page.getByText('Foto/Video').click();
+  await page.locator('input[type=file]').setInputFiles([
+    { name: 'a.png', mimeType: 'image/png', buffer: GRAU },
+    { name: 'b.png', mimeType: 'image/png', buffer: GRAU },
+    { name: 'c.png', mimeType: 'image/png', buffer: GRAU },
+  ]);
+  await expect(page.locator('.media-tile')).toHaveCount(3);
+  const vorher = await kachelHelligkeiten(page);
+  for (const wert of vorher) {
+    expect(wert).toBeGreaterThan(95);
+    expect(wert).toBeLessThan(125);
+  }
+
+  /*
+   * Zuerst das erste Bild WIRKLICH bearbeiten – mit „Übernehmen".
+   *
+   * Das ist der Fall, um den es geht: Danach steht die Aufhellung in seinen
+   * Bildpunkten. Würde die Reihe gleich darauf weiterrechnen statt auf dem
+   * Original, käme sie beim ersten Bild doppelt heraus. Ohne diesen Schritt
+   * wäre `blob` überall noch dasselbe wie `original`, und der Test könnte
+   * den Unterschied gar nicht sehen.
+   */
+  await page.locator('.media-tile-knopf').first().click();
+  await expect(page.locator('.bild-leinwand')).toBeVisible({ timeout: 30_000 });
+  await page.getByRole('button', { name: /Ton$/ }).click();
+  const erste = page.getByLabel('Belichtung').first();
+  await erste.fill('1.5');
+  await erste.dispatchEvent('change');
+  await page.getByRole('button', { name: 'Übernehmen' }).click();
+  await expect(page.getByText('Bearbeitete Fassung übernommen.')).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => (await kachelHelligkeiten(page))[0], { timeout: 30_000 })
+    .toBeGreaterThan(vorher[0] + 30);
+
+  // Jetzt am ZWEITEN Bild dasselbe einstellen und auf alle übertragen.
+  await page.locator('.media-tile-knopf').nth(1).click();
+  await expect(page.locator('.bild-leinwand')).toBeVisible({ timeout: 30_000 });
+  await page.getByRole('button', { name: /Ton$/ }).click();
+  const belichtung = page.getByLabel('Belichtung').first();
+  await belichtung.fill('1.5');
+  await belichtung.dispatchEvent('change');
+
+  const knopf = page.getByRole('button', { name: /Auf alle 3/ });
+  await expect(knopf).toBeVisible();
+  await knopf.click();
+
+  // Der Editor bleibt offen – „übertragen" und „übernehmen" sind zwei
+  // Entscheidungen. Er wird hier geschlossen, ohne das eine Bild zu sichern.
+  await expect(page.getByText(/übertragen\./)).toBeVisible({ timeout: 60_000 });
+  await page.getByRole('button', { name: 'Schließen' }).first().click();
+  await page.getByRole('button', { name: 'Verwerfen' }).click();
+
+  await expect
+    .poll(async () => Math.min(...(await kachelHelligkeiten(page))), { timeout: 30_000 })
+    .toBeGreaterThan(vorher[0] + 30);
+
+  /*
+   * Und alle drei gleich hell – das ist die Aussage über das Original.
+   *
+   * Bei einer Reihe, die auf der bearbeiteten Fassung rechnete, stünde das
+   * erste Bild deutlich über den anderen beiden.
+   */
+  const nachher = await kachelHelligkeiten(page);
+  const spanne = Math.max(...nachher) - Math.min(...nachher);
+  expect(spanne, 'die drei Bilder sind unterschiedlich hell geworden').toBeLessThan(4);
+
+  await page.context().close();
+});

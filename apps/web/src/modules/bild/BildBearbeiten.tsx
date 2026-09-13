@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { BildEditor } from './BildEditor.js';
+import type { Anpassung } from './ton.js';
 
 interface BildBearbeitenProps {
   /** Was bearbeitet werden soll. Liegt schon im Gerät – nichts wird geladen. */
@@ -34,6 +35,10 @@ interface BildBearbeitenProps {
    * `.is-beiseite` in `global.css`.
    */
   onOffen?: (offen: boolean) => void;
+  /** Wieviele weitere Bilder danebenliegen – für „auf alle übertragen“. */
+  stapelAnzahl?: number;
+  /** Überträgt Licht und Farbe auf die anderen Bilder der Auswahl. */
+  onStapel?: (anpassung: Anpassung) => Promise<void> | void;
 }
 
 /**
@@ -56,6 +61,8 @@ export function BildBearbeiten({
   className,
   tipp,
   onOffen,
+  stapelAnzahl,
+  onStapel,
 }: BildBearbeitenProps) {
   const [offen, setOffen] = useState(false);
 
@@ -94,6 +101,8 @@ export function BildBearbeiten({
                 }
               : undefined
           }
+          stapelAnzahl={stapelAnzahl}
+          onStapel={onStapel}
           zielName={zielName ?? 'Übernehmen'}
           startVerhaeltnis={startVerhaeltnis}
         />
