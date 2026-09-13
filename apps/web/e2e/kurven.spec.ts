@@ -95,7 +95,17 @@ async function editorMit(browser: Browser, prefix: string, bild: Buffer): Promis
   await signUp(browser, bob);
   await page.getByRole('button', { name: 'Neuer Chat' }).click();
   await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
-  await page.getByText(bob.displayName).first().click();
+  /*
+   * Erst abwarten, dann klicken.
+   *
+   * Im gemeinsamen Lauf über alle Tests teilen sich hunderte Konten dieselbe
+   * Datenbank; die Suche braucht dann länger. Ein `click` ohne vorheriges
+   * Abwarten meldet am Ende den Zeitablauf des ganzen Tests statt „den gibt
+   * es noch nicht".
+   */
+  const treffer = page.getByText(bob.displayName).first();
+  await expect(treffer).toBeVisible({ timeout: 30_000 });
+  await treffer.click();
   await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
   await page.getByRole('button', { name: 'Mehr hinzufügen' }).click();
   await page.getByText('Foto/Video').click();
@@ -287,7 +297,17 @@ test('Licht und Farbe lassen sich auf die ganze Auswahl übertragen', async ({ b
   await signUp(browser, bob);
   await page.getByRole('button', { name: 'Neuer Chat' }).click();
   await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
-  await page.getByText(bob.displayName).first().click();
+  /*
+   * Erst abwarten, dann klicken.
+   *
+   * Im gemeinsamen Lauf über alle Tests teilen sich hunderte Konten dieselbe
+   * Datenbank; die Suche braucht dann länger. Ein `click` ohne vorheriges
+   * Abwarten meldet am Ende den Zeitablauf des ganzen Tests statt „den gibt
+   * es noch nicht".
+   */
+  const treffer = page.getByText(bob.displayName).first();
+  await expect(treffer).toBeVisible({ timeout: 30_000 });
+  await treffer.click();
   await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
 
   await page.getByRole('button', { name: 'Mehr hinzufügen' }).click();

@@ -83,11 +83,28 @@ function grauesPng(breite: number, hoehe: number, wert = 110): Buffer {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), ...bloecke]);
 }
 
-async function chatMit(page: Page, gegenueber: string) {
+/**
+ * Einen Chat mit jemandem aufmachen.
+ *
+ * Gesucht wird über den BENUTZERNAMEN, nicht über den Anzeigenamen. Der
+ * Unterschied ist keiner der Bequemlichkeit: Die Suche lief hier vorher über
+ * das erste Wort des Anzeigenamens, und im gemeinsamen Lauf über alle Tests
+ * teilen sich hunderte Konten dieselbe Datenbank. Unter Last kam das Ergebnis
+ * dann nicht rechtzeitig – ein Fehlschlag, der allein nie auftrat und im
+ * vollen Durchgang einmal zuschlug. Der Benutzername ist eindeutig, und alle
+ * anderen Prüfungen dieses Vorhabens suchen genau so.
+ *
+ * Und ausdrücklich abgewartet, bevor geklickt wird: Ein `click` mit
+ * Standardfrist wartet still auf ein Element, das vielleicht nie kommt, und
+ * meldet am Ende den Zeitablauf des ganzen Tests statt „den gibt es nicht".
+ */
+async function chatMit(page: Page, gegenueber: ReturnType<typeof credentials>) {
   await page.getByRole('button', { name: 'Neuer Chat' }).click();
-  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(gegenueber.split(' ')[0]);
-  await page.getByText(gegenueber).first().click();
-  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(gegenueber.username);
+  const treffer = page.getByText(gegenueber.displayName).first();
+  await expect(treffer).toBeVisible({ timeout: 30_000 });
+  await treffer.click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible({ timeout: 30_000 });
 }
 
 /**
@@ -134,7 +151,7 @@ test('eine Bearbeitung reist als Rezept und kommt beim Empfänger gerechnet an',
   const alicePage = await signUp(browser, alice);
   const bobPage = await signUp(browser, bob);
 
-  await chatMit(alicePage, bob.displayName);
+  await chatMit(alicePage, bob);
 
   // Ein Bild aussuchen und VOR dem Senden bearbeiten – der Weg, auf dem das
   // Rezept überhaupt erst entsteht.
@@ -226,7 +243,7 @@ test('was Bildinhalt entfernt, wird nicht zum Rezept', async ({ browser }) => {
   const alicePage = await signUp(browser, alice);
   await signUp(browser, bob);
 
-  await chatMit(alicePage, bob.displayName);
+  await chatMit(alicePage, bob);
   await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
   await alicePage.getByText('Foto/Video').click();
   await alicePage.locator('input[type=file]').setInputFiles({
@@ -307,7 +324,7 @@ test('ein Entwurf überlebt das Schliessen – und den ganzen Browser', async ({
   const alicePage = await signUp(browser, alice);
   await signUp(browser, bob);
 
-  await chatMit(alicePage, bob.displayName);
+  await chatMit(alicePage, bob);
   await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
   await alicePage.getByText('Foto/Video').click();
   await alicePage.locator('input[type=file]').setInputFiles({
@@ -358,7 +375,7 @@ test('„Neu anfangen" lässt den Entwurf nicht wiederkommen', async ({ browser 
   const alicePage = await signUp(browser, alice);
   await signUp(browser, bob);
 
-  await chatMit(alicePage, bob.displayName);
+  await chatMit(alicePage, bob);
 
   const aufmachen = async () => {
     await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
