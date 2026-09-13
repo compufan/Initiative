@@ -64,10 +64,24 @@ export function BildBearbeiten({
   stapelAnzahl,
   onStapel,
 }: BildBearbeitenProps) {
+  /*
+   * Das Bild, mit dem der Editor AUFGEGANGEN ist – festgehalten.
+   *
+   * `blob` kann sich unter dem offenen Editor ändern: „Auf alle übertragen"
+   * rechnet jedes Bild der Auswahl neu und tauscht es aus, auch das gerade
+   * bearbeitete. Der Editor lädt bei einer neuen Quelle neu und setzt ein
+   * frisches Dokument – die Arbeit von eben wäre fort, und zwar ausgelöst von
+   * einer Aktion, die mit diesem einen Bild gar nichts zu tun hatte.
+   *
+   * Wer den Editor aufmacht, macht ihn für DIESES Bild auf. Was danach im
+   * Blatt passiert, geht ihn nichts an.
+   */
+  const [offenesBild, setOffenesBild] = useState<Blob | null>(null);
   const [offen, setOffen] = useState(false);
 
   // Den Melder an EINER Stelle bedienen, nicht an jedem der vier Wege hinaus.
   const setzen = (wert: boolean) => {
+    if (wert) setOffenesBild(blob);
     setOffen(wert);
     onOffen?.(wert);
   };
@@ -84,9 +98,9 @@ export function BildBearbeiten({
         {label ? `✏️ ${label}` : '✏️'}
       </button>
 
-      {offen && (
+      {offen && offenesBild && (
         <BildEditor
-          quelle={blob}
+          quelle={offenesBild}
           name={name}
           onClose={() => setzen(false)}
           onFertig={async (fertig, fertigName) => {

@@ -703,6 +703,22 @@ export function BildEditor({
   // Zurück-Taste schliesst den Editor, statt aus der App zu fallen.
   useEffect(() => dialogAnmelden(schliessenVersuchen), [schliessenVersuchen]);
 
+  /*
+   * `onClose` über eine Referenz, nicht über die Abhängigkeiten.
+   *
+   * Fast jeder Aufrufer gibt hier eine frisch erzeugte Funktion herein
+   * (`onClose={() => setzen(false)}`), und die ändert bei jedem Rendern des
+   * ELTERNTEILS ihre Kennung. Stand sie im Abhängigkeitsfeld des Ladeeffekts,
+   * lud dieser das Bild neu und setzte ein frisches Dokument – mitten in der
+   * Arbeit. Nachgestellt: Während „Auf alle übertragen" läuft, meldet das
+   * Auswahlblatt seinen Fortschritt über den Zustand, rendert dabei neu, und
+   * die Belichtung im offenen Editor sprang von 1,5 zurück auf 0.
+   *
+   * Dasselbe Muster und dieselbe Begründung stehen in `components/Sheet.tsx`.
+   */
+  const schliessenRef = useRef(onClose);
+  schliessenRef.current = onClose;
+
   useEffect(() => {
     let weg = false;
     loadImageFromBlob(quelle)
@@ -758,7 +774,7 @@ export function BildEditor({
       .catch((error: unknown) => {
         if (weg) return;
         toast(errorMessage(error, 'Das Bild konnte nicht geladen werden'), 'error');
-        onClose();
+        schliessenRef.current();
       })
       .finally(() => {
         if (!weg) setLaedt(false);
@@ -766,12 +782,13 @@ export function BildEditor({
     return () => {
       weg = true;
     };
-    // `startVerhaeltnis` und `startDoc` gehören bewusst nicht in die
-    // Abhängigkeiten: Beide geben den ANFANGSstand vor. Stünden sie hier,
-    // würde ein Wechsel das Bild neu laden und jede Bearbeitung wegwerfen –
-    // und `startDoc` ist ein Objekt, das bei jedem Rahmen neu entsteht.
+    // `startVerhaeltnis`, `startDoc` und `onClose` gehören bewusst nicht in
+    // die Abhängigkeiten: Die ersten beiden geben den ANFANGSstand vor,
+    // `onClose` läuft über eine Referenz (siehe oben). Stünde eines davon
+    // hier, würde ein Wechsel das Bild neu laden und jede Bearbeitung
+    // wegwerfen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quelle, onClose]);
+  }, [quelle]);
 
   /*
    * Der Entwurf wird beim ARBEITEN fortgeschrieben, nicht beim Verlassen.
@@ -788,11 +805,22 @@ export function BildEditor({
    */
   useEffect(() => {
     if (!kennung || !doc || !bild) return undefined;
+    /*
+     * Solange die Frage nach dem Entwurf offen steht, wird NICHT geschrieben.
+     *
+     * Ohne das lief der Effekt gegen das frische, unberührte Dokument, und
+     * `entwurfSichern` räumt bei einem unberührten Dokument den Entwurf weg –
+     * nach einer Dreiviertelsekunde also genau den, nach dem der Dialog
+     * gerade fragt. Wer die Frage länger ansieht als drei Viertel einer
+     * Sekunde (also: jeder) und dann den Tab schliesst, hatte den Entwurf
+     * schon verloren, bevor er antworten konnte.
+     */
+    if (entwurfsfrage) return undefined;
     const timer = window.setTimeout(() => {
       void entwurfSichern(kennung, doc, bild.naturalWidth, bild.naturalHeight, name ?? null);
     }, 750);
     return () => window.clearTimeout(timer);
-  }, [kennung, doc, bild, name]);
+  }, [kennung, doc, bild, name, entwurfsfrage]);
 
   /** Merkt den Stand für „Rückgängig“. */
   const merken = useCallback(() => {

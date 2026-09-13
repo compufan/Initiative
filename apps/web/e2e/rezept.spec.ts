@@ -356,6 +356,30 @@ test('ein Entwurf überlebt das Schliessen – und den ganzen Browser', async ({
 
   // Gefragt wird, nicht angewandt.
   await expect(alicePage.getByText('Entwurf weiterführen?')).toBeVisible({ timeout: 30_000 });
+
+  /*
+   * Und die Frage darf den Entwurf nicht verbrauchen, während sie dasteht.
+   *
+   * Der Speichereffekt schreibt nach einer Dreiviertelsekunde Ruhe – und bei
+   * einem UNBERÜHRTEN Dokument räumt er den Entwurf weg. Solange die Frage
+   * offen steht, ist das Dokument aber genau das: unberührt. Ohne die Sperre
+   * löschte der Editor also nach 750 ms den Entwurf, nach dem er gerade
+   * fragte. Hier wird deshalb länger gewartet, als der Effekt braucht, und
+   * danach OHNE Antwort neu geladen: Der Entwurf muss die Frage überleben.
+   */
+  await alicePage.waitForTimeout(1800);
+  await alicePage.reload();
+  await wiederImChat(alicePage, bob.displayName);
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'grau.png',
+    mimeType: 'image/png',
+    buffer: grauesPng(320, 240),
+  });
+  await alicePage.locator('.media-tile-knopf').first().click();
+
+  await expect(alicePage.getByText('Entwurf weiterführen?')).toBeVisible({ timeout: 30_000 });
   await alicePage.getByRole('button', { name: 'Weiterführen' }).click();
 
   await alicePage.getByRole('button', { name: /Ton$/ }).click();

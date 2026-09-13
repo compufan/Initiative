@@ -167,11 +167,39 @@ export function kurveTabelle(punkte: readonly Kurvenpunkt[]): Float32Array {
      * kleineren Sehne betragen; darüber beult die Kurve aus.
      */
     for (let i = 0; i < n - 1; i += 1) {
-      if (sehne[i] === 0) {
+      /*
+       * Eine Sehne, die praktisch null ist, gilt als null.
+       *
+       * Nicht nur `=== 0`: Liegen zwei Stützpunkte auf fast demselben y, wird
+       * `sehne[i]` winzig, und `m[i] / sehne[i]` läuft gegen unendlich. Dann
+       * ist `s` unendlich, `t = 3/√s` null, und `t * a * sehne[i]` ist
+       * `0 · ∞ · winzig` – also NaN. Von dort kippt die GANZE Tabelle: `halten`
+       * reicht NaN durch, und ein `Uint8ClampedArray` legt es stumm als 0 ab.
+       * Aus einer Kurve würde ein schwarzes Bild, ohne jede Fehlermeldung.
+       * Erreichbar ist das aus einem fremden Rezept, dessen y-Werte sich um
+       * einen subnormalen Betrag unterscheiden.
+       */
+      if (Math.abs(sehne[i]) < 1e-12) {
         m[i] = 0;
         m[i + 1] = 0;
         continue;
       }
+      /*
+       * ZUERST das Vorzeichen, dann der Kreis.
+       *
+       * Das ist der Teil des Verfahrens, der hier zuerst gefehlt hat – und er
+       * ist der wichtigere. Wo zwei Sehnen die Richtung wechseln (ein Hoch
+       * oder Tief in den Stützpunkten), zeigt die gemittelte Ableitung in die
+       * FALSCHE Richtung. Die Kreisbedingung `a² + b² ≤ 9` merkt davon
+       * nichts: Ein Quadrat verliert das Vorzeichen.
+       *
+       * Nachgerechnet an (0; 0), (0,5; 0,8), (1; 0,6): Die Ableitung in der
+       * Mitte war +0,6, während die Sehne dahinter −0,4 beträgt. Die Kurve
+       * stieg auf 0,8246 statt bei 0,8 umzukehren – ein heller Saum über dem
+       * gesetzten Punkt, und danach ein Gefälle, das steiler ist als gewollt.
+       */
+      if (m[i] * sehne[i] < 0) m[i] = 0;
+      if (m[i + 1] * sehne[i] < 0) m[i + 1] = 0;
       const a = m[i] / sehne[i];
       const b = m[i + 1] / sehne[i];
       const s = a * a + b * b;

@@ -338,3 +338,54 @@ describe('feinPunkt', () => {
     expect(baenderNeutral(bandMit(2, { helligkeit: 0.01 }))).toBe(false);
   });
 });
+
+describe('kurveTabelle bei einem Hoch in den Stützpunkten', () => {
+  it('schwingt nicht über den gesetzten Punkt hinaus', () => {
+    /*
+     * Der Fall, an dem die erste Fassung des Filters vorbeilief.
+     *
+     * Der bisherige Test hatte streng steigende Punkte – dort greift die
+     * Kreisbedingung und alles sah richtig aus. Erst bei einem HOCH in den
+     * Daten zeigt die gemittelte Ableitung in die falsche Richtung, und ein
+     * Quadrat verliert das Vorzeichen: `a² + b² ≤ 9` merkt davon nichts.
+     *
+     * Nachgerechnet ohne Vorzeichenprüfung: 0,8246 statt 0,8 – ein heller
+     * Saum über dem gesetzten Punkt.
+     */
+    const t = kurveTabelle([
+      { x: 0, y: 0 },
+      { x: 0.5, y: 0.8 },
+      { x: 1, y: 0.6 },
+    ]);
+    expect(Math.max(...Array.from(t))).toBeLessThanOrEqual(0.8 + 1e-4);
+    // Und das Hoch liegt da, wo der Punkt gesetzt wurde – nicht daneben.
+    const hoechstes = Array.from(t).indexOf(Math.max(...Array.from(t)));
+    expect(hoechstes).toBe(16);
+  });
+
+  it('schwingt auch bei einem Tief nicht unter den gesetzten Punkt', () => {
+    const t = kurveTabelle([
+      { x: 0, y: 0.6 },
+      { x: 0.5, y: 0.15 },
+      { x: 1, y: 0.9 },
+    ]);
+    expect(Math.min(...Array.from(t))).toBeGreaterThanOrEqual(0.15 - 1e-4);
+  });
+
+  it('macht aus einer verschwindend kleinen Sehne kein NaN', () => {
+    /*
+     * Erreichbar aus einem fremden Rezept: zwei y-Werte, die sich um einen
+     * subnormalen Betrag unterscheiden. `m / sehne` läuft dann gegen
+     * unendlich, `0 · ∞ · winzig` ist NaN, und von dort kippt die ganze
+     * Tabelle – `halten` reicht NaN durch und ein `Uint8ClampedArray` legt es
+     * stumm als 0 ab. Aus einer Kurve würde ein schwarzes Bild.
+     */
+    const t = kurveTabelle([
+      { x: 0, y: 0 },
+      { x: 0.5, y: Number.MIN_VALUE },
+      { x: 1, y: 1 },
+    ]);
+    for (const wert of t) expect(Number.isFinite(wert)).toBe(true);
+    expect(Math.max(...Array.from(t))).toBeLessThanOrEqual(1);
+  });
+});

@@ -357,8 +357,19 @@ test('Licht und Farbe lassen sich auf die ganze Auswahl übertragen', async ({ b
   await expect(knopf).toBeVisible();
   await knopf.click();
 
-  // Der Editor bleibt offen – „übertragen" und „übernehmen" sind zwei
-  // Entscheidungen. Er wird hier geschlossen, ohne das eine Bild zu sichern.
+  /*
+   * Der Editor bleibt offen – UND behält seine Einstellung.
+   *
+   * Das ist mehr als eine Nebenbemerkung: Die Reihe meldet ihren Fortschritt
+   * über den Zustand des Auswahlblatts, das Blatt rendert dabei neu, und der
+   * Editor bekommt bei jedem Rendern ein frisches `onClose`. Hing sein
+   * Ladeeffekt daran, lud er das Bild mitten in der Reihe neu und warf die
+   * Einstellung weg, an der man gerade gearbeitet hat.
+   */
+  await expect(page.getByLabel('Belichtung').first()).toHaveValue(/^1\.5/);
+
+  // „übertragen" und „übernehmen" sind zwei Entscheidungen. Hier wird
+  // geschlossen, ohne das eine Bild zu sichern.
   await expect(page.getByText(/übertragen\./)).toBeVisible({ timeout: 60_000 });
   await page.getByRole('button', { name: 'Schließen' }).first().click();
   await page.getByRole('button', { name: 'Verwerfen' }).click();

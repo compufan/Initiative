@@ -657,6 +657,26 @@ export function rezeptHindernis(doc: BildDoc, breite: number, hoehe: number): st
   if (z.x > 0 || z.y > 0 || z.w < breite || z.h < hoehe) {
     return 'Der Zuschnitt lässt etwas weg. Ein Rezept würde das Weggeschnittene mitschicken.';
   }
+  /*
+   * Ein weichgezeichneter Bereich ist eine Anonymisierung.
+   *
+   * Das ist der Fall, den die Regel oben zuerst übersehen hat, und er ist
+   * der gefährlichste: Ein Gesicht oder ein Kennzeichen mit einer
+   * Pinselmaske weichzuzeichnen ist der übliche Weg, es unkenntlich zu
+   * machen – in jedem Bearbeitungsprogramm, seit es Masken gibt. Dass es
+   * technisch ein Regler und kein Strich ist, ändert an der Absicht nichts.
+   *
+   * Warum nur die Unschärfe und nicht jeder Bereich: Ein Bereich, der Licht
+   * und Farbe verschiebt, ORDNET Bildinhalt um – er nimmt ihn nicht weg.
+   * Dieselben Bildpunkte stehen danach noch da, nur anders. Unschärfe
+   * dagegen wirft Information fort, und genau darum benutzt man sie zum
+   * Verdecken. Jeden Bereich zu sperren nähme dem Rezept seinen besten
+   * Anwendungsfall (Himmel abdunkeln, Porträt freistellen) für einen
+   * Gewinn, den es nicht gibt.
+   */
+  if (doc.bereiche.some((b) => b.anpassung.unschaerfe > 0)) {
+    return 'Ein weichgezeichneter Bereich macht etwas unkenntlich. Ein Rezept würde das scharfe Original mitschicken.';
+  }
   return null;
 }
 
