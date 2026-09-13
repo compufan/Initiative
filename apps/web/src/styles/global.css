@@ -212,10 +212,25 @@ canvas {
   transform: scale(0.97);
 }
 
-.btn[disabled] {
+.btn[disabled],
+.btn[aria-disabled='true'] {
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/*
+ * `aria-disabled` und nicht `disabled` – wo der Grund am Knopf hängt.
+ *
+ * Ein `disabled`-Knopf bekommt vom Browser GAR KEINE Zeigerereignisse. Der
+ * Tipp der App findet sein Ziel über `closest('[data-tipp]')` vom Ereignis
+ * aus; an einem gesperrten Knopf kommt er also nie an. Der Grund, warum es
+ * gerade nicht geht, wäre damit unlesbar – und ein gesperrter Knopf ohne
+ * Erklärung ist schlimmer als gar keiner.
+ *
+ * Mit `aria-disabled` bleibt der Knopf bedienbar: Eine Vorlesehilfe meldet
+ * ihn als nicht verfügbar, der Tipp erreicht ihn, und ein Tipp darauf sagt
+ * in einem Satz, woran es liegt.
+ */
 
 .btn-primary {
   background: var(--accent);

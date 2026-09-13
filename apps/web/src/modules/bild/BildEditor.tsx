@@ -2246,6 +2246,14 @@ export function BildEditor({
         : (rezeptHindernis(doc, bild.naturalWidth, bild.naturalHeight) ?? '');
   const rezeptGeht = Boolean(onRezept && bild && doc && rezeptSperre === '' && rezeptLohnt(doc));
 
+  /** Der eine Satz, der am Knopf steht – als Tipp und beim Tippen darauf. */
+  const rezeptGrund =
+    rezeptSperre !== ''
+      ? `Kein Rezept möglich. ${rezeptSperre} Die Kopie geht wie immer.`
+      : !rezeptGeht
+        ? 'Noch nichts eingestellt – ein Rezept beschriebe nichts.'
+        : 'Schickt das UNBEARBEITETE Bild und die Bearbeitung als Anweisung daneben – der Empfänger sieht dasselbe Ergebnis, kann aber das Original ansehen und die Regler weiterschieben.';
+
   return createPortal(
     <div className="bild-editor" role="dialog" aria-modal="true" aria-label="Bild bearbeiten">
       <header className="bild-kopf">
@@ -3439,13 +3447,42 @@ export function BildEditor({
               ✨ Auf alle {stapelAnzahl + 1}
             </button>
           )}
-          {rezeptGeht && (
+          {onRezept && (
+            /*
+             * IMMER da, nur manchmal gesperrt – und der Grund steht im Tipp.
+             *
+             * Der Knopf hing vorher an `rezeptGeht`, und darin steckt
+             * `doc.striche.length`: Er verschwand also genau dann, wenn
+             * jemand den ersten Strich malte – zusammen mit zwei
+             * Hinweiszeilen, die je nach Dokument drei oder vier Zeilen hoch
+             * waren. Die Leinwand bekommt, was das Bedienfeld übrig lässt,
+             * und wuchs damit mitten im Strich.
+             *
+             * Nachgemessen auf dem Telefon, an derselben Stelle im Ablauf:
+             * 243 × 325 Punkte Leinwand mit den beiden Hinweisen, 290 × 386
+             * ohne sie. Die zwei Zeilen kosteten also ein Sechstel der
+             * Bildfläche – und zwar solange, bis man zu malen anfing.
+             *
+             * Ein gesperrter Knopf mit Begründung ist ausserdem auffindbarer
+             * als einer, der gar nicht erst erscheint: Wer wissen will, warum
+             * es hier kein Rezept gibt, bekommt eine Antwort statt einer
+             * Leerstelle.
+             */
             <button
               type="button"
               className="btn btn-sm"
-              onClick={() => void alsRezept()}
-              disabled={laedt || speichert}
-              title="Das Original mit der Bearbeitung als Anweisung daneben – der Empfänger kann sie weiterdrehen"
+              onClick={() => {
+                if (laedt || speichert) return;
+                // Gesperrt heisst nicht stumm: Ein Tipp darauf sagt, woran es
+                // liegt. Siehe `aria-disabled` in `global.css`.
+                if (!rezeptGeht) {
+                  toast(rezeptGrund, 'info');
+                  return;
+                }
+                void alsRezept();
+              }}
+              aria-disabled={laedt || speichert || !rezeptGeht}
+              data-tipp={rezeptGrund}
             >
               🧪 Als Rezept
             </button>
@@ -3454,18 +3491,6 @@ export function BildEditor({
         {unberuehrt && !laedt && (
           <p className="bild-hinweis">
             Noch nichts geändert – gespeichert würde eine Kopie des Originals.
-          </p>
-        )}
-        {!unberuehrt && !laedt && onRezept && rezeptSperre !== '' && (
-          <p className="bild-hinweis">
-            <strong>Kein Rezept möglich.</strong> {rezeptSperre} Die Kopie geht wie immer.
-          </p>
-        )}
-        {rezeptGeht && (
-          <p className="bild-hinweis">
-            „Als Rezept“ schickt das <strong>unbearbeitete</strong> Bild und die Bearbeitung als
-            Anweisung daneben. Der Empfänger sieht dasselbe Ergebnis, kann aber das Original ansehen
-            und die Regler weiterschieben.
           </p>
         )}
       </div>

@@ -1928,32 +1928,37 @@ test('der Stempel holt Bildpunkte von woanders – ein Fleck verschwindet', asyn
   const vorher = await helligkeitIn(0.25, 0.6, 0.35, 0.75);
   expect(vorher).toBeLessThan(80);
 
-  /*
-   * Das Rechteck der Leinwand ERST JETZT holen: Die Werkzeugwahl blendet eine
-   * andere Bedienleiste ein, und die Leinwand bekommt dadurch eine andere
-   * Höhe. Ein vorher gemerkter Kasten zeigt dann neben das Bild – so lief die
-   * erste Fassung dieses Tests ins Leere, und zwar lautlos.
-   */
-  const kasten = (await leinwand.boundingBox())!;
-  expect(kasten).not.toBeNull();
+  // Ein breiter Strich, damit der Fleck in wenigen Zügen gedeckt ist.
+  await alicePage.getByRole('slider', { name: 'Strich' }).fill('60');
 
   /*
-   * Erst die Quelle auf die saubere Fläche links, dann über den Fleck malen.
-   * Der Versatz ergibt sich aus beidem: Gelesen wird um denselben Abstand
-   * versetzt, den Quelle und erster Strichpunkt hatten.
+   * Zwei Kästen, und der Unterschied zwischen ihnen ist die Lehre.
+   *
+   * Die Leinwand bekommt, was das Bedienfeld übrig lässt – und das Feld
+   * wächst, sobald die Quelle steht: Aus einem zweizeiligen Hinweis wird ein
+   * längerer mit einem zusätzlichen Knopf. Nachgemessen auf dem Telefon
+   * 386 → 350 Punkte Höhe, also neun Prozent. Wer den Kasten VOR dem Setzen
+   * der Quelle merkt und danach damit malt, trifft um denselben Anteil
+   * daneben – lautlos, weil Striche ja irgendwo landen.
+   *
+   * Deshalb: Die Quelle mit dem ersten Kasten setzen, den zweiten danach
+   * holen und ALLE Striche mit dem zweiten malen.
    */
+  const ersterKasten = (await leinwand.boundingBox())!;
+  expect(ersterKasten).not.toBeNull();
+  const quelle = {
+    x: ersterKasten.x + 0.75 * ersterKasten.width,
+    y: ersterKasten.y + 0.66 * ersterKasten.height,
+  };
+  // Die Quelle in die helle Hälfte – die liegt im gedrehten Bild rechts.
+  await alicePage.mouse.click(quelle.x, quelle.y);
+  await expect(alicePage.getByText(/Die Quelle steht/)).toBeVisible();
+
+  const kasten = (await leinwand.boundingBox())!;
   const bei = (u: number, v: number) => ({
     x: kasten.x + u * kasten.width,
     y: kasten.y + v * kasten.height,
   });
-
-  // Ein breiter Strich, damit der Fleck in wenigen Zügen gedeckt ist.
-  await alicePage.getByRole('slider', { name: 'Strich' }).fill('60');
-
-  // Die Quelle in die helle Hälfte – die liegt im gedrehten Bild rechts.
-  const quelle = bei(0.75, 0.66);
-  await alicePage.mouse.click(quelle.x, quelle.y);
-  await expect(alicePage.getByText(/Die Quelle steht/)).toBeVisible();
 
   for (const u of [0.26, 0.3, 0.34]) {
     await alicePage.mouse.move(bei(u, 0.58).x, bei(u, 0.58).y);

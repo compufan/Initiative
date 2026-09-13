@@ -151,7 +151,17 @@ test('eine Bearbeitung reist als Rezept und kommt beim Empfänger gerechnet an',
   await expect(leinwand).toBeVisible({ timeout: 30_000 });
 
   // Ohne Bearbeitung gibt es kein Rezept – es gäbe ja nichts zu beschreiben.
-  await expect(alicePage.getByRole('button', { name: /Als Rezept/ })).toHaveCount(0);
+  /*
+   * Ohne Bearbeitung ist der Knopf GESPERRT – nicht fort.
+   *
+   * Er verschwand früher, und die Fusszeile wurde damit kürzer; die Leinwand
+   * bekommt, was übrig bleibt, und wuchs mitten im Malen. Ein gesperrter
+   * Knopf hält die Höhe und sagt im Tipp, warum er gerade nicht geht.
+   */
+  await expect(alicePage.getByRole('button', { name: /Als Rezept/ })).toHaveAttribute(
+    'aria-disabled',
+    'true',
+  );
 
   await alicePage.getByRole('button', { name: /Ton$/ }).click();
   const belichtung = alicePage.getByLabel('Belichtung').first();
@@ -248,7 +258,34 @@ test('was Bildinhalt entfernt, wird nicht zum Rezept', async ({ browser }) => {
   });
   await alicePage.mouse.up();
 
-  await expect(alicePage.getByRole('button', { name: /Als Rezept/ })).toHaveCount(0);
+  /*
+   * Gesperrt, mit Begründung im Tipp – und nicht einfach fort.
+   *
+   * Geprüft wird beides: dass der Knopf nicht mehr auslöst, UND dass der
+   * Grund am Knopf steht. Ein Knopf, der ohne Erklärung nicht geht, lässt
+   * denselben Anwender dreimal tippen.
+   */
+  const gesperrt = alicePage.getByRole('button', { name: /Als Rezept/ });
+  await expect(gesperrt).toHaveAttribute('aria-disabled', 'true');
+  await expect(gesperrt).toHaveAttribute('data-tipp', /Kein Rezept möglich.*Bildinhalt/s);
+
+  /*
+   * Und der Grund ist auch WIRKLICH zu bekommen.
+   *
+   * Der Knopf ist mit `aria-disabled` gesperrt und nicht mit `disabled`:
+   * Ein `disabled`-Knopf bekommt vom Browser keine Zeigerereignisse, der
+   * Tipp der App fände ihn nie, und die Begründung wäre unlesbar. Hier wird
+   * genau das geprüft – tippen, Erklärung bekommen, und das Rezept geht
+   * trotzdem nicht raus.
+   */
+  /*
+   * `force`, weil Playwright `aria-disabled` als „nicht bedienbar" wertet und
+   * sonst bis zum Zeitablauf wartet. Genau das ist hier erwünscht: Eine
+   * Vorlesehilfe soll den Knopf als gesperrt melden. Ein Finger erreicht ihn
+   * trotzdem – das DOM-Attribut `disabled` steht ja nicht da –, und `force`
+   * schickt denselben echten Klick an dieselbe Stelle.
+   */
+  await gesperrt.click({ force: true });
   await expect(alicePage.getByText(/Kein Rezept möglich/)).toBeVisible();
 
   await alicePage.context().close();
