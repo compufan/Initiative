@@ -223,21 +223,37 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
         (fertig, gesamt) => setReihe({ fertig, gesamt }),
         steuerung.signal,
       );
+      /*
+       * Durch `prepareImage` wie beim Bearbeiten eines einzelnen Bildes.
+       *
+       * Nicht wegen der Grösse – die stimmt schon –, sondern wegen der
+       * Vorschau: An ihr hängt die sofort sichtbare, unscharfe Kachel im
+       * Chat. Ohne sie käme das Bild dort als leerer Rahmen an, bis es
+       * geladen ist, und das gerade bei Bildern, die durch eine Reihe
+       * gelaufen sind. Der Merker `true` sagt „ist schon kodiert" – es wird
+       * also nicht ein zweites Mal komprimiert.
+       */
+      const vorschauen = new Map<string, Awaited<ReturnType<typeof prepareImage>>>();
+      for (const [id, neu] of ergebnis) {
+        vorschauen.set(
+          id,
+          await prepareImage(new File([neu.blob], 'reihe', { type: neu.mime }), 1920, true),
+        );
+      }
       setItems((alt) =>
         alt.map((eintrag) => {
-          const neu = ergebnis.get(eintrag.id);
-          if (!neu) return eintrag;
+          const fertig = vorschauen.get(eintrag.id);
+          if (!fertig) return eintrag;
           URL.revokeObjectURL(eintrag.url);
           return {
             ...eintrag,
-            blob: neu.blob,
-            mime: neu.mime,
-            url: URL.createObjectURL(neu.blob),
-            width: neu.breite,
-            height: neu.hoehe,
-            size: neu.blob.size,
-            // Die Vorschau stimmt nicht mehr; sie entsteht beim Senden neu.
-            previewDataUrl: undefined,
+            blob: fertig.blob,
+            mime: fertig.mime,
+            url: URL.createObjectURL(fertig.blob),
+            width: fertig.width,
+            height: fertig.height,
+            previewDataUrl: fertig.previewDataUrl,
+            size: fertig.blob.size,
           };
         }),
       );
