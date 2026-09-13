@@ -74,9 +74,29 @@ export function TextBubble({ message, isMine }: MessageRendererProps) {
 
   const body = message.body ?? '';
   if (body.trim().length === 0) {
+    /*
+     * Zwei verschiedene Fälle, die hier zusammenlaufen.
+     *
+     * `TextBubble` ist auch der Rückfall für eine Nachrichtenart, die diese
+     * Fassung nicht kennt (siehe `rendererFor` in MessageBubble). Bei einem
+     * Text ohne Inhalt ist „Leere Nachricht" die Wahrheit; bei einer
+     * unbekannten Art ist sie eine Lüge – dort steckt der ganze Inhalt in
+     * Anhängen und Zusatzfeldern, die diese Fassung nur nicht zu deuten weiss.
+     *
+     * Angezeigt wird trotzdem nichts davon, und das ist Absicht: Bei `rezept`
+     * zum Beispiel liegt das UNBEARBEITETE Original bei, und es zu zeigen
+     * hiesse, etwas anderes zu zeigen, als der Absender gesehen hat (siehe
+     * MESSAGE_TYPES im gemeinsamen Paket). Zu sagen, dass hier etwas ist,
+     * kostet dagegen nichts.
+     */
+    const unbekannt = message.type !== 'text';
     return (
       <div className={`msg-bubble ${tone} msg-bubble-deleted`}>
-        <em>Leere Nachricht</em>
+        <em>
+          {unbekannt
+            ? 'Diese Nachricht kann diese Fassung der App nicht anzeigen'
+            : 'Leere Nachricht'}
+        </em>
       </div>
     );
   }
