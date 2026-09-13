@@ -5,12 +5,14 @@ import {
   BAENDER_NEUTRAL,
   KURVE_STUETZEN,
   ausHsl,
+  KURVE_MINDESTABSTAND,
   bandGewichte,
   baenderNeutral,
   feinPunkt,
   kurveAn,
   kurveGerade,
   kurveTabelle,
+  xImRahmen,
   kurvenFeld,
   zuHsl,
   type Farbband,
@@ -387,5 +389,74 @@ describe('kurveTabelle bei einem Hoch in den Stützpunkten', () => {
     ]);
     for (const wert of t) expect(Number.isFinite(wert)).toBe(true);
     expect(Math.max(...Array.from(t))).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('xImRahmen', () => {
+  const drei = [
+    { x: 0, y: 0 },
+    { x: 0.5, y: 0.5 },
+    { x: 1, y: 1 },
+  ];
+
+  it('hält die Enden an 0 und 1', () => {
+    expect(xImRahmen(drei, 0, 0.4)).toBe(0);
+    expect(xImRahmen(drei, 2, 0.6)).toBe(1);
+  });
+
+  it('lässt einen Punkt zwischen seinen Nachbarn frei laufen', () => {
+    expect(xImRahmen(drei, 1, 0.3)).toBeCloseTo(0.3, 6);
+    expect(xImRahmen(drei, 1, 0.8)).toBeCloseTo(0.8, 6);
+  });
+
+  it('lässt keinen Punkt an seinem Nachbarn vorbei', () => {
+    const vier = [
+      { x: 0, y: 0 },
+      { x: 0.3, y: 0.3 },
+      { x: 0.6, y: 0.6 },
+      { x: 1, y: 1 },
+    ];
+    // Weit nach links gezogen: Er bleibt rechts von 0,3 stehen.
+    expect(xImRahmen(vier, 2, -5)).toBeGreaterThan(0.3);
+    expect(xImRahmen(vier, 2, -5)).toBeLessThan(0.3 + 2 * KURVE_MINDESTABSTAND);
+    // Und weit nach rechts: links von 1.
+    expect(xImRahmen(vier, 2, 99)).toBeLessThan(1);
+    expect(xImRahmen(vier, 1, 99)).toBeLessThan(0.6);
+  });
+
+  it('hält die Reihenfolge über den ganzen Zug', () => {
+    /*
+     * Der eigentliche Punkt: Nach jedem Schritt eines Zuges muss die Liste
+     * noch streng steigend sein. Ist sie es nicht, sortiert `mitEnden` beim
+     * nächsten Bild – und ab da zieht der Finger am Nachbarn.
+     */
+    const punkte = [
+      { x: 0, y: 0 },
+      { x: 0.25, y: 0.3 },
+      { x: 0.5, y: 0.5 },
+      { x: 1, y: 1 },
+    ];
+    for (let i = 0; i <= 40; i += 1) {
+      const gezogen = punkte.map((p, k) =>
+        k === 2 ? { x: xImRahmen(punkte, 2, 1 - i / 20), y: p.y } : p,
+      );
+      for (let k = 1; k < gezogen.length; k += 1) {
+        expect(gezogen[k].x, `Schritt ${i}, Punkt ${k}`).toBeGreaterThan(gezogen[k - 1].x);
+      }
+    }
+  });
+
+  it('lässt das x stehen, wenn links und rechts kein Platz ist', () => {
+    // Die beiden Nachbarn stehen enger beieinander als zweimal der
+    // Mindestabstand – dazwischen ist für den mittleren kein Platz mehr.
+    const eng = [
+      { x: 0, y: 0 },
+      { x: 0.5 - KURVE_MINDESTABSTAND / 2, y: 0.3 },
+      { x: 0.5, y: 0.4 },
+      { x: 0.5 + KURVE_MINDESTABSTAND / 2, y: 0.6 },
+      { x: 1, y: 1 },
+    ];
+    expect(xImRahmen(eng, 2, 0.1)).toBe(0.5);
+    expect(xImRahmen(eng, 2, 0.9)).toBe(0.5);
   });
 });

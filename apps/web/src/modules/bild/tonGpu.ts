@@ -423,18 +423,37 @@ vec3 ausHsl(vec3 hsl) {
  * „bandGewichte" aus fein.ts, nur ohne das Feld: Es wirken immer genau zwei
  * Baender, und ihre Gewichte sind t und 1 − t.
  */
-vec3 bandMittel(float h) {
-  for (int i = 0; i < BAENDER; i++) {
-    float a = BAND_MITTE[i];
-    // Nicht „BAND_MITTE[i + 1]": Beim letzten Band laege das ausserhalb des
-    // Feldes, und ein Zugriff daneben ist in GLSL nicht definiert.
-    float b = i + 1 < BAENDER ? BAND_MITTE[min(i + 1, BAENDER - 1)] : 1.0;
-    if (h >= a && h < b) {
-      float t = smoothstep(0.0, 1.0, b > a ? (h - a) / (b - a) : 0.0);
-      return mix(uBand[i], uBand[(i + 1) % BAENDER], t);
+vec3 bandMittel(float farbton) {
+  /*
+   * Erst in den Kreis zurueck.
+   *
+   * „zuHsl" kann genau 1.0 liefern: Bei einem Rotton, dessen Blau um ein
+   * Millionstel ueber dem Gruen liegt, ist (g − b) / d so klein, dass 6.0 +
+   * dieser Wert in „float" wieder 6.0 ist – und 6.0 / 6.0 ist 1.0. Ein
+   * Achtbitbild allein schafft das nicht (dort trennt mindestens 1/255), wohl
+   * aber jede Farbe, die vorher durch Zerstreuung oder Kurve gelaufen ist.
+   *
+   * 1.0 faellt in keinen Abschnitt. Ohne diese Zeile fiele die Schleife bis
+   * ans Ende durch, und auf einen ROTEN Bildpunkt wirkte der Regler von
+   * Magenta – ein einzelner falscher Punkt mitten in einer Flaeche, den man
+   * fuer Bildrauschen haelt. „bandGewichte" in fein.ts tut dasselbe in der
+   * ersten Zeile.
+   */
+  float h = farbton - floor(farbton);
+  int i = BAENDER - 1;
+  for (int k = 0; k < BAENDER - 1; k++) {
+    if (h >= BAND_MITTE[k] && h < BAND_MITTE[k + 1]) {
+      i = k;
+      break;
     }
   }
-  return uBand[BAENDER - 1];
+  float a = BAND_MITTE[i];
+  // Nicht „BAND_MITTE[i + 1]": Beim letzten Band laege das ausserhalb des
+  // Feldes, und ein Zugriff daneben ist in GLSL nicht definiert. Dort endet
+  // der Abschnitt bei der vollen Umdrehung, wo wieder das erste Band steht.
+  float b = i + 1 < BAENDER ? BAND_MITTE[min(i + 1, BAENDER - 1)] : 1.0;
+  float t = smoothstep(0.0, 1.0, b > a ? (h - a) / (b - a) : 0.0);
+  return mix(uBand[i], uBand[(i + 1) % BAENDER], t);
 }
 
 /** Kurven und Baender – dieselbe Reihenfolge wie „feinPunkt" in fein.ts. */

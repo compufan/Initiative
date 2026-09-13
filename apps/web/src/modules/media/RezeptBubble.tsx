@@ -66,12 +66,18 @@ export function RezeptBubble({ message, isMine }: MessageRendererProps) {
   const [bearbeitet, setBearbeitet] = useState(false);
   const [sendet, setSendet] = useState(false);
   /*
-   * Die erzeugten Adressen an einem Ort.
+   * Die Adressen, auf die `stand` gerade zeigt.
    *
    * `URL.createObjectURL` hält den Blob fest, bis jemand `revokeObjectURL`
    * ruft – ein Foto von zwölf Megapunkten bleibt sonst im Arbeitsspeicher
    * liegen, auch wenn der Chat längst woanders ist. Bei zwanzig solchen
    * Blasen in einem Verlauf ist das kein Detail mehr.
+   *
+   * Deshalb steht hier NICHT alles je Erzeugte, sondern nur das gerade
+   * Gezeigte. Läuft der Effekt ein zweites Mal – eine neue Fassung der
+   * Nachricht, ein neu geladener Anhang –, so kommen sonst zwei weitere
+   * Adressen dazu und keine geht, und erst das Verlassen des Chats räumt
+   * alles auf einmal weg.
    */
   const adressen = useRef<string[]>([]);
 
@@ -88,6 +94,21 @@ export function RezeptBubble({ message, isMine }: MessageRendererProps) {
   useEffect(() => {
     if (!foto || !anweisung) return undefined;
     let weg = false;
+    /*
+     * Was DIESER Durchgang erzeugt hat.
+     *
+     * Getrennt von `adressen`, weil beides zu verschiedenen Zeitpunkten
+     * freigegeben werden muss: Ein abgebrochener Durchgang gibt sofort frei,
+     * ein fertiger erst, NACHDEM `setStand` das Bild auf die neuen Adressen
+     * umgehängt hat. Umgekehrt zeigte das `img` für die Dauer eines
+     * Bildaufbaus auf eine freigegebene Adresse – und ein freigegebener
+     * Objektlink lädt nicht etwa langsam, er lädt gar nicht.
+     */
+    const neue: string[] = [];
+    const verwerfen = () => {
+      for (const adresse of neue) URL.revokeObjectURL(adresse);
+      neue.length = 0;
+    };
 
     void (async () => {
       try {
@@ -122,11 +143,15 @@ export function RezeptBubble({ message, isMine }: MessageRendererProps) {
           if (weg) return;
           if (blob) {
             fertig = URL.createObjectURL(blob);
-            adressen.current.push(fertig);
+            neue.push(fertig);
           }
         }
         const originalAdresse = URL.createObjectURL(bildBlob);
-        adressen.current.push(originalAdresse);
+        neue.push(originalAdresse);
+        if (weg) {
+          verwerfen();
+          return;
+        }
         setStand({
           original: bildBlob,
           doc,
@@ -135,8 +160,20 @@ export function RezeptBubble({ message, isMine }: MessageRendererProps) {
           breite: bild.naturalWidth,
           hoehe: bild.naturalHeight,
         });
+        // Erst jetzt, wo das Bild auf die neuen zeigt, die alten weg.
+        const alte = adressen.current;
+        adressen.current = neue.slice();
+        // Übergeben heisst nicht mehr zuständig: Sonst gäbe ein späteres
+        // `verwerfen` Adressen frei, auf die `stand` gerade zeigt.
+        neue.length = 0;
+        for (const adresse of alte) URL.revokeObjectURL(adresse);
         if (!doc) setFehler('Die Bearbeitung liess sich nicht lesen – hier steht das Original.');
       } catch (error) {
+        // Auch im Fehlerfall: Was halb fertig wurde, hängt sonst am Blob.
+        // Die ALTEN bleiben – `stand` zeigt noch auf sie, und ein
+        // gescheiterter zweiter Durchgang soll das erste Ergebnis nicht
+        // mitreissen.
+        verwerfen();
         if (weg) return;
         setFehler(errorMessage(error, 'Das Foto konnte nicht geladen werden'));
       }

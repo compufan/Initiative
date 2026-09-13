@@ -110,7 +110,15 @@ export const REZEPT_MIME = 'application/gzip';
 export const REZEPT_GRENZEN = {
   /** Die Datei, wie sie ankommt – gepackt. */
   dateiBytes: 8 * 1024 * 1024,
-  /** Und entpackt. Ohne diese Grenze wäre eine Zip-Bombe möglich. */
+  /**
+   * Und entpackt. Ohne diese Grenze wäre eine Zip-Bombe möglich.
+   *
+   * Was eine echte Datei höchstens braucht, lässt sich ausrechnen: acht
+   * Rasterteile zu 1536 × 1536 sind 18,9 MB, als Base64 25,2 MB; dazu die
+   * Striche (siehe `punkteGesamt`) und der Rest des Dokuments. Rund 27 MB –
+   * der Deckel liegt gut zweimal darüber, weil er eine Schranke gegen
+   * Missbrauch sein soll und keine Falle für den Grenzfall.
+   */
   textBytes: 64 * 1024 * 1024,
   bereiche: BEREICHE_MAX,
   teileJeBereich: 12,
@@ -121,6 +129,26 @@ export const REZEPT_GRENZEN = {
   pinselstriche: 400,
   /** Zahlen je Strich, also halb so viele Punkte. */
   strichZahlen: 40_000,
+  /**
+   * Und die Summe über das GANZE Dokument.
+   *
+   * Ohne diese Zeile sind die Grenzen darüber ein Rechenweg statt einer
+   * Schranke: vier Bereiche mal zwölf Teile mal vierhundert Striche mal
+   * vierzigtausend Zahlen. Die Textgrenze bremst das nicht wirksam – als JSON
+   * ist eine Koordinate „0,“, also zwei Bytes, und 64 MB tragen damit
+   * zweiunddreissig Millionen davon. Gepackt sind das wenige Kilobyte, weil
+   * sich nichts so gut packt wie dieselbe Zahl millionenfach.
+   *
+   * Beim Empfänger wird daraus Arbeit: Jeder Abschnitt stempelt in
+   * `strichStempeln` sein Rechteck ins Raster. Zweiunddreissig Millionen
+   * Zahlen sind sechzehn Millionen Abschnitte, und der Reiter steht still,
+   * ohne dass etwas abstürzt oder eine Meldung erscheint.
+   *
+   * Hunderttausend Punkte sind weit mehr, als eine echte Sitzung erzeugt –
+   * der Editor hängt jeden Punkt mit `[...punkte, x, y]` an, was quadratisch
+   * wächst und lange vorher spürbar wird.
+   */
+  punkteGesamt: 200_000,
   striche: 400,
   texte: 40,
   textZeichen: 500,
@@ -316,19 +344,46 @@ function strichNachRoh(s: Malstrich): unknown {
 
 const STRICH_ARTEN = new Set(['farbe', 'pixel', 'weich', 'klon']);
 
-function strichAusRoh(roh: unknown, breite: number, hoehe: number): Malstrich | null {
+/**
+ * Die Punkte eines Strichs – gegen beide Grenzen zugleich.
+ *
+ * Gibt `null` zurück, wenn kein ganzer Punkt mehr übrig ist; der Strich fällt
+ * dann weg. Das ist die richtige Richtung: Ein Dokument, das die Schranke
+ * reisst, verliert Striche, statt den Empfänger anzuhalten.
+ */
+function punkteAusRoh(roh: unknown, kante: number, zaehler: Zaehlwerk): number[] | null {
+  const uebrig = REZEPT_GRENZEN.punkteGesamt - zaehler.punkte;
+  if (uebrig < 2) return null;
+  // `& ~1` rundet auf eine gerade Zahl ab. Ein halber Punkt am Ende wäre ein
+  // y ohne x: `punkte.length >> 1` übersähe ihn, und die Datei sähe aus, als
+  // hätte sie einen Punkt mehr, als sie hat.
+  const roheListe = liste(roh, Math.min(REZEPT_GRENZEN.strichZahlen, uebrig));
+  const anzahl = roheListe.length & ~1;
+  if (anzahl < 2) return null;
+  zaehler.punkte += anzahl;
+  const punkte = new Array<number>(anzahl);
+  for (let i = 0; i < anzahl; i += 1) punkte[i] = zahl(roheListe[i], -4 * kante, 4 * kante, 0);
+  return punkte;
+}
+
+function strichAusRoh(
+  roh: unknown,
+  breite: number,
+  hoehe: number,
+  zaehler: Zaehlwerk,
+): Malstrich | null {
   if (!roh || typeof roh !== 'object') return null;
   const q = roh as Record<string, unknown>;
-  const punkte = liste(q.punkte, REZEPT_GRENZEN.strichZahlen);
-  if (punkte.length < 2) return null;
   const kante = Math.max(breite, hoehe);
+  const punkte = punkteAusRoh(q.punkte, kante, zaehler);
+  if (!punkte) return null;
   const art = typeof q.art === 'string' && STRICH_ARTEN.has(q.art) ? q.art : 'farbe';
   const strich: Malstrich = {
     // Eine Farbe wird nie ausgewertet, nur als Füllstil gesetzt – trotzdem
     // gekürzt, damit kein Dokument mit einem Kilobyte Farbstring wächst.
     farbe: text(q.farbe, 64) || '#ffffff',
     breite: zahl(q.breite, 0, kante, 8),
-    punkte: punkte.map((p) => zahl(p, -4 * kante, 4 * kante, 0)),
+    punkte,
     art: art as Malstrich['art'],
   };
   if (q.quelle && typeof q.quelle === 'object') {
@@ -411,9 +466,15 @@ function teilNachRoh(teil: Maskenteil): unknown {
   }
 }
 
-/** Zählt die Rasterteile mit, damit acht Masken nicht zu achtzig werden. */
+/**
+ * Zählt mit, was über das ganze Dokument begrenzt ist.
+ *
+ * Rasterteile, damit acht Masken nicht zu achtzig werden; Strichzahlen, damit
+ * die Grenzen je Liste nicht miteinander multipliziert werden können.
+ */
 interface Zaehlwerk {
   raster: number;
+  punkte: number;
 }
 
 function punkt(roh: unknown, kante: number): { x: number; y: number } {
@@ -479,10 +540,10 @@ function teilAusRoh(
       for (const s of liste(q.striche, REZEPT_GRENZEN.pinselstriche)) {
         if (!s || typeof s !== 'object') continue;
         const sq = s as Record<string, unknown>;
-        const punkte = liste(sq.punkte, REZEPT_GRENZEN.strichZahlen);
-        if (punkte.length < 2) continue;
+        const punkte = punkteAusRoh(sq.punkte, kante, zaehler);
+        if (!punkte) continue;
         striche.push({
-          punkte: punkte.map((p) => zahl(p, -4 * kante, 4 * kante, 0)),
+          punkte,
           breite: zahl(sq.breite, 1, kante, 40),
           haerte: zahl(sq.haerte, 0, 1, 0.5),
           abziehen: jaNein(sq.abziehen),
@@ -593,7 +654,7 @@ export function docAusRoh(roh: unknown, breite: number, hoehe: number): BildDoc 
   const doc = neuesDoc(breite, hoehe);
   if (!roh || typeof roh !== 'object') return doc;
   const q = roh as Record<string, unknown>;
-  const zaehler: Zaehlwerk = { raster: 0 };
+  const zaehler: Zaehlwerk = { raster: 0, punkte: 0 };
 
   // Auf ein Vielfaches von 90 runden, nicht klemmen: 45 wäre sonst als 45
   // stehengeblieben, und `Drehung` verspricht eine von vier Lagen.
@@ -613,7 +674,7 @@ export function docAusRoh(roh: unknown, breite: number, hoehe: number): BildDoc 
   };
 
   for (const s of liste(q.striche, REZEPT_GRENZEN.striche)) {
-    const strich = strichAusRoh(s, breite, hoehe);
+    const strich = strichAusRoh(s, breite, hoehe, zaehler);
     if (strich) doc.striche.push(strich);
   }
   for (const t of liste(q.texte, REZEPT_GRENZEN.texte)) {
@@ -709,11 +770,27 @@ async function packen(text: string): Promise<Blob> {
  * wird statt `new Response(strom).text()` zu rufen: Jenes läse erst alles und
  * fragte danach nach der Grösse – bei einer Datei, die sich tausendfach
  * aufbläst, wäre die Antwort dann schon im Arbeitsspeicher.
+ *
+ * Und dekodiert wird MITLAUFEND, nicht am Ende. Die naheliegende Fassung
+ * sammelt die Häppchen, fügt sie zu einem Feld zusammen und dekodiert das –
+ * dann liegt der Inhalt dreimal gleichzeitig da: als Liste von Häppchen, als
+ * zusammengesetztes Feld und als Zeichenkette. Am Deckel wären das knapp
+ * zweihundert Megabyte, und auf einem Telefon fällt der Reiter dabei aus dem
+ * Speicher, bevor die Grenze überhaupt greift. `{ stream: true }` trägt die
+ * angebrochene Mehrbytefolge über die Häppchengrenze – ohne das stünde
+ * mitten in einem Umlaut ein Fragezeichen.
+ *
+ * Nach aussen gegeben, weil sich beides – der Deckel und die Häppchengrenze –
+ * von aussen nicht zuverlässig treffen lässt: Wo der Entpacker seine Häppchen
+ * schneidet, entscheidet er selbst, und im Rezeptformat steht freier Text nur
+ * in den Schriftzügen, also in zwanzigtausend Zeichen irgendwo in einer Datei
+ * von Megabytes.
  */
-async function entpacken(datei: Blob, deckel: number): Promise<string> {
+export async function entpacken(datei: Blob, deckel: number): Promise<string> {
   const strom = datei.stream().pipeThrough(new DecompressionStream('gzip'));
   const leser = strom.getReader();
-  const teile: Uint8Array[] = [];
+  const dekoder = new TextDecoder();
+  let text = '';
   let summe = 0;
   try {
     for (;;) {
@@ -722,19 +799,13 @@ async function entpacken(datei: Blob, deckel: number): Promise<string> {
       if (!value) continue;
       summe += value.byteLength;
       if (summe > deckel) throw new Error('Das Rezept ist unerwartet gross');
-      teile.push(value);
+      text += dekoder.decode(value, { stream: true });
     }
   } finally {
     // Nicht erst beim Aufräumer: Ein offener Leser hält den Strom fest.
     void leser.cancel().catch(() => undefined);
   }
-  const alles = new Uint8Array(summe);
-  let at = 0;
-  for (const teil of teile) {
-    alles.set(teil, at);
-    at += teil.byteLength;
-  }
-  return new TextDecoder().decode(alles);
+  return text + dekoder.decode();
 }
 
 /** Das Rezept als fertige, gepackte Datei. */

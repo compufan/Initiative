@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { KURVE_STUETZEN, kurveTabelle, type Kurvenpunkt } from './fein.js';
+import { KURVE_STUETZEN, kurveTabelle, xImRahmen, type Kurvenpunkt } from './fein.js';
 
 /**
  * Das Kurvenfeld – der Regler, der keiner ist.
@@ -67,6 +67,23 @@ export function Kurvenfeld({
   const [gewaehlt, setGewaehlt] = useState<number | null>(null);
   const arbeit = mitEnden(punkte);
 
+  /*
+   * Ob dieser Zug schon einen Rückgängig-Schritt angelegt hat.
+   *
+   * `onBeginn` beim Aufsetzen des Fingers zu rufen wäre einfacher und legte
+   * einen Schritt an, bevor irgendetwas passiert ist: Wer einen Punkt nur
+   * ANTIPPT, um ihn auszuwählen, oder danebentippt, während die Kurve schon
+   * sechzehn Punkte trägt, bekäme einen Rückgängig-Schritt geschenkt, der
+   * nichts zurücknimmt. Zweimal daneben getippt, und „Rückgängig" führt
+   * zweimal ins Leere – das sieht aus, als sei der Verlauf kaputt.
+   */
+  const begonnen = useRef(false);
+  const melden = () => {
+    if (begonnen.current) return;
+    begonnen.current = true;
+    onBeginn?.();
+  };
+
   useEffect(() => {
     const flaeche = leinwand.current;
     if (!flaeche) return;
@@ -93,7 +110,14 @@ export function Kurvenfeld({
     const stil = getComputedStyle(flaeche);
     const linie = stil.getPropertyValue('--bild-kurve-gitter').trim() || 'rgba(128,128,128,0.35)';
 
-    // Das Gitter: Drittel, nicht Viertel – Schatten, Mitten, Lichter.
+    /*
+     * Das Gitter: Viertel, nicht Drittel.
+     *
+     * Drei Linien ziehen vier Spalten, und die mittlere liegt auf dem
+     * mittleren Grau – der einzigen Stelle im Feld, an der man wirklich
+     * ablesen will, ob die Kurve darüber oder darunter liegt. Bei Dritteln
+     * fehlt genau diese Linie.
+     */
     ctx.strokeStyle = linie;
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -174,24 +198,15 @@ export function Kurvenfeld({
   }
 
   function setzen(index: number, punkt: Kurvenpunkt) {
-    const neu = arbeit.map((p, i) => (i === index ? punkt : p));
-    /*
-     * Die beiden Enden bleiben an ihrem x.
-     *
-     * Nicht aus Prinzip, sondern weil eine Kurve, deren erster Punkt bei 0,3
-     * anfängt, für alles darunter nicht definiert wäre – und „nicht
-     * definiert“ heisst in der Auswertung „irgendetwas“. Die HÖHE der Enden
-     * ist frei: Genau damit hebt man den Schwarzpunkt an.
-     */
-    if (index === 0) neu[0] = { x: 0, y: punkt.y };
-    if (index === arbeit.length - 1) neu[index] = { x: 1, y: punkt.y };
-    onAendern(neu);
+    const gesetzt = { x: xImRahmen(arbeit, index, punkt.x), y: punkt.y };
+    melden();
+    onAendern(arbeit.map((p, i) => (i === index ? gesetzt : p)));
   }
 
   function runter(event: React.PointerEvent<HTMLCanvasElement>) {
     event.currentTarget.setPointerCapture(event.pointerId);
+    begonnen.current = false;
     const getroffen = treffer(event);
-    onBeginn?.();
     if (getroffen !== null) {
       setGezogen(getroffen);
       setGewaehlt(getroffen);
@@ -203,6 +218,7 @@ export function Kurvenfeld({
     const index = liste.indexOf(neu);
     setGezogen(index);
     setGewaehlt(index);
+    melden();
     onAendern(liste);
   }
 
@@ -214,12 +230,13 @@ export function Kurvenfeld({
 
   function loslassen() {
     setGezogen(null);
+    begonnen.current = false;
   }
 
   function entfernen() {
     if (gewaehlt === null) return;
     // Die Enden bleiben: Ohne sie wäre die Kurve an den Rändern offen.
-    if (gewaehlt === 0 || gewaehlt === arbeit.length - 1) return;
+    if (gewaehlt === 0 || gewaehlt >= arbeit.length - 1) return;
     onBeginn?.();
     onAendern(arbeit.filter((_, i) => i !== gewaehlt));
     setGewaehlt(null);

@@ -16,6 +16,13 @@ export function MediaCaption({ body, isMine }: { body: string | null; isMine: bo
 /**
  * Shown while a message still sits in the outbox: the attachment only exists as
  * a blob in IndexedDB at that point, so there is nothing to render yet.
+ *
+ * Eine GELÖSCHTE Nachricht sieht von hier aus genauso aus – der Server gibt
+ * `attachments: []` zurück und behält nur den Typ. Ohne die Abfrage unten
+ * stünde über einem gelöschten Foto für immer „Foto wird gesendet …“ samt
+ * drehendem Rädchen: eine Nachricht, die es nicht mehr gibt, sähe aus wie
+ * eine, die gleich ankommt. Der Text ist derselbe wie in `TextBubble`, damit
+ * eine gelöschte Nachricht überall gleich aussieht.
  */
 export function PendingMedia({
   emoji,
@@ -28,6 +35,16 @@ export function PendingMedia({
   message: RenderedMessage;
   isMine: boolean;
 }) {
+  if (message.deletedAt) {
+    return (
+      <div
+        className={`msg-bubble ${isMine ? 'msg-bubble-mine' : 'msg-bubble-theirs'} msg-bubble-deleted`}
+      >
+        <em>Diese Nachricht wurde gelöscht</em>
+      </div>
+    );
+  }
+
   const failed = message.failed === true;
   return (
     <div className="media-bubble">

@@ -101,6 +101,48 @@ export const FARBTON_HUB = 30 / 360;
 
 export const KURVE_STUETZEN = 33;
 
+/**
+ * Wie nah zwei Stützpunkte einander in x kommen dürfen.
+ *
+ * Auf demselben x wäre die Kurve nicht mehr eindeutig – an einer Stelle zwei
+ * Werte –, und die Sehne dazwischen wäre null. `kurveTabelle` fängt das ab,
+ * aber die Kurve, die dabei herauskommt, ist nicht die, die jemand gemeint
+ * hat. Eine Tausendstel Breite ist knapp ein Drittel einer Tabellenstufe:
+ * eng genug, dass man beim Ziehen nichts spürt, weit genug, dass die beiden
+ * Punkte getrennt bleiben.
+ */
+export const KURVE_MINDESTABSTAND = 1 / 1024;
+
+/**
+ * Das x, das der Punkt an dieser Stelle annehmen darf.
+ *
+ * # Die beiden Enden bleiben, wo sie sind
+ *
+ * Nicht aus Prinzip, sondern weil eine Kurve, deren erster Punkt bei 0,3
+ * anfängt, für alles darunter nicht definiert wäre – und „nicht definiert“
+ * heisst in der Auswertung „irgendetwas“. Die HÖHE der Enden ist frei: Genau
+ * damit hebt man den Schwarz- und den Weisspunkt.
+ *
+ * # Und die anderen kommen an ihren Nachbarn nicht vorbei
+ *
+ * Ohne diese Schranke zieht man einen Punkt über seinen Nachbarn hinweg, die
+ * Liste wird beim nächsten Bild sortiert – und derselbe Listenplatz meint
+ * plötzlich den ANDEREN Punkt. Der Zeiger hängt weiter an seiner Nummer, also
+ * springt der Griff zurück und man zieht ab da am Nachbarn. Zu sehen ist ein
+ * Punkt, der nicht folgen will; zu vermuten wäre eine hakende Anzeige.
+ *
+ * Ist links und rechts kein Platz mehr, bleibt das x stehen. Die Höhe lässt
+ * sich trotzdem weiter ziehen – der Punkt ist festgesetzt, nicht tot.
+ */
+export function xImRahmen(punkte: readonly Kurvenpunkt[], index: number, x: number): number {
+  if (index <= 0) return 0;
+  if (index >= punkte.length - 1) return 1;
+  const links = punkte[index - 1].x + KURVE_MINDESTABSTAND;
+  const rechts = punkte[index + 1].x - KURVE_MINDESTABSTAND;
+  if (links > rechts) return punkte[index].x;
+  return Math.min(rechts, Math.max(links, x));
+}
+
 /* ---------- die Kurve ---------- */
 
 /**

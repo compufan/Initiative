@@ -2596,7 +2596,17 @@ export function BildEditor({
                   </button>
                 ))}
               </div>
+              {/*
+                Der Schlüssel ist der KANAL.
+                Ohne ihn behält das Feld beim Wechsel seinen inneren Stand –
+                unter anderem den ausgewählten Punkt, und der ist eine Nummer.
+                Punkt 3 der Rotkurve ist beim Umschalten auf Blau noch immer
+                „Punkt 3“, meint aber einen anderen. „Punkt entfernen“ nähme
+                dann in der Blaukurve etwas weg, das man in der Roten
+                ausgewählt hat.
+              */}
               <Kurvenfeld
+                key={kurvenKanal}
                 label={`Kurve ${KURVENKANAELE.find((k) => k.key === kurvenKanal)?.label ?? ''}`}
                 farbe={KURVENKANAELE.find((k) => k.key === kurvenKanal)?.farbe}
                 punkte={(doc.anpassung.kurven ?? KURVEN_NEUTRAL)[kurvenKanal]}
