@@ -24,6 +24,7 @@ vi.mock('../../lib/db.js', () => ({
 }));
 
 const { bildKennung, entwurfAlter, entwurfHolen, entwurfSichern } = await import('./entwurf.js');
+const { docNachRoh } = await import('./rezept.js');
 
 function getont(breite = 100, hoehe = 80): BildDoc {
   const doc = neuesDoc(breite, hoehe);
@@ -90,6 +91,29 @@ describe('entwurfSichern / entwurfHolen', () => {
   it('legt für ein unberührtes Bild gar nichts erst an', async () => {
     await entwurfSichern('k1', neuesDoc(100, 80), 100, 80, null);
     expect(speicher.size).toBe(0);
+  });
+
+  it('bietet keinen Entwurf an, in dem gar nichts steht', async () => {
+    /*
+     * Am Sichern vorbei in den Speicher gelegt – und genau so kommt es auch
+     * vor: Ein Eintrag aus einer älteren Fassung, oder einer, dessen
+     * Bearbeitung nach dem Einlesen nichts mehr hergibt, weil `docAusRoh`
+     * jede Zahl klemmt und jede Liste begrenzt.
+     *
+     * `entwurfSichern` räumt solche Einträge weg, aber nur, wenn es an ihnen
+     * vorbeikommt. Die zweite Prüfung steht deshalb beim HOLEN: Sonst fragt
+     * der Editor „Entwurf fortsetzen?“ über etwas, hinter dem nichts steht,
+     * und wer „ja" sagt, sieht sein unverändertes Bild.
+     */
+    speicher.set('k1', {
+      id: 'k1',
+      doc: docNachRoh(neuesDoc(100, 80)),
+      breite: 100,
+      hoehe: 80,
+      stand: Date.now(),
+      name: null,
+    });
+    expect(await entwurfHolen('k1', 100, 80)).toBeNull();
   });
 
   it('teilt kein Feld mit dem lebenden Dokument', async () => {

@@ -102,4 +102,24 @@ describe('Bokeh statt Weichzeichner', () => {
     bokehRgba(daten, 10, 10, 0);
     expect(Array.from(daten)).toEqual(vorher);
   });
+
+  it('macht aus einem unsinnigen Radius kein schwarzes Bild', () => {
+    /*
+     * NaN ist erreichbar: `bokehRadius` rechnet `Math.max(0, Math.round(u *
+     * 0.02 * kante))`, und `Math.max(0, NaN)` ist NaN – die Null schützt also
+     * gegen ein negatives Ergebnis, nicht gegen ein unbekanntes.
+     *
+     * Ohne den Wächter wäre der Schaden nicht etwa „keine Unschärfe", sondern
+     * SCHWARZ: Das Fenster `for (i = -radius; i <= radius)` läuft dann kein
+     * einziges Mal, der Zähler bleibt 0, und jeder Bildpunkt bekommt die
+     * Null. Ein Bereich, den man weichzeichnen wollte, wäre ein schwarzer
+     * Fleck.
+     */
+    for (const radius of [Number.NaN, -4, -0.5]) {
+      const daten = feld(10, 10, (x) => x * 20);
+      const vorher = Array.from(daten);
+      bokehRgba(daten, 10, 10, radius);
+      expect(Array.from(daten), `Radius ${radius}`).toEqual(vorher);
+    }
+  });
 });
