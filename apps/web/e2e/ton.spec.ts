@@ -576,3 +576,178 @@ test('Kurven und Farbbänder rechnen auf beiden Wegen dasselbe', async ({ page }
     expect(bericht.mittel, `${bericht.name} (${bericht.weg}): mittlerer Fehler`).toBeLessThan(0.6);
   }
 });
+
+test('die Unschärfemaske sieht auf beiden Wegen gleich aus', async ({ page }) => {
+  /*
+   * Die Schärfe steht als Einzige nicht in der Farbtabelle: Sie braucht die
+   * NACHBARN eines Bildpunktes, und eine Tabelle kennt nur den Punkt selbst.
+   * Deshalb fällt sie aus dem Gleichstandstest darüber heraus – und deshalb
+   * braucht sie einen eigenen.
+   *
+   * Der Schattierer und der Prozessorweg rechnen dasselbe Muster aus
+   * fünfundzwanzig Stellen; wer eines von beiden ändert, muss das andere
+   * mitziehen. Vorher war das nicht geprüft, und die beiden Wege hätten
+   * beliebig auseinanderlaufen können – sichtbar erst an einem Foto, das auf
+   * einem Gerät ohne Grafikeinheit anders aussieht.
+   */
+  await page.goto('/');
+
+  const ergebnis = await page.evaluate(async () => {
+    const ladeGpu = '/src/modules/bild/tonGpu.ts';
+    const ladeTon = '/src/modules/bild/ton.ts';
+    const gpu = (await import(
+      /* @vite-ignore */ ladeGpu
+    )) as typeof import('../src/modules/bild/tonGpu.js');
+    const ton = (await import(
+      /* @vite-ignore */ ladeTon
+    )) as typeof import('../src/modules/bild/ton.js');
+
+    const kante = 96;
+    const quelle = document.createElement('canvas');
+    quelle.width = kante;
+    quelle.height = kante;
+    const qctx = quelle.getContext('2d', { willReadFrequently: true });
+    if (!qctx) return { fehler: 'keine Leinwand' };
+    /*
+     * Ein Motiv mit Kanten in beiden Richtungen und mit Flächen dazwischen –
+     * sonst misst man nur eine Sorte Stelle.
+     */
+    const bild = qctx.createImageData(kante, kante);
+    for (let y = 0; y < kante; y += 1) {
+      for (let x = 0; x < kante; x += 1) {
+        const streifen = x > 30 && x < 40 ? 200 : 60;
+        const balken = y > 55 && y < 70 ? 220 : streifen;
+        const at = (y * kante + x) * 4;
+        bild.data[at] = balken;
+        bild.data[at + 1] = Math.min(255, balken + 20);
+        bild.data[at + 2] = Math.max(0, balken - 30);
+        bild.data[at + 3] = 255;
+      }
+    }
+    qctx.putImageData(bild, 0, 0);
+
+    const lesen = (bild2: CanvasImageSource) => {
+      const c = document.createElement('canvas');
+      c.width = kante;
+      c.height = kante;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return null;
+      ctx.drawImage(bild2, 0, 0);
+      return ctx.getImageData(0, 0, kante, kante).data;
+    };
+
+    /*
+     * Ein Hauch Belichtung, und zwar für jeden Weg ein anderer.
+     *
+     * `bildRechnen` hat einen Merkzettel: Gleiche Einstellung, gleiche
+     * Grösse, gleiche Quelle – dann kommt das Ergebnis von vorhin zurück, und
+     * der zweite Aufruf liefe gar nicht. Ein Zehntausendstel ändert den
+     * Schlüssel und liegt im Ergebnis weit unter einer Stufe von 255.
+     * Dasselbe Mittel benutzt `farbraum.spec.ts` aus demselben Grund.
+     */
+    const grund = { ...ton.NEUTRAL, schaerfe: 0.8, schaerfeRadius: 3, schaerfeSchwelle: 0.02 };
+
+    const aufGpu = lesen(
+      gpu.getoentesBild(quelle, kante, kante, {
+        ...grund,
+        belichtung: 0.0001,
+      }) as CanvasImageSource,
+    );
+    const wegGpu = gpu.letzterWeg;
+    gpu.gpuAbschalten(true);
+    const aufCpu = lesen(
+      gpu.getoentesBild(quelle, kante, kante, {
+        ...grund,
+        belichtung: 0.0002,
+      }) as CanvasImageSource,
+    );
+    const wegCpu = gpu.letzterWeg;
+    gpu.gpuAbschalten(false);
+    if (!aufGpu || !aufCpu) return { fehler: 'kein Ergebnis' };
+
+    // Und zum Vergleich: das UNGESCHÄRFTE Bild. Ohne diesen Bezug hiesse
+    // „beide gleich" womöglich nur „beide haben nichts getan".
+    const roh = lesen(quelle);
+    let max = 0;
+    let summe = 0;
+    let wirkung = 0;
+    let n = 0;
+    for (let i = 0; i < aufGpu.length; i += 4) {
+      for (let k = 0; k < 3; k += 1) {
+        const fehler = Math.abs(aufGpu[i + k] - aufCpu[i + k]);
+        max = Math.max(max, fehler);
+        summe += fehler;
+        wirkung = Math.max(wirkung, Math.abs(aufGpu[i + k] - (roh?.[i + k] ?? 0)));
+        n += 1;
+      }
+    }
+    /*
+     * Und zusätzlich: Tut der Radius im SCHATTIERER überhaupt etwas?
+     *
+     * Der Vergleich der beiden Wege allein beantwortet das nicht. Läse der
+     * Schattierer den Radius gar nicht, wäre er bei einem Motiv mit groben
+     * Flächen von der richtigen Fassung kaum zu unterscheiden – der
+     * Unterschied verschwände in derselben Grössenordnung, in der die
+     * bilineare Abtastung ohnehin von der ganzzahligen abweicht. Zwei Läufe
+     * mit weit auseinanderliegenden Radien sind eindeutig.
+     */
+    const eng = lesen(
+      gpu.getoentesBild(quelle, kante, kante, {
+        ...grund,
+        schaerfeRadius: 1,
+        belichtung: 0.0003,
+      }) as CanvasImageSource,
+    );
+    const weit = lesen(
+      gpu.getoentesBild(quelle, kante, kante, {
+        ...grund,
+        schaerfeRadius: 8,
+        belichtung: 0.0004,
+      }) as CanvasImageSource,
+    );
+    let radiusWirkung = 0;
+    if (eng && weit) {
+      for (let i = 0; i < eng.length; i += 4) {
+        for (let k = 0; k < 3; k += 1) {
+          radiusWirkung = Math.max(radiusWirkung, Math.abs(eng[i + k] - weit[i + k]));
+        }
+      }
+    }
+
+    return { max, mittel: summe / n, wirkung, radiusWirkung, wegGpu, wegCpu };
+  });
+
+  expect(ergebnis.fehler).toBeUndefined();
+  expect(ergebnis.wegGpu, 'es hat nicht die Grafikeinheit gerechnet').toBe('gpu');
+  expect(ergebnis.wegCpu, 'der Rückfallweg wurde nicht genommen').toBe('leinwand');
+
+  /*
+   * Erst der Beweis, dass überhaupt geschärft wurde: Ein Test, der zwei
+   * unveränderte Bilder vergleicht, besteht immer.
+   */
+  expect(ergebnis.wirkung, 'die Schärfe hat gar nichts getan').toBeGreaterThan(8);
+
+  /*
+   * Und dann der Gleichstand. Ganz genau kann er nicht sein: Der Schattierer
+   * tastet mit bilinearer Filterung zwischen den Punkten ab, der Prozessor
+   * rundet auf den nächsten – das sind an einer harten Kante ein paar Stufen.
+   */
+  /*
+   * Gemessen: im Gleichstand 18 Stufen im schlimmsten Punkt und 0,012 im
+   * Mittel. Die achtzehn stehen an harten Kanten und sind nicht wegzubekommen
+   * – dort tastet der Schattierer bilinear zwischen zwei Punkten ab, der
+   * Prozessor auf den nächsten. Das MITTEL ist die Zahl, die etwas sagt.
+   */
+  expect(ergebnis.max, 'die beiden Wege schärfen verschieden').toBeLessThan(24);
+  expect(ergebnis.mittel).toBeLessThan(0.02);
+
+  /*
+   * Und der Radius wirkt im Schattierer. Zwischen Weite 1 und Weite 8 liegen
+   * gemessen über vierzig Stufen; wäre der Regler nicht angeschlossen, wären
+   * es null.
+   */
+  expect(
+    ergebnis.radiusWirkung,
+    'der Radius kommt im Schattierer nicht an',
+  ).toBeGreaterThan(10);
+});

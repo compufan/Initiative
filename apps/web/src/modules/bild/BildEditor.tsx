@@ -44,6 +44,7 @@ import { basisAus, lupeHalten, zoomAusSpanne } from './lupe.js';
 import {
   FARB_NEUTRAL,
   NEUTRAL,
+  SCHAERFE_RADIUS_MAX,
   autoAnpassung,
   istNeutral,
   type Anpassung,
@@ -202,6 +203,16 @@ const TONREGLER: {
   { key: 'saettigung', label: 'Sättigung', min: -1, max: 1, schritt: 0.01 },
   { key: 'dynamik', label: 'Dynamik', min: -1, max: 1, schritt: 0.01 },
   { key: 'schaerfe', label: 'Schärfe', min: 0, max: 1, schritt: 0.01 },
+  /*
+   * Weite und Schwelle stehen direkt unter der Schärfe – sie gehören ihr.
+   *
+   * Beide waren vorher gar nicht einstellbar: Gerechnet wurde fest gegen die
+   * vier direkten Nachbarn, also mit einem Radius von genau einem Punkt. Bei
+   * einem Foto von zwölf Megapunkten fasst das nur die feinste Ebene an, und
+   * das ist das Rauschen.
+   */
+  { key: 'schaerfeRadius', label: 'Schärfe-Weite', min: 0.5, max: SCHAERFE_RADIUS_MAX, schritt: 0.5 },
+  { key: 'schaerfeSchwelle', label: 'Schärfe-Schwelle', min: 0, max: 1, schritt: 0.01 },
   { key: 'vignette', label: 'Vignette', min: -1, max: 1, schritt: 0.01 },
 ];
 
@@ -228,6 +239,10 @@ const REGLER_TIPP: Partial<Record<keyof Anpassung | keyof Bereichston, string>> 
   saettigung: 'Verstärkt alle Farben gleichmässig. Ganz nach links wird das Bild grau.',
   dynamik: 'Hebt blasse Farben an und lässt kräftige Farben und Hauttöne in Ruhe.',
   schaerfe: 'Betont Kanten. Sparsam einsetzen – zu viel sieht nach Blech aus.',
+  schaerfeRadius:
+    'Wie breit der betonte Saum an einer Kante wird. Klein trifft feine Strukturen, gross wirkt auch auf einem grossen Foto.',
+  schaerfeSchwelle:
+    'Ab welchem Unterschied überhaupt geschärft wird. Höher heisst: glatte Flächen und Rauschen bleiben in Ruhe.',
   vignette: 'Dunkelt die Ecken ab und zieht den Blick zur Mitte.',
 };
 

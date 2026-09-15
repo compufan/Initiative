@@ -158,6 +158,19 @@ export function vorlageAnwenden(vorlage: Vorlage, staerke: number): Anpassung {
    * und in `Anpassung` läge danach eine Kurve, die keine mehr ist.
    */
   for (const schluessel of ZAHLFELDER) {
+    /*
+     * Nicht jedes Zahlenfeld ist eine STÄRKE.
+     *
+     * Die Weite der Unschärfemaske und ihre Schwelle beschreiben, WIE
+     * geschärft wird, nicht WIE VIEL. Sie mit der Vorlagenstärke zu
+     * multiplizieren ergäbe bei halber Stärke einen halben Radius – und bei
+     * Stärke null einen Radius von null, was gar keine Einstellung mehr ist,
+     * sondern eine kaputte. Diese Felder übernimmt die Vorlage unverändert.
+     */
+    if (schluessel === 'schaerfeRadius' || schluessel === 'schaerfeSchwelle') {
+      aus[schluessel] = t === 0 ? NEUTRAL[schluessel] : vorlage.anpassung[schluessel];
+      continue;
+    }
     const wert = vorlage.anpassung[schluessel] * t;
     /*
      * Minus null zu plus null glattziehen.

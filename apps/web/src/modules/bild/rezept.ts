@@ -89,7 +89,14 @@ import {
   type Kurven,
   type Kurvenpunkt,
 } from './fein.js';
-import { FARB_NEUTRAL, NEUTRAL, istNeutral, type Anpassung, type Farbanpassung } from './ton.js';
+import {
+  FARB_NEUTRAL,
+  NEUTRAL,
+  SCHAERFE_RADIUS_MAX,
+  istNeutral,
+  type Anpassung,
+  type Farbanpassung,
+} from './ton.js';
 
 /** Die Fassung des Formats. Steht in jeder Datei und wird beim Lesen geprüft. */
 export const REZEPT_FASSUNG = 1;
@@ -313,12 +320,26 @@ function anpassungNachRoh(a: Farbanpassung, schluessel: readonly string[]): Reco
  * Die Grenzen sind die der Regler im Editor, mit einer Ausnahme: `belichtung`
  * geht dort bis ±3, und genau so weit auch hier. Wer ±300 schickt, bekommt ±3.
  */
+/**
+ * Die Spanne, in der ein Regler aus fremder Hand liegen darf.
+ *
+ * Alles ohne eigenen Eintrag liegt zwischen −1 und 1; das ist die Spanne, die
+ * fast jeder Regler hat. Die Ausnahmen stehen hier, und sie müssen hier
+ * stehen: Die Weite der Unschärfemaske geht bis acht Punkte, und ohne
+ * Eintrag käme sie aus jeder Rezeptdatei als 1 zurück – der Regler stünde auf
+ * acht, das Bild sähe nach eins aus, und niemand fände den Grund.
+ */
+const SPANNEN: Record<string, [number, number]> = {
+  belichtung: [-3, 3],
+  schaerfeRadius: [0.5, SCHAERFE_RADIUS_MAX],
+};
+
 function anpassungAusRoh<T>(roh: unknown, neutral: T, schluessel: readonly string[]): T {
   const quelle = (roh ?? {}) as Record<string, unknown>;
   const raus = { ...neutral } as unknown as Record<string, number>;
   for (const k of schluessel) {
-    const grenze = k === 'belichtung' ? 3 : 1;
-    raus[k] = zahl(quelle[k], -grenze, grenze, raus[k] ?? 0);
+    const [min, max] = SPANNEN[k] ?? [-1, 1];
+    raus[k] = zahl(quelle[k], min, max, raus[k] ?? 0);
   }
   return raus as unknown as T;
 }

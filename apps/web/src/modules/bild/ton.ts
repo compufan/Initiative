@@ -85,6 +85,28 @@ export interface Farbanpassung {
 export interface Anpassung extends Farbanpassung {
   /** Unschärfemaske, 0 … 1. Braucht die NACHBARN, deshalb nicht in der Tabelle. */
   schaerfe: number;
+  /**
+   * Wie weit die Unschärfemaske greift – in Bildpunkten der Rechengrösse.
+   *
+   * Vorher gab es das nicht: Gerechnet wurde fest gegen das Mittel der VIER
+   * direkten Nachbarn. Das ist ein Radius von genau einem Punkt, und bei
+   * einem Foto von zwölf Megapunkten fasst er ausschliesslich die feinste
+   * Ebene an – also das Rauschen. Ein verwackeltes Bild, dessen Streifen
+   * zwanzig Punkte lang ist, wurde davon nicht besser, nur körniger.
+   *
+   * 1 ist die alte Weite; darüber wird aus dem Mikrokontrast eine Schärfe,
+   * die man auch sieht.
+   */
+  schaerfeRadius: number;
+  /**
+   * Ab welchem Unterschied die Unschärfemaske überhaupt zupackt, 0 … 1.
+   *
+   * Ohne Schwelle verstärkt sie jeden Unterschied gleich – auch den zwischen
+   * zwei benachbarten Rauschpunkten in einer glatten Fläche. Genau daran
+   * erkennt man überschärfte Fotos: Der Himmel wird grieselig, bevor die
+   * Kanten knackig sind. Die Schwelle lässt alles darunter in Ruhe.
+   */
+  schaerfeSchwelle: number;
   /** Positiv dunkelt die Ecken ab, negativ hellt sie auf. Braucht den ORT. */
   vignette: number;
   /**
@@ -99,6 +121,18 @@ export interface Anpassung extends Farbanpassung {
   /** Die acht Farbbänder, immer acht und immer in der Reihenfolge von `BAENDER`. */
   baender: readonly Farbband[];
 }
+
+/**
+ * Die Weite, mit der eine Unschärfemaske anfängt.
+ *
+ * Nicht 1: Ein Radius von einem Punkt ist der alte Mikrokontrast, und der
+ * war das Problem. Zwei Punkte sind auf einem grossen Foto immer noch fein,
+ * greifen aber schon an Kanten statt nur an Korn.
+ */
+export const SCHAERFE_RADIUS_VORGABE = 2;
+
+/** Die Weite, über die der Regler hinaus nicht geht. */
+export const SCHAERFE_RADIUS_MAX = 8;
 
 export const FARB_NEUTRAL: Farbanpassung = {
   belichtung: 0,
@@ -123,6 +157,8 @@ export const FARB_NEUTRAL: Farbanpassung = {
 export const NEUTRAL: Anpassung = {
   ...FARB_NEUTRAL,
   schaerfe: 0,
+  schaerfeRadius: SCHAERFE_RADIUS_VORGABE,
+  schaerfeSchwelle: 0,
   vignette: 0,
   kurven: KURVEN_NEUTRAL,
   baender: BAENDER_NEUTRAL,
@@ -138,18 +174,35 @@ export const NEUTRAL: Anpassung = {
  * Zahlenfeld hinzufügt, ohne es hier einzutragen, bekommt einen Regler ohne
  * Wirkung auf den Merkzettel.
  */
-export type Zahlfeld = keyof Farbanpassung | 'schaerfe' | 'vignette';
+export type Zahlfeld =
+  | keyof Farbanpassung
+  | 'schaerfe'
+  | 'schaerfeRadius'
+  | 'schaerfeSchwelle'
+  | 'vignette';
 
 export const ZAHLFELDER = [
   ...(Object.keys(FARB_NEUTRAL) as (keyof Farbanpassung)[]),
   'schaerfe',
+  'schaerfeRadius',
+  'schaerfeSchwelle',
   'vignette',
 ] as const satisfies readonly Zahlfeld[];
 
 /** Ob überhaupt etwas eingestellt ist – sonst wird die ganze Kette übersprungen. */
 export function istNeutral(a: Anpassung): boolean {
+  /*
+   * Verglichen wird gegen NEUTRAL, nicht gegen null.
+   *
+   * Lange war das dasselbe: Jeder Regler stand im Ruhezustand auf 0. Mit der
+   * Weite der Unschärfemaske gilt das nicht mehr – ihr Ruhezustand ist zwei
+   * Punkte, denn ein Radius von null wäre keine Einstellung, sondern eine
+   * kaputte. Ein `=== 0` über alle Felder hielte ein unberührtes Dokument
+   * deshalb für bearbeitet, und der Editor böte „Verwerfen?" an, bevor
+   * irgendjemand etwas angefasst hat.
+   */
   return (
-    ZAHLFELDER.every((schlüssel) => a[schlüssel] === 0) &&
+    ZAHLFELDER.every((schlüssel) => a[schlüssel] === NEUTRAL[schlüssel]) &&
     kurvenNeutral(a.kurven ?? KURVEN_NEUTRAL) &&
     baenderNeutral(a.baender ?? BAENDER_NEUTRAL)
   );
@@ -180,9 +233,22 @@ export function farbSchluessel(a: Farbanpassung): string {
 }
 
 /** Ob etwas eingestellt ist, das sich in eine Farbtabelle fassen lässt. */
+/**
+ * Die Felder, die NICHT in die Farbtabelle gehören.
+ *
+ * Sie hängen alle an der Umgebung eines Bildpunktes oder an seinem Ort, und
+ * eine Tabelle kennt nur den Punkt selbst.
+ */
+const AUSSERHALB_DER_TABELLE = new Set<Zahlfeld>([
+  'schaerfe',
+  'schaerfeRadius',
+  'schaerfeSchwelle',
+  'vignette',
+]);
+
 export function brauchtTabelle(a: Anpassung): boolean {
   return ZAHLFELDER.some(
-    (schlüssel) => schlüssel !== 'schaerfe' && schlüssel !== 'vignette' && a[schlüssel] !== 0,
+    (schlüssel) => !AUSSERHALB_DER_TABELLE.has(schlüssel) && a[schlüssel] !== NEUTRAL[schlüssel],
   );
 }
 

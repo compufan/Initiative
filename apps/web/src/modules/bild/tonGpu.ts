@@ -23,6 +23,7 @@ import { BEREICHE_MAX } from './doc.js';
 import type { Szene } from './maskenSpeicher.js';
 import { maskeUmrastern } from './maske.js';
 import { bokehRgba } from './bokeh.js';
+import { ABTAST_N, schaerfenFeld } from './schaerfe.js';
 import { flaeche2d, glRaum } from './farbraum.js';
 import { bokehRadius } from './weich.js';
 import {
@@ -125,6 +126,8 @@ uniform float uVignette;
 #define STUETZEN ${KURVE_STUETZEN}
 #define KURVEN_LAENGE ${KURVE_STUETZEN * 4}
 #define BAENDER ${BAENDER.length}
+#define ABTAST_N ${ABTAST_N}
+const float SIGMA = ${glslZahl(ABTAST_N / 2)};
 const float FARBTON_HUB = ${glslZahl(FARBTON_HUB)};
 const float BAND_MITTE[BAENDER] = float[BAENDER](${BAENDER.map((b) => glslZahl(b.winkel / 360)).join(', ')});
 
@@ -157,6 +160,8 @@ uniform float uKurven[KURVEN_LAENGE];
 uniform bool uHatKurven;
 /** Je Band: x = Farbton, y = Saettigung, z = Helligkeit. */
 uniform vec3 uBand[BAENDER];
+uniform float uSchaerfeRadius;
+uniform float uSchaerfeSchwelle;
 uniform bool uHatBaender;
 
 const vec3 LUMA = vec3(0.2126, 0.7152, 0.0722);
@@ -502,13 +507,45 @@ void main() {
    * entfernt hat – der Hintergrund waere unscharf UND kantig.
    */
   if (uSchaerfe > 0.0) {
-    vec3 weich = (
-      texture(uBild, vUv + vec2(uTexel.x, 0.0)).rgb +
-      texture(uBild, vUv - vec2(uTexel.x, 0.0)).rgb +
-      texture(uBild, vUv + vec2(0.0, uTexel.y)).rgb +
-      texture(uBild, vUv - vec2(0.0, uTexel.y)).rgb
-    ) * 0.25;
-    c = clamp(c + (scharf - weich) * uSchaerfe * 1.5 * (1.0 - bokeh), 0.0, 1.0);
+    /*
+     * Fuenf mal fuenf Stellen, im Abstand des halben Radius – dasselbe
+     * Muster wie in schaerfe.ts, damit beide Wege gleich aussehen.
+     *
+     * Gerechnet wird in LINEAREM Licht. Anzeigewerte sind nicht proportional
+     * zum Licht, und deshalb fiel derselbe Unterschied auf der hellen Seite
+     * einer Kante staerker aus als auf der dunklen – das ist der helle Saum,
+     * der bisher ueber jeder dunklen Kante stand.
+     */
+    float schritt = max(0.5, uSchaerfeRadius) / float(ABTAST_N);
+    vec3 weich = vec3(0.0);
+    vec3 kleinst = vec3(1.0);
+    vec3 groesst = vec3(0.0);
+    float summe = 0.0;
+    for (int dy = -ABTAST_N; dy <= ABTAST_N; dy++) {
+      for (int dx = -ABTAST_N; dx <= ABTAST_N; dx++) {
+        vec2 ab = vec2(float(dx), float(dy)) * schritt;
+        vec3 wert = zuLinear(texture(uBild, vUv + ab * uTexel).rgb);
+        float q = dot(ab, ab) / (schritt * schritt * 2.0 * SIGMA * SIGMA);
+        float g = exp(-q);
+        weich += wert * g;
+        summe += g;
+        kleinst = min(kleinst, wert);
+        groesst = max(groesst, wert);
+      }
+    }
+    weich /= summe;
+    vec3 mitte = zuLinear(scharf);
+    vec3 diff = mitte - weich;
+    /*
+     * Die Schwelle, weich und nicht als Sprung: Eine harte Grenze erzeugt
+     * genau dort, wo sie liegt, eine sichtbare Linie im Verlauf.
+     */
+    vec3 anteil = uSchaerfeSchwelle <= 0.0
+      ? vec3(1.0)
+      : smoothstep(vec3(0.0), vec3(1.0), (abs(diff) - uSchaerfeSchwelle) / uSchaerfeSchwelle);
+    vec3 roh = mitte + diff * uSchaerfe * 1.5 * (1.0 - bokeh) * anteil;
+    // Die Saumbegrenzung: steiler ja, ueber die Nachbarschaft hinaus nein.
+    c = zuSrgb(clamp(min(groesst, max(kleinst, roh)), 0.0, 1.0));
   }
 
   // Die globale Anpassung.
@@ -728,6 +765,8 @@ function werkzeug(): Werk | null {
       'uSwRot',
       'uSwGruen',
       'uSchaerfe',
+      'uSchaerfeRadius',
+      'uSchaerfeSchwelle',
       'uVignette',
       'uMasken',
       'uAnzahl',
@@ -876,6 +915,8 @@ function aufGpu(
     gl.uniform1f(orte.uSwRot, a.swRot);
     gl.uniform1f(orte.uSwGruen, a.swGruen);
     gl.uniform1f(orte.uSchaerfe, a.schaerfe);
+    gl.uniform1f(orte.uSchaerfeRadius, a.schaerfeRadius);
+    gl.uniform1f(orte.uSchaerfeSchwelle, a.schaerfeSchwelle);
     gl.uniform1f(orte.uVignette, a.vignette);
 
     /*
@@ -1004,43 +1045,6 @@ function lutHolen(a: Farbanpassung): Uint8Array {
 }
 
 /** Die Unschärfemaske auf dem Prozessor – vier Nachbarn, wie im Schattierer. */
-/**
- * Die Unschärfemaske – vier Nachbarn, wie im Schattierer.
- *
- * `quelle` ist das Bild, aus dem die Kanten kommen, und das ist ausdrücklich
- * das UNVERWISCHTE: Der Schattierer rechnet `c + (scharf − nachbar_scharf)`,
- * nicht `c + (c − nachbar_c)`. Nähme man hier das schon weichgezeichnete
- * Bild, liefen die beiden Wege bei eingeschalteter Tiefenschärfe
- * auseinander – und zwar leise, weil beide für sich plausibel aussehen.
- */
-function schaerfen(
-  daten: Uint8ClampedArray,
-  breite: number,
-  hoehe: number,
-  staerke: number,
-  daempfung: Uint8Array | null,
-  quelle: Uint8ClampedArray,
-): void {
-  const kopie = quelle;
-  for (let y = 0; y < hoehe; y += 1) {
-    for (let x = 0; x < breite; x += 1) {
-      const at = (y * breite + x) * 4;
-      for (let k = 0; k < 3; k += 1) {
-        const links = kopie[(y * breite + Math.max(0, x - 1)) * 4 + k];
-        const rechts = kopie[(y * breite + Math.min(breite - 1, x + 1)) * 4 + k];
-        const oben = kopie[(Math.max(0, y - 1) * breite + x) * 4 + k];
-        const unten = kopie[(Math.min(hoehe - 1, y + 1) * breite + x) * 4 + k];
-        const weich = (links + rechts + oben + unten) * 0.25;
-        // Mit `(1 − bokeh)` gedämpft, wie im Schattierer: Ohne das holte die
-        // Schärfe genau die Hochfrequenz zurück, die das Bokeh gerade
-        // entfernt hat – der Hintergrund wäre unscharf UND kantig.
-        const daempf = daempfung ? 1 - daempfung[y * breite + x] / 255 : 1;
-        daten[at + k] = kopie[at + k] + (kopie[at + k] - weich) * staerke * 1.5 * daempf;
-      }
-    }
-  }
-}
-
 function aufLeinwand(
   bild: CanvasImageSource,
   breite: number,
@@ -1150,7 +1154,18 @@ function aufLeinwand(
     }
   }
 
-  if (a.schaerfe > 0) schaerfen(daten, breite, hoehe, a.schaerfe, bokehGewicht, unverwischt);
+  if (a.schaerfe > 0) {
+    schaerfenFeld(
+      daten,
+      breite,
+      hoehe,
+      a.schaerfe,
+      a.schaerfeRadius,
+      a.schaerfeSchwelle,
+      bokehGewicht,
+      unverwischt,
+    );
+  }
 
   const lut = lutHolen(a);
   /*

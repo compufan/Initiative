@@ -375,7 +375,7 @@ describe('autoAnpassung', () => {
 });
 
 describe('Farbanpassung und bereichePunkt', () => {
-  it('trennt die elf Farbregler von den zwei ortsabhängigen', () => {
+  it('trennt die elf Farbregler von den vier, die mehr als den Punkt brauchen', () => {
     expect(Object.keys(FARB_NEUTRAL)).toHaveLength(11);
     expect(Object.keys(FARB_NEUTRAL)).not.toContain('schaerfe');
     expect(Object.keys(FARB_NEUTRAL)).not.toContain('vignette');
@@ -389,14 +389,35 @@ describe('Farbanpassung und bereichePunkt', () => {
      * und hier nicht einträgt, bekommt einen Regler, den der Merkzettel nicht
      * sieht.
      */
-    expect(ZAHLFELDER).toEqual([...Object.keys(FARB_NEUTRAL), 'schaerfe', 'vignette']);
+    expect(ZAHLFELDER).toEqual([
+      ...Object.keys(FARB_NEUTRAL),
+      'schaerfe',
+      'schaerfeRadius',
+      'schaerfeSchwelle',
+      'vignette',
+    ]);
     expect(Object.keys(NEUTRAL)).toEqual([
       ...Object.keys(FARB_NEUTRAL),
       'schaerfe',
+      'schaerfeRadius',
+      'schaerfeSchwelle',
       'vignette',
       'kurven',
       'baender',
     ]);
+
+    /*
+     * Und der Ruhezustand ist NICHT überall null.
+     *
+     * Die Weite der Unschärfemaske ruht bei zwei Punkten – null wäre kein
+     * Ruhezustand, sondern eine kaputte Einstellung. Jede Schleife, die
+     * „unberührt“ als `=== 0` prüft, ist damit falsch; sie muss gegen
+     * `NEUTRAL` vergleichen. Steht diese Zeile hier, fällt es beim nächsten
+     * Feld dieser Art sofort auf.
+     */
+    expect(NEUTRAL.schaerfeRadius).toBeGreaterThan(0);
+    expect(istNeutral(NEUTRAL)).toBe(true);
+    expect(istNeutral({ ...NEUTRAL, schaerfeRadius: 0 })).toBe(false);
   });
 
   it('nagelt die Schlüsselreihenfolge fest', () => {
@@ -408,7 +429,8 @@ describe('Farbanpassung und bereichePunkt', () => {
      */
     expect(tonSchluessel(NEUTRAL)).toBe(
       'belichtung:0|kontrast:0|lichter:0|tiefen:0|schwarz:0|waerme:0|toenung:0|' +
-        'saettigung:0|dynamik:0|swRot:0|swGruen:0|schaerfe:0|vignette:0|' +
+        'saettigung:0|dynamik:0|swRot:0|swGruen:0|schaerfe:0|schaerfeRadius:2|' +
+        'schaerfeSchwelle:0|vignette:0|' +
         'k:///|b:0,0,0;0,0,0;0,0,0;0,0,0;0,0,0;0,0,0;0,0,0;0,0,0',
     );
     expect(farbSchluessel(NEUTRAL)).toBe(
