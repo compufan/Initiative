@@ -40,7 +40,25 @@
  * zweitens patentfrei – die blinde Kernschätzung aus Gradientenstatistik ist
  * belastet (US 7 616 826 B2, 2021 erloschen, aber mit Nachbarn).
  *
- * Und: Stark Verwackeltes bleibt verloren. Wo die Bewegung eine Kante über
+ * # Was hier noch fehlt: die Grafikeinheit
+ *
+ * Diese Fassung rechnet auf dem Prozessor und ist damit für ein Telefonfoto
+ * zu langsam – 36 Milliarden Rechenschritte in JavaScript sind über eine
+ * Minute auf dem Hauptstrang. Sie ist der Prüfmassstab und der Weg für kleine
+ * Bilder; die Oberfläche braucht eine Fassung auf der Grafikeinheit.
+ *
+ * Die ist nicht bloss eine Übersetzung, und daran ist der erste Versuch
+ * gescheitert: Richardson-Lucy braucht drei Arbeitstexturen gleichzeitig
+ * (Schätzung, Verhältnis, neue Schätzung – die neue darf nicht dieselbe sein,
+ * aus der gelesen wird) plus das beobachtete Bild. Nachgerechnet sind das bei
+ * zwölf Megapunkten in RGBA16F 366 MB und in RGBA32F 732 MB. Auf einem
+ * Telefon fällt der Reiter dabei aus dem Speicher.
+ *
+ * Es braucht also KACHELN mit Überlappung – mindestens so breit wie der Kern,
+ * sonst steht an jeder Kachelgrenze eine Naht. Das ist ein eigenes Stück
+ * Arbeit und wird als solches gebaut, nicht nebenbei.
+ *
+ * # Und: Stark Verwackeltes bleibt verloren. Wo die Bewegung eine Kante über
  * fünfzig Punkte gezogen hat, ist die Information physikalisch weg. Jedes
  * Verfahren, das dort trotzdem ein scharfes Bild zeigt, hat es ERFUNDEN.
  */
