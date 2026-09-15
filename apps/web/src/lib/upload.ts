@@ -13,6 +13,49 @@ import { videoBereinigen } from './videoMetadaten.js';
 /** Nach dieser Zeit gilt ein Upload als gescheitert statt weiter zu hängen. */
 const UPLOAD_TIMEOUT_MS = 120_000;
 
+/**
+ * Wie gross die eingebettete Vorschau wird – die längste Kante in Punkten.
+ *
+ * # Warum sie so viel grösser ist als vorher
+ *
+ * Sie stand auf 48 (Bilder) und 64 (Videos). Angezeigt wird sie in einem
+ * Rahmen von `min(74vw, 320px)`, auf einem Telefon also rund 291 CSS-Punkte:
+ * Das ist eine SECHSFACHE Vergrösserung, und bei dreifacher Gerätedichte das
+ * Achtzehnfache. Genau das meldet der Anwender als „sehr unscharf".
+ *
+ * An drei Stellen ist dieses Bildchen ausserdem nicht bloss ein Platzhalter
+ * für einen Augenblick, sondern das Endergebnis:
+ *
+ *   * Ein Video im Chat zeigt es als `poster` und lädt mit
+ *     `preload="metadata"` nie ein echtes Einzelbild – bis jemand auf
+ *     Abspielen tippt, IST das 64-Punkt-Bild das Aussehen des Videos.
+ *   * In der Dateiliste und in der Auswahl vor dem Senden steht daneben gar
+ *     kein scharfes Bild; es wird dort nie geladen.
+ *   * Und offline ist es ohnehin das Einzige, was da ist.
+ *
+ * # Warum 160 und nicht mehr
+ *
+ * Die Vorschau ist eine data-URL und fährt in JEDER Nachrichtenliste mit; sie
+ * liegt je Anhang in einer Textspalte der Datenbank. Nachgemessen: 160 Punkte
+ * Kante sind rund 2,5 bis 3 kB, 320 Punkte schon knapp 8 kB – eine Chatseite
+ * mit fünfzig Fotos trüge dann 400 kB Base64 mit sich herum. Die Grenze
+ * (`LIMITS.previewDataUrlMax`) liegt bei 32 000 Zeichen; davon waren bisher
+ * vier Prozent benutzt, jetzt rund ein Zehntel.
+ *
+ * Bei 160 Punkten fällt die Vergrösserung im Chat von 6,1 auf 1,8 – und
+ * darüber liegt ohnehin noch der gewollte Weichzeichner der Überblendung.
+ */
+const VORSCHAU_KANTE = 160;
+
+/**
+ * Und die Güte.
+ *
+ * 0,5 war für 48 Punkte gedacht, wo ohnehin nichts zu erkennen war. Auf 160
+ * Punkten sieht man die Blockartefakte; 0,62 kostet wenige hundert Byte und
+ * nimmt ihnen die Kanten.
+ */
+const VORSCHAU_GUETE = 0.62;
+
 export async function uploadBlob(attachment: OutboxAttachment): Promise<AttachmentDto> {
   /*
    * Der Vorposten für Video-Metadaten – hier und nirgends sonst.
@@ -219,9 +262,9 @@ export async function prepareImage(
     ? file
     : await toBlob(drawTo(source, width, height), mime, fertig ? 0.92 : 0.82);
 
-  const previewScale = Math.min(1, 48 / Math.max(width, height || 1));
+  const previewScale = Math.min(1, VORSCHAU_KANTE / Math.max(width, height || 1));
   const preview = drawTo(source, width * previewScale, height * previewScale);
-  const previewDataUrl = preview.toDataURL('image/jpeg', 0.5);
+  const previewDataUrl = preview.toDataURL('image/jpeg', VORSCHAU_GUETE);
 
   if ('close' in source) source.close();
   return { blob: full, mime, width, height, previewDataUrl };
@@ -257,13 +300,16 @@ export async function videoPreview(
     };
     video.onseeked = () => {
       try {
-        const scale = Math.min(1, 64 / Math.max(video.videoWidth, video.videoHeight || 1));
+        const scale = Math.min(
+          1,
+          VORSCHAU_KANTE / Math.max(video.videoWidth, video.videoHeight || 1),
+        );
         const canvas = document.createElement('canvas');
         canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
         canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
         canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
         finish({
-          previewDataUrl: canvas.toDataURL('image/jpeg', 0.5),
+          previewDataUrl: canvas.toDataURL('image/jpeg', VORSCHAU_GUETE),
           width: video.videoWidth,
           height: video.videoHeight,
           durationMs: Math.round((video.duration || 0) * 1000),
