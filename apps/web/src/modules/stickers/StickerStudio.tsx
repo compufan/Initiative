@@ -19,6 +19,7 @@ import {
   MIN_SCALE,
   motivFuellen,
   STICKER_SIZE,
+  texteMitbewegen,
   cloneDoc,
   createDoc,
   exportSticker,
@@ -116,6 +117,16 @@ const SHAPES: { key: ShapeKind; label: string; icon: string }[] = [
 
 /** Um wieviel Grad zwei Finger sich drehen dürfen, ohne dass etwas passiert. */
 const DREH_TOTGANG = 7;
+
+/**
+ * Wie weit ein Finger wandern darf, ohne dass aus dem Tipp ein Wischer wird.
+ *
+ * In Flächenpunkten, also von der Lupe unabhängig. Dreizehn Punkte auf 512
+ * sind etwa zweieinhalb Prozent der Kante – auf einem Telefon rund ein
+ * Millimeter. Grosszügig gemeint: Ein Finger wackelt beim Tippen immer ein
+ * wenig, und ein Tipp, der nur bei ruhiger Hand wirkt, ist kein Werkzeug.
+ */
+const TIPP_WACKEL = STICKER_SIZE / 40;
 
 const START_EMOJI = ['😀', '😂', '😍', '🥳', '😎', '🤔', '🙈', '🔥', '✨', '💜', '🎉', '🚀'];
 const TEXT_COLORS = ['#ffffff', '#111111', '#ff3b30', '#ffcc00', '#34c759', '#0a84ff', '#af52de'];
@@ -323,6 +334,30 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   const lupenZug = useRef({ clientX: 0, clientY: 0, x: 0, y: 0, faktor: 1, distanz: 1, zoom: 1 });
   const busyGesture = useRef(false);
   const frame = useRef<number | null>(null);
+
+  /**
+   * Der vorgemerkte Tipp – und die Sperre, die ihn zurücknimmt.
+   *
+   * # Warum ein Tipp nicht beim Aufsetzen wirken darf
+   *
+   * „Antippen" und „Teile antippen" wirkten bisher sofort in `onPointerDown`.
+   * Zwei Finger kommen aber nie in EINEM Zeigerereignis an: Der erste löst
+   * für sich aus, der zweite kommt eine Handbreit später. Wer also zum
+   * Heranzoomen zwei Finger aufsetzt, hatte nach dem ersten schon
+   * freigestellt – und sah es erst, als beide Finger lagen. Es sieht aus, als
+   * hätte der ZWEITE Finger getippt; ausgelöst hat es der erste.
+   *
+   * Deshalb wird beim Aufsetzen nur noch vorgemerkt. Gewirkt wird beim
+   * Loslassen, und nur, wenn `mehrfinger` nicht dazwischenkam. Genau dieses
+   * Muster steht im Foto-Editor (`BildEditor.tsx`, `zugBeenden`) und ist dort
+   * aus demselben Grund entstanden.
+   *
+   * `mehrfinger` hält bis alle Finger weg sind: Von zwei Fingern geht einer
+   * zuerst hoch, und der zweite darf danach ebenso wenig tippen wie der
+   * erste.
+   */
+  const tippKandidat = useRef<{ id: number; punkt: { x: number; y: number } } | null>(null);
+  const mehrfinger = useRef(false);
 
   /**
    * Ob „Antippen mit Netz“ bereitsteht.
@@ -1208,6 +1243,29 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     return Math.hypot(a.cx - b.cx, a.cy - b.cy) || 1;
   }
 
+  /**
+   * Das Motiv umsetzen – und die Schriftzüge daran festhalten.
+   *
+   * EINE Stelle für alle Wege, auf denen sich Massstab, Versatz oder Drehung
+   * ändern: zwei Finger, Schieben mit einem Finger, Mausrad, Zoomregler,
+   * Drehregler und die Viertelknöpfe. Ohne diese Bündelung müsste jeder Weg
+   * selbst daran denken, und der nächste, der dazukommt, vergisst es.
+   *
+   * Die Regel dahinter in einem Satz: Ein Schriftzug ist am BILD befestigt,
+   * nicht an der Fläche. Wer eine Sprechblase neben einen Kopf setzt und
+   * danach den Ausschnitt zurechtrückt, findet sie neben dem Kopf wieder.
+   */
+  function motivSetzen(
+    rechnen: (
+      value: StickerDoc,
+    ) => Partial<Pick<StickerDoc, 'scale' | 'offsetX' | 'offsetY' | 'drehung'>>,
+  ) {
+    setDoc((value) => {
+      const neu = { ...value, ...rechnen(value) };
+      return { ...neu, texte: texteMitbewegen(value.texte, value, neu) };
+    });
+  }
+
   function beginPinch() {
     const mid = midpoint();
     const current = docRef.current;
@@ -1267,6 +1325,10 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     if (!source) return;
     busyGesture.current = true;
     if (pointers.current.size >= 2) {
+      // Der zweite Finger nimmt den vorgemerkten Tipp des ersten zurück,
+      // bevor er wirken konnte – und sperrt für den Rest der Geste.
+      mehrfinger.current = true;
+      tippKandidat.current = null;
       // Ueber 1x gehoeren beide Finger der Lupe: Wer eine Kontur bearbeitet,
       // will sich naeher heranholen und nicht den Bildausschnitt umbauen. Die
       // Lupe aendert am Sticker nichts, also gibt es dafuer auch nichts
@@ -1281,19 +1343,16 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     }
 
     const current = docRef.current;
-    if (toolRef.current === 'teile') {
-      armGesture();
-      commitArmedGesture();
+    if (toolRef.current === 'teile' || toolRef.current === 'keep') {
+      /*
+       * Nur vormerken, nicht wirken – siehe `tippKandidat`.
+       *
+       * Auch `armGesture`/`commitArmedGesture` wandern mit ans Loslassen:
+       * Sie legen den Rückgängig-Schritt an, und ein Schritt für einen Tipp,
+       * der nie stattfindet, führt beim Drücken auf ↺ ins Leere.
+       */
       gesture.current = { ...gesture.current, mode: 'none' };
-      teilUmschalten(point);
-      return;
-    }
-    if (toolRef.current === 'keep') {
-      armGesture();
-      commitArmedGesture();
-      // Kein Ziehen: Ein Antippen ist ein Punkt, aus dem der Bereich waechst.
-      gesture.current = { ...gesture.current, mode: 'none' };
-      void tippAnwendenRef.current?.(point);
+      tippKandidat.current = mehrfinger.current ? null : { id: event.pointerId, punkt: point };
       return;
     }
     if (toolRef.current === 'erase') {
@@ -1385,6 +1444,22 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       return;
     }
     pointers.current.set(event.pointerId, { ...point, cx: event.clientX, cy: event.clientY });
+
+    /*
+     * Ein Wischer ist kein Tipp.
+     *
+     * Ohne diese Zeilen würde auch ein Zug über die Fläche beim Loslassen
+     * freistellen – und zwar an der Stelle, an der der Finger AUFGESETZT hat,
+     * nicht dort, wo er hochgeht. Der Totgang ist grosszügig: Ein Finger
+     * wackelt beim Tippen, und ein Tipp, der nur bei ruhiger Hand wirkt, ist
+     * auf einem Telefon kein Werkzeug.
+     */
+    const kandidat = tippKandidat.current;
+    if (kandidat && kandidat.id === event.pointerId) {
+      const weg = Math.hypot(point.x - kandidat.punkt.x, point.y - kandidat.punkt.y);
+      if (weg > TIPP_WACKEL) tippKandidat.current = null;
+    }
+
     const state = gesture.current;
 
     if (state.mode === 'pinch' && pointers.current.size >= 2) {
@@ -1402,9 +1477,8 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       const roh = normGrad(clientWinkel() - state.startWinkel);
       const ueber = Math.abs(roh) <= DREH_TOTGANG ? 0 : roh - Math.sign(roh) * DREH_TOTGANG;
       const ziel = rasten(normGrad(state.startDrehung + ueber));
-      setDoc((value) => ({
-        ...value,
-        ...zweiFingerZug(
+      motivSetzen(() =>
+        zweiFingerZug(
           {
             mitte: { x: state.startX, y: state.startY },
             offsetX: state.startOffsetX,
@@ -1418,7 +1492,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
             deltaGrad: ziel - state.startDrehung,
           },
         ),
-      }));
+      );
       return;
     }
 
@@ -1440,8 +1514,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
 
     if (state.mode === 'pan') {
       commitArmedGesture();
-      setDoc((value) => ({
-        ...value,
+      motivSetzen(() => ({
         offsetX: state.startOffsetX + (point.x - state.startX),
         offsetY: state.startOffsetY + (point.y - state.startY),
       }));
@@ -1473,6 +1546,27 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     // stehen, verschöbe der nächste Druck irgendwo auf der Fläche denselben
     // Schriftzug weiter.
     textZug.current = null;
+
+    /*
+     * Jetzt erst wirkt der Tipp – und nur unter drei Bedingungen.
+     *
+     * Es muss DIESER Finger sein, der ihn vorgemerkt hat; es darf nie ein
+     * zweiter dazugekommen sein; und es muss ein Loslassen sein, kein
+     * Abbruch. Ein `pointercancel` kommt, wenn das System den Finger
+     * übernimmt – eine Wischgeste, ein Anruf. Daraus eine Freistellung zu
+     * machen, wäre dasselbe wie der Fehler, den diese Zeilen beheben.
+     */
+    const kandidat = tippKandidat.current;
+    if (kandidat && kandidat.id === event.pointerId) {
+      tippKandidat.current = null;
+      if (!mehrfinger.current && pointers.current.size === 0 && event.type !== 'pointercancel') {
+        armGesture();
+        commitArmedGesture();
+        if (toolRef.current === 'teile') teilUmschalten(kandidat.punkt);
+        else if (toolRef.current === 'keep') void tippAnwendenRef.current?.(kandidat.punkt);
+      }
+    }
+
     if (pointers.current.size >= 2) {
       if (lupeRef.current.zoom > 1) beginLupenPinch();
       else beginPinch();
@@ -1486,7 +1580,21 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       const remaining = [...pointers.current.values()][0];
       const current = docRef.current;
       gesture.current = {
-        mode: toolRef.current === 'erase' ? 'none' : 'pan',
+        /*
+         * Der übrig gebliebene Finger schiebt – ausser bei den Werkzeugen,
+         * die mit einem Finger etwas ganz anderes tun.
+         *
+         * „Antippen" und „Teile antippen" verschieben mit einem Finger nie
+         * (siehe `onPointerDown`); nach dem Abheben des zweiten Fingers taten
+         * sie es plötzlich doch, und das Motiv rutschte beim Loslassen einer
+         * Zoomgeste ein Stück weg.
+         */
+        mode:
+          toolRef.current === 'erase' ||
+          toolRef.current === 'keep' ||
+          toolRef.current === 'teile'
+            ? 'none'
+            : 'pan',
         startX: remaining.x,
         startY: remaining.y,
         startOffsetX: current.offsetX,
@@ -1501,6 +1609,8 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     if (pointers.current.size === 0) {
       gesture.current = { ...gesture.current, mode: 'none' };
       pending.current = null;
+      mehrfinger.current = false;
+      tippKandidat.current = null;
       busyGesture.current = false;
       lastCommit.current = { label: '', at: 0 };
       schedule();
@@ -1535,8 +1645,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       const ratio = next / current.scale;
       const centre = STICKER_SIZE / 2;
       commit('wheel');
-      setDoc((value) => ({
-        ...value,
+      motivSetzen((value) => ({
         scale: next,
         offsetX: anchorX - centre - (anchorX - centre - value.offsetX) * ratio,
         offsetY: anchorY - centre - (anchorY - centre - value.offsetY) * ratio,
@@ -1549,10 +1658,9 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   /** Slider zoom keeps the canvas centre fixed, so the offset scales with it. */
   function setZoom(next: number) {
     commit('zoom');
-    setDoc((value) => {
+    motivSetzen((value) => {
       const ratio = next / value.scale;
       return {
-        ...value,
         scale: next,
         offsetX: value.offsetX * ratio,
         offsetY: value.offsetY * ratio,
@@ -1574,7 +1682,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
    */
   function drehungSetzen(grad: number, sofort = false) {
     commit(sofort ? undefined : 'drehen');
-    setDoc((value) => ({ ...value, drehung: rasten(grad) }));
+    motivSetzen(() => ({ drehung: rasten(grad) }));
   }
 
   function chooseShape(shape: ShapeKind) {
@@ -2870,14 +2978,27 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                 />
                 <label className="stk-slider">
                   <span>Größe</span>
+                  {/*
+                    Der Regler reicht weiter, als man von Hand einstellen
+                    würde – bis 400 statt bis 140.
+
+                    Seit ein Schriftzug am Motiv hängt (`texteMitbewegen`),
+                    wächst seine Grösse beim Heranzoomen mit. Bei der alten
+                    Obergrenze stand der Regler danach am Anschlag, und der
+                    erste Griff daran liess den Text auf 140 zurückspringen –
+                    ein Wert, den niemand eingestellt hatte. Was darüber
+                    hinausgeht, zeigt der Zahlenwert daneben weiterhin
+                    richtig an, und `textMass` schrumpft ohnehin auf die
+                    Fläche.
+                  */}
                   <input
                     type="range"
-                    min={24}
-                    max={140}
-                    value={layer.size}
+                    min={8}
+                    max={400}
+                    value={Math.min(400, Math.round(layer.size))}
                     onChange={(event) => updateText({ size: Number(event.target.value) })}
                   />
-                  <span className="stk-slider-value">{layer.size}</span>
+                  <span className="stk-slider-value">{Math.round(layer.size)}</span>
                 </label>
                 <label className="stk-slider">
                   <span>Drehen</span>

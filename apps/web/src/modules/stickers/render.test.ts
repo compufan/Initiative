@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  dilateAlpha,
+  texteMitbewegen,
   STICKER_SIZE,
   cloneDoc,
   createDoc,
@@ -26,7 +28,7 @@ import {
   toSourcePoint,
   vereinigeAlpha,
 } from './render.js';
-import type { Stroke } from './render.js';
+import type { StickerText, Stroke } from './render.js';
 
 /** Minimal stand-in for `ImageData` – the pure pipeline never touches the DOM. */
 function makeImage(
@@ -1002,5 +1004,243 @@ describe('Schriftzüge auf dem Sticker', () => {
     const leer = text({ value: '' });
     const knappDaneben = { x: STICKER_SIZE / 2 + 9, y: STICKER_SIZE / 2 + 9 };
     expect(trifftText(messkontext(), leer, knappDaneben, STICKER_SIZE)).toBe(true);
+  });
+});
+
+describe('dilateAlpha', () => {
+  /**
+   * Die vorige Fassung, Zeile für Zeile – als Massstab.
+   *
+   * Das laufende Maximum ist ein anderes Verfahren für dasselbe Ergebnis, und
+   * „dasselbe" ist hier wörtlich zu nehmen: Byte für Byte. Ein Test, der nur
+   * prüft, dass irgendetwas Grösseres herauskommt, würde einen
+   * Vorzeichenfehler im Blockrand nicht bemerken – und der sähe im Bild aus
+   * wie ein Saum, der an einer Stelle einen Punkt zu schmal ist.
+   */
+  function langsam(
+    alpha: Uint8Array,
+    width: number,
+    height: number,
+    radius: number,
+  ): Uint8Array {
+    const horizontal = new Uint8Array(alpha.length);
+    for (let y = 0; y < height; y += 1) {
+      const row = y * width;
+      for (let x = 0; x < width; x += 1) {
+        let max = 0;
+        for (let i = Math.max(0, x - radius); i <= Math.min(width - 1, x + radius); i += 1) {
+          if (alpha[row + i] > max) max = alpha[row + i];
+        }
+        horizontal[row + x] = max;
+      }
+    }
+    const result = new Uint8Array(alpha.length);
+    for (let x = 0; x < width; x += 1) {
+      for (let y = 0; y < height; y += 1) {
+        let max = 0;
+        for (let i = Math.max(0, y - radius); i <= Math.min(height - 1, y + radius); i += 1) {
+          if (horizontal[i * width + x] > max) max = horizontal[i * width + x];
+        }
+        result[y * width + x] = max;
+      }
+    }
+    return result;
+  }
+
+  /** Ein Zufallsfeld mit fester Folge – derselbe Fall bei jedem Lauf. */
+  function feld(n: number, saat: number): Uint8Array {
+    const raus = new Uint8Array(n);
+    let z = saat;
+    for (let i = 0; i < n; i += 1) {
+      z = (z * 1103515245 + 12345) & 0x7fffffff;
+      // Viele Nullen und viele Vollwerte – so sieht eine Freistellmaske aus,
+      // und genau dort greift die Abkürzung „max === 255" der alten Fassung.
+      const w = (z >>> 16) % 100;
+      raus[i] = w < 40 ? 0 : w > 90 ? 255 : (z >>> 8) & 0xff;
+    }
+    return raus;
+  }
+
+  it('rechnet Byte für Byte dasselbe wie der Durchlauf über das Fenster', () => {
+    const faelle: [number, number, number][] = [
+      [16, 16, 1],
+      [16, 16, 3],
+      [17, 13, 4],
+      [13, 17, 7],
+      [33, 31, 5],
+      [64, 48, 12],
+      // Radius grösser als die Kante: Das Fenster ragt auf BEIDEN Seiten
+      // hinaus, und jeder Punkt bekommt das Maximum des ganzen Bildes.
+      [8, 8, 20],
+      // Eine einzelne Zeile und eine einzelne Spalte.
+      [40, 1, 6],
+      [1, 40, 6],
+    ];
+    for (const [w, h, r] of faelle) {
+      const a = feld(w * h, w * 7919 + h * 104729 + r);
+      expect(Array.from(dilateAlpha(a, w, h, r)), `${w}x${h}, Radius ${r}`).toEqual(
+        Array.from(langsam(a, w, h, r)),
+      );
+    }
+  });
+
+  it('trägt nichts aus dem waagerechten in den senkrechten Durchgang', () => {
+    /*
+     * Der Fall, den ein Zufallsfeld nicht findet.
+     *
+     * Beide Durchgänge teilen sich dieselben drei Hilfsfelder, und der
+     * waagerechte läuft über die BREITE, der senkrechte über die HÖHE. Ist
+     * das Bild breiter als hoch, steht im Hilfsfeld hinter der senkrechten
+     * Linie noch, was der waagerechte Durchgang dort zuletzt abgelegt hat –
+     * und ein Maximum zieht sich genau von dort nach vorn.
+     *
+     * Sichtbar wird das nur, wo das richtige Ergebnis NULL ist. In einem
+     * Zufallsfeld voller Vollwerte ist das Fenstermaximum fast überall schon
+     * 255, und der Fehler verschwindet darin. Deshalb hier: ein einzelner
+     * heller Fleck oben links, alles andere leer, und breiter als hoch.
+     */
+    const w = 64;
+    const h = 16;
+    const r = 5;
+    /*
+     * Wo der Fleck liegt, ist nicht gleichgültig – er muss GENAU dort
+     * stehen, wo der senkrechte Durchgang seine Polsterung erwartet.
+     *
+     * Der waagerechte Durchgang legt die Zeile bei Versatz r ab, also unter
+     * [5, 69). Der senkrechte braucht nur [5, 21) und liest bis 25. Die fünf
+     * Stellen [21, 26) schreibt er nie – dort steht noch die LETZTE Zeile des
+     * waagerechten Durchgangs, also alpha[15 · 64 + 16 … 20]. Genau da hinein
+     * kommt der Fleck. Ohne das Nullen zieht sich sein Wert danach durch
+     * jede Spalte.
+     */
+    const a = new Uint8Array(w * h);
+    for (let x = 16; x <= 20; x += 1) a[(h - 1) * w + x] = 255;
+    const raus = dilateAlpha(a, w, h, r);
+    expect(Array.from(raus)).toEqual(Array.from(langsam(a, w, h, r)));
+    // Und ausdrücklich: eine Spalte weit weg vom Fleck bleibt ganz leer.
+    for (let y = 0; y < h; y += 1) {
+      expect(raus[y * w + (w - 1)], `Zeile ${y}, letzte Spalte`).toBe(0);
+    }
+  });
+
+  it('lässt bei Radius 0 alles stehen', () => {
+    const a = feld(64, 5);
+    expect(Array.from(dilateAlpha(a, 8, 8, 0))).toEqual(Array.from(a));
+  });
+
+  it('gibt ein eigenes Feld zurück, nicht das hereingegebene', () => {
+    // Ein Aufrufer schreibt sein Ergebnis über die Eingabe (siehe
+    // „hereinziehen" in renderSticker). Käme dasselbe Feld zurück, läse er
+    // beim Umkehren, was er gerade geschrieben hat.
+    const a = feld(64, 9);
+    const raus = dilateAlpha(a, 8, 8, 0);
+    expect(raus).not.toBe(a);
+    raus[0] = 7;
+    expect(a[0]).not.toBe(7);
+  });
+
+  it('weitet einen einzelnen Punkt zu einem Quadrat aus', () => {
+    // Der anschauliche Fall: Ein Punkt in der Mitte, Radius 2, ergibt ein
+    // 5 × 5 grosses Quadrat – nicht einen Kreis. Rund wird es erst durch den
+    // Weichzeichner danach.
+    const a = new Uint8Array(81);
+    a[4 * 9 + 4] = 255;
+    const raus = dilateAlpha(a, 9, 9, 2);
+    let gesetzt = 0;
+    for (const wert of raus) if (wert === 255) gesetzt += 1;
+    expect(gesetzt).toBe(25);
+    expect(raus[2 * 9 + 2]).toBe(255);
+    expect(raus[1 * 9 + 4]).toBe(0);
+  });
+});
+
+describe('texteMitbewegen', () => {
+  const text = (werte: Partial<StickerText> = {}): StickerText =>
+    ({
+      id: 't1',
+      value: 'Hallo',
+      x: 0.7,
+      y: 0.3,
+      size: 80,
+      color: '#ffffff',
+      outline: true,
+      drehung: 0,
+      schrift: 'system',
+      ...werte,
+    }) as StickerText;
+
+  const lage = (scale: number, offsetX = 0, offsetY = 0, drehung = 0) => ({
+    scale,
+    offsetX,
+    offsetY,
+    drehung,
+  });
+
+  it('lässt alles stehen, wenn sich nichts geändert hat', () => {
+    const vorher = [text()];
+    expect(texteMitbewegen(vorher, lage(1), lage(1))).toBe(vorher);
+  });
+
+  it('schiebt den Schriftzug mit, wenn das Motiv geschoben wird', () => {
+    const [raus] = texteMitbewegen([text({ x: 0.5, y: 0.5 })], lage(1), lage(1, 64, -32));
+    expect(raus.x).toBeCloseTo(0.5 + 64 / STICKER_SIZE, 6);
+    expect(raus.y).toBeCloseTo(0.5 - 32 / STICKER_SIZE, 6);
+    // Reines Schieben ändert weder Grösse noch Winkel.
+    expect(raus.size).toBeCloseTo(80, 6);
+    expect(raus.drehung).toBe(0);
+  });
+
+  it('skaliert Abstand zur Motivmitte UND Schriftgrösse', () => {
+    // Motivmitte liegt bei Versatz 0 in der Flächenmitte (0,5 / 0,5).
+    const [raus] = texteMitbewegen([text({ x: 0.75, y: 0.5, size: 80 })], lage(1), lage(2));
+    // 0,25 Abstand wird zu 0,5.
+    expect(raus.x).toBeCloseTo(1.0, 6);
+    expect(raus.y).toBeCloseTo(0.5, 6);
+    expect(raus.size).toBeCloseTo(160, 6);
+  });
+
+  it('dreht den Schriftzug um die Motivmitte und um sich selbst', () => {
+    const [raus] = texteMitbewegen([text({ x: 0.75, y: 0.5, drehung: 10 })], lage(1), lage(1, 0, 0, 90));
+    // Eine Vierteldrehung um die Mitte: rechts wird unten.
+    expect(raus.x).toBeCloseTo(0.5, 6);
+    expect(raus.y).toBeCloseTo(0.75, 6);
+    expect(raus.drehung).toBeCloseTo(100, 6);
+  });
+
+  it('ist umkehrbar – hin und zurück landet genau wieder am Anfang', () => {
+    /*
+     * Die wichtigste Eigenschaft, und der Grund, warum hier nicht geklemmt
+     * wird. Würde `x`/`y` auf 0 … 1 gehalten, bliebe ein weit
+     * hinausgeschobener Schriftzug am Rand kleben und käme beim Zurückzoomen
+     * nicht an seine Stelle zurück. Nach einmal Hin und Her stünde er
+     * woanders – ein Fehler, der schlimmer wäre als der behobene.
+     */
+    const anfang = [text({ x: 0.82, y: 0.17, size: 96, drehung: 23 })];
+    const a = lage(1, 10, -5, 15);
+    const b = lage(3.7, -80, 120, 200);
+    const hin = texteMitbewegen(anfang, a, b);
+    const zurueck = texteMitbewegen(hin, b, a);
+    expect(zurueck[0].x).toBeCloseTo(anfang[0].x, 9);
+    expect(zurueck[0].y).toBeCloseTo(anfang[0].y, 9);
+    expect(zurueck[0].size).toBeCloseTo(anfang[0].size, 9);
+    expect(((zurueck[0].drehung % 360) + 360) % 360).toBeCloseTo(
+      ((anfang[0].drehung % 360) + 360) % 360,
+      9,
+    );
+  });
+
+  it('lässt den Schriftzug aus der Fläche hinauswandern, statt ihn zu klemmen', () => {
+    const [raus] = texteMitbewegen([text({ x: 0.9, y: 0.9 })], lage(1), lage(8));
+    expect(raus.x).toBeGreaterThan(1);
+    expect(raus.y).toBeGreaterThan(1);
+  });
+
+  it('verträgt einen Massstab von null, ohne NaN zu erzeugen', () => {
+    // Aus einem fremden oder halb gebauten Dokument erreichbar; ohne den
+    // Wächter wäre das Verhältnis Unendlich und jede Koordinate NaN.
+    const [raus] = texteMitbewegen([text()], lage(0), lage(2));
+    expect(Number.isFinite(raus.x)).toBe(true);
+    expect(Number.isFinite(raus.y)).toBe(true);
+    expect(Number.isFinite(raus.size)).toBe(true);
   });
 });

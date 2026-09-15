@@ -1064,3 +1064,176 @@ test('Sticker-Text kennt dieselben fünf Schriften wie der Fotoeditor', async ({
   await page.getByRole('button', { name: 'Serifen', exact: true }).click();
   await expect.poll(abdruck, { timeout: 10_000 }).not.toBe(normal);
 });
+
+test('zwei Finger zoomen, ohne dabei freizustellen – und der Text bleibt am Motiv', async ({
+  browser,
+}) => {
+  /*
+   * Zwei Fehler in einer Geste, beide vom Anwender gemeldet.
+   *
+   * (a) „Antippen" wirkte beim AUFSETZEN. Zwei Finger kommen aber nie in
+   *     einem Zeigerereignis an – der erste löste also aus, bevor der zweite
+   *     da war. Wer heranzoomen wollte, hatte danach etwas freigestellt.
+   *
+   * (b) Der Schriftzug stand in Anteilen der FLÄCHE, das Motiv in Massstab
+   *     und Versatz. Beim Zoomen wanderte das Bild unter dem Text weg.
+   *
+   * Gemessen wird an zwei Dingen, die man sieht: am Knopf „Letzten Tipp
+   * zurück" – er ist genau dann bedienbar, wenn ein Tipp abgelegt wurde – und
+   * am Zahlenwert neben dem Grössenregler.
+   */
+  const alice = credentials('zwfi');
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto('/');
+  await page.getByRole('button', { name: /Noch kein Konto/ }).click();
+  await page.getByLabel('Benutzername').fill(alice.username);
+  await page.getByLabel('Anzeigename').fill(alice.displayName);
+  await page.getByLabel('Passwort', { exact: true }).fill(alice.password);
+  await page.getByRole('button', { name: 'Konto erstellen' }).click();
+  await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
+
+  const bob = credentials('zwziel');
+  await signUp(browser, bob);
+  await page.getByRole('button', { name: 'Neuer Chat' }).click();
+  await page.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  const treffer = page.getByText(bob.displayName).first();
+  await expect(treffer).toBeVisible({ timeout: 30_000 });
+  await treffer.click();
+  await expect(page.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await page.getByRole('button', { name: 'Sticker', exact: true }).click();
+  await page.getByRole('button', { name: /Sticker erstellen/ }).click();
+
+  await page.getByRole('tab', { name: 'Quelle' }).click();
+  await page
+    .locator('input[type=file]')
+    .first()
+    .setInputFiles({ name: 'motiv.png', mimeType: 'image/png', buffer: motivPng(256, 256) });
+
+  const leinwand = page.locator('.stk-canvas').first();
+  await expect(leinwand).toBeVisible();
+  await expect
+    .poll(async () => leinwand.evaluate((el: HTMLCanvasElement) => el.width), { timeout: 15_000 })
+    .toBeGreaterThan(200);
+
+  // Ein Schriftzug, damit es etwas mitzubewegen gibt.
+  await page.getByRole('tab', { name: 'Text' }).click();
+  await page.getByRole('button', { name: /Text$/ }).first().click();
+  await page.getByPlaceholder('Was soll dastehen?').fill('Hallo');
+  const groesse = page
+    .locator('.stk-slider', { hasText: 'Größe' })
+    .locator('.stk-slider-value')
+    .first();
+  await expect(groesse).toBeVisible();
+  const groesseVorher = Number(await groesse.innerText());
+  expect(groesseVorher).toBeGreaterThan(0);
+
+  // „Antippen“ scharfschalten – ab hier würde ein Tipp freistellen.
+  await page.getByRole('tab', { name: 'Freistellen' }).click();
+  const antippen = page.getByRole('button', { name: /Antippen/ }).first();
+  await antippen.click();
+  await expect(antippen).toHaveText(/an$/);
+
+  /** Bedienbar genau dann, wenn ein Tipp abgelegt wurde. */
+  const tippZurueck = page.getByRole('button', { name: 'Letzten Tipp zurück' });
+  await expect(tippZurueck).toBeDisabled();
+
+  const kasten = await leinwand.boundingBox();
+  if (!kasten) throw new Error('keine Leinwand');
+  const mx = kasten.x + kasten.width / 2;
+  const my = kasten.y + kasten.height / 2;
+
+  /** Zeigerereignisse von Hand – `page.touchscreen` kann nur einen Finger. */
+  const senden = async (folge: { typ: string; id: number; x: number; y: number }[]) =>
+    leinwand.evaluate((el, schritte) => {
+      const ziel = el as HTMLCanvasElement;
+      for (const s of schritte) {
+        ziel.dispatchEvent(
+          new PointerEvent(s.typ, {
+            pointerId: s.id,
+            pointerType: 'touch',
+            isPrimary: s.id === 1,
+            clientX: s.x,
+            clientY: s.y,
+            bubbles: true,
+            cancelable: true,
+            buttons: s.typ === 'pointerup' ? 0 : 1,
+          }),
+        );
+      }
+    }, folge);
+
+  /*
+   * Die Gegenprobe ZUERST – ohne sie wäre die Prüfung danach wertlos.
+   *
+   * EIN Finger auf die Mitte muss einen Tipp ablegen. Täte er es nicht,
+   * hiesse „nach zwei Fingern ist kein Tipp da" nur, dass dieser Test einen
+   * Tipp gar nicht sehen kann.
+   */
+  await senden([
+    { typ: 'pointerdown', id: 9, x: mx, y: my },
+    { typ: 'pointerup', id: 9, x: mx, y: my },
+  ]);
+  await expect(tippZurueck).toBeEnabled({ timeout: 15_000 });
+
+  // Und wieder weg damit.
+  await tippZurueck.click();
+  await expect(tippZurueck).toBeDisabled({ timeout: 15_000 });
+
+  /*
+   * Und jetzt die eigentliche Geste: zwei Finger aufsetzen,
+   * auseinanderziehen, abheben.
+   */
+  const folge: { typ: string; id: number; x: number; y: number }[] = [
+    { typ: 'pointerdown', id: 1, x: mx - 20, y: my },
+    { typ: 'pointerdown', id: 2, x: mx + 20, y: my },
+  ];
+  for (let i = 1; i <= 10; i += 1) {
+    folge.push({ typ: 'pointermove', id: 1, x: mx - 20 - i * 5, y: my });
+    folge.push({ typ: 'pointermove', id: 2, x: mx + 20 + i * 5, y: my });
+  }
+  folge.push({ typ: 'pointerup', id: 2, x: mx + 70, y: my });
+  folge.push({ typ: 'pointerup', id: 1, x: mx - 70, y: my });
+  await senden(folge);
+
+  /*
+   * (b) Der Schriftzug ist mitgewachsen. Der Regler steht im Textreiter, also
+   * erst dorthin zurück – ein Wert, den man gar nicht sieht, taugt nicht als
+   * Beleg.
+   */
+  await page.getByRole('tab', { name: 'Text' }).click();
+  await expect
+    .poll(async () => Number(await groesse.innerText()), { timeout: 10_000 })
+    .toBeGreaterThan(groesseVorher);
+
+  /*
+   * (a) Und kein Tipp ist dabei entstanden. Zeit lassen: „Antippen" rechnet
+   * nebenher, und ein Blick unmittelbar nach der Geste fände einen Tipp noch
+   * gar nicht.
+   */
+  await page.getByRole('tab', { name: 'Freistellen' }).click();
+  await page.waitForTimeout(1500);
+  await expect(tippZurueck, 'die Zwei-Finger-Geste hat freigestellt').toBeDisabled();
+
+  /*
+   * Und derselbe Fall noch einmal, ohne nennenswerte Bewegung.
+   *
+   * Der Zug oben nimmt den vorgemerkten Tipp schon deshalb zurück, weil der
+   * Finger weit wandert – ein Wischer ist kein Tipp. Wer zwei Finger nur
+   * kurz aufsetzt und wieder abhebt, bewegt sie aber kaum. Dann trägt allein
+   * die Sperre: Sobald ein zweiter Finger da war, tippt in dieser Geste
+   * keiner mehr, auch nicht der, der zuerst lag.
+   */
+  await senden([
+    { typ: 'pointerdown', id: 3, x: mx - 18, y: my },
+    { typ: 'pointerdown', id: 4, x: mx + 18, y: my },
+    { typ: 'pointermove', id: 3, x: mx - 20, y: my },
+    { typ: 'pointermove', id: 4, x: mx + 20, y: my },
+    { typ: 'pointerup', id: 4, x: mx + 20, y: my },
+    { typ: 'pointerup', id: 3, x: mx - 20, y: my },
+  ]);
+  await page.waitForTimeout(1500);
+  await expect(tippZurueck, 'zwei Finger ohne Bewegung haben freigestellt').toBeDisabled();
+
+  await context.close();
+});
