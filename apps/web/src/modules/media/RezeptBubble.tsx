@@ -7,6 +7,7 @@ import { BildEditor } from '../bild/BildEditor.js';
 import { MAX_KANTE, type BildDoc } from '../bild/doc.js';
 import { REZEPT_DATEINAME, REZEPT_MIME, rezeptLesen } from '../bild/rezept.js';
 import { zeichneAusgabe } from '../bild/zeichnen.js';
+import { schriftenBereit } from '../../lib/schriften.js';
 import { flaeche2d } from '../bild/farbraum.js';
 import { prepareImage } from '../../lib/upload.js';
 import { loadImageFromBlob } from '../stickers/helpers.js';
@@ -130,6 +131,16 @@ export function RezeptBubble({ message, isMine }: MessageRendererProps) {
            * und wer weiterbearbeitet, bekommt ohnehin das Original in den
            * Editor.
            */
+          /*
+           * Erst die Schriften, dann rechnen.
+           *
+           * Hier ist die Stelle, an der es am meisten zählt: Ein Rezept wird
+           * auf dem Gerät JEDES Empfängers neu gerechnet. Wäre die Schrift
+           * noch nicht da, rasterte die Leinwand die Ersatzschrift – und zwar
+           * endgültig, denn ein Bild lädt nicht nach. Der Empfänger sähe
+           * einen anderen Schriftzug als der Absender.
+           */
+          await schriftenBereit(doc.texte.map((t) => t.schrift));
           const klein = await verkleinern(bild, VORSCHAU_KANTE);
           const canvas = zeichneAusgabe(
             klein.bild,

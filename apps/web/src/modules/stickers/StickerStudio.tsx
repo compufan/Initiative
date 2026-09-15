@@ -51,6 +51,7 @@ import {
   writeEngineSetting,
   type EngineKey,
 } from './engines/index.js';
+import { alleSchriftenBereit, schriftenBereit } from '../../lib/schriften.js';
 import {
   gewaehlterFreisteller,
   readQualitaet,
@@ -502,6 +503,23 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   useEffect(() => {
     tabRef.current = tab;
   }, [tab]);
+
+  /*
+   * Die Schriften holen, sobald das Studio aufgeht.
+   *
+   * Sonst zeigt die Fläche eine andere Schrift als der fertige Sticker: Man
+   * rückt den Text nach der Ersatzschrift zurecht, und gespeichert wird die
+   * richtige – die anders breit ist. Danach neu zeichnen.
+   */
+  useEffect(() => {
+    let gilt = true;
+    void alleSchriftenBereit().then(() => {
+      if (gilt) schedule();
+    });
+    return () => {
+      gilt = false;
+    };
+  }, [schedule]);
 
   useEffect(() => {
     toolRef.current = tool;
@@ -1859,6 +1877,15 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
         return;
       }
 
+      /*
+       * Erst die Schriften, dann der letzte Durchgang.
+       *
+       * Ein Sticker IST ein Bild: Was hier gerastert wird, lässt sich später
+       * nicht mehr austauschen. Stünde die Schrift noch aus, ginge die
+       * Ersatzschrift mit ins Paket – und zwar für alle, die den Sticker je
+       * bekommen.
+       */
+      await schriftenBereit(docRef.current.texte.map((t) => t.schrift));
       renderSticker(canvas, sourceRef.current, docRef.current, { fast: false });
       const exported = await exportSticker(canvas, supportsWebp());
       if (exported.blob.size > LIMITS.maxUploadBytes.sticker) {

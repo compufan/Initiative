@@ -1,0 +1,117 @@
+/*
+ * Die mitgelieferten Schriften.
+ *
+ * ERZEUGT – nicht von Hand ändern. Die Wahrheit steht in
+ * `src/lib/schriften.ts`; dieses Blatt wird daraus gebaut
+ * (`pnpm schriften`). Zwei von Hand gepflegte Listen laufen auseinander, und
+ * man merkt es erst an einem Sticker, auf dem die falsche Schrift steht.
+ *
+ * `font-display: block` und nicht `swap`: Was hier gezeichnet wird, landet in
+ * einem BILD. Ein Tausch nach dem Rastern kommt zu spät – dann steht die
+ * Ersatzschrift für immer darin. Lieber einen Augenblick nichts sehen als
+ * dauerhaft das Falsche. Gewartet wird ohnehin in `schriftBereit`.
+ */
+
+@font-face {
+  font-family: 'Initiative Serifen';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('/schriften/serif-400.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Initiative Serifen';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('/schriften/serif-700.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Initiative Technisch';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('/schriften/mono-400.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Initiative Technisch';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('/schriften/mono-700.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Initiative Rund';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('/schriften/rund-400.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Initiative Rund';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('/schriften/rund-700.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Initiative Schmal';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('/schriften/schmal-400.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Initiative Schmal';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('/schriften/schmal-700.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Initiative Plakat';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('/schriften/plakat-400.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Initiative Wucht';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('/schriften/wucht-400.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Initiative Handschrift';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('/schriften/hand-400.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Initiative Elegant';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('/schriften/elegant-400.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Initiative Elegant';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('/schriften/elegant-700.woff2') format('woff2');
+}

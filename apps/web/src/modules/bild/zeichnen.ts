@@ -27,37 +27,17 @@ import type { Raster } from './maske.js';
 import { szeneBauen } from './maskenSpeicher.js';
 import { neigungImOriginal, zuschnittMitte } from './neigen.js';
 
-/**
- * Die Schriftarten zur Auswahl.
+/*
+ * Die Schriftarten stehen jetzt an EINER Stelle.
  *
- * Bewusst nur das, was auf dem Gerät ohnehin liegt: Eine mitgelieferte Schrift
- * kostet Download bei jedem Start und wirft eine Lizenzfrage auf, die niemand
- * stellen wollte. Jede Angabe ist eine Kette mit Rückfall, damit auf Android
- * etwas Ähnliches erscheint wie auf dem iPhone.
+ * Sie standen hier und – Wort für Wort dieselbe Liste – noch einmal im
+ * Sticker-Studio. Wer eine ergänzte, ergänzte sie zweimal oder eben nicht.
+ * Beide lesen sie nun aus `lib/schriften.ts`; der Name bleibt stehen, damit
+ * die Aufrufer unverändert bleiben.
  */
-export const SCHRIFTEN: { key: string; label: string; stack: string }[] = [
-  {
-    key: 'system',
-    label: 'Normal',
-    stack: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
-  },
-  { key: 'serif', label: 'Serifen', stack: 'Georgia, "Times New Roman", Times, serif' },
-  {
-    key: 'mono',
-    label: 'Technisch',
-    stack: '"SF Mono", "Roboto Mono", Menlo, Consolas, monospace',
-  },
-  { key: 'rund', label: 'Rund', stack: '"Comic Sans MS", "Chalkboard SE", "Comic Neue", cursive' },
-  {
-    key: 'schmal',
-    label: 'Schmal',
-    stack: '"Arial Narrow", "Roboto Condensed", "Helvetica Neue", Arial, sans-serif',
-  },
-];
+import { SCHRIFTEN, schriftStack } from '../../lib/schriften.js';
 
-export function schriftStack(key: string): string {
-  return (SCHRIFTEN.find((eintrag) => eintrag.key === key) ?? SCHRIFTEN[0]).stack;
-}
+export { SCHRIFTEN, schriftStack };
 
 /** Wie dick die Kontur eines Schriftzugs im Verhältnis zur Schrifthöhe ist. */
 const KONTUR_ANTEIL = 0.14;

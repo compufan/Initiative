@@ -43,6 +43,53 @@ const ZIEL = join(webDir, 'public', 'lizenzen.json');
  * Abhängigkeitsliste abgeschrieben. Der Beleg steht dabei, damit man es
  * nachprüfen kann, statt es glauben zu müssen.
  */
+/**
+ * Die mitgelieferten Schriften.
+ *
+ * Sie sind kein npm-Paket und kein Modell – sie liegen als woff2-Dateien
+ * unter `public/schriften/`, und kein Werkzeug findet sie dort von selbst.
+ * Die Liste steht deshalb hier, und zwar je Schrift mit dem Urheberrecht aus
+ * ihrer eigenen LICENSE-Datei; die liegen zum Nachlesen daneben.
+ *
+ * Alle acht stehen unter der SIL Open Font License 1.1. Die erlaubt
+ * ausdrücklich das Einbetten in Dokumente und Bilder, verlangt aber, dass die
+ * Schrift selbst nicht unter ihrem Namen verkauft wird – was hier niemand
+ * vorhat. Die einzige Auflage, die uns betrifft, ist die Nennung, und die
+ * steht damit auf der Seite „Verwendete Software“.
+ */
+const SCHRIFTEN_LIZENZ = [
+  ['Anton', 'Anton Project Authors', 'https://github.com/googlefonts/AntonFont', 'Plakat'],
+  [
+    'Archivo Black',
+    'Omnibus-Type',
+    'https://github.com/Omnibus-Type/ArchivoBlack',
+    'Wucht',
+  ],
+  ['Caveat', 'Impallari Type', 'https://github.com/googlefonts/caveat', 'Handschrift'],
+  ['Fredoka', 'Milena Brandao, Hafontia', 'https://github.com/hafontia/Fredoka', 'Rund'],
+  [
+    'JetBrains Mono',
+    'JetBrains s.r.o.',
+    'https://github.com/JetBrains/JetBrainsMono',
+    'Technisch',
+  ],
+  ['Lora', 'Cyreal', 'https://github.com/cyrealtype/Lora-Cyrillic', 'Serifen'],
+  ['Oswald', 'Vernon Adams, Kalapi Gajjar', 'https://github.com/googlefonts/OswaldFont', 'Schmal'],
+  [
+    'Playfair Display',
+    'Claus Eggers Sørensen',
+    'https://github.com/clauseggers/Playfair-Display',
+    'Elegant',
+  ],
+].map(([name, urheber, quelle, rolle]) => ({
+  name,
+  lizenz: 'OFL-1.1',
+  urheber,
+  quelle,
+  teil: 'schrift',
+  hinweis: `In der App als „${rolle}“, auf Latin gekürzt und als woff2 mitgeliefert.`,
+}));
+
 const EINGEBAUT = [
   {
     name: 'Eigen',
@@ -257,6 +304,7 @@ const TEXTDATEIEN = {
   'BSD-3-Clause': 'bsd-3-clause.txt',
   'MPL-2.0': 'mpl-2.0.txt',
   ISC: 'isc.txt',
+  'OFL-1.1': 'ofl-1.1.txt',
 };
 
 async function textFuerLizenz(lizenz) {
@@ -307,6 +355,12 @@ async function textNachkuerzel(lizenz) {
   return undefined;
 }
 
+// Und die Schriften – gleiche Behandlung wie die einkompilierten Teile.
+const schriften = [];
+for (const eintrag of SCHRIFTEN_LIZENZ) {
+  schriften.push({ ...eintrag, textId: await textFuerLizenz(eintrag.lizenz) });
+}
+
 const rust = rustKisten();
 // Die Lizenztexte der Kisten liegen im Quellordner der Registry.
 for (const kiste of rust ?? []) {
@@ -322,6 +376,7 @@ const liste = {
       eintraege: [...(await npmPakete()), ...(await werkzeugPakete())],
     },
     { teil: 'wasm', titel: 'Fest in den Rechenwerken', eintraege: eingebaut },
+    { teil: 'schrift', titel: 'Schriften', eintraege: schriften },
     { teil: 'modell', titel: 'Modelle', eintraege: await modellEintraege() },
     {
       teil: 'api',

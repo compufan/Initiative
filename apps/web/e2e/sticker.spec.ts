@@ -1061,7 +1061,7 @@ test('ein Paket baut man aus vielen Bildern – die Reihe läuft durch', async (
   await expect(page.locator('.stk-studio')).toHaveCount(1);
 });
 
-test('Sticker-Text kennt dieselben fünf Schriften wie der Fotoeditor', async ({ browser }) => {
+test('Sticker-Text kennt dieselben Schriften wie der Fotoeditor', async ({ browser }) => {
   /*
    * Der Fotoeditor bietet fünf Schriften an, das Studio hatte eine – fest im
    * Zeichencode. Für ein Meme ist die Schrift nicht Beiwerk: Dasselbe Wort in
@@ -1108,7 +1108,22 @@ test('Sticker-Text kennt dieselben fünf Schriften wie der Fotoeditor', async ({
       return `${gesetzt}:${summe % 1000003}`;
     });
 
-  for (const name of ['Normal', 'Serifen', 'Technisch', 'Rund', 'Schmal']) {
+  /*
+   * Aus fünf sind neun geworden, und aus Systemstapeln mitgelieferte
+   * Schriften – aber die Zusicherung ist dieselbe geblieben: Editor und
+   * Studio bieten DIESELBE Liste an. Beide lesen sie aus `lib/schriften.ts`.
+   */
+  for (const name of [
+    'Normal',
+    'Serifen',
+    'Technisch',
+    'Rund',
+    'Schmal',
+    'Plakat',
+    'Wucht',
+    'Handschrift',
+    'Elegant',
+  ]) {
     await expect(page.getByRole('button', { name, exact: true })).toBeVisible();
   }
 

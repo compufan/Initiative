@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node scripts/prepare-models.mjs --optional && vite --host",
     "models": "node scripts/prepare-models.mjs",
-    "prebuild": "node scripts/prepare-models.mjs && node scripts/lizenzen.mjs",
+    "prebuild": "node scripts/prepare-models.mjs && node scripts/schriften.mjs && node scripts/lizenzen.mjs",
     "build": "vite build",
     "preview": "vite preview --host",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -15,7 +15,8 @@
     "check:cutout": "node scripts/check-cutout.mjs",
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui",
-    "lizenzen": "node scripts/lizenzen.mjs"
+    "lizenzen": "node scripts/lizenzen.mjs",
+    "schriften": "node scripts/schriften.mjs"
   },
   "dependencies": {
     "@initiative/shared": "workspace:*",

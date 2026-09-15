@@ -4,6 +4,7 @@ import { registerSW } from 'virtual:pwa-register';
 import { App } from './App.js';
 import { anmeldungMerken, nachNeuerFassungSehen } from './lib/aktualisieren.js';
 import { useUi } from './state/ui.js';
+import './styles/schriften.css';
 import './styles/global.css';
 
 const container = document.getElementById('root');

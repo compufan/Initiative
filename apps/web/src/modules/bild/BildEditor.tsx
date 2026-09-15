@@ -74,6 +74,7 @@ import {
 import type { EngineKey } from '../stickers/engines/types.js';
 import { writeEngineSetting } from '../stickers/engines/settings.js';
 import { SCHRIFTEN, trifftText, zeichneAnsicht, zeichneAusgabe } from './zeichnen.js';
+import { alleSchriftenBereit, schriftenBereit } from '../../lib/schriften.js';
 import { rezeptHindernis, rezeptLohnt, rezeptMoeglich, rezeptSchreiben } from './rezept.js';
 import { Kurvenfeld } from './Kurvenfeld.js';
 import { flaeche2d } from './farbraum.js';
@@ -696,6 +697,25 @@ export function BildEditor({
   useEffect(() => {
     planenRef.current = planen;
   }, [planen]);
+
+  /*
+   * Die Schriften holen, sobald der Editor aufgeht – nicht erst beim
+   * Speichern.
+   *
+   * Sonst sähe die Arbeitsansicht eine andere Schrift als das Ergebnis: Man
+   * setzt einen Schriftzug, rückt ihn nach der Ersatzschrift zurecht, und
+   * beim Speichern steht plötzlich eine breitere darin. Danach neu zeichnen,
+   * damit das Bild auf dem Schirm die richtige zeigt.
+   */
+  useEffect(() => {
+    let gilt = true;
+    void alleSchriftenBereit().then(() => {
+      if (gilt) planenRef.current?.();
+    });
+    return () => {
+      gilt = false;
+    };
+  }, []);
 
   useEffect(() => {
     docRef.current = doc;
@@ -2200,6 +2220,14 @@ export function BildEditor({
 
   async function ergebnis(): Promise<{ blob: Blob; name: string } | null> {
     if (!bild || !doc) return null;
+    /*
+     * Erst die Schriften, dann rastern.
+     *
+     * `fillText` wartet auf nichts: Ist die Schrift noch nicht geladen, malt
+     * die Leinwand die Ersatzschrift – und das steht dann für immer im Bild,
+     * denn ein Bild lädt nicht nach.
+     */
+    await schriftenBereit(doc.texte.map((t) => t.schrift));
     const canvas = zeichneAusgabe(bild, bild.naturalWidth, bild.naturalHeight, doc);
     // WebP ist bei gleicher Güte deutlich kleiner; ältere Geräte, die es nicht
     // schreiben können, bekommen still JPEG – `toBlob` sagt im `type` des
