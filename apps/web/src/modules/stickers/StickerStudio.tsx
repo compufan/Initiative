@@ -51,6 +51,12 @@ import {
   writeEngineSetting,
   type EngineKey,
 } from './engines/index.js';
+import {
+  gewaehlterFreisteller,
+  readQualitaet,
+  writeQualitaet,
+  type Qualitaet,
+} from './engines/settings.js';
 import { kanteWeichzeichnen, maskeTraegt, vorlageAus } from './engines/prepare.js';
 import { maskeAus, teilAn, teileFinden } from './engines/teile.js';
 import { letzteMessung, messungText, type Messung } from './engines/stockung.js';
@@ -67,7 +73,7 @@ type Tool = 'move' | 'erase' | 'keep' | 'teile';
  *
  * Von grob nach fein, und „Gesicht“ zuerst, weil es der häufigste Fall ist.
  */
-const VERFAHREN: EngineKey[] = ['face', 'person', 'object', 'birefnet'];
+const VERFAHREN: EngineKey[] = ['face', 'person'];
 type Tab = 'source' | 'move' | 'shape' | 'cutout' | 'detail' | 'outline' | 'text';
 
 const TABS: { key: Tab; icon: string; label: string }[] = [
@@ -203,6 +209,14 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
    * unter der Hand um.
    */
   const [mitNetz, setMitNetz] = useState(() => isEngineEnabled('tippen'));
+  /**
+   * Die gewählte Güte des Freistellens.
+   *
+   * Dieselbe Einstellung wie im Foto-Editor und aus demselben Speicher
+   * (`engines/settings.ts`) – wer sie hier umstellt, hat sie dort auch
+   * umgestellt. Der Zustand daneben ist nur der Spiegel für das Neuzeichnen.
+   */
+  const [qualitaet, setQualitaet] = useState<Qualitaet>(() => readQualitaet());
   /** Läuft gerade ein Netzlauf für einen Tipp? Dann kein zweiter daneben. */
   const [tippRechnet, setTippRechnet] = useState(false);
   /**
@@ -2323,7 +2337,40 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                   </button>
                 );
               })}
-              {/* Der fünfte: kein Verfahren, sondern ein Modus. */}
+              {/*
+                  EIN Knopf „Freistellen“, und die Güte steht als Schalter
+                  darunter.
+
+                  Vorher standen „Niedrige Qualität“ und „Hohe Qualität“ als
+                  zwei Knöpfe nebeneinander – zwei Namen für dieselbe
+                  Handlung, die sich nur im Modell unterscheiden. Das ist eine
+                  EINSTELLUNG und keine zweite Handlung, und genau so ist es
+                  beim Antippen schon gelöst.
+              */}
+              <button
+                type="button"
+                className={`btn btn-sm ${
+                  doc.autoMask?.engine === 'object' || doc.autoMask?.engine === 'birefnet'
+                    ? 'stk-chip-active'
+                    : ''
+                }`}
+                onClick={() => {
+                  const netz = gewaehlterFreisteller(qualitaet, grafikAus === null);
+                  if (netz) void modellAnwenden(netz);
+                }}
+                disabled={
+                  !hasImage ||
+                  rechnet !== null ||
+                  tippRechnet ||
+                  gewaehlterFreisteller(qualitaet, grafikAus === null) === null
+                }
+                title="Trennt das Motiv vom Hintergrund – egal was darauf ist."
+              >
+                {rechnet === 'object' || rechnet === 'birefnet' ? '⏳ ' : '🪄 '}
+                Freistellen
+                {rechnet === 'object' || rechnet === 'birefnet' ? ' rechnet …' : ''}
+              </button>
+              {/* Der letzte: kein Verfahren, sondern ein Modus. */}
               <button
                 type="button"
                 className={`btn btn-sm ${tool === 'keep' ? 'stk-chip-active' : ''}`}
@@ -2333,6 +2380,31 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
               >
                 👆 Antippen {tool === 'keep' ? 'an' : 'aus'}
               </button>
+            </div>
+            {/*
+                Die Güte – eingerückt, wie der Antipp-Schalter weiter unten.
+                Dieselbe Einstellung wie im Foto-Editor, derselbe Speicher.
+            */}
+            <div className="stk-btn-row stk-unterzeile">
+              <button
+                type="button"
+                className={`btn btn-sm ${qualitaet === 'hoch' ? 'stk-chip-active' : ''}`}
+                aria-pressed={qualitaet === 'hoch'}
+                disabled={grafikAus !== null}
+                onClick={() => {
+                  const naechst: Qualitaet = qualitaet === 'hoch' ? 'niedrig' : 'hoch';
+                  setQualitaet(writeQualitaet(naechst));
+                  if (naechst === 'hoch') writeEngineSetting('birefnet', true);
+                }}
+              >
+                ✨ Hohe Qualität {qualitaet === 'hoch' ? 'an' : 'aus'}
+                {qualitaet !== 'hoch' &&
+                  !isEngineEnabled('birefnet') &&
+                  ` — einmalig ${firstUseMb(engineInfo('birefnet'))} MB`}
+              </button>
+              <span className="stk-hint stk-hint-inline">
+                Die genaueste Kante – an Haaren, Zäunen, Brillenbügeln.
+              </span>
             </div>
             {/* Warum „Hohe Qualität“ nicht geht – als SICHTBARER Satz.
                 Er stand vorher nur im `title` des Knopfes. Auf einem Telefon

@@ -64,6 +64,13 @@ import { teilBefund } from './maske.js';
 import { netzGrund, netzTeilRechnen, netzVerfuegbar, type Netzart } from './netzMaske.js';
 import { tiefeGrund, tiefeVerfuegbar, tiefenTeilRechnen } from './tiefeNetz.js';
 import { engineInfo, firstUseMb } from '../stickers/engines/index.js';
+import {
+  freistellerFuer,
+  gewaehlterFreisteller,
+  readQualitaet,
+  writeQualitaet,
+  type Qualitaet,
+} from '../stickers/engines/settings.js';
 import type { EngineKey } from '../stickers/engines/types.js';
 import { writeEngineSetting } from '../stickers/engines/settings.js';
 import { SCHRIFTEN, trifftText, zeichneAnsicht, zeichneAusgabe } from './zeichnen.js';
@@ -412,6 +419,34 @@ export function BildEditor({
       gilt = false;
     };
   }, []);
+  /**
+   * Die gewählte Güte des Freistellens – „niedrig" oder „hoch".
+   *
+   * Sie liegt im Gerätespeicher (`engines/settings.ts`) und wird von hier und
+   * vom Sticker-Studio gemeinsam gelesen. Der Zustand daneben ist nur der
+   * Spiegel für das Neuzeichnen; die Wahrheit steht im Speicher.
+   */
+  const [qualitaet, setQualitaet] = useState<Qualitaet>(() => readQualitaet());
+  const qualitaetRef = useRef(qualitaet);
+  const grafikAusRef = useRef(grafikAus);
+  useEffect(() => {
+    qualitaetRef.current = qualitaet;
+  }, [qualitaet]);
+  useEffect(() => {
+    grafikAusRef.current = grafikAus;
+  }, [grafikAus]);
+
+  /**
+   * Warum gerade gar nicht freigestellt werden kann – oder `null`.
+   *
+   * Ein Satz und kein Wahrheitswert: „Geht nicht" ohne Grund lässt den
+   * Anwender raten, und raten heisst hier, den Knopf noch dreimal zu drücken.
+   */
+  const freistellerFehlt =
+    gewaehlterFreisteller(qualitaet, grafikAus === null) === null
+      ? netzGrund('object') || netzGrund('birefnet') || 'Kein Freistellverfahren eingeschaltet.'
+      : null;
+
   const [teilId, setTeilId] = useState<string | null>(null);
   const [pinselBreite, setPinselBreite] = useState(30);
   /**
@@ -1963,12 +1998,19 @@ export function BildEditor({
     const aktuell = docRef.current;
     if (!quellBild || !aktuell || netzLaeuft) return;
     if (!vorhandenOderPlatz(aktuell)) return;
-    // Das beste verfügbare Freistellverfahren – die Kante ist der ganze Zweck.
-    const kante: Netzart | null = netzVerfuegbar('object')
-      ? 'object'
-      : netzVerfuegbar('person')
-        ? 'person'
-        : null;
+    /*
+     * Die Kante ist der ganze Zweck – also gilt hier dieselbe Güte wie bei
+     * „Motiv".
+     *
+     * Vorher stand hier fest `object`, notfalls `person`; BiRefNet kam in
+     * dieser Kette gar nicht vor. Wer „Hohe Qualität" eingeschaltet hatte und
+     * „Motiv + Tiefe" drückte, bekam trotzdem das kleine Modell –
+     * ausgerechnet im Fall der Porträt-Unschärfe, für den die feine Kante
+     * gebaut wurde.
+     */
+    const kante: Netzart | null =
+      gewaehlterFreisteller(qualitaetRef.current, grafikAusRef.current === null) ??
+      (netzVerfuegbar('person') ? 'person' : null);
     setNetzFehler(null);
     setNetzLaeuft('Wird vorbereitet …');
     try {
@@ -2721,35 +2763,27 @@ export function BildEditor({
               >
                 👤 Person
               </button>
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => void netzTeilAnlegen('object')}
-                disabled={netzLaeuft !== null || !netzVerfuegbar('object')}
-                title={netzVerfuegbar('object') ? undefined : netzGrund('object')}
-              >
-                🖼 Motiv
-              </button>
               {/*
-                  „Hohe Qualität“ stand nur im Sticker-Studio zur Verfügung,
-                  obwohl gerade die Porträt-Unschärfe von seiner Kante lebt.
-                  Es ist dasselbe Verfahren über denselben Aufruf – es fehlte
-                  hier schlicht.
+                  EIN Knopf „Motiv“, und die Güte steht als Schalter darunter.
+
+                  Vorher standen „Motiv“ und „Hohe Qualität“ als zwei Knöpfe
+                  nebeneinander – zwei Namen für dieselbe Handlung, die sich
+                  nur im Modell unterscheiden. Wer „Motiv + Tiefe“ wollte,
+                  hatte die Wahl gar nicht: Der Knopf nahm fest das kleine
+                  Modell, ausgerechnet für den Fall, für den die feine Kante
+                  gebaut wurde.
               */}
               <button
                 type="button"
                 className="btn btn-sm"
-                onClick={() => void netzTeilAnlegen('birefnet')}
-                disabled={netzLaeuft !== null || !netzVerfuegbar('birefnet') || grafikAus !== null}
-                title={
-                  grafikAus
-                    ? grafikAus.grund
-                    : netzVerfuegbar('birefnet')
-                      ? 'Die genaueste Kante – an Haaren, Zäunen, Brillenbügeln'
-                      : netzGrund('birefnet')
-                }
+                onClick={() => {
+                  const netz = gewaehlterFreisteller(qualitaet, grafikAus === null);
+                  if (netz) void netzTeilAnlegen(netz);
+                }}
+                disabled={netzLaeuft !== null || freistellerFehlt !== null}
+                title={freistellerFehlt ?? undefined}
               >
-                ✨ Hohe Qualität
+                🖼 Motiv
               </button>
               <button
                 type="button"
@@ -2774,6 +2808,48 @@ export function BildEditor({
                 🎯 Motiv + Tiefe
               </button>
             </div>
+
+            {/*
+                Die Güte als Schalter, nicht als eigener Knopf.
+
+                Eingerückt unter der Reihe, nach dem Vorbild des
+                Antipp-Schalters im Sticker-Studio: Die Reihe darüber sind
+                HANDLUNGEN, dies hier ist eine EINSTELLUNG, die für zwei von
+                ihnen gilt. Als sechster Knopf in derselben Reihe sah es aus
+                wie eine sechste Handlung.
+
+                Ein Klick auf „an“ schaltet das Verfahren gleich mit ein,
+                statt in die Einstellungen zu verweisen – dieselbe
+                Entscheidung wie bei den Hinweisen weiter unten.
+            */}
+            <div className="bild-reihe bild-unterzeile">
+              <button
+                type="button"
+                className={`btn btn-sm ${qualitaet === 'hoch' ? 'is-active' : ''}`}
+                aria-pressed={qualitaet === 'hoch'}
+                disabled={grafikAus !== null}
+                onClick={() => {
+                  const naechst: Qualitaet = qualitaet === 'hoch' ? 'niedrig' : 'hoch';
+                  setQualitaet(writeQualitaet(naechst));
+                  if (naechst === 'hoch') einschalten(freistellerFuer('hoch'));
+                }}
+              >
+                ✨ Hohe Qualität {qualitaet === 'hoch' ? 'an' : 'aus'}
+                {qualitaet !== 'hoch' &&
+                  !netzVerfuegbar('birefnet') &&
+                  ` — einmalig ${firstUseMb(engineInfo('birefnet'))} MB`}
+              </button>
+              <span className="bild-hinweis-klein">
+                Gilt für „Motiv“ und „Motiv + Tiefe“: die genaueste Kante – an Haaren, Zäunen,
+                Brillenbügeln.
+              </span>
+            </div>
+            {/*
+                Sichtbar, nicht als Tooltip: Auf einem Telefon gibt es kein
+                Schweben, und ein abgeblendeter Knopf nimmt nicht einmal eine
+                Berührung entgegen. Genau das war schon einmal eine Meldung.
+            */}
+            {grafikAus && <p className="bild-hinweis bild-hinweis-warn">{grafikAus.grund}</p>}
 
             {netzLaeuft && <p className="bild-hinweis">⏳ {netzLaeuft}</p>}
             {netzFehler && (

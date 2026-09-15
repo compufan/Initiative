@@ -218,6 +218,26 @@
 }
 
 /*
+ * Eine Zeile, die zu der Reihe darüber gehört.
+ *
+ * Eingerückt, damit man sieht: Das ist keine weitere Handlung, sondern eine
+ * Einstellung zu den Knöpfen darüber. Auf schmalen Geräten bricht der
+ * Erklärsatz unter den Schalter statt ihn hinauszudrücken.
+ */
+.bild-unterzeile {
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border, rgba(128, 128, 128, 0.3));
+}
+
+.bild-hinweis-klein {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  flex: 1 1 12rem;
+}
+
+/*
  * Kurvenfeld und aufklappbare Abschnitte im Ton-Reiter.
  */
 .bild-klapp {

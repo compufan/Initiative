@@ -141,17 +141,24 @@ test('ohne Grafikeinheit steht die Begründung LESBAR da, nicht im Tooltip', asy
   await context.close();
 });
 
-test('das Freistellen bietet genau fünf Knöpfe, und Antippen ist einer davon', async ({
+test('das Freistellen bietet vier Knöpfe, und die Güte steht als Schalter darunter', async ({
   browser,
 }) => {
   /*
-   * Der Anwender hat die Reihe selbst festgelegt: „Nur noch die Knöpfe:
-   * Gesicht, Person, Niedrige Qualität, Hohe Qualität und Antippen."
+   * Die Reihe ist zweimal vom Anwender festgelegt worden, und die zweite
+   * Festlegung ersetzt die erste.
    *
-   * Vorher waren es bis zu acht, verteilt über vier Reihen – „Antippen zum
-   * Behalten" stand als Werkzeug ganz woanders als die Verfahren, und
-   * „Freistellen zurücknehmen" sass mit in derselben Reihe, aus fünf wurden
-   * also nach jedem Lauf sechs.
+   * Zuerst: „Nur noch die Knöpfe: Gesicht, Person, Niedrige Qualität, Hohe
+   * Qualität und Antippen." Damit wurden aus bis zu acht Knöpfen in vier
+   * Reihen fünf in einer.
+   *
+   * Dann: „Nur den Knopf Freistellen, und hohe Qualität und niedrige Qualität
+   * als Wählschalter – so wie es bei Antippen ja bereits geregelt ist."
+   * „Niedrige" und „Hohe Qualität" waren zwei Namen für DIESELBE Handlung,
+   * die sich nur im Modell unterscheiden; das ist eine Einstellung und keine
+   * zweite Handlung.
+   *
+   * Beides zusammen ist dieselbe Zusicherung: Die Reihe wächst nicht wieder.
    */
   const alice = credentials('fuenf');
   const context = await browser.newContext();
@@ -175,12 +182,21 @@ test('das Freistellen bietet genau fünf Knöpfe, und Antippen ist einer davon',
   await page.getByRole('tab', { name: 'Freistellen' }).click();
 
   const reihe = page.getByRole('group', { name: 'Freistellen' });
-  await expect(reihe.getByRole('button')).toHaveCount(5);
-  for (const name of ['Gesicht', 'Person', 'Niedrige Qualität', 'Hohe Qualität', 'Antippen']) {
+  await expect(reihe.getByRole('button')).toHaveCount(4);
+  for (const name of ['Gesicht', 'Person', 'Freistellen', 'Antippen']) {
     await expect(reihe.getByRole('button', { name: new RegExp(name) })).toHaveCount(1);
   }
   // „Antippen (genau)" darf es als eigenen Knopf nicht mehr geben.
   await expect(page.getByRole('button', { name: /Antippen \(genau\)/ })).toHaveCount(0);
+
+  /*
+   * Und die Güte steht als Schalter – ausserhalb der Reihe, sonst wären es
+   * wieder fünf. Sie ist von Haus aus aus: „Hoch" sind 84 MB beim ersten Mal.
+   */
+  const guete = page.getByRole('button', { name: /Hohe Qualität/ });
+  await expect(guete).toHaveCount(1);
+  await expect(reihe.getByRole('button', { name: /Hohe Qualität/ })).toHaveCount(0);
+  await expect(guete).toHaveAttribute('aria-pressed', 'false');
 
   await context.close();
 });
@@ -577,7 +593,20 @@ test('„Hohe Qualität" rechnet im eigenen Arbeiter – und meldet sich, wenn e
     });
 
   await page.getByRole('tab', { name: 'Freistellen' }).click();
-  const knopf = page.getByRole('button', { name: /Hohe Qualität/ });
+  /*
+   * Erst die Güte auf „hoch" stellen, dann freistellen.
+   *
+   * „Hohe Qualität" war einmal ein Knopf, der rechnete; jetzt ist es ein
+   * Schalter, der bestimmt, WOMIT der eine Freistellknopf rechnet. Der
+   * Schalter schaltet das Verfahren gleich mit ein – deshalb genügt hier ein
+   * Klick, wo vorher der Umweg über die Einstellungen nötig gewesen wäre.
+   */
+  const guete = page.getByRole('button', { name: /Hohe Qualität/ });
+  await expect(guete).toBeEnabled({ timeout: 15_000 });
+  await guete.click();
+  await expect(guete).toHaveAttribute('aria-pressed', 'true');
+
+  const knopf = page.getByRole('button', { name: /^🪄 Freistellen|Freistellen rechnet/ });
   await expect(knopf).toBeEnabled({ timeout: 15_000 });
   await knopf.click();
 
@@ -594,9 +623,7 @@ test('„Hohe Qualität" rechnet im eigenen Arbeiter – und meldet sich, wenn e
    * schlimmer als gar keiner: Der Anwender sähe „rechnet …" und danach für
    * immer nichts.
    */
-  await expect(page.getByRole('button', { name: /Hohe Qualität/ })).not.toContainText('rechnet', {
-    timeout: 60_000,
-  });
+  await expect(knopf).not.toContainText('rechnet', { timeout: 60_000 });
 
   await context.close();
 });

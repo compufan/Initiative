@@ -2045,3 +2045,93 @@ test('der Fotoeditor fragt, bevor er eine Bearbeitung wegwirft', async ({ browse
   await alicePage.getByRole('button', { name: 'Verwerfen' }).click();
   await expect(alicePage.locator('.bild-leinwand')).toHaveCount(0, { timeout: 10_000 });
 });
+
+test('die Güte gilt für „Motiv" UND für „Motiv + Tiefe"', async ({ browser }) => {
+  /*
+   * Der Anwender fragte: „Sind bei Motiv und Motiv+Tiefe auch hohe Qualität
+   * möglich?" Bei „Motiv" ja – aber nur über einen zweiten Knopf daneben.
+   * Bei „Motiv + Tiefe" gar nicht: `kombiAnlegen` wählte die Kante fest als
+   * `object`, notfalls `person`; BiRefNet kam in dieser Kette nicht vor. Wer
+   * „Hohe Qualität" eingeschaltet hatte, bekam trotzdem das kleine Modell –
+   * ausgerechnet im Fall der Porträt-Unschärfe, für den die feine Kante
+   * gebaut wurde.
+   *
+   * Geprüft wird nicht das Ergebnis (dafür bräuchte es eine Grafikeinheit,
+   * die es hier nicht gibt), sondern die WAHL: Aus den zwei Knöpfen ist einer
+   * plus ein Schalter geworden, und der Schalter steht für beide Handlungen.
+   */
+  const alice = credentials('guete');
+  const bob = credentials('gueteziel');
+  const alicePage = await signUp(browser, alice);
+  await signUp(browser, bob);
+  await alicePage.evaluate(() =>
+    localStorage.setItem(
+      'initiative.cutout-engines',
+      JSON.stringify({ tiefe: true, object: true }),
+    ),
+  );
+
+  await alicePage.getByRole('button', { name: 'Neuer Chat' }).click();
+  await alicePage.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  const treffer = alicePage.getByText(bob.displayName).first();
+  await expect(treffer).toBeVisible({ timeout: 30_000 });
+  await treffer.click();
+  await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'szene.png',
+    mimeType: 'image/png',
+    buffer: perspektivePng(512, 384, true),
+  });
+  await alicePage.getByRole('button', { name: /^Senden \(/ }).click();
+  const bild = alicePage.locator('.media-image').first();
+  await expect(bild).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => bild.evaluate((el: HTMLImageElement) => el.naturalWidth), { timeout: 30_000 })
+    .toBeGreaterThan(0);
+  await bild.click();
+  await alicePage.getByRole('button', { name: 'Bild bearbeiten' }).click();
+  await expect(alicePage.locator('.bild-leinwand')).toBeVisible({ timeout: 30_000 });
+  await alicePage.getByRole('button', { name: /Bereiche$/ }).click();
+
+  /*
+   * „Hohe Qualität" ist kein Knopf mehr, der rechnet – die Reihe hat ihn
+   * nicht mehr. Es gibt genau einen „Motiv"-Knopf.
+   */
+  const reihe = alicePage.getByRole('group', { name: 'Maske hinzufügen' });
+  await expect(reihe.getByRole('button', { name: /Hohe Qualität/ })).toHaveCount(0);
+  await expect(reihe.getByRole('button', { name: '🖼 Motiv' })).toHaveCount(1);
+  await expect(reihe.getByRole('button', { name: '🎯 Motiv + Tiefe' })).toHaveCount(1);
+
+  /*
+   * Der Schalter steht darunter, gilt sichtbar für beide – und ist von Haus
+   * aus aus, weil „hoch" 84 MB beim ersten Mal bedeutet.
+   */
+  const guete = alicePage.getByRole('button', { name: /Hohe Qualität/ });
+  await expect(guete).toHaveCount(1);
+  await expect(guete).toHaveAttribute('aria-pressed', 'false');
+  await expect(alicePage.getByText(/Gilt für „Motiv“ und „Motiv \+ Tiefe“/)).toBeVisible();
+
+  /*
+   * Und die Wahl überlebt das Schliessen: Sie liegt im Gerätespeicher, nicht
+   * im Zustand des Editors. Ohne das müsste man sie bei jedem Bild neu
+   * treffen.
+   */
+  if (await guete.isEnabled()) {
+    await guete.click();
+    await expect(guete).toHaveAttribute('aria-pressed', 'true');
+    expect(
+      await alicePage.evaluate(() => localStorage.getItem('initiative.cutout-qualitaet')),
+    ).toBe('hoch');
+  } else {
+    /*
+     * Ohne Grafikeinheit ist der Schalter abgeblendet – und dann muss der
+     * Grund LESBAR danebenstehen, nicht im Tooltip. Ein abgeblendeter Knopf
+     * nimmt auf einem Telefon nicht einmal eine Berührung entgegen.
+     */
+    await expect(alicePage.locator('.bild-hinweis-warn')).toBeVisible();
+  }
+
+  await alicePage.context().close();
+});

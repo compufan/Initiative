@@ -72,3 +72,68 @@ describe('Groessenangaben', () => {
     expect(downloadHint(tippen)).toMatch(/kein download/i);
   });
 });
+
+describe('Qualitätswahl', () => {
+  it('steht von Haus aus auf niedrig', () => {
+    // „Hoch" ist BiRefNet: 84 MB beim ersten Mal. Wer nie gewählt hat, soll
+    // das nicht ungefragt laden.
+    expect(settings.readQualitaet()).toBe('niedrig');
+  });
+
+  it('merkt sich die Wahl', () => {
+    settings.writeQualitaet('hoch');
+    expect(settings.readQualitaet()).toBe('hoch');
+    settings.writeQualitaet('niedrig');
+    expect(settings.readQualitaet()).toBe('niedrig');
+  });
+
+  it('macht aus Unsinn im Speicher keine hohe Qualität', () => {
+    localStorage.setItem('initiative.cutout-qualitaet', 'ganz hoch bitte');
+    expect(settings.readQualitaet()).toBe('niedrig');
+  });
+
+  it('ordnet jeder Güte ihr Verfahren zu', () => {
+    expect(settings.freistellerFuer('hoch')).toBe('birefnet');
+    expect(settings.freistellerFuer('niedrig')).toBe('object');
+  });
+
+  describe('gewaehlterFreisteller', () => {
+    it('nimmt bei hoher Güte BiRefNet – wenn Schalter und Grafik mitspielen', () => {
+      settings.writeEngineSetting('birefnet', true);
+      expect(settings.gewaehlterFreisteller('hoch', true)).toBe('birefnet');
+    });
+
+    it('fällt ohne Grafikeinheit auf das kleine Modell zurück', () => {
+      /*
+       * Der wichtigste Fall. Ohne `shader-f16` rechnet BiRefNet nicht
+       * langsamer, sondern 295 Sekunden je Bild – der Prozessor hat für halbe
+       * Genauigkeit keine Rechenwerke. Ein gröberer Ausschnitt ist besser als
+       * fünf Minuten Warten.
+       */
+      settings.writeEngineSetting('birefnet', true);
+      settings.writeEngineSetting('object', true);
+      expect(settings.gewaehlterFreisteller('hoch', false)).toBe('object');
+    });
+
+    it('fällt zurück, wenn das grosse Modell abgeschaltet ist', () => {
+      settings.writeEngineSetting('birefnet', false);
+      settings.writeEngineSetting('object', true);
+      expect(settings.gewaehlterFreisteller('hoch', true)).toBe('object');
+    });
+
+    it('macht aus niedriger Güte nie hohe', () => {
+      // Andersherum wären das ungefragte 84 MB.
+      settings.writeEngineSetting('birefnet', true);
+      settings.writeEngineSetting('object', true);
+      expect(settings.gewaehlterFreisteller('niedrig', true)).toBe('object');
+    });
+
+    it('gibt null zurück, wenn nichts übrig bleibt', () => {
+      settings.writeEngineSetting('birefnet', true);
+      settings.writeEngineSetting('object', false);
+      // „Hoch" gewählt, „niedrig" aus, keine Grafikeinheit: Dann bliebe nur
+      // die Falle. Lieber gar nichts und ein ehrlicher Hinweis.
+      expect(settings.gewaehlterFreisteller('hoch', false)).toBeNull();
+    });
+  });
+});

@@ -170,6 +170,24 @@
   color: var(--warning);
 }
 
+/*
+ * Eine Zeile, die zur Reihe darueber gehoert.
+ *
+ * Eingerueckt, damit man sieht: keine weitere Handlung, sondern eine
+ * Einstellung zu den Knoepfen darueber. Dasselbe Muster wie im Foto-Editor.
+ */
+.stk-unterzeile {
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+
+/* Der Erklaersatz neben einem Schalter, nicht darunter. */
+.stk-hint-inline {
+  flex: 1 1 11rem;
+  font-size: 0.75rem;
+}
+
 .stk-section-title {
   margin: var(--space-2) 0 0;
   font-size: 0.95rem;
