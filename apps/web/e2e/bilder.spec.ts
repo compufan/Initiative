@@ -487,16 +487,24 @@ test('der Ton-Reiter im Bildeditor verändert das Bild wirklich', async ({ brows
   await expect(belichtung).toBeVisible();
   await expect(belichtung).toHaveValue('0');
   /*
-   * Vierzehn Schieber, davon drei in einem aufklappbaren Abschnitt.
+   * Sechzehn Schieber, davon drei in einem aufklappbaren Abschnitt.
    *
-   * Hier stand „elf, nicht zehn und nicht zwölf". Die elf globalen Regler
-   * sind unverändert da; seit es Farbbänder gibt, stehen in „Farben einzeln"
-   * drei weitere im selben Feld. Die gehören nicht zu den elf – sie wirken
-   * auf einen Farbbereich und nicht auf das ganze Bild – und werden deshalb
-   * getrennt gezählt.
+   * Die Zahl ist zweimal gewachsen, und beide Male aus gutem Grund. Hier
+   * stand zuerst „elf, nicht zehn und nicht zwölf"; dann kamen mit den
+   * Farbbändern drei in „Farben einzeln" dazu, die nicht zu den elf gehören
+   * – sie wirken auf einen Farbbereich und nicht auf das ganze Bild.
+   *
+   * Jetzt zwei weitere: „Schärfe-Weite" und „Schärfe-Schwelle". Die Schärfe
+   * rechnete vorher fest gegen die vier direkten Nachbarn – ein Radius von
+   * genau einem Punkt, der auf einem Foto von zwölf Megapunkten nur das
+   * Rauschen anfasst – und ohne Schwelle, also mit derselben Verstärkung für
+   * eine Dachkante wie für zwei benachbarte Rauschpunkte.
+   *
+   * Die Zahl steht hier, damit das Feld nicht unbemerkt weiterwächst: Wer
+   * einen Regler hinzufügt, soll das an dieser Zeile begründen müssen.
    */
   await expect(alicePage.locator('.bild-panel.ist-ton details .bild-schieber')).toHaveCount(3);
-  await expect(alicePage.locator('.bild-panel.ist-ton .bild-schieber')).toHaveCount(14);
+  await expect(alicePage.locator('.bild-panel.ist-ton .bild-schieber')).toHaveCount(16);
 
   /** Die mittlere Helligkeit dessen, was auf der Leinwand steht. */
   const helligkeit = async () =>
