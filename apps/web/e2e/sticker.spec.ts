@@ -983,6 +983,31 @@ test('ein bewegtes Bild bleibt bewegt – und sagt, wenn es das nicht kann', asy
   await page.getByRole('button', { name: /Weiße Kontur an/ }).click();
   await page.getByRole('tab', { name: 'Quelle' }).click();
   await expect(page.getByText(/und bleibt so/)).toBeVisible({ timeout: 10_000 });
+
+  /*
+   * Und jetzt der Fehler, den man nicht kommen sieht: ein Emoji NACH dem GIF.
+   *
+   * Die bewegte Quelle hing an einem eigenen Zustand, den nur die Bildwege
+   * setzten. Wer danach ein Emoji wählte, bekam ein frisches Dokument – das
+   * erfüllt „unverändert", und gespeichert wurde deshalb die alte GIF-DATEI
+   * statt des Emoji. Der Sticker im Gespräch war ein anderer als der auf dem
+   * Schirm.
+   *
+   * Sichtbar wird es am Hinweis: Er gehört zum GIF und darf nach dem Emoji
+   * nicht mehr dastehen.
+   */
+  await page.getByRole('button', { name: '😀' }).first().click();
+  // Ein Wechsel mit Arbeit im Editor fragt nach – die Antwort ist hier ja.
+  const weiter = page.getByRole('button', { name: 'Neu anfangen' });
+  if (await weiter.isVisible().catch(() => false)) await weiter.click();
+  /*
+   * Und dann im QUELLE-Reiter nachsehen, nicht irgendwo: Der Hinweis steht
+   * dort. Nach dem Emoji springt das Studio in den Textreiter, und ein
+   * Hinweis, der gar nicht gezeigt wird, beweist nichts.
+   */
+  await page.getByRole('tab', { name: 'Quelle' }).click();
+  await expect(page.getByText(/und bleibt so/)).toHaveCount(0, { timeout: 10_000 });
+  await expect(page.getByText(/daraus wird ein Standbild/)).toHaveCount(0);
 });
 
 test('ein Paket baut man aus vielen Bildern – die Reihe läuft durch', async ({ browser }) => {

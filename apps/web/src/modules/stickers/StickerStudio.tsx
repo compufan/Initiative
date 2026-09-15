@@ -936,7 +936,27 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
    * einlädt, will zuallererst, dass es sich weiter bewegt; die Kontur kann er
    * danach einschalten und bekommt dann gesagt, was ihn das kostet.
    */
-  function applySource(next: EditorSource | null, bewegt = false) {
+  /**
+   * Eine neue Quelle setzen – und mit ihr ALLES, was an der alten hing.
+   *
+   * `bewegt` ist nicht bloss ein Merker fürs Aussehen: Ist er wahr und wird
+   * danach nichts bearbeitet, reicht `openSave` die ORIGINALDATEI aus
+   * `bewegteQuelle` durch, damit ein bewegtes GIF bewegt bleibt.
+   *
+   * Genau daraus entstand ein Fehler, den man nicht kommen sieht: Wer erst
+   * ein GIF wählte und dann ein Emoji, bekam ein frisches Dokument, das
+   * `bewegtUnveraendert` erfüllt – aber `bewegteQuelle` stand noch auf dem
+   * GIF. Gespeichert wurde dann das GIF statt des Emoji. Deshalb räumt
+   * `applySource` die bewegte Quelle jetzt selbst weg; wer eine hat, gibt sie
+   * hier mit. Zwei Zustände, die zusammengehören, werden an einer Stelle
+   * gesetzt – sonst vergisst es der nächste Aufrufer wieder.
+   */
+  function applySource(
+    next: EditorSource | null,
+    bewegteDatei: { datei: Blob; format: 'gif' | 'webp'; bilder: number | null } | null = null,
+  ) {
+    const bewegt = bewegteDatei !== null;
+    setBewegteQuelle(bewegteDatei);
     history.current = [];
     vorStapel.current = [];
     setCanRedo(false);
@@ -1044,17 +1064,19 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   const [quellWechsel, setQuellWechsel] = useState<{
     quelle: EditorSource;
     reiter: Tab;
-    bewegt: boolean;
-  } | null>(
-    null,
-  );
+    bewegteDatei: { datei: Blob; format: 'gif' | 'webp'; bilder: number | null } | null;
+  } | null>(null);
 
-  function quelleWechseln(quelle: EditorSource, reiter: Tab, bewegt = false) {
+  function quelleWechseln(
+    quelle: EditorSource,
+    reiter: Tab,
+    bewegteDatei: { datei: Blob; format: 'gif' | 'webp'; bilder: number | null } | null = null,
+  ) {
     if (hatArbeit()) {
-      setQuellWechsel({ quelle, reiter, bewegt });
+      setQuellWechsel({ quelle, reiter, bewegteDatei });
       return;
     }
-    applySource(quelle, bewegt);
+    applySource(quelle, bewegteDatei);
     setTab(reiter);
   }
 
@@ -1106,9 +1128,6 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     try {
       const image = await loadImageFromBlob(file);
       const lage = await bildlage(file);
-      setBewegteQuelle(
-        lage.bewegt ? { datei: file, format: lage.format, bilder: lage.bilder } : null,
-      );
       quelleWechseln(
         {
           kind: 'image',
@@ -1117,7 +1136,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
           height: image.naturalHeight,
         },
         lage.bewegt ? 'source' : 'move',
-        lage.bewegt,
+        lage.bewegt ? { datei: file, format: lage.format, bilder: lage.bilder } : null,
       );
     } catch (error) {
       toast(errorMessage(error, 'Das Bild konnte nicht geladen werden'), 'error');
@@ -1137,12 +1156,9 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     try {
       const image = await loadImageFromBlob(datei);
       const lage = await bildlage(datei);
-      setBewegteQuelle(
-        lage.bewegt ? { datei, format: lage.format, bilder: lage.bilder } : null,
-      );
       applySource(
         { kind: 'image', image, width: image.naturalWidth, height: image.naturalHeight },
-        lage.bewegt,
+        lage.bewegt ? { datei, format: lage.format, bilder: lage.bilder } : null,
       );
       setTab(lage.bewegt ? 'source' : 'move');
       toast(
@@ -3223,7 +3239,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
         onCancel={() => setQuellWechsel(null)}
         onConfirm={() => {
           if (!quellWechsel) return;
-          applySource(quellWechsel.quelle, quellWechsel.bewegt);
+          applySource(quellWechsel.quelle, quellWechsel.bewegteDatei);
           setTab(quellWechsel.reiter);
           setQuellWechsel(null);
         }}
