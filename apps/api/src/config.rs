@@ -11,6 +11,66 @@ pub enum StorageDriver {
     S3,
 }
 
+/**
+ * Was die kalte Ablage ist – oder dass es keine gibt.
+ *
+ * `Aus` ist die Voreinstellung und heisst: alles bleibt auf dem Server, wie
+ * bisher. Wer nichts einstellt, bekommt also nicht versehentlich eine
+ * Auslagerung, die er nicht wollte.
+ */
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KaltTreiber {
+    Aus,
+    /// Eine Hetzner Storage Box (oder irgendein SFTP-Ziel).
+    Sftp,
+    /**
+     * Ein zweites Verzeichnis auf diesem Rechner.
+     *
+     * Klingt sinnlos – eine kalte Ablage, die genauso schnell ist wie die
+     * warme? – und ist es nicht. Zwei Fälle:
+     *
+     *   * Wer eine zweite, grosse und langsame Platte hat (oder eine Storage
+     *     Box per `sshfs` im Wirtssystem eingehängt, ausserhalb des
+     *     Containers), bekommt die Auslagerung ohne jede Netzwerkschicht.
+     *   * Die Prüfung. Der ganze Weg – markieren, kopieren, nachmessen,
+     *     umschreiben, löschen, von drüben ausliefern – lässt sich damit
+     *     durchspielen, ohne dass irgendwo eine echte Storage Box stehen
+     *     muss. Ein Weg, der nur mit fremder Hardware prüfbar ist, wird nicht
+     *     geprüft.
+     */
+    Lokal,
+    /**
+     * Ein S3-Eimer als kalte Ablage.
+     *
+     * Steht hier, weil es billig ist: Der S3-Treiber existiert bereits. Wer
+     * statt einer Storage Box einen Object Storage hat – die beiden werden
+     * leicht verwechselt –, trägt das ein und bekommt dieselbe Auslagerung
+     * ohne eine Zeile neuen Code.
+     */
+    S3,
+}
+
+/// Wie die kalte Ablage über SFTP erreicht wird.
+#[derive(Debug, Clone)]
+pub struct SftpEinstellungen {
+    pub wirt: String,
+    pub hafen: u16,
+    pub benutzer: String,
+    pub schluesseldatei: String,
+    /**
+     * Der erwartete Fingerabdruck des Serverschlüssels, als
+     * `SHA256:…`.
+     *
+     * Ohne ihn verbindet sich der Dienst trotzdem und schreibt den
+     * vorgefundenen Abdruck ins Protokoll – damit man ihn eintragen KANN,
+     * bevor man ihn kennt. Mit ihm kommt nur genau dieser eine Schlüssel
+     * durch. Siehe `storage/sftp.rs`.
+     */
+    pub fingerabdruck: Option<String>,
+    /// Das Verzeichnis auf der Box, unterhalb dessen alles liegt.
+    pub pfad: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegistrationMode {
     Open,
@@ -92,6 +152,15 @@ pub struct Config {
      * kann: App und API auf fremden Stellen ohne TLS. Siehe `medienkeks`.
      */
     pub media_auth: bool,
+    /// Ob und wohin ausgelagert wird – siehe [`KaltTreiber`].
+    pub kalt_treiber: KaltTreiber,
+    pub kalt_sftp: Option<SftpEinstellungen>,
+    /// Das Verzeichnis der kalten Ablage bei `KALT_TREIBER=lokal`.
+    pub kalt_lokal_dir: String,
+    /// Ab wie viel Gigabyte app-eigener Daten ausgelagert wird.
+    pub kalt_grenze_gb: i64,
+    /// Ab wie viel Gigabyte auch Wichtiges drankommt.
+    pub kalt_grenze_hoch_gb: i64,
     pub cors_origins: Vec<String>,
     /**
      * Ob `X-Forwarded-For` geglaubt werden darf.
@@ -326,6 +395,47 @@ impl Config {
             public_app_url: trim_slash(var_or("PUBLIC_APP_URL", "http://localhost:5173")),
             public_api_url: trim_slash(var_or("PUBLIC_API_URL", "http://localhost:8080")),
             media_auth: flag("MEDIA_AUTH", true),
+
+            /*
+             * Die kalte Ablage. Ohne `KALT_TREIBER` bleibt alles, wie es war.
+             */
+            kalt_treiber: match var("KALT_TREIBER").as_deref() {
+                Some("sftp") => KaltTreiber::Sftp,
+                Some("lokal") => KaltTreiber::Lokal,
+                Some("s3") => KaltTreiber::S3,
+                Some("aus") | None => KaltTreiber::Aus,
+                Some(anderes) => {
+                    return Err(AppError::config(format!(
+                        "KALT_TREIBER kennt nur sftp, lokal, s3 oder aus – nicht {anderes}"
+                    )))
+                }
+            },
+            kalt_sftp: var("KALT_SFTP_WIRT").map(|wirt| SftpEinstellungen {
+                    wirt,
+                    hafen: var("KALT_SFTP_HAFEN")
+                        .and_then(|h| h.parse().ok())
+                        // Port 23 und nicht 22: Auf einer Storage Box ist 22
+                        // nur zum Schieben da, 23 kann alles und gilt als
+                        // der schnellere.
+                        .unwrap_or(23),
+                    benutzer: var_or("KALT_SFTP_BENUTZER", ""),
+                    schluesseldatei: var_or("KALT_SFTP_SCHLUESSEL", "/root/.ssh/storagebox_key"),
+                    fingerabdruck: var("KALT_SFTP_FINGERABDRUCK"),
+                pfad: trim_slash(var_or("KALT_SFTP_PFAD", "initiative")),
+            }),
+            /*
+             * Ab wie viel app-eigener Belegung ausgelagert wird.
+             *
+             * Einstellbar, weil 256 GB kein Naturgesetz sind – wer eine
+             * grössere Platte hat, will die Grenze woanders.
+             */
+            kalt_lokal_dir: var_or("KALT_LOKAL_DIR", "./.data/kalt"),
+            kalt_grenze_gb: var("KALT_GRENZE_GB")
+                .and_then(|g| g.parse().ok())
+                .unwrap_or(100),
+            kalt_grenze_hoch_gb: var("KALT_GRENZE_HOCH_GB")
+                .and_then(|g| g.parse().ok())
+                .unwrap_or(120),
             cors_origins: list("CORS_ORIGINS").into_iter().map(trim_slash).collect(),
 
             trust_proxy: flag("TRUST_PROXY", false),

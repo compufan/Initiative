@@ -129,6 +129,16 @@ nicht im normalen Safari-Tab.
 | `SIGNED_URL_TTL`       | `3600`            | Gültigkeit signierter URLs in Sekunden.                                                                    |
 | `MEDIA_KEY`            | leer              | 32 Bytes base64. Gesetzt → alles Neue wird verschlüsselt abgelegt (`initiative-api --generate-media-key`). |
 | `MEDIA_AUTH`           | `true`            | Medienrouten verlangen eine angemeldete Person (Medien-Keks). `false` gibt jede Datei heraus, deren Kennung man kennt. |
+| `KALT_TREIBER`         | `aus`             | `aus` \| `sftp` \| `lokal`. Zweite, grössere, langsamere Ablage für Anhänge. Siehe unten.                    |
+| `KALT_GRENZE_GB`       | `100`             | Ab wie viel app-eigenen Daten auf dem Server ausgelagert wird.                                              |
+| `KALT_GRENZE_HOCH_GB`  | `120`             | Ab wann auch Dateien mit Priorität „hoch" wandern.                                                          |
+| `KALT_SFTP_WIRT`       | –                 | Pflicht bei `sftp`, z. B. `u670518.your-storagebox.de`.                                                     |
+| `KALT_SFTP_HAFEN`      | `23`              | Bei Hetzner **23**, nicht 22 – siehe unten.                                                                 |
+| `KALT_SFTP_BENUTZER`   | –                 | Pflicht bei `sftp`. Am besten ein Unterkonto.                                                               |
+| `KALT_SFTP_SCHLUESSEL` | `/root/.ssh/storagebox_key` | Privater Schlüssel. Passwörter gibt es hier nicht.                                             |
+| `KALT_SFTP_FINGERABDRUCK` | leer           | SHA256-Fingerabdruck des Wirtsschlüssels, ohne `SHA256:`. Leer = jeder Schlüssel wird angenommen.            |
+| `KALT_SFTP_PFAD`       | `initiative`      | Unterverzeichnis auf der Box.                                                                               |
+| `KALT_LOKAL_DIR`       | `./.data/kalt`    | Nur bei `KALT_TREIBER=lokal`.                                                                               |
 
 > **`MEDIA_KEY` verschlüsselt nur, was danach hochgeladen wird.** Der Tresor
 > schiebt sich vor den eigentlichen Speicher; schon vorhandene Dateien bleiben,
@@ -365,6 +375,120 @@ S3_ENDPOINT=                 # bei AWS leer lassen
 S3_REGION=eu-central-1
 S3_FORCE_PATH_STYLE=false    # AWS: false, MinIO: true
 ```
+
+### Zweite Ebene: die grosse, langsame Ablage
+
+Ein Server mit 256 GB trägt eine ganze Weile – und irgendwann nicht mehr. Was
+den Platz frisst, sind nicht die Nachrichten (Text in einer Datenbank, gegen
+ein einziges Video ein Rundungsfehler), sondern die **Anhänge**. Läuft die
+Platte voll, nimmt die App keine Datei mehr an, und das trifft alle zugleich.
+
+Die Antwort darauf ist eine zweite Ablage: langsamer, dafür gross und billig.
+Anhänge wandern automatisch dorthin, sobald es eng wird. **In der App ändert
+sich nichts** – dieselben Adressen, dieselben Rechte, dieselben Vorschaubilder.
+Nur die Ladezeit ist länger, und zwar bei der ersten Anzeige des Originals,
+nicht bei den Kacheln (Miniaturbilder bleiben immer auf dem schnellen
+Speicher).
+
+**Nachrichten wandern nie.** Auch keine Datenbankinhalte. Nur Anhänge.
+
+#### Wann welche Datei wandert
+
+Der Dienst sieht alle 15 Minuten nach. Was er dann tut, hängt an drei Dingen:
+
+| Priorität | Wann sie wandert                                                        |
+| --------- | ----------------------------------------------------------------------- |
+| `niedrig` | **Sofort**, unabhängig vom Füllstand. Das ist die Bedeutung der Einstellung. |
+| `normal`  | Ab `KALT_GRENZE_GB` (Standard 100), nach Gewicht.                       |
+| `hoch`    | Erst ab `KALT_GRENZE_HOCH_GB` (Standard 120) – und dann zuletzt.        |
+
+Innerhalb einer Klasse entscheidet das **Gewicht**: `Grösse × (1 −
+2^(−Alter/30 Tage))`. Gross und alt wandert zuerst, klein und frisch zuletzt.
+Eine Datei von gestern bleibt also auch dann liegen, wenn sie gross ist – sie
+wird gerade noch angesehen.
+
+Die Priorität stellt man in einer Sammlung ein und sie hängt am Anhang, nicht
+am Sammlungseintrag: Es gibt die Datei nur einmal.
+
+#### Hetzner Storage Box einrichten
+
+```bash
+KALT_TREIBER=sftp
+KALT_SFTP_WIRT=uXXXXXX.your-storagebox.de
+KALT_SFTP_HAFEN=23
+KALT_SFTP_BENUTZER=uXXXXXX-sub1
+KALT_SFTP_SCHLUESSEL=/root/.ssh/storagebox_key
+KALT_SFTP_FINGERABDRUCK=<siehe unten>
+KALT_SFTP_PFAD=initiative
+```
+
+Vier Dinge, die man nur einmal falsch macht:
+
+1. **Port 23, nicht 22.** Auf 22 läuft bei Hetzner eine abgespeckte Fassung
+   ohne Unterverzeichnisse. Der volle Funktionsumfang – und damit alles, was
+   dieser Dienst braucht – liegt auf 23.
+2. **Ein Unterkonto anlegen, nicht das Hauptkonto benutzen.** Im Hetzner-Menü:
+   *Storage Box → Unterkonten → Unterkonto erstellen*, mit einem eigenen
+   Verzeichnis und ohne Schreibrechte auf den Rest. Verliert der Server seinen
+   Schlüssel an jemanden, ist damit nur dieses Verzeichnis offen und nicht die
+   ganze Box mitsamt den Sicherungen.
+3. **Schlüssel statt Passwort.** Auf dem Server:
+
+   ```bash
+   ssh-keygen -t ed25519 -f ~/.ssh/storagebox_key -N ""
+   # Den oeffentlichen Schluessel im Hetzner-Menue beim Unterkonto hinterlegen
+   ssh -p 23 uXXXXXX-sub1@uXXXXXX.your-storagebox.de ls
+   ```
+
+4. **Den Fingerabdruck eintragen.** Ohne ihn nimmt der Dienst jeden
+   Wirtsschlüssel an, und das ist genau die Lücke, durch die sich jemand
+   dazwischensetzt:
+
+   ```bash
+   ssh-keyscan -p 23 uXXXXXX.your-storagebox.de 2>/dev/null | ssh-keygen -lf -
+   ```
+
+   Aus `256 SHA256:abc123… uXXXXXX… (ED25519)` gehört `abc123…` in
+   `KALT_SFTP_FINGERABDRUCK` – ohne das `SHA256:` davor.
+
+> **Nicht ins Dateisystem einhängen.** Es ist verlockend, die Box mit `sshfs`
+> oder `davfs2` zu mounten und `LOCAL_STORAGE_DIR` daraufzuzeigen. Das geht bis
+> zur ersten Netzstörung: Ein hängender Mount blockiert jeden Zugriff auf das
+> Verzeichnis, und der API-Container friert samt aller Anfragen ein – auch
+> derer, die mit Medien nichts zu tun haben. Der Dienst spricht deshalb SFTP
+> direkt, mit Zeitschranken und begrenzter Zahl gleichzeitiger Verbindungen.
+
+#### Erst einmal trocken üben
+
+`KALT_TREIBER=lokal` legt die kalte Ablage in ein zweites Verzeichnis. Der
+ganze Weg – auswählen, hinüberschreiben, nachmessen, umschreiben, löschen,
+von drüben ausliefern – läuft dabei genauso ab wie über SFTP, nur schneller.
+Gut, um zu sehen, was der Dienst tut, bevor man ihn auf eine echte Box
+loslässt:
+
+```bash
+KALT_TREIBER=lokal
+KALT_LOKAL_DIR=/data/kalt
+KALT_GRENZE_GB=1        # klein setzen, damit ueberhaupt etwas wandert
+```
+
+#### Woran man sieht, dass es läuft
+
+Im Protokoll des API-Containers:
+
+```
+Auslagerung bewegt=7 gigabyte=2.31 gescheitert=0
+```
+
+In der Datenbank:
+
+```sql
+select ablage, count(*), pg_size_pretty(sum(size)) from attachments group by 1;
+```
+
+`lokal` ist auf dem Server, `fern` auf der Box, `wandert` gerade unterwegs.
+Bleibt etwas dauerhaft auf `wandert` stehen, ist ein Umzug abgebrochen – die
+Datei ist weiterhin erreichbar, sie belegt nur doppelt Platz.
 
 ---
 

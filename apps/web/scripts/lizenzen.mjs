@@ -398,6 +398,122 @@ liste.texte = Object.fromEntries(texte);
 await writeFile(ZIEL, JSON.stringify(liste), 'utf8');
 const anzahl = liste.gruppen.reduce((summe, gruppe) => summe + gruppe.eintraege.length, 0);
 console.log(`Lizenzliste geschrieben: ${anzahl} Eintraege in ${ZIEL}`);
+
+/* ==========================================================================
+ * Und jetzt die Frage, die eine Liste allein nicht beantwortet:
+ * Darf das alles hier überhaupt mit?
+ * ========================================================================== */
+
+/**
+ * Lizenzen, unter denen diese App ausgeliefert werden darf.
+ *
+ * Die App ist kommerziell gedacht. Das schliesst nicht bloss „teuer" aus,
+ * sondern alles mit einer Ansteckungswirkung: Eine GPL-Kiste im Server
+ * verlangt, den ganzen Server unter GPL zu stellen; eine
+ * Nicht-kommerziell-Klausel schliesst den Zweck aus.
+ *
+ * Diese Liste ist deshalb bewusst kurz und wird nicht „mal eben" ergänzt. Wer
+ * etwas hinzufügen will, soll begründen müssen, warum es hier hingehört.
+ */
+const ERLAUBT = new Set([
+  'MIT', 'MIT-0', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'BSD-1-Clause',
+  '0BSD', 'ISC', 'Zlib', 'Unlicense', 'BSL-1.0', 'Unicode-3.0', 'Unicode-DFS-2016',
+  'CC0-1.0', 'CDLA-Permissive-2.0', 'OFL-1.1', 'NCSA', 'PSF-2.0',
+]);
+
+/**
+ * Lizenzen, die geduldet werden – mit Namen und mit Begründung.
+ *
+ * MPL-2.0 ist ein Copyleft je DATEI: Wer eine MPL-Datei ändert, muss die
+ * Änderung veröffentlichen. Verlinken und mit eigenem Code zusammenpacken ist
+ * ausdrücklich erlaubt, und der eigene Code bleibt, was er ist. Solange diese
+ * Kisten unverändert benutzt werden – und das werden sie –, entsteht keine
+ * Pflicht.
+ *
+ * Sie stehen hier trotzdem einzeln und nicht als pauschale Erlaubnis für
+ * MPL: Käme morgen eine sechste dazu, soll jemand hinsehen müssen.
+ */
+const GEDULDET = {
+  'webauthn-rs': 'MPL-2.0 – Passkeys. Unverändert benutzt, also keine Pflicht.',
+  'webauthn-rs-core': 'MPL-2.0 – gehört zu webauthn-rs.',
+  'webauthn-rs-proto': 'MPL-2.0 – gehört zu webauthn-rs.',
+  'webauthn-attestation-ca': 'MPL-2.0 – gehört zu webauthn-rs.',
+  'base64urlsafedata': 'MPL-2.0 – gehört zu webauthn-rs.',
+  Eigen: 'MPL-2.0 – fest in MediaPipe einkompiliert, unverändert.',
+};
+
+/**
+ * Ist diese Lizenzangabe in Ordnung?
+ *
+ * SPDX-Ausdrücke sind keine einzelnen Namen: `MIT OR Apache-2.0` heisst, man
+ * darf sich aussuchen, welche gilt – ein einziger erlaubter Zweig genügt.
+ * `A AND B` dagegen heisst, beide gelten, also müssen beide passen.
+ *
+ * Deshalb wird von aussen nach innen gerechnet: erst an ODER trennen (ein
+ * Treffer reicht), dann an UND (alle müssen treffen). Wer stattdessen nur
+ * nach Teilzeichenketten sucht, hält `MIT OR Apache-2.0 OR LGPL-2.1-or-later`
+ * für ein LGPL-Problem, obwohl man dort MIT wählen darf – und er hält
+ * umgekehrt `ISC AND (Apache-2.0 OR ISC)` für unbedenklich, weil „ISC"
+ * darin vorkommt.
+ */
+function lizenzOk(ausdruck) {
+  const text = String(ausdruck ?? '').trim();
+  if (!text) return false;
+  // `MIT/Apache-2.0` ist die alte Schreibweise für ein ODER.
+  const norm = text.replace(/\//g, ' OR ');
+  const ohneKlammern = (t) => t.trim().replace(/^\((.*)\)$/s, '$1').trim();
+
+  const oder = teilen(ohneKlammern(norm), 'OR');
+  if (oder.length > 1) return oder.some((t) => lizenzOk(t));
+  const und = teilen(ohneKlammern(norm), 'AND');
+  if (und.length > 1) return und.every((t) => lizenzOk(t));
+
+  const nackt = ohneKlammern(norm).replace(/\s+WITH\s+.*$/i, '').trim();
+  return ERLAUBT.has(nackt);
+}
+
+/** An einem Verknüpfungswort trennen – aber nicht innerhalb von Klammern. */
+function teilen(text, wort) {
+  const teile = [];
+  let tiefe = 0;
+  let letzter = 0;
+  const muster = new RegExp(`\\s${wort}\\s`, 'gi');
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === '(') tiefe += 1;
+    else if (text[i] === ')') tiefe -= 1;
+    if (tiefe !== 0) continue;
+    muster.lastIndex = i;
+    const treffer = muster.exec(text);
+    if (treffer && treffer.index === i) {
+      teile.push(text.slice(letzter, i));
+      letzter = i + treffer[0].length;
+      i = letzter - 1;
+    }
+  }
+  teile.push(text.slice(letzter));
+  return teile.map((t) => t.trim()).filter(Boolean);
+}
+
+const beanstandet = [];
+for (const gruppe of liste.gruppen) {
+  for (const eintrag of gruppe.eintraege) {
+    if (lizenzOk(eintrag.lizenz)) continue;
+    if (GEDULDET[eintrag.name]) continue;
+    beanstandet.push(`${gruppe.titel}: ${eintrag.name} – ${eintrag.lizenz ?? '(keine Angabe)'}`);
+  }
+}
+
+if (beanstandet.length > 0) {
+  console.error('');
+  console.error('Lizenzprüfung: nicht zulässig für eine kommerzielle Auslieferung:');
+  for (const zeile of beanstandet) console.error(`  * ${zeile}`);
+  console.error('');
+  console.error('Zulässig sind MIT, Apache-2.0, BSD, ISC, Zlib und Ähnliches.');
+  console.error('Wenn es trotzdem mit soll, gehört es mit Begründung nach GEDULDET');
+  console.error('in scripts/lizenzen.mjs – nicht stillschweigend in ERLAUBT.');
+  process.exit(1);
+}
+console.log(`Lizenzpruefung: alle ${anzahl} Eintraege zulaessig.`);
 for (const gruppe of liste.gruppen) {
   console.log(
     `  ${gruppe.titel}: ${gruppe.eintraege.length}${gruppe.fehlt ? ` (${gruppe.fehlt})` : ''}`,

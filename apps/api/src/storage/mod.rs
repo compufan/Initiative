@@ -7,7 +7,9 @@
 pub mod local;
 pub mod muell;
 pub mod s3;
+pub mod sftp;
 pub mod tresor;
+pub mod weiche;
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -17,7 +19,7 @@ use axum::body::Bytes;
 use chrono::{DateTime, Utc};
 use futures_util::Stream;
 
-use crate::config::{Config, StorageDriver};
+use crate::config::{Config, KaltTreiber, StorageDriver};
 use crate::error::AppResult;
 
 pub struct PresignedUpload {
@@ -69,17 +71,104 @@ pub trait Storage: Send + Sync {
     async fn delete(&self, key: &str) -> AppResult<()>;
 }
 
-pub fn create_storage(config: &Config) -> AppResult<Arc<dyn Storage>> {
-    let roh: Arc<dyn Storage> = match config.storage_driver {
+/**
+ * Der Speicher, den dieser Prozess benutzt – genau einer, in drei Schichten.
+ *
+ * Von innen nach aussen:
+ *
+ *   1. **Der Treiber**: Platte oder S3. Er kennt nur Schlüssel und Bytes.
+ *   2. **Die Weiche** (falls eine kalte Ablage eingerichtet ist): Sie
+ *      entscheidet je Schlüssel, ob warm oder kalt gelesen wird. Geschrieben
+ *      wird immer warm.
+ *   3. **Der Tresor** (falls ein Schlüssel gesetzt ist): Er verschlüsselt.
+ *
+ * Die Reihenfolge ist keine Geschmacksfrage. Der Tresor gehört NACH AUSSEN,
+ * weil sonst zweimal verschlüsselt würde – einmal je Ablage – und eine Datei
+ * beim Umzug von warm nach kalt umgeschlüsselt werden müsste. So wandert sie
+ * Byte für Byte, wie sie ist.
+ *
+ * `pool` wird nur von der Weiche gebraucht. Er steht trotzdem in der
+ * Signatur und nicht hinter einem `Option`: Eine Funktion, die ihre
+ * Abhängigkeit je nach Einstellung verlangt oder nicht, lädt dazu ein, sie
+ * beim nächsten Umbau zu vergessen.
+ */
+/**
+ * Was beim Anlegen des Speichers herauskommt.
+ *
+ * `aussen` ist das, was der ganze Rest der App benutzt – mit Tresor, mit
+ * Weiche, fertig.
+ *
+ * `warm` und `kalt` sind die ROHEN Treiber daneben, und sie stehen nur für
+ * eine einzige Aufgabe hier: den Umzug. Eine Datei, die von warm nach kalt
+ * wandert, soll Byte für Byte kopiert werden – durch den Tresor gelesen und
+ * wieder hineingeschrieben würde sie entschlüsselt und neu verschlüsselt,
+ * ohne dass sich am Ergebnis etwas ändert ausser der Rechenzeit. Und durch
+ * die Weiche gelesen käme sie gar nicht an: Die schickt jeden Schreibvorgang
+ * nach warm, also auch den, der nach kalt soll.
+ */
+pub struct Speicher {
+    pub aussen: Arc<dyn Storage>,
+    pub warm: Arc<dyn Storage>,
+    pub kalt: Option<Arc<dyn Storage>>,
+}
+
+pub fn create_storage(config: &Config, pool: &sqlx::PgPool) -> AppResult<Speicher> {
+    let warm: Arc<dyn Storage> = match config.storage_driver {
         StorageDriver::Local => Arc::new(local::LocalStorage::new(&config.local_storage_dir)),
         StorageDriver::R2 | StorageDriver::S3 => Arc::new(s3::S3Storage::new(config)?),
     };
+    let kalt = kalte_ablage(config)?;
+
+    let mit_weiche: Arc<dyn Storage> = match &kalt {
+        Some(kalt) => Arc::new(weiche::Weiche::neu(
+            warm.clone(),
+            kalt.clone(),
+            pool.clone(),
+        )),
+        None => warm.clone(),
+    };
+
     // Ist ein Schlüssel gesetzt, kommt der Tresor davor und alles Neue wird
     // verschlüsselt abgelegt. Ohne Schlüssel bleibt alles wie bisher – das
     // Einschalten soll eine Zeile in der Umgebung sein, kein Umbau.
-    match config.media_key {
-        Some(schluessel) => Ok(Arc::new(tresor::Tresor::neu(roh, schluessel))),
-        None => Ok(roh),
+    let aussen: Arc<dyn Storage> = match config.media_key {
+        Some(schluessel) => Arc::new(tresor::Tresor::neu(mit_weiche, schluessel)),
+        None => mit_weiche,
+    };
+    Ok(Speicher { aussen, warm, kalt })
+}
+
+/// Die kalte Ablage – oder `None`, wenn keine eingerichtet ist.
+fn kalte_ablage(config: &Config) -> AppResult<Option<Arc<dyn Storage>>> {
+    match config.kalt_treiber {
+        KaltTreiber::Aus => Ok(None),
+        KaltTreiber::Lokal => Ok(Some(Arc::new(local::LocalStorage::new(
+            &config.kalt_lokal_dir,
+        )))),
+        KaltTreiber::Sftp => {
+            let Some(einstellungen) = config.kalt_sftp.clone() else {
+                return Err(crate::error::AppError::config(
+                    "KALT_TREIBER=sftp, aber KALT_SFTP_WIRT fehlt",
+                ));
+            };
+            if einstellungen.benutzer.is_empty() {
+                return Err(crate::error::AppError::config(
+                    "KALT_TREIBER=sftp, aber KALT_SFTP_BENUTZER fehlt",
+                ));
+            }
+            Ok(Some(Arc::new(sftp::SftpSpeicher::neu(einstellungen))))
+        }
+        /*
+         * Der S3-Weg als kalte Ablage ist bewusst noch nicht verdrahtet:
+         * `S3Storage::new` liest EINEN Satz Zugangsdaten aus der Umgebung,
+         * und für zwei Eimer bräuchte es zwei. Das ist ein kleiner Umbau, aber
+         * einer – und eine halb verdrahtete Einstellung, die stillschweigend
+         * denselben Eimer für warm und kalt nimmt, wäre schlimmer als eine,
+         * die ehrlich sagt, dass sie noch nicht da ist.
+         */
+        KaltTreiber::S3 => Err(crate::error::AppError::config(
+            "KALT_TREIBER=s3 ist noch nicht eingebaut – nimm sftp",
+        )),
     }
 }
 

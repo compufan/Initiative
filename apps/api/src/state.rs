@@ -12,13 +12,23 @@ use crate::error::AppResult;
 use crate::push::PushService;
 use crate::realtime::bus::RealtimeBus;
 use crate::realtime::hub::Hub;
-use crate::storage::{create_storage, Storage};
+use crate::storage::{create_storage, Speicher, Storage};
 
 #[derive(Clone)]
 pub struct AppState {
     pub pool: PgPool,
     pub config: Arc<Config>,
     pub storage: Arc<dyn Storage>,
+    /**
+     * Die rohen Ablagen – nur für den Umzug.
+     *
+     * Der Auslagerungsdienst braucht sie, weil er Byte für Byte kopiert:
+     * durch den Tresor gelesen und wieder hineingeschrieben würde eine Datei
+     * entschlüsselt und neu verschlüsselt, ohne dass sich etwas ändert ausser
+     * der Rechenzeit – und durch die Weiche geschrieben landete sie wieder
+     * warm, also genau dort, wo sie wegsollte.
+     */
+    pub speicher: Arc<Speicher>,
     pub hub: Arc<Hub>,
     pub bus: Arc<RealtimeBus>,
     pub push: Arc<PushService>,
@@ -52,7 +62,8 @@ impl AppState {
     }
 
     pub async fn from_pool(pool: PgPool, config: Arc<Config>) -> AppResult<Self> {
-        let storage = create_storage(&config)?;
+        let speicher = create_storage(&config, &pool)?;
+        let storage = speicher.aussen.clone();
         let bus = Arc::new(RealtimeBus::new(config.realtime_bus, pool.clone()));
         let hub = Arc::new(Hub::new(bus.clone()));
         bus.attach_hub(hub.clone());
@@ -63,6 +74,7 @@ impl AppState {
             drossel: Arc::new(Drossel::neu(config.rate_limit)),
             config,
             storage,
+            speicher: Arc::new(speicher),
             hub,
             bus,
             startup_problem: Arc::new(RwLock::new(None)),

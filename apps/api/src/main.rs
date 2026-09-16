@@ -104,6 +104,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::time::Duration::from_secs(300),
     );
 
+    /*
+     * Der Auslagerungsdienst.
+     *
+     * Er läuft nur, wenn eine kalte Ablage eingerichtet ist – ohne
+     * `KALT_TREIBER` sagt er das einmal ins Protokoll und legt sich hin. Damit
+     * ändert sich für jede bestehende Installation nichts, solange niemand
+     * etwas einstellt.
+     *
+     * Viertelstündlich und nicht öfter: Auslagern ist kein Notdienst. Wenn
+     * die Platte in fünfzehn Minuten von hundert auf zweihundertsechsundfünfzig
+     * Gigabyte läuft, hilft auch ein Minutentakt nicht mehr.
+     */
+    initiative_api::services::auslagern::starten(
+        state.pool.clone(),
+        state.speicher.clone(),
+        state.config.clone(),
+    );
+
     let router = app::build(state.clone());
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(

@@ -146,9 +146,15 @@ pub enum Erlaubt {
  * volläuft, wäre eine merkwürdige Art, dem nachzukommen.
  */
 pub fn erlaubt_bei(belegt: i64) -> Erlaubt {
-    if belegt >= GRENZE_HOCH {
+    erlaubt_bei_mit(belegt, GRENZE_NORMAL, GRENZE_HOCH)
+}
+
+/// Dasselbe mit eigenen Grenzen – 256 GB sind kein Naturgesetz, und wer eine
+/// grössere Platte hat, will die Schwelle woanders.
+pub fn erlaubt_bei_mit(belegt: i64, grenze: i64, grenze_hoch: i64) -> Erlaubt {
+    if belegt >= grenze_hoch {
         Erlaubt::Alles
-    } else if belegt >= GRENZE_NORMAL {
+    } else if belegt >= grenze {
         Erlaubt::BisNormal
     } else {
         Erlaubt::NurNiedrig
@@ -165,7 +171,18 @@ pub fn erlaubt_bei(belegt: i64) -> Erlaubt {
  * Zurück kommen die Kandidaten in der Reihenfolge, in der sie wandern sollen.
  */
 pub fn reihenfolge(kandidaten: &[Kandidat], belegt: i64, jetzt: DateTime<Utc>) -> Vec<Kandidat> {
-    let erlaubt = erlaubt_bei(belegt);
+    reihenfolge_mit(kandidaten, belegt, jetzt, GRENZE_NORMAL, GRENZE_HOCH)
+}
+
+/// Dasselbe mit eigenen Grenzen.
+pub fn reihenfolge_mit(
+    kandidaten: &[Kandidat],
+    belegt: i64,
+    jetzt: DateTime<Utc>,
+    grenze: i64,
+    grenze_hoch: i64,
+) -> Vec<Kandidat> {
+    let erlaubt = erlaubt_bei_mit(belegt, grenze, grenze_hoch);
     let klasse = |p: Prioritaet| match p {
         Prioritaet::Niedrig => 0u8,
         Prioritaet::Normal => 1,
@@ -215,7 +232,19 @@ pub fn auswahl(
     ziel: i64,
     jetzt: DateTime<Utc>,
 ) -> Vec<Kandidat> {
-    let geordnet = reihenfolge(kandidaten, belegt, jetzt);
+    auswahl_mit(kandidaten, belegt, ziel, jetzt, GRENZE_NORMAL, GRENZE_HOCH)
+}
+
+/// Dasselbe mit eigenen Grenzen.
+pub fn auswahl_mit(
+    kandidaten: &[Kandidat],
+    belegt: i64,
+    ziel: i64,
+    jetzt: DateTime<Utc>,
+    grenze: i64,
+    grenze_hoch: i64,
+) -> Vec<Kandidat> {
+    let geordnet = reihenfolge_mit(kandidaten, belegt, jetzt, grenze, grenze_hoch);
     let mut raus = Vec::new();
     let mut rest = belegt;
     for kandidat in geordnet {
@@ -435,4 +464,316 @@ mod tests {
         assert_eq!(Prioritaet::aus("unfug"), Prioritaet::Normal);
         assert_eq!(Prioritaet::aus(""), Prioritaet::Normal);
     }
+}
+
+/* ==========================================================================
+ * Der Dienst, der die Dateien wirklich bewegt.
+ * ========================================================================== */
+
+use futures_util::StreamExt;
+use sqlx::PgPool;
+use std::sync::Arc;
+
+use crate::config::Config;
+use crate::storage::Storage;
+
+/**
+ * Wie viel unter der Grenze aufgehört wird.
+ *
+ * Wer genau bis zur Grenze auslagert, ist beim nächsten Upload wieder darüber,
+ * und der Dienst läuft dauernd. Fünf Gigabyte Abstand heissen: Er läuft selten
+ * und richtet dann etwas aus.
+ */
+const ABSTAND: i64 = 5 * 1024 * 1024 * 1024;
+
+/// Wie viele Dateien ein Durchgang höchstens bewegt.
+///
+/// Nicht, weil mehr nicht ginge, sondern weil ein Durchgang ein Ende haben
+/// soll: Jede Datei belegt während des Umzugs ihre Grösse im Arbeitsspeicher,
+/// und ein Dienst, der eine Stunde lang läuft, lässt sich nicht beenden.
+const STAPEL: usize = 20;
+
+/// Wie oft nachgesehen wird, ob etwas zu tun ist.
+const TAKT_S: u64 = 900;
+
+/// Was ein Durchgang ausgerichtet hat.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Bilanz {
+    pub bewegt: usize,
+    pub bytes: i64,
+    pub gescheitert: usize,
+}
+
+/// Wie viel app-eigene Daten gerade auf dem Server liegen.
+///
+/// Gezählt werden ausschliesslich Anhänge, und nur die, die wirklich lokal
+/// liegen. Das ist die Zahl, die der Anwender meint, wenn er „Daten im
+/// Zusammenhang mit der App" sagt: Nachrichten sind Text in einer Datenbank
+/// und gegen ein einziges Video ein Rundungsfehler.
+pub async fn belegt(pool: &PgPool) -> i64 {
+    /*
+     * Das `::bigint` ist kein Schmuck.
+     *
+     * `sum()` über eine `bigint`-Spalte gibt in Postgres `numeric` zurück,
+     * nicht `bigint` – damit eine Summe über viele grosse Zahlen nicht
+     * überläuft. Wer das Ergebnis als `i64` abholt, bekommt keinen falschen
+     * Wert, sondern einen Dekodierfehler.
+     *
+     * Und genau das war hier der Fehler, den ein Test gefunden hat: Der
+     * Fehler wurde mit `.ok()` verschluckt, die Funktion meldete pflichtschuldig
+     * null belegte Bytes – und ein Server, der laut Auskunft leer ist, lagert
+     * nie etwas aus. Die ganze Schwelle wäre tot gewesen, ohne eine einzige
+     * Fehlermeldung. Nur Dateien auf „niedrig" wären gewandert, weil die an
+     * der Schwelle vorbeigehen.
+     *
+     * Deshalb steht hier jetzt eine Umwandlung in der Abfrage UND ein
+     * Protokolleintrag statt eines stillen Rückfalls. Null Bytes belegt ist
+     * eine Aussage, die man sich verdienen muss.
+     */
+    match sqlx::query_scalar::<_, i64>(
+        "select coalesce(sum(size), 0)::bigint from attachments
+          where ablage = 'lokal' and status = 'ready'",
+    )
+    .fetch_one(pool)
+    .await
+    {
+        Ok(summe) => summe,
+        Err(fehler) => {
+            tracing::error!(%fehler, "Füllstand nicht lesbar – es wird nichts ausgelagert");
+            0
+        }
+    }
+}
+
+/// Die Kandidaten, die bei diesem Füllstand überhaupt in Frage kommen.
+async fn kandidaten(pool: &PgPool, erlaubt: Erlaubt) -> Vec<Kandidat> {
+    let prioritaeten: &[&str] = match erlaubt {
+        Erlaubt::NurNiedrig => &["niedrig"],
+        Erlaubt::BisNormal => &["niedrig", "normal"],
+        Erlaubt::Alles => &["niedrig", "normal", "hoch"],
+    };
+    /*
+     * Nur Anhänge, und nur fertige. Ein Upload, der noch läuft, darf nicht
+     * unter den Händen weggezogen werden.
+     *
+     * Die Obergrenze ist grosszügig: Gewogen wird hinterher in Rust, und wer
+     * nur die hundert grössten holte, übersähe die tausend alten kleinen, die
+     * zusammen mehr ausmachen.
+     */
+    sqlx::query_as::<_, (uuid::Uuid, i64, chrono::DateTime<Utc>, String)>(
+        "select id, size, created_at, prioritaet
+           from attachments
+          where ablage = 'lokal' and status = 'ready' and size > 0
+            and prioritaet = any($1)
+          order by created_at asc
+          limit 5000",
+    )
+    .bind(prioritaeten)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .map(|(id, groesse, angelegt, prioritaet)| Kandidat {
+        id,
+        groesse,
+        angelegt,
+        prioritaet: Prioritaet::aus(&prioritaet),
+    })
+    .collect()
+}
+
+/**
+ * Eine Datei hinüberschaffen.
+ *
+ * # Die Reihenfolge ist der ganze Trick
+ *
+ * 1. `ablage = 'wandert'` – ab jetzt weiss jeder, dass hier etwas geschieht.
+ *    Gelesen wird weiterhin die lokale Fassung; sie steht ja noch.
+ * 2. Kopieren. Dauert bei einem Video Minuten.
+ * 3. Nachmessen: Ist drüben wirklich alles angekommen?
+ * 4. `ablage = 'fern'` – ab jetzt wird drüben gelesen.
+ * 5. Erst danach die lokale Fassung löschen.
+ *
+ * Bricht es an irgendeiner Stelle ab, ist die Datei weiterhin erreichbar:
+ * Bis Schritt 4 aus der lokalen Fassung, danach aus der fernen. Der einzige
+ * Verlust ist Platz – eine Datei, die bei einem Absturz zwischen 4 und 5 an
+ * beiden Orten liegt. Das ist die richtige Richtung: lieber doppelt als weg.
+ *
+ * # Warum die ganze Datei in den Arbeitsspeicher
+ *
+ * Weil `Storage::put` Bytes nimmt, keinen Strom. Bei einem Video von 200 MB
+ * ist das eine Spitze von 200 MB – dieselbe Grössenordnung, die der
+ * Upload-Weg ohnehin hat (`UPLOAD_BODY_LIMIT`), und es läuft immer nur eine
+ * Datei zugleich. Ein Strom-Weg wäre besser und wäre ein zweiter Eintrag im
+ * Speicher-Trait; er lohnt sich, wenn der Dienst einmal mehrere Dateien
+ * nebeneinander bewegen soll.
+ */
+async fn umziehen(
+    pool: &PgPool,
+    warm: &Arc<dyn Storage>,
+    kalt: &Arc<dyn Storage>,
+    id: uuid::Uuid,
+) -> Result<i64, String> {
+    let zeile: Option<(String, i64, String)> = sqlx::query_as(
+        "select storage_key, size, mime from attachments
+          where id = $1 and ablage = 'lokal' and status = 'ready'",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|f| f.to_string())?;
+    let Some((schluessel, groesse, mime)) = zeile else {
+        // Zwischen Auswahl und Umzug gelöscht oder schon gewandert. Kein
+        // Fehler, nur nichts zu tun.
+        return Ok(0);
+    };
+
+    sqlx::query("update attachments set ablage = 'wandert' where id = $1 and ablage = 'lokal'")
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|f| f.to_string())?;
+
+    let zurueck = || async {
+        let _ = sqlx::query("update attachments set ablage = 'lokal' where id = $1")
+            .bind(id)
+            .execute(pool)
+            .await;
+    };
+
+    let Some(objekt) = warm
+        .read(&schluessel, None)
+        .await
+        .map_err(|f| f.to_string())?
+    else {
+        zurueck().await;
+        return Err(format!("{schluessel}: liegt gar nicht da"));
+    };
+
+    let mut bytes = Vec::with_capacity(groesse.max(0) as usize);
+    let mut strom = objekt.stream;
+    while let Some(stueck) = strom.next().await {
+        match stueck {
+            Ok(daten) => bytes.extend_from_slice(&daten),
+            Err(fehler) => {
+                zurueck().await;
+                return Err(format!("{schluessel}: Lesen abgebrochen – {fehler}"));
+            }
+        }
+    }
+
+    if let Err(fehler) = kalt
+        .put(&schluessel, axum::body::Bytes::from(bytes.clone()), &mime)
+        .await
+    {
+        zurueck().await;
+        return Err(format!("{schluessel}: Schreiben gescheitert – {fehler}"));
+    }
+
+    /*
+     * Nachmessen, bevor die lokale Fassung fällt.
+     *
+     * Ohne diese Prüfung genügt ein halb geschriebenes Video, und die Datei
+     * ist weg – die kalte Fassung ist unvollständig, die warme gelöscht.
+     * Gemessen wird, was wirklich dort liegt, und nicht, was wir glauben
+     * geschrieben zu haben.
+     */
+    let drueben = kalt
+        .read(&schluessel, None)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|o| o.total_size);
+    if drueben != Some(bytes.len() as u64) {
+        zurueck().await;
+        return Err(format!(
+            "{schluessel}: drüben liegen {drueben:?} statt {} Bytes",
+            bytes.len()
+        ));
+    }
+
+    sqlx::query("update attachments set ablage = 'fern', ausgelagert_at = now() where id = $1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .map_err(|f| f.to_string())?;
+
+    /*
+     * Erst jetzt die lokale Fassung. Scheitert das, ist es kein Drama: Die
+     * Datei ist erreichbar, sie belegt nur weiter Platz. Der nächste
+     * Durchgang wählt sie nicht noch einmal (sie steht auf `fern`), also
+     * bleibt dieser Rest liegen – sichtbar im Protokoll.
+     */
+    if let Err(fehler) = warm.delete(&schluessel).await {
+        tracing::warn!(%schluessel, %fehler, "Ausgelagert, aber die lokale Fassung blieb liegen");
+    }
+    Ok(groesse)
+}
+
+/// Ein Durchgang.
+pub async fn durchgang(
+    pool: &PgPool,
+    warm: &Arc<dyn Storage>,
+    kalt: &Arc<dyn Storage>,
+    grenze: i64,
+    grenze_hoch: i64,
+) -> Bilanz {
+    let belegt_jetzt = belegt(pool).await;
+    let erlaubt = erlaubt_bei_mit(belegt_jetzt, grenze, grenze_hoch);
+    let liste = kandidaten(pool, erlaubt).await;
+    if liste.is_empty() {
+        return Bilanz::default();
+    }
+    let ziel = (grenze - ABSTAND).max(0);
+    let gewaehlt = auswahl_mit(&liste, belegt_jetzt, ziel, Utc::now(), grenze, grenze_hoch);
+
+    let mut bilanz = Bilanz::default();
+    for kandidat in gewaehlt.into_iter().take(STAPEL) {
+        match umziehen(pool, warm, kalt, kandidat.id).await {
+            Ok(0) => {}
+            Ok(bytes) => {
+                bilanz.bewegt += 1;
+                bilanz.bytes += bytes;
+            }
+            Err(fehler) => {
+                bilanz.gescheitert += 1;
+                tracing::warn!(%fehler, "Auslagern gescheitert");
+            }
+        }
+    }
+    if bilanz.bewegt > 0 || bilanz.gescheitert > 0 {
+        tracing::info!(
+            bewegt = bilanz.bewegt,
+            gigabyte = bilanz.bytes as f64 / 1_073_741_824.0,
+            gescheitert = bilanz.gescheitert,
+            "Auslagerung"
+        );
+    }
+    bilanz
+}
+
+/// Den Dienst starten. Gibt zurück, wie man ihn beendet.
+pub fn starten(
+    pool: PgPool,
+    speicher: Arc<crate::storage::Speicher>,
+    config: Arc<Config>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let Some(kalt) = speicher.kalt.clone() else {
+            tracing::info!("Keine kalte Ablage eingerichtet – es wird nichts ausgelagert");
+            return;
+        };
+        let grenze = config.kalt_grenze_gb * 1024 * 1024 * 1024;
+        let grenze_hoch = config.kalt_grenze_hoch_gb * 1024 * 1024 * 1024;
+        /*
+         * Ein Augenblick Ruhe vor dem ersten Durchgang: Beim Start laufen
+         * Migrationen und die ersten Anfragen, und ein Dienst, der genau dann
+         * ein Video über SFTP schiebt, macht den Start langsam.
+         */
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        loop {
+            durchgang(&pool, &speicher.warm, &kalt, grenze, grenze_hoch).await;
+            tokio::time::sleep(std::time::Duration::from_secs(TAKT_S)).await;
+        }
+    })
 }
