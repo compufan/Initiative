@@ -719,24 +719,30 @@ test('die Sprechblase bekommt einen Körper – vorher war sie ein unsichtbarer 
 
   /** Die Deckkraft an einer Stelle, in Anteilen der Kantenlänge. */
   const deckung = async (u: number, v: number) =>
-    leinwand.evaluate((el: HTMLCanvasElement, stelle: { u: number; v: number }) => {
-      const ctx = el.getContext('2d');
-      if (!ctx) return -1;
-      const x = Math.min(el.width - 1, Math.round(stelle.u * el.width));
-      const y = Math.min(el.height - 1, Math.round(stelle.v * el.height));
-      return ctx.getImageData(x, y, 1, 1).data[3];
-    }, { u, v });
+    leinwand.evaluate(
+      (el: HTMLCanvasElement, stelle: { u: number; v: number }) => {
+        const ctx = el.getContext('2d');
+        if (!ctx) return -1;
+        const x = Math.min(el.width - 1, Math.round(stelle.u * el.width));
+        const y = Math.min(el.height - 1, Math.round(stelle.v * el.height));
+        return ctx.getImageData(x, y, 1, 1).data[3];
+      },
+      { u, v },
+    );
 
   /** Die Farbe an einer Stelle als „r,g,b" – zum Vergleichen. */
   const farbe = async (u: number, v: number) =>
-    leinwand.evaluate((el: HTMLCanvasElement, stelle: { u: number; v: number }) => {
-      const ctx = el.getContext('2d');
-      if (!ctx) return '';
-      const x = Math.min(el.width - 1, Math.round(stelle.u * el.width));
-      const y = Math.min(el.height - 1, Math.round(stelle.v * el.height));
-      const d = ctx.getImageData(x, y, 1, 1).data;
-      return `${d[0]},${d[1]},${d[2]}`;
-    }, { u, v });
+    leinwand.evaluate(
+      (el: HTMLCanvasElement, stelle: { u: number; v: number }) => {
+        const ctx = el.getContext('2d');
+        if (!ctx) return '';
+        const x = Math.min(el.width - 1, Math.round(stelle.u * el.width));
+        const y = Math.min(el.height - 1, Math.round(stelle.v * el.height));
+        const d = ctx.getImageData(x, y, 1, 1).data;
+        return `${d[0]},${d[1]},${d[2]}`;
+      },
+      { u, v },
+    );
 
   /*
    * Ein Emoji als Inhalt, damit auch die zweite Hälfte geprüft ist: Die
@@ -852,17 +858,22 @@ test('Kontur und Schatten: Farbe, Schatten – und genug Rand für beide', async
 
   /** Deckung und Farbe an einer Stelle, in Anteilen der Kantenlänge. */
   const punkt = async (u: number, v: number) =>
-    leinwand.evaluate((el: HTMLCanvasElement, stelle: { u: number; v: number }) => {
-      const ctx = el.getContext('2d');
-      if (!ctx) return { a: -1, r: -1, g: -1, b: -1 };
-      const x = Math.min(el.width - 1, Math.round(stelle.u * el.width));
-      const y = Math.min(el.height - 1, Math.round(stelle.v * el.height));
-      const d = ctx.getImageData(x, y, 1, 1).data;
-      return { r: d[0], g: d[1], b: d[2], a: d[3] };
-    }, { u, v });
+    leinwand.evaluate(
+      (el: HTMLCanvasElement, stelle: { u: number; v: number }) => {
+        const ctx = el.getContext('2d');
+        if (!ctx) return { a: -1, r: -1, g: -1, b: -1 };
+        const x = Math.min(el.width - 1, Math.round(stelle.u * el.width));
+        const y = Math.min(el.height - 1, Math.round(stelle.v * el.height));
+        const d = ctx.getImageData(x, y, 1, 1).data;
+        return { r: d[0], g: d[1], b: d[2], a: d[3] };
+      },
+      { u, v },
+    );
 
   await page.locator('.stk-emoji-btn').first().click();
-  await expect.poll(async () => (await punkt(0.5, 0.5)).a, { timeout: 15_000 }).toBeGreaterThan(200);
+  await expect
+    .poll(async () => (await punkt(0.5, 0.5)).a, { timeout: 15_000 })
+    .toBeGreaterThan(200);
 
   await page.getByRole('tab', { name: 'Kontur' }).click();
 
@@ -942,8 +953,12 @@ test('ein bewegtes Bild bleibt bewegt – und sagt, wenn es das nicht kann', asy
    * den Editor gab, bekam wortlos ein Standbild und merkte es erst am
    * fertigen Sticker im Gespräch.
    *
-   * Bewegt bleibt es nur auf einem Weg: die Datei unverändert weiterreichen.
-   * Das schliesst Bearbeiten aus, und genau das muss dastehen.
+   * Erst blieb es nur auf EINEM Weg bewegt: die Datei unverändert
+   * weiterreichen. Seit `bewegtLesen.ts` und `gif.ts` daneben stehen, geht
+   * auch der andere – jedes Teilbild einzeln durch dieselbe Kette und am Ende
+   * wieder zusammengesetzt. Geprüft wird hier, dass der Hinweis beides
+   * auseinanderhält: „unverändert übernommen" ist etwas anderes als „bleibt
+   * bewegt", und beides zur selben Zeit zu behaupten wäre nutzlos.
    */
   const alice = credentials('bewg');
   const bob = credentials('bwziel');
@@ -965,24 +980,25 @@ test('ein bewegtes Bild bleibt bewegt – und sagt, wenn es das nicht kann', asy
   });
 
   // Erkannt, samt Zahl der Teilbilder – und die gute Nachricht zuerst.
-  await expect(page.getByText(/bewegt sich \(3 Teilbilder\) und bleibt so/)).toBeVisible({
-    timeout: 15_000,
-  });
+  await expect(
+    page.getByText(/bewegt sich \(3 Teilbilder\) und wird unverändert übernommen/),
+  ).toBeVisible({ timeout: 15_000 });
 
   /*
-   * Jetzt etwas ändern: Die Kontur zwingt auf die Leinwand, und damit ist
-   * die Bewegung fort. Der Satz muss sich umdrehen.
+   * Jetzt etwas ändern: Die Kontur zwingt auf die Leinwand. Früher war damit
+   * die Bewegung fort; heute bekommt jedes Teilbild sie – und der Satz sagt
+   * genau das, samt der Einschränkung, die GIF mitbringt.
    */
   await page.getByRole('tab', { name: 'Kontur' }).click();
   await page.getByRole('button', { name: /Weiße Kontur aus/ }).click();
   await page.getByRole('tab', { name: 'Quelle' }).click();
-  await expect(page.getByText(/daraus wird ein Standbild/)).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(/bleibt bewegt/)).toBeVisible({ timeout: 10_000 });
 
-  // Und zurückgenommen ist die Bewegung wieder da.
+  // Und zurückgenommen steht wieder da, dass nichts gerechnet wird.
   await page.getByRole('tab', { name: 'Kontur' }).click();
   await page.getByRole('button', { name: /Weiße Kontur an/ }).click();
   await page.getByRole('tab', { name: 'Quelle' }).click();
-  await expect(page.getByText(/und bleibt so/)).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText(/unverändert übernommen/)).toBeVisible({ timeout: 10_000 });
 
   /*
    * Und jetzt der Fehler, den man nicht kommen sieht: ein Emoji NACH dem GIF.
@@ -1006,8 +1022,8 @@ test('ein bewegtes Bild bleibt bewegt – und sagt, wenn es das nicht kann', asy
    * Hinweis, der gar nicht gezeigt wird, beweist nichts.
    */
   await page.getByRole('tab', { name: 'Quelle' }).click();
-  await expect(page.getByText(/und bleibt so/)).toHaveCount(0, { timeout: 10_000 });
-  await expect(page.getByText(/daraus wird ein Standbild/)).toHaveCount(0);
+  await expect(page.getByText(/unverändert übernommen/)).toHaveCount(0, { timeout: 10_000 });
+  await expect(page.getByText(/bleibt bewegt/)).toHaveCount(0);
 });
 
 test('ein Paket baut man aus vielen Bildern – die Reihe läuft durch', async ({ browser }) => {
@@ -1035,11 +1051,14 @@ test('ein Paket baut man aus vielen Bildern – die Reihe läuft durch', async (
 
   await page.getByRole('tab', { name: 'Quelle' }).click();
   // Der zweite Eingang ist die Galerie; die Kamera nimmt bewusst nur eines.
-  await page.locator('.stk-file').nth(1).setInputFiles([
-    { name: 'a.png', mimeType: 'image/png', buffer: EIN_PNG },
-    { name: 'b.png', mimeType: 'image/png', buffer: EIN_PNG },
-    { name: 'c.png', mimeType: 'image/png', buffer: EIN_PNG },
-  ]);
+  await page
+    .locator('.stk-file')
+    .nth(1)
+    .setInputFiles([
+      { name: 'a.png', mimeType: 'image/png', buffer: EIN_PNG },
+      { name: 'b.png', mimeType: 'image/png', buffer: EIN_PNG },
+      { name: 'c.png', mimeType: 'image/png', buffer: EIN_PNG },
+    ]);
 
   await expect(page.getByText(/Noch 2 in der Reihe/)).toBeVisible({ timeout: 15_000 });
 
@@ -1303,4 +1322,143 @@ test('zwei Finger zoomen, ohne dabei freizustellen – und der Text bleibt am Mo
   await expect(tippZurueck, 'zwei Finger ohne Bewegung haben freigestellt').toBeDisabled();
 
   await context.close();
+});
+
+test('ein bewegter Sticker übersteht das Hin und Her: schreiben, lesen, wieder schreiben', async ({
+  page,
+}) => {
+  /*
+   * Der Kern der bewegten Sticker, im Browser geprüft.
+   *
+   * Zwei Stücke arbeiten hier gegeneinander: `gif.ts` schreibt eine Datei,
+   * `bewegtLesen.ts` nimmt sie mit dem Entschlüssler des Browsers wieder
+   * auseinander. Beide könnten für sich genommen falsch sein und trotzdem
+   * zueinander passen – deshalb steht der ECHTE Leser des Browsers auf der
+   * anderen Seite und nicht ein selbstgebauter.
+   *
+   * Und deshalb im Browser: `ImageDecoder` gibt es in Node nicht, und ihn
+   * nachzubauen hiesse, die Nachbildung zu prüfen.
+   *
+   * Was diese Prüfung NICHT sieht: Der Leser von Chromium ist nachsichtig.
+   * Nachgemessen geht ihm ein fehlender Löschcode am Anfang der LZW-Kette
+   * glatt durch, obwohl das Format ihn verlangt – ein anderer Leser wäre
+   * strenger. Dafür steht die Bitprüfung in `gif.test.ts`; hier geht es um
+   * das, was ein echter Leser mit der Datei anfangen kann.
+   */
+  await page.goto('/');
+
+  const ergebnis = await page.evaluate(async () => {
+    const ladeGif = '/src/modules/stickers/gif.ts';
+    const ladeLesen = '/src/modules/stickers/bewegtLesen.ts';
+    const gif = (await import(
+      /* @vite-ignore */ ladeGif
+    )) as typeof import('../src/modules/stickers/gif.js');
+    const lesen = (await import(
+      /* @vite-ignore */ ladeLesen
+    )) as typeof import('../src/modules/stickers/bewegtLesen.js');
+    if (!lesen.lesenMoeglich()) return { fehlt: 'kein ImageDecoder' } as const;
+
+    const K = 16;
+    const bild = (r: number, g: number, b: number, durchsichtigAb: number): ImageData => {
+      const daten = new Uint8ClampedArray(K * K * 4);
+      for (let y = 0; y < K; y += 1) {
+        for (let x = 0; x < K; x += 1) {
+          const at = (y * K + x) * 4;
+          daten[at] = r;
+          daten[at + 1] = g;
+          daten[at + 2] = b;
+          daten[at + 3] = x >= durchsichtigAb ? 0 : 255;
+        }
+      }
+      return new ImageData(daten, K, K);
+    };
+
+    // Drei deutlich verschiedene Teilbilder, das dritte halb durchsichtig.
+    const hinein = [
+      { daten: bild(230, 20, 20, K), dauerMs: 80 },
+      { daten: bild(20, 200, 20, K), dauerMs: 120 },
+      { daten: bild(20, 20, 230, 8), dauerMs: 200 },
+    ];
+    const roh = gif.gifSchreiben(hinein);
+    const datei = new Blob([roh as unknown as BlobPart], { type: 'image/gif' });
+
+    const heraus = await lesen.teilbilderLesen(datei, 'image/gif');
+    /*
+     * KEIN Übersprung, sondern ein Fehler.
+     *
+     * „Der Browser kann keine bewegten Bilder lesen" ist eine Eigenschaft des
+     * Geräts – „diese Datei liess sich nicht lesen" ist ein Fehler im
+     * Schreiber. Beides in denselben Übersprung zu werfen, nimmt der Prüfung
+     * genau den Fall, für den sie da ist: Nachgemessen ging eine falsch
+     * gepackte LZW-Kette (von der höchsten Bitstelle statt von der
+     * niedrigsten) anstandslos durch, weil der Leser sie verwarf und der Test
+     * sich übersprang.
+     */
+    if (!heraus) return { nichtLesbar: true } as const;
+
+    const flaeche = document.createElement('canvas');
+    flaeche.width = K;
+    flaeche.height = K;
+    const ctx = flaeche.getContext('2d', { willReadFrequently: true });
+    const gelesen = heraus.map((teil) => {
+      ctx?.clearRect(0, 0, K, K);
+      ctx?.drawImage(teil.bild, 0, 0);
+      const d = ctx?.getImageData(0, 0, K, K).data;
+      const at = (y: number, x: number) => (y * K + x) * 4;
+      return {
+        dauerMs: teil.dauerMs,
+        links: d ? [d[at(8, 2)], d[at(8, 2) + 1], d[at(8, 2) + 2], d[at(8, 2) + 3]] : [],
+        rechts: d ? [d[at(8, 12) + 3]] : [],
+      };
+    });
+    return { anzahl: heraus.length, gelesen, bytes: roh.length } as const;
+  });
+
+  if ('fehlt' in ergebnis) {
+    test.skip(true, `Bewegte Sticker nicht prüfbar: ${ergebnis.fehlt}`);
+    return;
+  }
+  expect(
+    'nichtLesbar' in ergebnis,
+    'der Browser konnte die geschriebene Datei nicht lesen – der Aufbau stimmt nicht',
+  ).toBe(false);
+  if ('nichtLesbar' in ergebnis) return;
+
+  expect(ergebnis.anzahl, 'es kamen nicht drei Teilbilder zurück').toBe(3);
+
+  /*
+   * Die Farben. GIF hat 255 Plätze, also darf jede ein wenig danebenliegen –
+   * aber nicht so weit, dass Rot und Blau sich verwechseln lassen. Zwanzig
+   * Stufen sind mehr als die Rundung auf fünf Bit hergibt und weit unter dem,
+   * was ein falscher Tafelplatz anrichten würde.
+   */
+  const nah = (ist: number[], soll: number[]) =>
+    soll.every((wert, i) => Math.abs(ist[i] - wert) <= 20);
+  expect(
+    nah(ergebnis.gelesen[0].links, [230, 20, 20]),
+    `Teilbild 1: ${ergebnis.gelesen[0].links}`,
+  ).toBe(true);
+  expect(
+    nah(ergebnis.gelesen[1].links, [20, 200, 20]),
+    `Teilbild 2: ${ergebnis.gelesen[1].links}`,
+  ).toBe(true);
+  expect(
+    nah(ergebnis.gelesen[2].links, [20, 20, 230]),
+    `Teilbild 3: ${ergebnis.gelesen[2].links}`,
+  ).toBe(true);
+
+  /*
+   * Die Durchsichtigkeit. GIF kennt keinen Alphakanal, sondern einen
+   * Tafelplatz, der als durchsichtig gilt – wird der nicht gesetzt, ist ein
+   * freigestellter Sticker ein Rechteck mit schwarzem Grund.
+   */
+  expect(ergebnis.gelesen[0].links[3], 'das erste Teilbild ist nicht deckend').toBe(255);
+  expect(ergebnis.gelesen[2].rechts[0], 'die Durchsichtigkeit ging verloren').toBe(0);
+
+  /*
+   * Und die Standzeiten. Sie zählen in GIF in Hundertstelsekunden, und
+   * `ImageDecoder` gibt sie in MIKROsekunden zurück – wer da eine Einheit
+   * verwechselt, bekommt einen Sticker, der tausendmal zu schnell läuft.
+   */
+  expect(ergebnis.gelesen.map((g) => Math.round(g.dauerMs))).toEqual([80, 120, 200]);
 });

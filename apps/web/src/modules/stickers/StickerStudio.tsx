@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
@@ -14,6 +15,8 @@ import { SavePackSheet } from './SavePackSheet.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 import { dialogAnmelden } from '../../lib/dialogVerlauf.js';
 import { bildlage } from './bewegt.js';
+import { lesenMoeglich, teilbilderLesen } from './bewegtLesen.js';
+import { gifSchreiben, type Teilbild } from './gif.js';
 import {
   MAX_SCALE,
   MIN_SCALE,
@@ -312,7 +315,9 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
    * rechnete den Encoder von vorn (rund eine Sekunde statt eines Viertels).
    */
   const vorlageRef = useRef<{
-    bild: HTMLImageElement;
+    // Auch ein `ImageBitmap`: Die Teilbilder eines bewegten Bildes kommen so
+    // herein (siehe `bewegtLesen.ts`).
+    bild: HTMLImageElement | ImageBitmap;
     vorlage: ReturnType<typeof vorlageAus>;
   } | null>(null);
   const lupeRef = useRef(lupe);
@@ -1051,11 +1056,11 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     const d = docRef.current;
     return Boolean(
       sourceRef.current ||
-        d.autoMask ||
-        d.tippGruppen.length > 0 ||
-        d.keep.length > 0 ||
-        d.strokes.length > 0 ||
-        d.texte.length > 0,
+      d.autoMask ||
+      d.tippGruppen.length > 0 ||
+      d.keep.length > 0 ||
+      d.strokes.length > 0 ||
+      d.texte.length > 0,
     );
   }, []);
 
@@ -1638,9 +1643,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
          * Zoomgeste ein Stück weg.
          */
         mode:
-          toolRef.current === 'erase' ||
-          toolRef.current === 'keep' ||
-          toolRef.current === 'teile'
+          toolRef.current === 'erase' || toolRef.current === 'keep' || toolRef.current === 'teile'
             ? 'none'
             : 'pan',
         startX: remaining.x,
@@ -1820,6 +1823,14 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
    * dadurch „du hast es bearbeitet", während der Anwender gerade erst die
    * Datei ausgewählt hatte.
    */
+  /**
+   * Kann dieses Gerät ein bewegtes Bild bearbeiten und bewegt lassen?
+   *
+   * Hängt allein an `ImageDecoder` – siehe `bewegtLesen.ts`. Steht hier
+   * `false`, gilt der alte Weg: bearbeiten heisst Standbild.
+   */
+  const kannBewegtBleiben = useMemo(() => lesenMoeglich(), []);
+
   function bewegtUnveraendert(d: StickerDoc): boolean {
     if (!bewegteQuelle) return false;
     return (
@@ -1835,6 +1846,60 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       d.offsetX === 0 &&
       d.offsetY === 0
     );
+  }
+
+  /**
+   * Aus einem bewegten Quellbild einen bewegten Sticker.
+   *
+   * Gibt `null` zurück, wenn dieses Gerät es nicht kann – der Aufrufer macht
+   * dann ein Standbild, wie bisher.
+   *
+   * # Warum eine eigene Leinwand
+   *
+   * Die Leinwand des Studios zeigt gerade, was der Anwender sieht. Hier
+   * werden nacheinander vierzig Teilbilder daraufgezeichnet und ausgelesen;
+   * täte man das auf der sichtbaren, flackerte sie sekundenlang durch alle
+   * Teilbilder.
+   */
+  async function bewegtBauen(): Promise<{ blob: Blob; mime: string } | null> {
+    if (!bewegteQuelle || !lesenMoeglich()) return null;
+    const typ = bewegteQuelle.format === 'gif' ? 'image/gif' : 'image/webp';
+    const gelesen = await teilbilderLesen(bewegteQuelle.datei, typ);
+    if (!gelesen || gelesen.length < 2) return null;
+
+    const flaeche = document.createElement('canvas');
+    flaeche.width = STICKER_SIZE;
+    flaeche.height = STICKER_SIZE;
+    const ctx = flaeche.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+
+    const teilbilder: Teilbild[] = [];
+    for (let i = 0; i < gelesen.length; i += 1) {
+      const { bild, dauerMs } = gelesen[i];
+      renderSticker(
+        flaeche,
+        { kind: 'image', image: bild, width: bild.width, height: bild.height },
+        docRef.current,
+        { fast: false },
+      );
+      teilbilder.push({
+        daten: ctx.getImageData(0, 0, flaeche.width, flaeche.height),
+        dauerMs,
+      });
+      bild.close();
+      /*
+       * Zwischendurch Luft holen. Vierzig Durchgänge durch die ganze Kette
+       * sind auf einem Telefon mehrere Sekunden – ohne das steht die
+       * Oberfläche währenddessen still und sieht abgestürzt aus.
+       */
+      if (i % 4 === 3) await new Promise((auf) => setTimeout(auf, 0));
+    }
+
+    const roh = gifSchreiben(teilbilder);
+    return {
+      blob: new Blob([roh as unknown as BlobPart], { type: 'image/gif' }),
+      mime: 'image/gif',
+    };
   }
 
   async function openSave() {
@@ -1886,6 +1951,39 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
        * bekommen.
        */
       await schriftenBereit(docRef.current.texte.map((t) => t.schrift));
+
+      /*
+       * Bewegt BLEIBEN, auch wenn daran gearbeitet wurde.
+       *
+       * Bis hierher gab es nur zwei Ausgänge: unverändert durchreichen – dann
+       * bewegt – oder bearbeiten – dann ein Standbild. Dass beides zugleich
+       * nicht ging, lag an zwei fehlenden Stücken, und beide stehen jetzt
+       * daneben: `bewegtLesen` nimmt das Bild in seine Teilbilder
+       * auseinander, `gif.ts` setzt sie wieder zusammen.
+       *
+       * Dazwischen läuft jedes Teilbild durch dieselbe Kette wie ein
+       * Standbild – Zuschnitt, Form, Kontur, Schatten, Schrift. Ein Sticker,
+       * bei dem nur das erste Teilbild die Kontur trägt, sähe schlimmer aus
+       * als gar keiner.
+       */
+      if (bewegteQuelle) {
+        const bewegt = await bewegtBauen();
+        if (bewegt) {
+          if (bewegt.blob.size > LIMITS.maxUploadBytes.sticker) {
+            toast(
+              `Der bewegte Sticker ist zu groß (${formatBytes(bewegt.blob.size)}, erlaubt sind ` +
+                `${formatBytes(LIMITS.maxUploadBytes.sticker)}). Mit weniger Teilbildern oder ` +
+                'kleinerem Ausschnitt wird er leichter.',
+              'error',
+            );
+            return;
+          }
+          setResult(bewegt);
+          return;
+        }
+        // Ging nicht – dann wie bisher ein Standbild, und zwar mit Ansage.
+        toast('Dieses Gerät kann bewegte Bilder nicht bearbeiten – es wird ein Standbild.', 'info');
+      }
       renderSticker(canvas, sourceRef.current, docRef.current, { fast: false });
       const exported = await exportSticker(canvas, supportsWebp());
       if (exported.blob.size > LIMITS.maxUploadBytes.sticker) {
@@ -2101,12 +2199,26 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                 nutzlos.
             */}
             {bewegteQuelle && (
-              <p className={`stk-hint ${bewegtUnveraendert(doc) ? '' : 'stk-hint-warn'}`}>
-                {bewegtUnveraendert(doc)
-                  ? `Dieses Bild bewegt sich${
-                      bewegteQuelle.bilder ? ` (${bewegteQuelle.bilder} Teilbilder)` : ''
-                    } und bleibt so – es wird unverändert übernommen. Sobald du etwas daran änderst, wird ein Standbild daraus.`
-                  : 'Dieses Bild bewegt sich, aber du hast es bearbeitet – daraus wird ein Standbild. Nimm die Änderungen zurück, wenn die Bewegung bleiben soll.'}
+              <p className={`stk-hint ${kannBewegtBleiben ? '' : 'stk-hint-warn'}`}>
+                {(() => {
+                  const zahl = bewegteQuelle.bilder ? ` (${bewegteQuelle.bilder} Teilbilder)` : '';
+                  if (bewegtUnveraendert(doc)) {
+                    return `Dieses Bild bewegt sich${zahl} und wird unverändert übernommen.`;
+                  }
+                  /*
+                   * Der Satz hing bis eben an einer Einschränkung, die es
+                   * nicht mehr gibt: „daraus wird ein Standbild". Jetzt wird
+                   * jedes Teilbild einzeln durch dieselbe Kette gerechnet und
+                   * am Ende wieder zusammengesetzt.
+                   *
+                   * Auf Geräten ohne `ImageDecoder` gilt der alte Satz
+                   * weiter – und dort steht er auch. Eine Zusage, die auf dem
+                   * eigenen Gerät nicht gilt, wäre schlimmer als die Warnung.
+                   */
+                  return kannBewegtBleiben
+                    ? `Dieses Bild bewegt sich${zahl} und bleibt bewegt: Jedes Teilbild bekommt deine Bearbeitung. Als GIF hat es 255 Farben und harte Ränder – mehr gibt das Format nicht her.`
+                    : `Dieses Bild bewegt sich${zahl}, aber du hast es bearbeitet – auf diesem Gerät wird daraus ein Standbild. Nimm die Änderungen zurück, wenn die Bewegung bleiben soll.`;
+                })()}
               </p>
             )}
             <div className="stk-emoji-row">

@@ -283,7 +283,18 @@ export interface StickerDoc {
 export const FORM_FUELLUNG_VORGABE = '#ffffff';
 
 export type EditorSource =
-  | { kind: 'image'; image: HTMLImageElement; width: number; height: number }
+  /*
+   * `ImageBitmap` steht hier neben `HTMLImageElement`, weil ein bewegtes Bild
+   * seine Teilbilder als Bitmaps herausgibt (siehe `bewegtLesen.ts`).
+   * Gezeichnet wird ohnehin nur mit `drawImage`, und Breite und Höhe stehen
+   * daneben – das Element selbst wird nirgends nach seinen Massen gefragt.
+   */
+  | {
+      kind: 'image';
+      image: HTMLImageElement | ImageBitmap;
+      width: number;
+      height: number;
+    }
   | { kind: 'emoji'; emoji: string }
   | { kind: 'text' };
 
@@ -658,7 +669,19 @@ export function dilateAlpha(
 
   const horizontal = new Uint8Array(alpha.length);
   for (let y = 0; y < height; y += 1) {
-    maxLinie(alpha, y * width, 1, horizontal, y * width, 1, width, radius, polster, praefix, suffix);
+    maxLinie(
+      alpha,
+      y * width,
+      1,
+      horizontal,
+      y * width,
+      1,
+      width,
+      radius,
+      polster,
+      praefix,
+      suffix,
+    );
   }
   for (let x = 0; x < width; x += 1) {
     maxLinie(horizontal, x, width, result, x, width, height, radius, polster, praefix, suffix);
@@ -1306,8 +1329,7 @@ function formRand(doc: StickerDoc): number {
   const reichweite = (w: number) => Math.ceil((w * 4) / 3) + 2;
   const kontur = doc.outline ? reichweite(doc.outlineWidth) : 0;
   const schatten = doc.schatten
-    ? reichweite(doc.schatten.weite) +
-      Math.max(Math.abs(doc.schatten.x), Math.abs(doc.schatten.y))
+    ? reichweite(doc.schatten.weite) + Math.max(Math.abs(doc.schatten.x), Math.abs(doc.schatten.y))
     : 0;
   /*
    * Die beiden ADDIEREN sich, sie stehen nicht nebeneinander.
@@ -1368,9 +1390,7 @@ function abgerundet(
  * wieder auseinanderlaufen lassen, also steht sie hier einmal.
  */
 export function hatFreistellung(doc: StickerDoc): boolean {
-  return Boolean(
-    doc.autoMask || doc.tippGruppen.length > 0 || doc.keep.length > 0 || doc.removeBg,
-  );
+  return Boolean(doc.autoMask || doc.tippGruppen.length > 0 || doc.keep.length > 0 || doc.removeBg);
 }
 
 export function formPfad(
