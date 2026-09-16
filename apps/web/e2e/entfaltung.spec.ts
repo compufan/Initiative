@@ -1,4 +1,5 @@
-import { expect, test } from '@playwright/test';
+import { crc32, deflateSync } from 'node:zlib';
+import { expect, test, type Browser, type Page } from '@playwright/test';
 
 /**
  * Die Entfaltung: holt sie wirklich etwas zurück – und rechnen beide Wege dasselbe?
@@ -319,5 +320,203 @@ test('die Entfaltung holt Schärfe zurück – auf beiden Wegen dieselbe', async
       `Prozessor ${ergebnis.prozessor.toFixed(3)}, Abstand ${ergebnis.abstand.toFixed(4)} ` +
       `(Rand ${ergebnis.abstandRand.toFixed(4)}, L-Kern ${ergebnis.unsymmetrisch.toFixed(4)}), ` +
       `${ergebnis.msGpu.toFixed(0)} ms, ${ergebnis.stuetzen} Stützstellen (Grenze ${ergebnis.grenze})`,
+  );
+});
+
+/* ==========================================================================
+ * Und derselbe Weg durch die Oberfläche.
+ * ========================================================================== */
+
+/** Ein PNG aus einer Funktion – dieselbe Machart wie in `vorschau.spec.ts`. */
+function pngAus(breite: number, hoehe: number, farbe: (x: number, y: number) => number): Buffer {
+  const roh = Buffer.alloc((breite * 3 + 1) * hoehe);
+  let at = 0;
+  for (let y = 0; y < hoehe; y += 1) {
+    roh[at] = 0;
+    at += 1;
+    for (let x = 0; x < breite; x += 1) {
+      const c = farbe(x, y);
+      roh[at] = c;
+      roh[at + 1] = c;
+      roh[at + 2] = c;
+      at += 3;
+    }
+  }
+  const bloecke: Buffer[] = [];
+  const block = (typ: string, daten: Buffer) => {
+    const kopf = Buffer.alloc(8);
+    kopf.writeUInt32BE(daten.length, 0);
+    kopf.write(typ, 4, 'ascii');
+    const pruef = Buffer.alloc(4);
+    pruef.writeUInt32BE(crc32(Buffer.concat([Buffer.from(typ, 'ascii'), daten])) >>> 0, 0);
+    bloecke.push(kopf, daten, pruef);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(breite, 0);
+  ihdr.writeUInt32BE(hoehe, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  block('IHDR', ihdr);
+  block('IDAT', deflateSync(roh));
+  block('IEND', Buffer.alloc(0));
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), ...bloecke]);
+}
+
+/**
+ * Ein Bild mit senkrechten Kanten, WAAGERECHT verwischt – also verwackelt.
+ *
+ * Streifen und nicht eine einzelne Kante: An einer Kante allein sieht jede
+ * Entfaltung gut aus. Ein Muster, dessen Abstand in der Grössenordnung der
+ * Verwacklung liegt, ist das, woran sie wirklich etwas zu holen hat.
+ */
+function verwackeltPng(kante: number, laenge: number): Buffer {
+  const scharf: number[] = [];
+  for (let x = 0; x < kante; x += 1) scharf.push(Math.floor(x / 24) % 2 === 0 ? 30 : 225);
+  const halb = Math.floor(laenge / 2);
+  const weich = scharf.map((_, x) => {
+    let summe = 0;
+    for (let d = -halb; d <= halb; d += 1) {
+      summe += scharf[Math.min(kante - 1, Math.max(0, x + d))];
+    }
+    return Math.round(summe / (halb * 2 + 1));
+  });
+  return pngAus(kante, kante, (x) => weich[x]);
+}
+
+function zugang(prefix: string) {
+  const suffix = Math.random().toString(36).slice(2, 8);
+  return {
+    username: `${prefix}${suffix}`,
+    password: 'passwort123',
+    displayName: `${prefix.toUpperCase()} ${suffix}`,
+  };
+}
+
+async function anmelden(browser: Browser, nutzer: ReturnType<typeof zugang>): Promise<Page> {
+  const page = await (await browser.newContext()).newPage();
+  await page.goto('/');
+  await page.getByRole('button', { name: /Noch kein Konto/ }).click();
+  await page.getByLabel('Benutzername').fill(nutzer.username);
+  await page.getByLabel('Anzeigename').fill(nutzer.displayName);
+  await page.getByLabel('Passwort', { exact: true }).fill(nutzer.password);
+  await page.getByRole('button', { name: 'Konto erstellen' }).click();
+  await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
+  return page;
+}
+
+/**
+ * Wie steil die Kanten auf der Leinwand stehen.
+ *
+ * Der grösste Sprung zwischen zwei benachbarten Bildpunkten, gemittelt über
+ * ein paar Zeilen. Genau das nimmt eine Unschärfe weg und genau das holt eine
+ * Entfaltung zurück – und es ist unabhängig davon, wie gross die Leinwand
+ * gerade dargestellt wird.
+ */
+async function kantenSteilheit(page: Page): Promise<number> {
+  return await page.evaluate(() => {
+    const leinwand = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+    if (!leinwand) return 0;
+    const ctx = leinwand.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return 0;
+    const h = leinwand.height;
+    const b = leinwand.width;
+    let summe = 0;
+    let zeilen = 0;
+    for (const y of [Math.floor(h * 0.4), Math.floor(h * 0.5), Math.floor(h * 0.6)]) {
+      const zeile = ctx.getImageData(0, y, b, 1).data;
+      let groesst = 0;
+      // Der Rand bleibt aussen vor: Dort spiegelt die Entfaltung, und das ist
+      // eine Kante des Verfahrens, keine des Bildes.
+      for (let x = Math.floor(b * 0.2); x < Math.floor(b * 0.8) - 1; x += 1) {
+        const d = Math.abs(zeile[x * 4] - zeile[(x + 1) * 4]);
+        if (d > groesst) groesst = d;
+      }
+      summe += groesst;
+      zeilen += 1;
+    }
+    return zeilen > 0 ? summe / zeilen : 0;
+  });
+}
+
+test('im Editor macht „Unschärfe zurückrechnen" ein verwackeltes Foto schärfer', async ({
+  browser,
+}) => {
+  const anna = zugang('entf');
+  const ben = zugang('entfempf');
+  const seite = await anmelden(browser, anna);
+  await anmelden(browser, ben);
+
+  await seite.getByRole('button', { name: 'Neuer Chat' }).click();
+  await seite.getByPlaceholder('Wen möchtest du anschreiben?').fill(ben.username);
+  await seite.getByText(ben.displayName).first().click();
+  await expect(seite.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+
+  await seite.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await seite.getByText('Foto/Video').click();
+  await seite.locator('input[type=file]').setInputFiles({
+    name: 'verwackelt.png',
+    mimeType: 'image/png',
+    buffer: verwackeltPng(512, 9),
+  });
+  await seite.getByRole('button', { name: /^Senden \(/ }).click();
+
+  const foto = seite.locator('.media-image').first();
+  await expect(foto).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => foto.evaluate((el: HTMLImageElement) => el.naturalWidth), { timeout: 30_000 })
+    .toBeGreaterThan(0);
+
+  await foto.click();
+  await seite.getByRole('button', { name: 'Bild bearbeiten' }).click();
+  await expect(seite.locator('.bild-leinwand')).toBeVisible({ timeout: 30_000 });
+
+  await seite.locator('.bild-reiter-knopf', { hasText: 'Ton' }).click();
+  const klapp = seite.locator('details.bild-klapp', { hasText: 'Unschärfe zurückrechnen' });
+  await klapp.locator('summary').click();
+
+  const knopf = seite.getByRole('button', { name: 'Auf das ganze Bild' });
+  if (!(await knopf.isVisible())) {
+    test.skip(true, 'Dieses Gerät kann nicht entfalten');
+    return;
+  }
+
+  // Waagerecht verwischt: Richtung 0, Länge 9 – genau die Unschärfe im Bild.
+  await klapp.locator('input[type="range"]').first().fill('9');
+  await klapp.locator('input[type="range"]').nth(1).fill('0');
+
+  const vorher = await kantenSteilheit(seite);
+  await knopf.click();
+  await expect(seite.getByText('Die Unschärfe ist zurückgerechnet.')).toBeVisible({
+    timeout: 60_000,
+  });
+  // Die Leinwand zeichnet nach dem Bildtausch neu; ein Bildwechsel genügt.
+  await seite.waitForTimeout(500);
+  const nachher = await kantenSteilheit(seite);
+
+  /*
+   * Die eine Frage: Stehen die Kanten steiler als vorher?
+   *
+   * Das ist das, was eine Unschärfe wegnimmt. Gemessen an einem Muster, das
+   * mit neun Punkten verwischt wurde, und mit genau dieser Einstellung wieder
+   * entfaltet. Ein Verfahren, das das Bild nur durchreicht, steht hier bei
+   * eins.
+   */
+  expect(vorher, 'das verwackelte Bild hat schon steile Kanten').toBeGreaterThan(0);
+  expect(
+    nachher / vorher,
+    `die Kanten wurden nicht steiler: ${vorher.toFixed(0)} → ${nachher.toFixed(0)}`,
+  ).toBeGreaterThan(1.3);
+
+  /*
+   * Und „Zurücknehmen" holt das Foto wirklich zurück. Die Entfaltung ist der
+   * einzige Schritt in diesem Editor, der das QUELLBILD ersetzt – der
+   * Rückgängig-Verlauf fasst sie deshalb nicht, und ohne diesen Knopf wäre
+   * sie der einzige unumkehrbare Griff hier.
+   */
+  await seite.getByRole('button', { name: 'Zurücknehmen' }).click();
+  await seite.waitForTimeout(500);
+  const zurueck = await kantenSteilheit(seite);
+  expect(Math.abs(zurueck - vorher), 'das ursprüngliche Foto kam nicht zurück').toBeLessThan(
+    vorher * 0.15,
   );
 });

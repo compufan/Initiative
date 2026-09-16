@@ -79,6 +79,7 @@ import { alleSchriftenBereit, schriftenBereit } from '../../lib/schriften.js';
 import { rezeptHindernis, rezeptLohnt, rezeptMoeglich, rezeptSchreiben } from './rezept.js';
 import { Kurvenfeld } from './Kurvenfeld.js';
 import { flaeche2d } from './farbraum.js';
+import { Entfaltungsfeld } from './Entfaltungsfeld.js';
 import {
   BAENDER,
   BAENDER_NEUTRAL,
@@ -211,7 +212,13 @@ const TONREGLER: {
    * einem Foto von zwölf Megapunkten fasst das nur die feinste Ebene an, und
    * das ist das Rauschen.
    */
-  { key: 'schaerfeRadius', label: 'Schärfe-Weite', min: 0.5, max: SCHAERFE_RADIUS_MAX, schritt: 0.5 },
+  {
+    key: 'schaerfeRadius',
+    label: 'Schärfe-Weite',
+    min: 0.5,
+    max: SCHAERFE_RADIUS_MAX,
+    schritt: 0.5,
+  },
   { key: 'schaerfeSchwelle', label: 'Schärfe-Schwelle', min: 0, max: 1, schritt: 0.01 },
   { key: 'vignette', label: 'Vignette', min: -1, max: 1, schritt: 0.01 },
 ];
@@ -357,6 +364,16 @@ export function BildEditor({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [bild, setBild] = useState<HTMLImageElement | null>(null);
+  /*
+   * Das Bild, wie es hereinkam – nur für „Zurücknehmen“ nach einer Entfaltung.
+   *
+   * Die Entfaltung ist der einzige Schritt in diesem Editor, der das QUELLBILD
+   * ersetzt statt das Dokument zu ändern. Damit fasst der Rückgängig-Verlauf
+   * sie nicht, und ohne diese Kopie wäre sie der einzige unumkehrbare Griff
+   * hier – in einem Editor, in dem sonst alles zurückgeht.
+   */
+  const urbildRef = useRef<HTMLImageElement | null>(null);
+  const [entfaltet, setEntfaltet] = useState(false);
   const [doc, setDoc] = useState<BildDoc | null>(null);
   const [werkzeug, setWerkzeug] = useState<Werkzeug>('zuschnitt');
   /**
@@ -2759,6 +2776,28 @@ export function BildEditor({
                 Farbton, an dem sich etwas festmachen liesse.
               </p>
             </details>
+
+            {/*
+              Die Entfaltung steht hier unten und zugeklappt, und das ist eine
+              Aussage über die Reihenfolge: Erst Licht und Farbe, dann der
+              Schärferegler – und nur wenn das Bild wirklich verwackelt ist,
+              dieser Abschnitt. Er rechnet Sekunden und ersetzt das Foto; wer
+              ein gutes Bild ein wenig knackiger will, ist beim Regler
+              „Schärfe“ oben richtig.
+            */}
+            <Entfaltungsfeld
+              bild={bild}
+              entfaltet={entfaltet}
+              onAnwenden={(neu) => {
+                if (!urbildRef.current) urbildRef.current = bild;
+                setBild(neu);
+                setEntfaltet(true);
+              }}
+              onZuruecknehmen={() => {
+                if (urbildRef.current) setBild(urbildRef.current);
+                setEntfaltet(false);
+              }}
+            />
           </>
         )}
 

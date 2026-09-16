@@ -277,3 +277,44 @@
   touch-action: none;
   --bild-kurve-gitter: rgba(128, 128, 128, 0.3);
 }
+
+/*
+ * Vorher und nachher nebeneinander – die Vorschau der Entfaltung.
+ *
+ * Nebeneinander und nicht nacheinander: Eine Entfaltung sieht ohne Vergleich
+ * immer nur nach „irgendwie anders“ aus. Zwei gleich grosse Felder
+ * nebeneinander beantworten die einzige Frage, die zählt – ist es besser
+ * geworden?
+ */
+.bild-entfaltung-paar {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin: 0.6rem 0;
+}
+
+.bild-entfaltung-paar figure {
+  margin: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.bild-entfaltung-paar canvas {
+  width: 100%;
+  height: auto;
+  /*
+   * `pixelated`: Hier wird eine Schärfe beurteilt, und die Glättung des
+   * Browsers beim Hochskalieren macht genau das kaputt, worum es geht.
+   */
+  image-rendering: pixelated;
+  border-radius: var(--radius-sm, 6px);
+  background: #000;
+  aspect-ratio: 1 / 1;
+  object-fit: contain;
+}
+
+.bild-entfaltung-paar figcaption {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
