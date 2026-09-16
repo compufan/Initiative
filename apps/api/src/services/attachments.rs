@@ -107,8 +107,10 @@ pub async fn darf_anhang_sehen(
     attachment_id: Uuid,
     user_id: Uuid,
 ) -> AppResult<bool> {
-    Ok(crate::services::zugriff::anhang(pool, attachment_id, user_id)
-        .await?
-        .grund
-        .erlaubt())
+    Ok(
+        crate::services::zugriff::anhang(pool, attachment_id, user_id)
+            .await?
+            .grund
+            .erlaubt(),
+    )
 }

@@ -99,9 +99,8 @@ async fn list_messages(
         .fetch_all(&state.pool)
         .await?
     } else {
-        let mut rows = sqlx::query_as::<_, MessageRow>(
-            &format!(
-                "select * from messages m
+        let mut rows = sqlx::query_as::<_, MessageRow>(&format!(
+            "select * from messages m
                   where m.conversation_id = $1 and ($2::uuid is null or m.id < $2)
                     and not exists (
                       select 1 from message_hidden h
@@ -109,8 +108,7 @@ async fn list_messages(
                     )
                     {AB_BEITRITT}
                   order by m.id desc limit $3"
-            ),
-        )
+        ))
         .bind(id)
         .bind(query.before)
         .bind(limit)
@@ -390,7 +388,8 @@ async fn publish_reactions(
     // Nur an die, die diese Nachricht auch sehen dürfen. Sonst meldet das
     // Ereignis einem Neuzugang die Kennung einer Nachricht von vor seinem
     // Beitritt – samt der Liste derer, die darauf reagiert haben.
-    let members = crate::services::verlauf::empfaenger_fuer_nachricht(&state.pool, message_id).await?;
+    let members =
+        crate::services::verlauf::empfaenger_fuer_nachricht(&state.pool, message_id).await?;
     state
         .hub
         .publish(

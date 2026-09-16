@@ -535,7 +535,11 @@ async fn eine_fremde_datei_wird_nicht_zum_eigenen_bild() {
             Some(json!({ "avatarAttachmentId": eigenes })),
         )
         .await;
-    assert_eq!(status, StatusCode::OK, "das eigene Bild muss gehen: {antwort}");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "das eigene Bild muss gehen: {antwort}"
+    );
 }
 
 /// Das kleinstmögliche gültige PNG – ein Pixel.

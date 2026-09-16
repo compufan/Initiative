@@ -443,6 +443,18 @@ export const api = {
       });
     },
     url: (attachmentId: string) => `${API_BASE}${API_PREFIX}/media/${attachmentId}`,
+    /**
+     * Eine Adresse, die ein Fernseher selbst abrufen kann.
+     *
+     * Das Gerät im Zimmer holt die Datei SELBST und schickt dabei weder Kopf
+     * noch Keks – der Ausweis muss also in der Adresse stehen. Die Karte
+     * entsteht erst auf Knopfdruck und gilt ein paar Stunden; die lange
+     * Begründung steht auf der Serverseite in `auth::fernsehticket`.
+     */
+    fernsehticket: (attachmentId: string) =>
+      post<{ url: string; mime: string; gueltigSekunden: number }>(
+        `/media/${attachmentId}/fernsehticket`,
+      ),
   },
   stickers: {
     packs: () => get<ListResult<StickerPackDto>>('/stickers/packs'),

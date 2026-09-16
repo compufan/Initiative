@@ -1,6 +1,7 @@
-import { useRef } from 'react';
+import { useState } from 'react';
 import { formatDuration } from '@initiative/shared';
 import type { MessageRendererProps } from '../types.js';
+import { FernsehKnopf } from '../fernseher/FernsehKnopf.js';
 import { MediaCaption, PendingMedia } from './MediaFrame.js';
 import { claimPlayback, mediaSrc, releasePlayback, standbildHolen } from './helpers.js';
 
@@ -13,7 +14,7 @@ import { claimPlayback, mediaSrc, releasePlayback, standbildHolen } from './help
  * und `standbildHolen` holt darüber das erste echte Bild.
  */
 export function VideoBubble({ message, isMine }: MessageRendererProps) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [video, setVideo] = useState<HTMLVideoElement | null>(null);
   const attachment = message.attachments.find((item) => item.kind === 'video');
 
   if (!attachment) {
@@ -32,20 +33,17 @@ export function VideoBubble({ message, isMine }: MessageRendererProps) {
           <img className="media-blur" src={attachment.previewDataUrl} alt="" aria-hidden="true" />
         )}
         <video
-          ref={videoRef}
+          ref={setVideo}
           className="media-video"
           src={mediaSrc(attachment)}
           controls
           playsInline
           preload="metadata"
           onLoadedMetadata={(ereignis) => standbildHolen(ereignis.currentTarget)}
-          onPlay={() => {
-            if (videoRef.current) claimPlayback(videoRef.current);
-          }}
-          onPause={() => {
-            if (videoRef.current) releasePlayback(videoRef.current);
-          }}
+          onPlay={(ereignis) => claimPlayback(ereignis.currentTarget)}
+          onPause={(ereignis) => releasePlayback(ereignis.currentTarget)}
         />
+        <FernsehKnopf video={video} attachmentId={attachment.id} />
         {attachment.durationMs != null && attachment.durationMs > 0 && (
           <span className="media-badge">{formatDuration(attachment.durationMs)}</span>
         )}

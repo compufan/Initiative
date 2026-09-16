@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { formatBytes, formatDuration, type AttachmentDto } from '@initiative/shared';
 import { FotoWerkstatt } from '../media/FotoWerkstatt.js';
 import { mediaSrc, standbildHolen } from '../media/helpers.js';
+import { FernsehKnopf } from '../fernseher/FernsehKnopf.js';
 
 interface FileViewerProps {
   items: AttachmentDto[];
@@ -112,6 +113,39 @@ export function FileViewer({ items, index, onClose, ablegen, zielName }: FileVie
   );
 }
 
+/**
+ * Video im Vollbildbetrachter – mit echtem Standbild und Fernsehknopf.
+ *
+ * Eine eigene Komponente, weil beides einen Zustand braucht: `FernsehKnopf`
+ * will das ELEMENT, nicht nur seine Adresse, und an ein Element kommt man
+ * nur über einen Rückruf-`ref`. In `Inhalt` wäre das ein Haken hinter einem
+ * `if`, und das darf React nicht.
+ *
+ * Kein `poster`: Das wäre die eingebettete Vorschau, und die ist ein Klecks
+ * von 160 Punkten Kante – im Vollbild besonders deutlich. Statt dessen
+ * springt `standbildHolen` auf ein Zehntel und holt ein echtes Bild aus der
+ * Datei. Der Untergrund bleibt hier schwarz und nicht unscharf: In einem
+ * Vollbildbetrachter ist Schwarz der richtige Rahmen.
+ */
+function Video({ datei, quelle }: { datei: AttachmentDto; quelle: string }) {
+  const [element, setElement] = useState<HTMLVideoElement | null>(null);
+  return (
+    <div className="fv-videorahmen">
+      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+      <video
+        ref={setElement}
+        className="fv-video"
+        src={quelle}
+        controls
+        playsInline
+        preload="metadata"
+        onLoadedMetadata={(ereignis) => standbildHolen(ereignis.currentTarget)}
+      />
+      <FernsehKnopf video={element} attachmentId={datei.id} />
+    </div>
+  );
+}
+
 function Inhalt({ datei }: { datei: AttachmentDto }) {
   const quelle = mediaSrc(datei);
   const mime = datei.mime.split(';')[0].trim().toLowerCase();
@@ -121,24 +155,7 @@ function Inhalt({ datei }: { datei: AttachmentDto }) {
   }
 
   if (datei.kind === 'video' || mime.startsWith('video/')) {
-    /*
-     * Kein `poster`: Das wäre die eingebettete Vorschau, und die ist ein
-     * Klecks von 160 Punkten Kante – im Vollbild besonders deutlich. Statt
-     * dessen springt `standbildHolen` auf ein Zehntel und holt damit ein
-     * echtes Bild aus der Datei. Der Untergrund ist hier schwarz, nicht
-     * unscharf: In einem Vollbildbetrachter ist Schwarz der richtige Rahmen.
-     */
-    return (
-      // eslint-disable-next-line jsx-a11y/media-has-caption
-      <video
-        className="fv-video"
-        src={quelle}
-        controls
-        playsInline
-        preload="metadata"
-        onLoadedMetadata={(ereignis) => standbildHolen(ereignis.currentTarget)}
-      />
-    );
+    return <Video datei={datei} quelle={quelle} />;
   }
 
   if (datei.kind === 'audio' || mime.startsWith('audio/')) {

@@ -211,10 +211,14 @@ pub async fn abstimmen(
     .ok_or_else(|| AppError::not_found("Antrag nicht gefunden"))?;
 
     if zeile.status != "offen" {
-        return Err(AppError::conflict("Über diesen Antrag ist schon entschieden"));
+        return Err(AppError::conflict(
+            "Über diesen Antrag ist schon entschieden",
+        ));
     }
     if zeile.antragsteller == user_id {
-        return Err(AppError::forbidden("Über den eigenen Antrag stimmt man nicht ab"));
+        return Err(AppError::forbidden(
+            "Über den eigenen Antrag stimmt man nicht ab",
+        ));
     }
     let dabei: bool = sqlx::query_scalar(
         "select exists (select 1 from conversation_members

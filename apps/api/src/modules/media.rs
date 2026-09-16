@@ -2,7 +2,7 @@
 
 use axum::body::Body;
 use axum::extract::DefaultBodyLimit;
-use axum::extract::{Multipart, Path, State};
+use axum::extract::{Multipart, Path, RawQuery, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::time::timeout;
 use uuid::Uuid;
 
-use crate::auth::{medienkeks, AuthUser};
+use crate::auth::{fernsehticket, medienkeks, AuthUser};
 use crate::constants::{allowed_mime, max_upload_bytes, ATTACHMENT_KINDS, PREVIEW_DATA_URL_MAX};
 use crate::db::AttachmentRow;
 use crate::dto::AttachmentDto;
@@ -37,6 +37,7 @@ pub fn router() -> Router<AppState> {
         .route("/media/{id}/download", get(download))
         .route("/media/{id}/bytes", get(bytes_through_api))
         .route("/media/{id}/zugriff", get(zugriff))
+        .route("/media/{id}/fernsehticket", post(fernsehticket_ausstellen))
 }
 
 /**
@@ -367,6 +368,7 @@ async fn serve(
     id: Uuid,
     headers: HeaderMap,
     betrachter: Option<AuthUser>,
+    abfrage: Option<String>,
     as_download: bool,
     direkt: bool,
 ) -> AppResult<Response> {
@@ -400,7 +402,21 @@ async fn serve(
      */
     let wer = betrachter
         .map(|user| user.id())
-        .or_else(|| medienkeks::betrachter(&headers, &state.config.jwt_secret));
+        .or_else(|| medienkeks::betrachter(&headers, &state.config.jwt_secret))
+        /*
+         * Und der dritte Weg: die Eintrittskarte in der Adresse.
+         *
+         * Für ein Gerät im Zimmer, das die Datei SELBST holt. Es hat weder
+         * Kopf noch Keks – siehe `auth::fernsehticket`. Die Karte nennt die
+         * Person, weshalb `darf_anhang_sehen` gleich darunter genauso
+         * greift wie auf den anderen beiden Wegen: Wer aus dem Gespräch
+         * austritt, verliert auch das Bild auf dem Fernseher, und nicht
+         * erst, wenn die Karte abläuft.
+         */
+        .or_else(|| {
+            let karte = fernsehticket::aus_abfrage(abfrage.as_deref())?;
+            fernsehticket::betrachter(&karte, id, &state.config.jwt_secret)
+        });
 
     if state.config.media_auth {
         let Some(user) = wer else {
@@ -629,9 +645,10 @@ async fn deliver(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     betrachter: Option<AuthUser>,
+    RawQuery(abfrage): RawQuery,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    serve(state, id, headers, betrachter, false, true).await
+    serve(state, id, headers, betrachter, abfrage, false, true).await
 }
 
 /**
@@ -652,18 +669,20 @@ async fn bytes_through_api(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     betrachter: Option<AuthUser>,
+    RawQuery(abfrage): RawQuery,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    serve(state, id, headers, betrachter, false, false).await
+    serve(state, id, headers, betrachter, abfrage, false, false).await
 }
 
 async fn download(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     betrachter: Option<AuthUser>,
+    RawQuery(abfrage): RawQuery,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    serve(state, id, headers, betrachter, true, true).await
+    serve(state, id, headers, betrachter, abfrage, true, true).await
 }
 
 /**
@@ -691,6 +710,53 @@ async fn zugriff(
     Ok(Json(
         crate::services::zugriff::wer_sieht_anhang(&state.pool, id).await?,
     ))
+}
+
+/**
+ * Eine Eintrittskarte für den Fernseher.
+ *
+ * # Wofür
+ *
+ * Beim Streamen holt das Gerät die Datei selbst – es bekommt nichts als eine
+ * Adresse, und in dieser Adresse muss der Ausweis stecken (die lange
+ * Begründung steht in `auth::fernsehticket`). Diese Route ist die einzige
+ * Stelle, an der so eine Adresse entsteht, und sie stellt vorher dieselbe
+ * Frage wie die Auslieferung: Darf die fragende Person das überhaupt sehen?
+ *
+ * # Warum eine eigene Route und nicht einfach ein Feld im Anhang
+ *
+ * Weil sonst jede Nachrichtenliste Karten für alles mitlieferte, was darin
+ * vorkommt – hunderte gültiger Adressen, für die niemand je einen Fernseher
+ * eingeschaltet hat. Eine Karte entsteht, wenn jemand auf den Knopf drückt,
+ * und sonst nie.
+ *
+ * # Warum die volle Adresse und nicht nur die Karte
+ *
+ * Weil die App sie selbst gar nicht zusammensetzen könnte, ohne zu wissen,
+ * unter welchem Namen die API von aussen erreichbar ist. `public_api_url` ist
+ * genau diese Angabe, und sie steht auf dem Server.
+ */
+async fn fernsehticket_ausstellen(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<serde_json::Value>> {
+    let attachment = load_attachment(&state.pool, id).await?;
+    if attachment.status != "ready" {
+        return Err(AppError::not_found("Datei nicht gefunden"));
+    }
+    // Auch wenn `media_auth` aus ist: Eine Karte auszustellen ist ein eigener
+    // Vorgang, und wer sie bekommt, soll die Datei auch sehen dürfen.
+    if !darf_anhang_sehen(&state.pool, attachment.id, user.id()).await? {
+        return Err(AppError::not_found("Datei nicht gefunden"));
+    }
+    let karte = fernsehticket::ausstellen(user.id(), attachment.id, &state.config.jwt_secret);
+    let basis = state.config.public_api_url.trim_end_matches('/');
+    Ok(Json(json!({
+        "url": format!("{basis}/api/v1/media/{id}?{}={karte}", fernsehticket::FELD),
+        "mime": attachment.mime,
+        "gueltigSekunden": fernsehticket::DAUER_S,
+    })))
 }
 
 async fn remove(

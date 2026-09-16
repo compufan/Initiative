@@ -529,7 +529,12 @@ async fn der_chat_verraet_die_eigene_grenze() {
     };
 
     let (status, gesehen) = probe
-        .call("GET", &format!("/api/v1/conversations/{chat_id}"), Some(&cleo), None)
+        .call(
+            "GET",
+            &format!("/api/v1/conversations/{chat_id}"),
+            Some(&cleo),
+            None,
+        )
         .await;
     assert_eq!(status, StatusCode::OK, "{gesehen}");
     assert!(
@@ -548,7 +553,12 @@ async fn der_chat_verraet_die_eigene_grenze() {
      * es nicht gibt.
      */
     let (_, annas_sicht) = probe
-        .call("GET", &format!("/api/v1/conversations/{chat_id}"), Some(&anna), None)
+        .call(
+            "GET",
+            &format!("/api/v1/conversations/{chat_id}"),
+            Some(&anna),
+            None,
+        )
         .await;
     assert!(
         grenze(&annas_sicht, &anna_id).is_some(),
@@ -594,7 +604,12 @@ async fn der_chat_verraet_die_eigene_grenze() {
     }
 
     let (_, danach) = probe
-        .call("GET", &format!("/api/v1/conversations/{chat_id}"), Some(&cleo), None)
+        .call(
+            "GET",
+            &format!("/api/v1/conversations/{chat_id}"),
+            Some(&cleo),
+            None,
+        )
         .await;
     assert!(
         grenze(&danach, &cleo_id).is_none(),

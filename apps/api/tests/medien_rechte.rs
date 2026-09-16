@@ -96,10 +96,7 @@ impl Probe {
     async fn holen(&self, anhang: &str, ausweis: Ausweis<'_>) -> StatusCode {
         let (token, kopfzeilen) = match ausweis {
             Ausweis::Token(t) => (Some(t), vec![]),
-            Ausweis::Keks(k) => (
-                None,
-                vec![("cookie", format!("initiative_medien={k}"))],
-            ),
+            Ausweis::Keks(k) => (None, vec![("cookie", format!("initiative_medien={k}"))]),
             Ausweis::Keiner => (None, vec![]),
         };
         let (status, _, _) = self
@@ -329,7 +326,9 @@ async fn wer_darf_welchen_anhang_sehen() {
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
-        probe.holen(&annas_profilbild, Ausweis::Keks(&cleo_keks)).await,
+        probe
+            .holen(&annas_profilbild, Ausweis::Keks(&cleo_keks))
+            .await,
         StatusCode::OK,
         "ein Profilbild sieht jede angemeldete Person"
     );

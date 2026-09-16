@@ -79,17 +79,16 @@ pub fn beiwerk(app_url: &str, api_url: &str) -> Option<Beiwerk> {
 
 /// Der Name hinter dem Schema und vor Hafen und Pfad.
 fn wirt(url: &str) -> &str {
-    let ohne_schema = url
-        .split_once("://")
-        .map(|(_, rest)| rest)
-        .unwrap_or(url);
+    let ohne_schema = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
     let ohne_pfad = ohne_schema.split('/').next().unwrap_or(ohne_schema);
     // Der Hafen gehört nicht zur „Stelle": `example.com:8080` und
     // `example.com` sind für einen Keks dasselbe.
     match ohne_pfad.rsplit_once(':') {
         // Vorsicht bei IPv6 in Klammern – dort ist der Doppelpunkt Teil der
         // Adresse.
-        Some((vorne, hinten)) if !hinten.is_empty() && hinten.chars().all(|c| c.is_ascii_digit()) => {
+        Some((vorne, hinten))
+            if !hinten.is_empty() && hinten.chars().all(|c| c.is_ascii_digit()) =>
+        {
             vorne
         }
         _ => ohne_pfad,
@@ -112,7 +111,10 @@ fn gleiche_stelle(a: &str, b: &str) -> bool {
         return true;
     }
     let (kurz, lang) = if a.len() < b.len() { (a, b) } else { (b, a) };
-    !kurz.is_empty() && lang.to_ascii_lowercase().ends_with(&format!(".{}", kurz.to_ascii_lowercase()))
+    !kurz.is_empty()
+        && lang
+            .to_ascii_lowercase()
+            .ends_with(&format!(".{}", kurz.to_ascii_lowercase()))
 }
 
 /// Der `Set-Cookie`-Wert, der eine Sitzung eröffnet.
@@ -192,24 +194,39 @@ mod tests {
     #[test]
     fn der_hafen_zaehlt_nicht() {
         // Genau der Fall in der Entwicklung: App auf 5173, API auf 8080.
-        assert!(gleiche_stelle("http://localhost:5173", "http://localhost:8080"));
+        assert!(gleiche_stelle(
+            "http://localhost:5173",
+            "http://localhost:8080"
+        ));
     }
 
     #[test]
     fn ein_untername_gehoert_dazu() {
-        assert!(gleiche_stelle("https://example.com", "https://api.example.com"));
-        assert!(gleiche_stelle("https://api.example.com", "https://example.com"));
+        assert!(gleiche_stelle(
+            "https://example.com",
+            "https://api.example.com"
+        ));
+        assert!(gleiche_stelle(
+            "https://api.example.com",
+            "https://example.com"
+        ));
     }
 
     #[test]
     fn zwei_fremde_namen_sind_es_nicht() {
-        assert!(!gleiche_stelle("https://app.example.com", "https://cdn.woanders.de"));
+        assert!(!gleiche_stelle(
+            "https://app.example.com",
+            "https://cdn.woanders.de"
+        ));
     }
 
     #[test]
     fn kein_halber_name_gilt_als_untername() {
         // „bad-example.com" endet auf „example.com", ist aber etwas anderes.
-        assert!(!gleiche_stelle("https://example.com", "https://badexample.com"));
+        assert!(!gleiche_stelle(
+            "https://example.com",
+            "https://badexample.com"
+        ));
     }
 
     #[test]
@@ -226,7 +243,10 @@ mod tests {
         let b = beiwerk("http://localhost:5173", "http://localhost:8080").expect("möglich");
         let keks = bauen("t", 60, b);
         assert!(keks.contains("SameSite=Lax"));
-        assert!(!keks.contains("Secure"), "auf http gibt es kein Secure: {keks}");
+        assert!(
+            !keks.contains("Secure"),
+            "auf http gibt es kein Secure: {keks}"
+        );
     }
 
     #[test]
@@ -241,7 +261,10 @@ mod tests {
     fn fremde_stelle_ohne_tls_ist_unmoeglich() {
         // `SameSite=None` ohne `Secure` lehnt jeder Browser ab – dann lieber
         // ehrlich gar keinen Keks als einen, der nie ankommt.
-        assert_eq!(beiwerk("http://app.example.com", "http://api.woanders.de"), None);
+        assert_eq!(
+            beiwerk("http://app.example.com", "http://api.woanders.de"),
+            None
+        );
     }
 
     #[test]

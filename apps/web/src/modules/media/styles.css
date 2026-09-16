@@ -855,3 +855,40 @@
   flex: 1 1 120px;
   min-width: 80px;
 }
+
+/*
+ * Der Fernsehknopf über einem Video.
+ *
+ * Oben rechts und nicht unten: Unten liegt die Bedienleiste des Videos, und
+ * die gehört dem Browser – wo genau sie endet, weiss man nicht. Oben rechts
+ * ist überall frei.
+ *
+ * Er erscheint nur, wenn wirklich ein Gerät gefunden wurde; die Entscheidung
+ * darüber trifft `FernsehKnopf`, nicht dieses Blatt.
+ */
+.media-tv-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--radius-full);
+  background: rgba(4, 8, 20, 0.62);
+  color: #fff;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.media-tv-btn[disabled] {
+  opacity: 0.5;
+}
+
+/* Verbunden: sichtbar anders, damit man es aus zwei Metern Abstand erkennt. */
+.media-tv-btn[data-verbunden='ja'] {
+  background: var(--accent, #2f6bff);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
+}

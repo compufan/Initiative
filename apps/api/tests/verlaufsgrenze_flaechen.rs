@@ -55,7 +55,10 @@ impl Probe {
         let response = self.router.clone().oneshot(request).await.unwrap();
         let status = response.status();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();
-        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
     }
 
     async fn hochladen(&self, token: &str) -> String {
@@ -291,7 +294,11 @@ async fn das_zitat_auf_etwas_altes_erreicht_den_neuzugang_nicht() {
 
     let bei_anna = eingang(&mut bei_anna);
     let neu_bei_anna = vom_typ(&bei_anna, "message.new");
-    assert_eq!(neu_bei_anna.len(), 1, "Anna bekommt die Antwort: {bei_anna:?}");
+    assert_eq!(
+        neu_bei_anna.len(),
+        1,
+        "Anna bekommt die Antwort: {bei_anna:?}"
+    );
     assert_eq!(
         neu_bei_anna[0]["payload"]["message"]["replyTo"]["body"], "Geheimes von damals",
         "Anna war dabei und sieht das Zitat"
