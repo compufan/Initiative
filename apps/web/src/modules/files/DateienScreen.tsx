@@ -23,6 +23,7 @@ import { FileViewer } from './FileViewer.js';
 import { ShareSheet } from './ShareSheet.js';
 import { FernsehSheet } from '../fernseher/FernsehSheet.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
+import { miniaturSrc } from '../media/helpers.js';
 import { pfadZu, useFiles } from './state.js';
 import { MAX_KANTE } from '../bild/doc.js';
 
@@ -489,6 +490,60 @@ const SYMBOLE: Record<string, string> = {
   sticker: '🌟',
 };
 
+/**
+ * Das Bild einer Kachel – erst der Klecks, dann das Miniaturbild.
+ *
+ * Die eingebettete Vorschau steht sofort da (sie liegt schon in der Liste),
+ * das Miniaturbild vom Server wird darüber eingeblendet. Ohne den Klecks
+ * darunter blitzte beim Blättern eine leere Fläche auf; ohne das Miniaturbild
+ * bliebe es bei 160 Punkten, und das ist auf einer Kachel eines Tablets
+ * sichtbar zu wenig.
+ *
+ * `loading="lazy"`: In einem Ordner mit vierzig Dateien sind höchstens sechs
+ * zu sehen. Ohne das holte der Browser alle vierzig.
+ *
+ * Schlägt das Miniaturbild fehl – ein Video, ein HEIC vom iPhone, eine PDF –,
+ * bleibt der Klecks stehen beziehungsweise das Symbol. Das ist die richtige
+ * Antwort und kein Fehler: Für diese Typen kann der Server keines rechnen.
+ */
+function Kachelbild({ attachment }: { attachment: AttachmentDto }) {
+  const [da, setDa] = useState(false);
+  const [kaputt, setKaputt] = useState(false);
+  const bildhaft = attachment.kind === 'image' || attachment.kind === 'sticker';
+
+  if (!attachment.previewDataUrl && !bildhaft) {
+    return (
+      <span className="fil-thumb fil-thumb-icon" aria-hidden="true">
+        {SYMBOLE[attachment.kind] ?? '📄'}
+      </span>
+    );
+  }
+
+  return (
+    <span className="fil-thumb-stapel">
+      {attachment.previewDataUrl && (
+        <img className="fil-thumb fil-thumb-klecks" src={attachment.previewDataUrl} alt="" />
+      )}
+      {bildhaft && !kaputt && (
+        <img
+          className={da ? 'fil-thumb is-da' : 'fil-thumb'}
+          src={miniaturSrc(attachment, 160)}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          onLoad={() => setDa(true)}
+          onError={() => setKaputt(true)}
+        />
+      )}
+      {!attachment.previewDataUrl && !da && (
+        <span className="fil-thumb fil-thumb-icon" aria-hidden="true">
+          {SYMBOLE[attachment.kind] ?? '📄'}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function DateiKachel({
   item,
   collectionId,
@@ -520,13 +575,7 @@ function DateiKachel({
   return (
     <li className="fil-tile">
       <button type="button" className="fil-tile-open" onClick={onOpen}>
-        {item.attachment.previewDataUrl ? (
-          <img className="fil-thumb" src={item.attachment.previewDataUrl} alt="" />
-        ) : (
-          <span className="fil-thumb fil-thumb-icon" aria-hidden="true">
-            {SYMBOLE[item.attachment.kind] ?? '📄'}
-          </span>
-        )}
+        <Kachelbild attachment={item.attachment} />
         <span className="fil-tile-name truncate">{name}</span>
         <span className="fil-meta">{formatBytes(item.attachment.size)}</span>
       </button>

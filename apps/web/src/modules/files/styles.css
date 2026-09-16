@@ -329,3 +329,42 @@
 .fil-upload-zustand.is-fehler {
   color: var(--danger, #dc2626);
 }
+
+/*
+ * Das Bild einer Kachel liegt doppelt: die eingebettete Vorschau unten, das
+ * Miniaturbild vom Server darüber.
+ *
+ * Nicht als Tausch des `src`, sondern übereinander: Ein `<img>`, dessen Quelle
+ * man wechselt, wird für einen Augenblick LEER – der Browser verwirft das
+ * alte, bevor das neue da ist. Beim Blättern durch einen Ordner sieht man
+ * dieses Blitzen an jeder Kachel.
+ */
+.fil-thumb-stapel {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+}
+
+.fil-thumb-stapel .fil-thumb {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.fil-thumb-klecks {
+  /* Der Klecks ist 160 Punkte gross und wird hochskaliert; ohne diese Zeile
+     glättet der Browser ihn zu Brei, statt ihn weich zu zeigen. */
+  filter: blur(2px);
+  transform: scale(1.04);
+}
+
+.fil-thumb-stapel img.fil-thumb:not(.fil-thumb-klecks) {
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.fil-thumb-stapel img.fil-thumb.is-da {
+  opacity: 1;
+}

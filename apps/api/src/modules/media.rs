@@ -1,8 +1,9 @@
 //! Uploads, Auslieferung und Streaming von Medien.
 
 use axum::body::Body;
+use axum::body::Bytes;
 use axum::extract::DefaultBodyLimit;
-use axum::extract::{Multipart, Path, RawQuery, State};
+use axum::extract::{Multipart, Path, Query, RawQuery, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -19,6 +20,7 @@ use crate::db::AttachmentRow;
 use crate::dto::AttachmentDto;
 use crate::error::{AppError, AppResult};
 use crate::services::attachments::{darf_anhang_sehen, load_attachment, to_attachment_dto};
+use crate::services::miniatur;
 use crate::state::AppState;
 use crate::storage::{
     extension_for, sanitise_file_name, storage_key_for, ByteRange, DownloadOptions,
@@ -36,6 +38,7 @@ pub fn router() -> Router<AppState> {
         .route("/media/{id}", get(deliver).delete(remove))
         .route("/media/{id}/download", get(download))
         .route("/media/{id}/bytes", get(bytes_through_api))
+        .route("/media/{id}/miniatur", get(miniatur))
         .route("/media/{id}/zugriff", get(zugriff))
         .route("/media/{id}/fernsehticket", post(fernsehticket_ausstellen))
 }
@@ -757,6 +760,201 @@ async fn fernsehticket_ausstellen(
         "mime": attachment.mime,
         "gueltigSekunden": fernsehticket::DAUER_S,
     })))
+}
+
+/**
+ * Wie viele Miniaturbilder gleichzeitig gerechnet werden.
+ *
+ * Entschlüsseln und Verkleinern sind reine Rechenarbeit. Ohne Deckel öffnet
+ * ein Ordner mit vierzig Kacheln vierzig gleichzeitige Läufe, von denen jeder
+ * ein ganzes Foto im Arbeitsspeicher hält – auf einer kleinen Maschine reicht
+ * das, um den Dienst umzuwerfen. Vier Plätze halten einen einzelnen Kern
+ * beschäftigt und lassen die Warteschlange kurz; wer als Fünfter kommt,
+ * wartet Millisekunden.
+ */
+static MINIATUR_PLAETZE: std::sync::LazyLock<tokio::sync::Semaphore> =
+    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(4));
+
+#[derive(Debug, Deserialize)]
+struct MiniaturFrage {
+    kante: Option<u32>,
+}
+
+/**
+ * Ein Miniaturbild – einmal gerechnet, dann aus dem Speicher.
+ *
+ * # Wofür
+ *
+ * Für Kachelansichten. Dort war die eingebettete `previewDataUrl` bisher das
+ * ENDGÜLTIGE Bild – anders als in der Chatblase wird daneben nichts
+ * Schärferes nachgeladen –, und die ist 160 Punkte lang und darf nicht
+ * wachsen: Sie fährt in jeder Nachrichtenliste mit.
+ *
+ * Das Original zu laden wäre die falsche Antwort: vierzig Urlaubsfotos zu je
+ * zwei Megabyte für Kacheln von 110 Punkten.
+ *
+ * # Die Rechte
+ *
+ * Dieselben drei Wege wie bei der Auslieferung – Kopf, Keks, Eintrittskarte –
+ * und dieselbe Frage nach der HEUTIGEN Lage. Ein Miniaturbild ist das Bild,
+ * nur kleiner; es darf keine Hintertür daneben sein.
+ *
+ * # Was es NICHT gibt
+ *
+ * Video und HEIC. Für Video bräuchte es einen Videodekodierer auf dem Server,
+ * für HEIC libheif (LGPL) und HEVC-Patente. Beide bekommen eine 404, und der
+ * Browser bleibt bei der eingebetteten Vorschau – deshalb steht sie weiterhin
+ * an jedem Anhang.
+ */
+async fn miniatur(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    betrachter: Option<AuthUser>,
+    RawQuery(abfrage): RawQuery,
+    Query(frage): Query<MiniaturFrage>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    let attachment = load_attachment(&state.pool, id).await?;
+
+    let wer = betrachter
+        .map(|user| user.id())
+        .or_else(|| medienkeks::betrachter(&headers, &state.config.jwt_secret))
+        .or_else(|| {
+            let karte = fernsehticket::aus_abfrage(abfrage.as_deref())?;
+            fernsehticket::betrachter(&karte, id, &state.config.jwt_secret)
+        });
+    if state.config.media_auth {
+        let Some(user) = wer else {
+            return Err(AppError::unauthorized("Nicht angemeldet"));
+        };
+        if !darf_anhang_sehen(&state.pool, attachment.id, user).await? {
+            return Err(AppError::not_found("Datei nicht gefunden"));
+        }
+    }
+    if attachment.status != "ready" {
+        return Err(AppError::not_found("Datei nicht gefunden"));
+    }
+    if !miniatur::wandelbar(&attachment.mime) {
+        // Nicht „geht nicht", sondern „gibt es nicht": Der Browser fällt auf
+        // die eingebettete Vorschau zurück, und das ist die richtige Antwort.
+        return Err(AppError::not_found("Kein Miniaturbild für diesen Typ"));
+    }
+
+    let kante = miniatur::kante_waehlen(frage.kante.unwrap_or(320));
+    let schluessel = miniatur::schluessel(&attachment.storage_key, kante);
+
+    // Schon einmal gerechnet? Dann nur noch ausliefern.
+    if let Some(objekt) = state.storage.read(&schluessel, None).await? {
+        return Ok(antwort_mit(objekt.stream, kante));
+    }
+
+    let _platz = MINIATUR_PLAETZE
+        .acquire()
+        .await
+        .map_err(|_| AppError::internal("Miniaturbilder stehen gerade nicht bereit"))?;
+
+    /*
+     * Zwischen dem Nachsehen oben und hier kann ein anderer Aufruf fertig
+     * geworden sein – vierzig Kacheln fragen gleichzeitig. Noch einmal
+     * nachsehen kostet eine Abfrage und spart einen ganzen Durchgang durch
+     * den Bildwandler.
+     */
+    if let Some(objekt) = state.storage.read(&schluessel, None).await? {
+        return Ok(antwort_mit(objekt.stream, kante));
+    }
+
+    let Some(objekt) = state.storage.read(&attachment.storage_key, None).await? else {
+        return Err(AppError::not_found("Datei nicht gefunden"));
+    };
+    let roh = axum::body::to_bytes(Body::from_stream(objekt.stream), MINIATUR_QUELLE_MAX)
+        .await
+        .map_err(|_| AppError::bad_request("Das Bild ist zu gross für ein Miniaturbild"))?;
+
+    // Rechnen gehört nicht auf einen Faden der Laufzeit: Dort warten sonst
+    // alle anderen Anfragen mit.
+    let bytes = tokio::task::spawn_blocking(move || miniatur::rechnen(&roh, kante))
+        .await
+        .map_err(|_| AppError::internal("Das Miniaturbild ist abgestürzt"))??;
+
+    /*
+     * Ablegen, aber nicht darauf warten, ob es geklappt hat.
+     *
+     * Der Speicher kann voll sein oder gerade streiken. Dann ist die richtige
+     * Antwort trotzdem das Bild, das schon fertig im Arbeitsspeicher liegt –
+     * nur eben ohne Vorrat für das nächste Mal.
+     */
+    if let Err(fehler) = state
+        .storage
+        .put(&schluessel, Bytes::from(bytes.clone()), "image/jpeg")
+        .await
+    {
+        tracing::warn!(?fehler, "Miniaturbild liess sich nicht ablegen");
+    }
+
+    Ok(antwort_mit(
+        Box::pin(futures_util::stream::once(async move {
+            Ok::<_, std::io::Error>(Bytes::from(bytes))
+        })),
+        kante,
+    ))
+}
+
+/// Wie gross ein Original höchstens sein darf, um daraus eine Kachel zu machen.
+const MINIATUR_QUELLE_MAX: usize = 40 * 1024 * 1024;
+
+fn antwort_mit(strom: crate::storage::ByteStream, kante: u32) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "image/jpeg".to_string()),
+            /*
+             * Dieselben Schutzzeilen wie an der gewöhnlichen Auslieferung.
+             *
+             * `nosniff`, damit der Browser den Typ nicht selbst rät – hier
+             * kommt immer ein JPEG heraus, und wenn doch einmal etwas
+             * anderes, soll es nicht als Dokument dargestellt werden.
+             *
+             * (Nachgemessen und deshalb hier vermerkt: Diese Zeile war NICHT
+             * die Antwort auf `ERR_BLOCKED_BY_ORB` in der Kachel. Das war
+             * eine 401 mit JSON-Rumpf – ein `<img>`, das ein JSON bekommt,
+             * meldet Chrome als Blockade, und man sucht den Fehler an der
+             * falschen Stelle. Die Anmeldung fehlte, nicht die Kopfzeile.)
+             */
+            (
+                axum::http::HeaderName::from_static("x-content-type-options"),
+                "nosniff".to_string(),
+            ),
+            /*
+             * Nicht in einen Suchindex – dieselbe Begründung wie bei der
+             * Auslieferung: Die Adresse trägt ihre Berechtigung nicht in
+             * sich, aber sie soll auch nicht AUFFINDBAR werden.
+             */
+            (
+                axum::http::HeaderName::from_static("x-robots-tag"),
+                "noindex, nofollow, noarchive, noimageindex".to_string(),
+            ),
+            /*
+             * Ein Jahr und `immutable`: Der Schlüssel trägt die Kante und
+             * hängt am Ablageschlüssel des Originals, der sich nie ändert.
+             * Ein anderes Bild bekommt einen anderen Schlüssel – dieses hier
+             * kann sich nicht ändern.
+             *
+             * `private`, weil es hinter einer Rechteprüfung steht: Ein
+             * gemeinsamer Zwischenspeicher unterwegs dürfte es nicht an den
+             * Nächsten weitergeben.
+             */
+            (
+                header::CACHE_CONTROL,
+                "private, max-age=31536000, immutable".to_string(),
+            ),
+            (header::VARY, "Cookie, Authorization".to_string()),
+            (
+                axum::http::HeaderName::from_static("x-miniatur-kante"),
+                kante.to_string(),
+            ),
+        ],
+        Body::from_stream(strom),
+    )
+        .into_response()
 }
 
 async fn remove(

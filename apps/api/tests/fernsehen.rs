@@ -134,6 +134,92 @@ impl Probe {
         kennung
     }
 
+    /// Ein Abruf mit Token, der die Bytes und die Kopfzeilen zurückgibt.
+    async fn mit_token(
+        &self,
+        method: &str,
+        uri: &str,
+        token: Option<&str>,
+    ) -> (StatusCode, Vec<u8>, Vec<(String, String)>) {
+        let mut builder = Request::builder().method(method).uri(uri);
+        if let Some(token) = token {
+            builder = builder.header("authorization", format!("Bearer {token}"));
+        }
+        let response = self
+            .router
+            .clone()
+            .oneshot(builder.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let kopf = response
+            .headers()
+            .iter()
+            .map(|(n, w)| {
+                (
+                    n.as_str().to_string(),
+                    w.to_str().unwrap_or_default().to_string(),
+                )
+            })
+            .collect();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, bytes.to_vec(), kopf)
+    }
+
+    /// Eine Datei beliebiger Art hochladen.
+    async fn hochladen_bytes(
+        &self,
+        token: &str,
+        art: &str,
+        typ: &str,
+        name: &str,
+        inhalt: &[u8],
+    ) -> String {
+        let (status, upload) = self
+            .call(
+                "POST",
+                "/api/v1/media/uploads",
+                Some(token),
+                Some(json!({
+                    "kind": art,
+                    "mime": typ,
+                    "size": inhalt.len(),
+                    "fileName": name,
+                })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{upload}");
+        let kennung = upload["attachmentId"]
+            .as_str()
+            .expect("Kennung")
+            .to_string();
+
+        let grenze = "----initiativebytes";
+        let mut body = Vec::new();
+        body.extend_from_slice(format!("--{grenze}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n")
+                .as_bytes(),
+        );
+        body.extend_from_slice(format!("Content-Type: {typ}\r\n\r\n").as_bytes());
+        body.extend_from_slice(inhalt);
+        body.extend_from_slice(format!("\r\n--{grenze}--\r\n").as_bytes());
+
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/media/uploads/{kennung}/data"))
+            .header("authorization", format!("Bearer {token}"))
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={grenze}"),
+            )
+            .body(Body::from(body))
+            .unwrap();
+        let antwort = self.router.clone().oneshot(request).await.unwrap();
+        assert_eq!(antwort.status(), StatusCode::OK, "Upload {name}");
+        kennung
+    }
+
     async fn anmelden(&self, was: &str) -> String {
         let kennung = Uuid::now_v7().simple().to_string();
         let name = format!("{was}{}", &kennung[kennung.len() - 12..]);
@@ -722,4 +808,142 @@ async fn ein_fremdes_telefon_uebernimmt_keine_laufende_sitzung() {
         )
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "ein Fremder hat beendet");
+}
+
+/* ==========================================================================
+ * Miniaturbilder – dieselbe Rechteprüfung, nur kleiner.
+ * ========================================================================== */
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ein_miniaturbild_kostet_ein_paar_kilobyte_und_haelt_dieselbe_tuer_zu() {
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL fehlt – übersprungen");
+        return;
+    };
+    let besitzer = probe.anmelden("mini").await;
+    let fremd = probe.anmelden("minifremd").await;
+
+    // Ein unruhiges PNG – ein glattes packte auf ein Zwanzigstel und der
+    // Vergleich wäre geschönt.
+    let png = {
+        let mut bild = image::RgbImage::new(1200, 900);
+        for (x, y, punkt) in bild.enumerate_pixels_mut() {
+            *punkt = image::Rgb([
+                ((x * 7 + y * 13) % 256) as u8,
+                ((x * 29 + y * 3) % 256) as u8,
+                ((x * 5 + y * 31) % 256) as u8,
+            ]);
+        }
+        let mut raus = Vec::new();
+        image::DynamicImage::ImageRgb8(bild)
+            .write_to(
+                &mut std::io::Cursor::new(&mut raus),
+                image::ImageFormat::Png,
+            )
+            .expect("PNG");
+        raus
+    };
+    let kennung = probe
+        .hochladen_bytes(&besitzer, "image", "image/png", "gross.png", &png)
+        .await;
+
+    let (status, klein, kopf) = probe
+        .mit_token(
+            "GET",
+            &format!("/api/v1/media/{kennung}/miniatur?kante=320"),
+            Some(&besitzer),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        kopf.iter()
+            .find(|(n, _)| n == "content-type")
+            .map(|(_, w)| w.as_str()),
+        Some("image/jpeg")
+    );
+    /*
+     * Der Zweck in einer Zahl: Eine Kachel kostet ein paar Kilobyte statt des
+     * ganzen Fotos. Ohne diese Schranke könnte die Route das Original
+     * durchreichen, und jede andere Prüfung hier bestünde trotzdem.
+     *
+     * Die Schranken stehen bewusst auf dem SCHLECHTESTEN Fall: Das Bild oben
+     * ist reines Rauschen – jeder Punkt anders als sein Nachbar –, und das
+     * gibt es in keiner Kamera. Gemessen kommen dabei 75 kB aus 2,4 MB
+     * heraus, also ein Dreissigstel. Bei einem echten Foto sind es 20 bis 35
+     * kB; der erste Anlauf stand deshalb bei 60 kB und ist an der eigenen
+     * Prüfungsvorlage gescheitert, nicht an der Sache.
+     */
+    assert!(
+        klein.len() < 100_000,
+        "die Kachel ist zu schwer: {} Bytes",
+        klein.len()
+    );
+    assert!(
+        klein.len() * 20 < png.len(),
+        "die Kachel spart zu wenig: {} von {} Bytes",
+        klein.len(),
+        png.len()
+    );
+
+    /*
+     * Beim zweiten Mal kommt sie aus dem Speicher. Geprüft wird das am
+     * ERGEBNIS und nicht an der Zeit: Byte für Byte dasselbe heisst, dass
+     * nicht zweimal gerechnet wurde – ein zweiter Lauf des Bildwandlers
+     * lieferte zwar dasselbe Bild, aber das ist hier nicht der Punkt: Läge im
+     * Speicher nichts, käme auch bei der dritten Anfrage nichts an.
+     */
+    let (status, nochmal, _) = probe
+        .mit_token(
+            "GET",
+            &format!("/api/v1/media/{kennung}/miniatur?kante=320"),
+            Some(&besitzer),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(nochmal, klein);
+
+    /*
+     * Und dieselbe Tür wie bei der Auslieferung. Ein Miniaturbild ist das
+     * Bild, nur kleiner – es darf keine Hintertür daneben sein.
+     */
+    let (status, _, _) = probe
+        .mit_token(
+            "GET",
+            &format!("/api/v1/media/{kennung}/miniatur?kante=320"),
+            Some(&fremd),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "eine fremde Person bekam die Kachel"
+    );
+    let (status, _, _) = probe
+        .mit_token("GET", &format!("/api/v1/media/{kennung}/miniatur"), None)
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "ohne Anmeldung ging es auch"
+    );
+
+    /*
+     * Ein Video bekommt keine – dafür bräuchte es einen Videodekodierer auf
+     * dem Server. Die Absage ist wichtig: Der Browser fällt darauf zurück,
+     * die eingebettete Vorschau zu zeigen, und täte das nicht, wenn hier eine
+     * kaputte Antwort käme.
+     */
+    let video = probe.hochladen(&besitzer, b"kein echtes video").await;
+    let (status, _, _) = probe
+        .mit_token(
+            "GET",
+            &format!("/api/v1/media/{video}/miniatur"),
+            Some(&besitzer),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "ein Video bekam ein Miniaturbild"
+    );
 }

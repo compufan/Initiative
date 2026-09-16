@@ -31,6 +31,42 @@ export function mediaSrc(attachment: AttachmentDto): string {
 }
 
 /**
+ * Ein Miniaturbild vom Server – für Kacheln, nicht für Blasen.
+ *
+ * # Warum es das braucht
+ *
+ * In einer Kachelansicht war die eingebettete `previewDataUrl` bisher das
+ * ENDGÜLTIGE Bild: Anders als in der Chatblase wird daneben nichts Schärferes
+ * nachgeladen. Und sie darf nicht wachsen – sie fährt in jeder
+ * Nachrichtenliste mit, als Text in einer Spalte.
+ *
+ * Das Original zu laden wäre die falsche Antwort: ein Ordner mit vierzig
+ * Urlaubsfotos zu je zwei Megabyte, für Kacheln von 110 Punkten.
+ *
+ * # Die Kantenlänge
+ *
+ * `kante` ist die CSS-Grösse der Kachel; hier wird mit der Punktdichte
+ * multipliziert. Auf einem Telefon mit dreifacher Dichte hat eine Kachel von
+ * 110 Punkten in Wahrheit 330 – ein Bild von 110 wäre dort genauso unscharf
+ * wie vorher. Der Server rundet auf die nächste angebotene Stufe auf.
+ */
+export function miniaturSrc(attachment: AttachmentDto, kante: number): string {
+  /*
+   * Die Punktdichte zählt bis zwei, nicht bis drei.
+   *
+   * Der Server hat drei Stufen (160, 320, 640) und rundet auf. Eine Kachel
+   * von 160 Punkten auf einem Telefon mit dreifacher Dichte verlangte damit
+   * 480 und bekäme 640 – nachgemessen 451 kB statt 75 kB für DIESELBE
+   * Kachel. Bei zwei ist es 320, also auf einem 2×-Schirm genau eins zu eins
+   * und auf einem 3×-Schirm ein wenig weich. Für ein Miniaturbild, das man im
+   * Vorbeigehen ansieht, ist das der richtige Tausch; wer genau hinsehen
+   * will, tippt darauf und bekommt das Original.
+   */
+  const dichte = typeof window !== 'undefined' ? Math.min(2, window.devicePixelRatio || 1) : 1;
+  return `${mediaSrc(attachment)}/miniatur?kante=${Math.round(kante * dichte)}`;
+}
+
+/**
  * Die Bilddaten eines Anhangs – zum Lesen, nicht zum Anzeigen.
  *
  * `mediaSrc` reicht für `<img src>`: Der Browser folgt der Umleitung zum
