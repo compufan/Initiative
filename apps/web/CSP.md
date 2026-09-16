@@ -9,27 +9,48 @@ und nichts hinausschicken können.
 
 | Angabe                                                       | Grund                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `script-src 'self' 'wasm-unsafe-eval'`                       | **Die wichtigste Zeile.** Kein fremdes Skript, kein `eval`. Das `wasm-unsafe-eval` ist unvermeidlich: MediaPipe und die ONNX-Laufzeit für das Freistellen sind WebAssembly, und ohne diese Angabe startet keines von beiden. Es erlaubt ausdrücklich **nur** WebAssembly, nicht `eval` für JavaScript.                                                                                                                                     |
+| `script-src 'self' 'wasm-unsafe-eval' https://www.gstatic.com` | **Die wichtigste Zeile.** Kein fremdes Skript, kein `eval`. Das `wasm-unsafe-eval` ist unvermeidlich: MediaPipe und die ONNX-Laufzeit für das Freistellen sind WebAssembly, und ohne diese Angabe startet keines von beiden. Es erlaubt ausdrücklich **nur** WebAssembly, nicht `eval` für JavaScript.                                                                                                                                     |
 | `style-src 'self' 'unsafe-inline'`                           | React setzt an vielen Stellen `style={{ … }}`, und das sind Stil-Attribute. Ohne `unsafe-inline` fällt die halbe Oberfläche auseinander. Stile sind kein Ausführungspfad; der Verlust ist gering.                                                                                                                                                                                                                                          |
 | `object-src 'none'`, `base-uri 'self'`, `form-action 'self'` | Drei alte Einfallstore, die nichts kosten: eingebettete Plugins, ein untergeschobenes `<base>`, ein Formular, das woandershin sendet.                                                                                                                                                                                                                                                                                                      |
 | `frame-ancestors 'none'`                                     | Niemand kann die App in einen fremden Rahmen setzen und Klicks abfangen.                                                                                                                                                                                                                                                                                                                                                                   |
 | `img-src`/`media-src`/`connect-src` mit `https:`             | Hier ist die Richtlinie bewusst weit, und das soll man wissen: Die API-Adresse steht erst beim Bauen fest, und ein Medienabruf wird von der API auf eine signierte Adresse bei Cloudflare R2 umgeleitet. Eine feste Aufzählung wäre entweder falsch oder müsste bei jedem Umzug nachgezogen werden – und eine Richtlinie, die man ständig lockern muss, schützt am Ende gar nicht. `https:` schliesst immerhin unverschlüsselte Ziele aus. |
 
-## Einmal abgelehnt: das Google-Cast-SDK
+## Die eine Ausnahme: `www.gstatic.com` für Google Cast
 
-Für „Fotos und Diashow auf den Fernseher" gäbe es einen fertigen Weg. Das
-Google-Cast-SDK kann Bilder und Warteschlangen, kostet keine Lizenzgebühr und
-wäre an einem Nachmittag eingebaut. Es hat genau einen Preis, und der steht in
-der Zeile oben: `cast_sender.js` liegt auf gstatic.com und müsste dauerhaft in
-`script-src`.
+Hier stand einmal, das Google-Cast-SDK sei abgelehnt. Die Ablehnung stützte
+sich auf eine Annahme über die Lizenz, die bei der Nachprüfung nicht hielt:
+Die *Google Cast SDK Additional Developer Terms* gewähren in §2.1
+ausdrücklich eine „limited, worldwide, **royalty-free** … license". Es gibt
+keine Gebühr, keine Umsatzschwelle und keine Nicht-kommerziell-Klausel. Die
+einzige Zahlung im ganzen Umfeld sind einmalig fünf Dollar für ein
+Entwicklerkonto, und die braucht nur, wer einen EIGENEN Empfänger
+veröffentlicht; mit dem Standard-Empfänger (`CC1AD845`) entfällt auch das.
 
-Damit wäre die wichtigste Zeile dieser Regel aufgeweicht – nicht für den
-Augenblick des Streamens, sondern immer, für jede Seite, für jeden Benutzer.
-Dazu käme, dass bei jedem Streamen die IP-Adresse an Google ginge, in einer
-App, die man ausdrücklich selbst hostet.
+Also steht `https://www.gstatic.com` jetzt in `script-src` – und das ist
+weiterhin eine Aufweichung der wichtigsten Zeile. Was sie erträglich macht:
 
-Statt dessen gehen zwei Wege nebeneinander, die beide ohne fremden Code
-auskommen:
+* **Geladen wird erst nach Zustimmung.** Die Richtlinie ERLAUBT das Skript,
+  die App HOLT es nicht. `cast_sender.js` kommt erst, wenn jemand das
+  Streamen einmal ausdrücklich einschaltet (`modules/fernseher/cast.ts`). Wer
+  den Knopf nie drückt, hat eine App, die nichts von fremden Servern lädt –
+  genau wie vorher.
+* **Nur `script-src`.** Alle drei Cast-Skripte wurden heruntergeladen und
+  durchgesehen: Sie machen selbst keine Anfragen. Der Steuerkanal zum Gerät
+  läuft im Browser (Media Router, mDNS im eigenen Netz), nicht auf der Seite.
+  `connect-src` bleibt deshalb unberührt.
+* **Es gibt weiter einen Weg ohne Google.** Siehe unten.
+
+Was die Bedingungen dafür VERLANGEN, steht im Kopf von `cast.ts` – vor allem
+§5.1: Es muss der offizielle `<google-cast-launcher>` sein, auf oberster
+Ebene, nicht in einem Klappmenü. Ein nachgebautes Symbol wäre ein Verstoss.
+
+## Die Wege, die ohne fremden Code auskommen
+
+Sie bleiben, und zwar nicht aus Nostalgie: Cast gibt es nur in Chrome und
+Edge, es zeigt Bilder höchstens mit 1280 × 720, und eine Bild-Diashow muss
+vom Telefon getaktet werden und endet, wenn die App zugeht.
+
+
 
 - **Videos** über die eingebauten Schnittstellen des Browsers – Remote Playback
   (Chrome, Edge) und AirPlay (Safari). Ein Fingertipp, keine Einrichtung.

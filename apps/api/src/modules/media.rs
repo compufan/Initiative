@@ -757,7 +757,24 @@ async fn fernsehticket_ausstellen(
     let basis = state.config.public_api_url.trim_end_matches('/');
     Ok(Json(json!({
         "url": format!("{basis}/api/v1/media/{id}?{}={karte}", fernsehticket::FELD),
+        /*
+         * Die Karte auch einzeln.
+         *
+         * Wer auf einen Fernseher streamt, braucht manchmal eine ANDERE
+         * Adresse derselben Datei – für ein Foto etwa das Miniaturbild in
+         * Fernsehgrösse statt des Originals von zwölf Megapunkten. Ohne die
+         * rohe Karte müsste die App sie aus der fertigen Adresse
+         * herausschneiden, und das ist genau die Art Zeichenkettenarbeit, die
+         * beim ersten Umbau bricht.
+         */
+        "karte": karte,
+        "feld": fernsehticket::FELD,
+        "basis": format!("{basis}/api/v1/media/{id}"),
         "mime": attachment.mime,
+        "art": attachment.kind,
+        "breite": attachment.width,
+        "hoehe": attachment.height,
+        "name": attachment.file_name,
         "gueltigSekunden": fernsehticket::DAUER_S,
     })))
 }

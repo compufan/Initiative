@@ -99,6 +99,11 @@ pub struct AttachmentRow {
     pub preview_data_url: Option<String>,
     pub status: String,
     pub created_at: DateTime<Utc>,
+    /// `lokal` | `wandert` | `fern` – siehe Migration 0018.
+    pub ablage: String,
+    /// `niedrig` | `normal` | `hoch` – wie ungern diese Datei ausgelagert wird.
+    pub prioritaet: String,
+    pub ausgelagert_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, FromRow)]

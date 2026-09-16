@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type TouchEvent, type TouchLi
 import { createPortal } from 'react-dom';
 import type { AttachmentDto } from '@initiative/shared';
 import { FotoWerkstatt } from './FotoWerkstatt.js';
+import { CastKnopf } from '../fernseher/CastKnopf.js';
 import { mediaDownloadSrc, mediaSrc } from './helpers.js';
 import { dialogAnmelden } from '../../lib/dialogVerlauf.js';
 
@@ -238,6 +239,13 @@ export function Lightbox({ items, index, onClose, ablegen, alsRezept, zielName }
           </span>
         )}
         <div className="media-lightbox-tools">
+          {/*
+            Der Cast-Knopf steht auf OBERSTER Ebene und nicht in einem
+            Klappmenü – das verlangen die Nutzungsbedingungen des Cast-SDK
+            (§5.1), und zwar auf jeder Seite mit castbarem Inhalt. Die
+            Begründung im Ganzen steht in `fernseher/cast.ts`.
+          */}
+          <CastKnopf stuecke={[item.id]} was={item.fileName ?? 'Dieses Foto'} />
           <FotoWerkstatt
             foto={item}
             ablegen={ablegen}

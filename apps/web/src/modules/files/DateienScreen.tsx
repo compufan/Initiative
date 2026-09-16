@@ -22,6 +22,7 @@ import { UploadToCollectionSheet } from './UploadToCollectionSheet.js';
 import { FileViewer } from './FileViewer.js';
 import { ShareSheet } from './ShareSheet.js';
 import { FernsehSheet } from '../fernseher/FernsehSheet.js';
+import { CastKnopf } from '../fernseher/CastKnopf.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 import { miniaturSrc } from '../media/helpers.js';
 import { pfadZu, useFiles } from './state.js';
@@ -91,9 +92,10 @@ export function DateienScreen() {
    * Server wiese die Liste ab („weder Fotos noch Videos"), und ein Knopf, der
    * zuverlässig eine Fehlermeldung ergibt, ist schlechter als keiner.
    */
-  const zeigbare = items.filter(
-    (eintrag) => eintrag.attachment.kind === 'image' || eintrag.attachment.kind === 'video',
-  ).length;
+  const zeigbareIds = items
+    .filter((eintrag) => eintrag.attachment.kind === 'image' || eintrag.attachment.kind === 'video')
+    .map((eintrag) => eintrag.attachment.id);
+  const zeigbare = zeigbareIds.length;
   const inhaltGeladen = collectionId ? Boolean(geladen[collectionId]) : true;
 
   useEffect(() => {
@@ -272,14 +274,30 @@ export function DateienScreen() {
            * Fernseher zu zeigen ist Ansehen, nicht Ändern.
            */}
           {aktuell.myLevel !== 'none' && zeigbare > 0 && (
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => setFernseher(true)}
-              data-tipp="Diese Sammlung als Diashow auf einem Fernseher zeigen"
-            >
-              📺 Auf den Fernseher
-            </button>
+            <>
+              {/*
+                Zwei Wege nebeneinander, und das ist Absicht.
+
+                Der Cast-Knopf ist der kurze: ein Fingertipp, Geräteliste von
+                Chrome, los. Er erscheint nur dort, wo es ihn gibt – Chrome
+                und Edge, https, ein Gerät in Reichweite.
+
+                „Auf den Fernseher“ daneben ist der lange und der
+                verlässlichere: Er braucht kein Chromecast, läuft in jedem
+                Browser, zeigt Bilder in voller Grösse und läuft weiter, wenn
+                das Telefon in der Tasche steckt. Wer beides hat, soll wählen
+                können; wer nur eines hat, sieht nur eines.
+              */}
+              <CastKnopf stuecke={zeigbareIds} sekunden={8} was={aktuell.name} modusWahl />
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setFernseher(true)}
+                data-tipp="Diese Sammlung als Diashow auf einem Fernseher zeigen – auch ohne Chromecast"
+              >
+                📺 Auf den Fernseher
+              </button>
+            </>
           )}
           {darfBesitzen && (
             <>

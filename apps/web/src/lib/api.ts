@@ -452,9 +452,22 @@ export const api = {
      * Begründung steht auf der Serverseite in `auth::fernsehticket`.
      */
     fernsehticket: (attachmentId: string) =>
-      post<{ url: string; mime: string; gueltigSekunden: number }>(
-        `/media/${attachmentId}/fernsehticket`,
-      ),
+      post<{
+        /** Die fertige Adresse des Originals. */
+        url: string;
+        /** Die Karte allein – für eine ANDERE Adresse derselben Datei. */
+        karte: string;
+        /** Wie der Abfrageteil heisst, in dem die Karte steht. */
+        feld: string;
+        /** Die Adresse ohne Abfrageteil, zum Anhängen von `/miniatur` & Co. */
+        basis: string;
+        mime: string;
+        art: string;
+        breite: number | null;
+        hoehe: number | null;
+        name: string | null;
+        gueltigSekunden: number;
+      }>(`/media/${attachmentId}/fernsehticket`),
   },
   /**
    * Der Fernseher als zweiter Bildschirm.

@@ -4,6 +4,7 @@ import { formatBytes, formatDuration, type AttachmentDto } from '@initiative/sha
 import { FotoWerkstatt } from '../media/FotoWerkstatt.js';
 import { mediaSrc, standbildHolen } from '../media/helpers.js';
 import { FernsehKnopf } from '../fernseher/FernsehKnopf.js';
+import { CastKnopf } from '../fernseher/CastKnopf.js';
 
 interface FileViewerProps {
   items: AttachmentDto[];
@@ -64,6 +65,9 @@ export function FileViewer({ items, index, onClose, ablegen, zielName }: FileVie
           <strong className="truncate">{datei.fileName ?? 'Datei'}</strong>
           <span className="fv-meta">{formatBytes(datei.size)}</span>
         </div>
+        {(datei.kind === 'image' || datei.kind === 'video') && (
+          <CastKnopf stuecke={[datei.id]} was={datei.fileName ?? 'Diese Datei'} />
+        )}
         {datei.kind === 'image' && (
           <FotoWerkstatt
             foto={datei}

@@ -70,7 +70,20 @@
 		# `'wasm-unsafe-eval'` bleibt zwingend (MediaPipe und ONNX für das
 		# Freistellen), `style-src 'unsafe-inline'` ebenso (React setzt
 		# style-Eigenschaften direkt am Element).
-		header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self' wss:; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
+		#
+		# `https://www.gstatic.com` in `script-src` ist die EINE Ausnahme von
+		# „kein fremdes Skript", und sie ist hart erkämpft: Ohne sie gibt es
+		# kein Google Cast, und ohne Cast kein Streamen mit einem Fingertipp.
+		# Geladen wird trotzdem nichts, solange niemand es einschaltet – die
+		# App holt `cast_sender.js` erst nach ausdrücklicher Zustimmung
+		# (siehe `modules/fernseher/cast.ts`). Die Richtlinie ERLAUBT hier
+		# also etwas, das ohne Zutun nicht geschieht.
+		#
+		# Nur `script-src`: Die Cast-Skripte machen selbst keine Anfragen –
+		# nachgemessen, alle drei heruntergeladen und durchgesehen. Der
+		# Steuerkanal zum Gerät läuft im Browser, nicht auf der Seite. Deshalb
+		# steht gstatic NICHT in `connect-src`.
+		header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://www.gstatic.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self' wss:; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
 
 		# Das Blatt für den Fernseher ist ein eigener Einstiegspunkt und keine
 		# Seite der App: In einem Fernseher steckt selten ein aktueller

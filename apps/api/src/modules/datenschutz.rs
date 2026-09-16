@@ -248,9 +248,13 @@ dich bitte direkt an diese Adresse.</p>
 <h2>Worum es hier geht</h2>
 <p>Initiative ist eine selbst betriebene App für einen kleinen Kreis. Es gibt
 <strong>keine Werbung, keine Analyse-Werkzeuge, kein Tracking</strong> und keine
-Weitergabe an Dritte zu Werbezwecken. Die Seite lädt nichts von fremden Servern –
-keine Schriftart, kein Symbol, kein Zählpixel. Es wird nichts gespeichert, was die
-App nicht zum Funktionieren braucht.</p>
+Weitergabe an Dritte zu Werbezwecken. Die Seite lädt von sich aus nichts von
+fremden Servern – keine Schriftart, kein Symbol, kein Zählpixel. Es wird nichts
+gespeichert, was die App nicht zum Funktionieren braucht.</p>
+<p>Es gibt <strong>eine</strong> Ausnahme, und sie schaltest du selbst ein: das
+Streamen auf einen Chromecast. Solange du das nicht tust, gilt der Satz oben
+ohne Einschränkung. Was dabei geschieht, steht weiter unten unter
+„Streamen auf einen Fernseher".</p>
 
 <h2>Was du angeben musst – und was nicht</h2>
 <p>Für ein Konto brauchen wir zwei Dinge: einen Benutzernamen und ein Passwort.
@@ -404,6 +408,38 @@ Dienst – und rechnen danach vollständig <strong>in deinem Gerät</strong>. De
 Bilder verlassen es dabei nicht; es werden keine Bilddaten an uns oder an Dritte
 gesendet. Jedes Modell ist einzeln abschaltbar und die grösseren sind von Haus aus
 aus, weil sie beim ersten Benutzen einen Download kosten.</p>
+
+<h2>Streamen auf einen Fernseher</h2>
+<p>Es gibt zwei Wege, ein Foto oder Video auf einen Fernseher zu bringen, und sie
+unterscheiden sich datenschutzrechtlich deutlich.</p>
+<p><strong>Der Weg ohne Dritte.</strong> Am Fernseher wird im Browser eine Seite
+dieser App geöffnet, die einen Code anzeigt; den tippst du am Telefon ein. Dabei
+verlässt nichts diesen Server. Dasselbe gilt für das Streamen über die eingebauten
+Schnittstellen deines Browsers (Remote Playback in Chrome, AirPlay in Safari) –
+auch dort ist kein Dritter beteiligt.</p>
+<p><strong>Der Weg über Google Cast.</strong> Für einen Chromecast braucht der
+Browser ein Skript von Google. Es wird von <code>www.gstatic.com</code> geladen,
+und dabei erfährt Google:</p>
+<ul>
+  <li>deine IP-Adresse,</li>
+  <li>die Kennung deines Browsers und deines Betriebssystems,</li>
+  <li>je nach Einstellung deines Browsers die Adresse der Seite, von der aus
+      geladen wurde.</li>
+</ul>
+<p>Empfänger ist Google Ireland Limited beziehungsweise Google LLC; eine
+Übermittlung in Drittländer ist dabei nicht ausgeschlossen. <strong>Die Fotos und
+Videos selbst gehen nicht über Google.</strong> Der Fernseher holt sie direkt von
+diesem Server; das Skript stellt nur die Verbindung zwischen Telefon und Gerät
+her.</p>
+<p>Dieses Skript wird <strong>nicht beim Öffnen der App geladen</strong>, sondern
+erst, wenn du das Streamen über Google einmal ausdrücklich erlaubst. Bis dahin
+findet keine Übermittlung statt. Rechtsgrundlage ist dann Art. 6 Abs. 1 lit. a
+DSGVO (deine Einwilligung); du kannst sie in den Einstellungen jederzeit für die
+Zukunft widerrufen, womit das Skript nicht mehr geladen wird. Die beiden Wege
+oben stehen dir unabhängig davon offen.</p>
+<p>Unabhängig von dieser App spricht dein Chromecast mit Google, und dein Browser
+tut es ebenfalls. Darauf haben wir keinen Einfluss.</p>
+<p><em>Google Cast is a trademark of Google LLC.</em></p>
 
 <h2>Was andere über dich eintragen</h2>
 <p>Nicht alles, was hier über dich steht, kommt von dir. Wer dich in eine Gruppe

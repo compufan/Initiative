@@ -41,10 +41,19 @@ use crate::error::{AppError, AppResult};
 /// Speicher ab, und jede kostet Platz und einen Durchgang durch den
 /// Bildwandler.
 ///
-/// Drei Stufen decken, was es gibt: 160 für eine Zeile in einer Liste, 320 für
+/// Vier Stufen decken, was es gibt: 160 für eine Zeile in einer Liste, 320 für
 /// eine Kachel auf dem Telefon, 640 für eine Kachel auf einem Tablet oder ein
-/// Telefon mit dreifacher Punktdichte.
-pub const KANTEN: [u32; 3] = [160, 320, 640];
+/// Telefon mit dreifacher Punktdichte – und 1280 für den FERNSEHER.
+///
+/// Die letzte Stufe ist keine Willkür: Der Standard-Empfänger von Google Cast
+/// zeigt Bilder mit höchstens 1280 × 720 an und rechnet alles Grössere selbst
+/// herunter. Ein Foto von zwölf Megapunkten dorthin zu schicken, heisst also,
+/// dreissig Megabyte durchs WLAN zu schieben, damit das Gerät sie auf ein
+/// Zwanzigstel zusammenrechnet.
+pub const KANTEN: [u32; 4] = [160, 320, 640, 1280];
+
+/// Die Kante, die auf einen Fernseher geht – siehe oben.
+pub const KANTE_FERNSEHER: u32 = 1280;
 
 /// Die nächstgrössere angebotene Kante – kleiner wäre unscharf.
 pub fn kante_waehlen(gewuenscht: u32) -> u32 {
@@ -258,8 +267,9 @@ mod tests {
         assert_eq!(kante_waehlen(160), 160);
         assert_eq!(kante_waehlen(161), 320);
         assert_eq!(kante_waehlen(640), 640);
+        assert_eq!(kante_waehlen(641), KANTE_FERNSEHER);
         // Und darüber wird nicht aufgeblasen – die grösste Stufe gilt.
-        assert_eq!(kante_waehlen(4000), 640);
+        assert_eq!(kante_waehlen(4000), KANTE_FERNSEHER);
     }
 
     #[test]

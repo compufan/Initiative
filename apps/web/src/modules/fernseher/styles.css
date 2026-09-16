@@ -81,3 +81,66 @@
 .tv-tasten .btn {
   min-height: 48px;
 }
+
+/*
+ * Der Cast-Knopf.
+ *
+ * `<google-cast-launcher>` bringt sein Aussehen selbst mit – es hängt einen
+ * offenen Schattenbaum an und zeichnet darin das Cast-Symbol als SVG. Von
+ * aussen lässt sich genau das einstellen, was es als Eigenschaften anbietet:
+ * die beiden Farben und die Grösse. Mehr zu bemalen wäre auch nicht erlaubt;
+ * die Markenrichtlinien lassen am Symbol keine Änderung zu.
+ */
+.cast-knopf {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.cast-knopf google-cast-launcher {
+  --connected-color: var(--accent, #2f6bff);
+  --disconnected-color: #fff;
+  width: 30px;
+  height: 30px;
+  cursor: pointer;
+  /*
+   * Der Knopf sitzt in Leisten, die auf einem Foto liegen – dort ist Weiss
+   * die einzige Farbe, die auf jedem Bild zu sehen ist. Ein Schatten hebt ihn
+   * auch über einer hellen Stelle ab.
+   */
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+}
+
+.cast-knopf.ist-beschaeftigt {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/*
+ * Die Abfrage vor dem ersten Mal.
+ *
+ * Sie ist ausdrücklich keine Wand aus Kleingedrucktem: Was Google erfährt,
+ * steht in einem Satz, was NICHT dorthin geht in einem zweiten, und der Weg
+ * ohne Google im dritten. Wer eine Einwilligung erbittet, sollte sie so
+ * stellen, dass „nein“ eine echte Möglichkeit bleibt.
+ */
+.cast-frage p {
+  margin: 0 0 0.8rem;
+  line-height: 1.5;
+}
+
+.cast-frage-klein {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+.cast-frage code {
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+  background: var(--surface-2);
+  font-size: 0.9em;
+}
+
+.cast-frage .btn {
+  margin-top: 0.4rem;
+}

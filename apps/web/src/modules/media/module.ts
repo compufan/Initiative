@@ -9,6 +9,8 @@ import { RezeptBubble } from './RezeptBubble.js';
 import { VideoBubble } from './VideoBubble.js';
 import { VoiceSheet } from './VoiceSheet.js';
 import './styles.css';
+// Der Cast-Knopf sitzt in der Lightbox – also kommt sein Blatt mit ihr.
+import '../fernseher/styles.css';
 
 /**
  * Media module – camera, gallery, voice messages and files.
