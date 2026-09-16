@@ -133,6 +133,17 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
+  /*
+   * Dieselbe Angabe wie an der Nachrichtenblase im Chat (`.msg-col`), und aus
+   * demselben Grund: Hier liegt eine Langdruck-Geste.
+   *
+   * `pan-y` heisst „senkrecht scrollen darfst du, alles andere überlasse mir".
+   * Ohne das darf der Browser einen ruhenden Finger jederzeit als Beginn einer
+   * eigenen Geste übernehmen, schickt `pointercancel` – und unser Wecker fällt
+   * aus, bevor er klingelt. Nebenbei fällt die Klickverzögerung weg, die der
+   * Doppeltipp-Zoom sonst verlangt.
+   */
+  touch-action: pan-y;
 }
 
 .fil-thumb {

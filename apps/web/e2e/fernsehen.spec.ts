@@ -175,7 +175,16 @@ test('eine Sammlung läuft als Diashow auf einem Fernseher', async ({ browser, b
   // ---- Das Telefon: Sammlung öffnen und auf den Fernseher schicken --------
   const telefon = await seiteFuer(browser, person, wurzel);
   await telefon.goto(`${wurzel}/dateien/${sammlung.id}`);
-  await telefon.getByRole('button', { name: /Auf den Fernseher/ }).click();
+  /*
+   * Der Knopf heisst nicht mehr „📺 Auf den Fernseher", sondern „Kein
+   * Chromecast? Code am Fernseher".
+   *
+   * Er stand einmal als gleichrangiger Zwilling neben dem Cast-Knopf, und weil
+   * er der beschriftete von beiden war, gewann er jeden Blick – ein Anwender
+   * berichtete, er finde in der Sammlung nur den Code-Weg und kein Chromecast.
+   * Jetzt sagt die Beschriftung, wofür er da ist.
+   */
+  await telefon.getByRole('button', { name: /Code am Fernseher/ }).click();
   await telefon.locator('.tv-code-eingabe').fill(code);
   /*
    * Das kürzeste Tempo, und das ist kein Geschmack, sondern die Voraussetzung

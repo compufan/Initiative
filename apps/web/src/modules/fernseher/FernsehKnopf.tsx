@@ -74,7 +74,23 @@ export function FernsehKnopf({
     };
   }, [video, zurueck]);
 
-  if (!video || !da) return null;
+  /*
+   * Solange etwas LÄUFT, bleibt der Knopf – auch wenn der Browser gerade
+   * meldet, es sei kein Gerät zu finden.
+   *
+   * Hier stand nur `!da`, und das hatte eine unangenehme Folge: Meldet der
+   * Browser die Verfügbarkeit während einer laufenden Verbindung neu (ein
+   * kurzer Aussetzer im WLAN genügt), verschwand der Knopf mitten im
+   * Streamen. Damit war die einzige Stelle weg, über die man wieder trennen
+   * kann – und das Video lief auf dem Fernseher weiter, mit einer Adresse,
+   * deren Eintrittskarte irgendwann abläuft.
+   *
+   * Der Anfangsfall bleibt, wie er war: Wer noch nichts getan hat und kein
+   * Gerät in Reichweite hat, sieht keinen Knopf. Ein Knopf, der zuverlässig
+   * „nichts gefunden" sagt, wird nach zweimal nicht mehr gedrückt. Aber was
+   * nach einer Handlung verschwindet, ist etwas anderes als was nie da war.
+   */
+  if (!video || (!da && !verbunden)) return null;
 
   return (
     <button

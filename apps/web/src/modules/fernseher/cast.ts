@@ -55,6 +55,17 @@
  *   * **Keine Standzeit je Bild.** Der Standard-Empfänger kennt kein „zeig
  *     dieses Bild acht Sekunden lang". Eine Diashow muss deshalb vom Telefon
  *     getaktet werden und läuft nur, solange die App offen ist.
+ *   * **Der Gerätewähler braucht eine FRISCHE Fingerbewegung.** `requestSession()`
+ *     aus einem `.then()` heraus tut nichts – die Geste ist dann verbraucht,
+ *     und Chrome lässt die Liste gar nicht erst aufgehen. Deshalb gibt es
+ *     hier keine Funktion, die „zustimmen und verbinden" in einem Schritt
+ *     erledigt; es gibt sie nicht, weil es sie nicht geben kann. Verbunden
+ *     wird über den echten `<google-cast-launcher>`, und das ist ohnehin das,
+ *     was §5.1 verlangt.
+ *     (Zweite Falle derselben Stelle, falls sie je gebraucht wird:
+ *     `requestSession()` erfüllt sich mit `null`, wenn es geklappt hat, und
+ *     LEHNT AB mit einer Fehlerkennung als Zeichenkette, wenn nicht. Wer auf
+ *     einen Wert prüft, statt zu fangen, hält den Erfolg für einen Fehlschlag.)
  *
  * Das TV-Blatt unter `/tv` hat keine dieser Grenzen und bleibt deshalb
  * daneben stehen – für jeden Fernseher ohne Cast, für Safari, und für eine
@@ -153,23 +164,117 @@ export function castErlauben(an: boolean): void {
   } catch {
     /* Ohne Speicher gilt es eben nur für diesen Besuch. */
   }
+  if (!an) {
+    /*
+     * Erst trennen, dann vergessen.
+     *
+     * Ohne diese Zeile lief eine Diashow auf dem Fernseher einfach weiter –
+     * und zugleich verschwand der einzige Knopf, über den man sie hätte
+     * beenden können (`<google-cast-launcher>` gibt es nur, solange das
+     * Streamen eingeschaltet ist). Auch ein Neuladen half nicht: `castLaden`
+     * steigt bei fehlender Erlaubnis sofort aus, das SDK kommt gar nicht
+     * mehr, die Sitzung bleibt unerreichbar. Der Fernseher im Wohnzimmer
+     * stand dann bis zum Ausschalten auf dem letzten Bild.
+     */
+    castTrennen();
+    ladeVersprechen = null;
+  }
+  horcher.forEach((melden) => melden());
 }
 
 /**
- * Kann dieser Browser überhaupt casten?
+ * Eine laufende Cast-Sitzung beenden.
  *
- * Geprüft wird an der Presentation API, die das SDK darunter benutzt – und
- * nicht am Browsernamen. Ein Namensvergleich wäre bei jedem neuen Browser
- * wieder falsch.
+ * `endSession(true)` heisst: auch den Empfänger anhalten, nicht nur die
+ * Verbindung lösen. Alles andere liesse das letzte Bild stehen.
  *
- * Nur https (oder localhost): Auf unsicheren Herkünften ist die Presentation
- * API abgeschaltet, und das SDK meldete dann erst nach dem Laden, dass es
- * nicht geht – nachdem die Anfrage an Google längst draussen wäre.
+ * Still, wenn nichts läuft oder das SDK gar nicht da ist – der Aufrufer ist
+ * ein Schalter in den Einstellungen, und der soll nicht wissen müssen,
+ * worauf er gerade verzichtet.
  */
-export function castMoeglich(): boolean {
-  if (typeof window === 'undefined') return false;
-  if (!window.isSecureContext) return false;
-  return typeof (navigator as Navigator & { presentation?: unknown }).presentation !== 'undefined';
+export function castTrennen(): void {
+  try {
+    const g = welt();
+    if (!g.cast?.framework) return;
+    g.cast.framework.CastContext.getInstance().getCurrentSession()?.endSession(true);
+  } catch {
+    /* Ein Widerruf darf an einer Sitzung nicht scheitern, die es nicht gibt. */
+  }
+}
+
+/**
+ * Wer erfahren will, wenn sich die Erlaubnis ändert.
+ *
+ * # Warum das eine gemeinsame Quelle braucht
+ *
+ * Es gibt diesen Knopf mehr als einmal auf dem Bildschirm, und zwar
+ * gleichzeitig: In einer Sammlung sitzt einer in der Werkzeugleiste, und
+ * öffnet man ein Foto, kommt der Betrachter mit einem zweiten darüber – die
+ * Leiste dahinter bleibt montiert.
+ *
+ * Wer die Erlaubnis in jeder Instanz einzeln in einem `useState`-Anfangswert
+ * festhält, hat danach zwei verschiedene Wahrheiten: Die Zustimmung im
+ * Betrachter erreicht die Leiste dahinter nicht, und beim Schliessen des
+ * Betrachters fragt sie ein zweites Mal dasselbe. Deshalb hier ein Abo statt
+ * eines Anfangswerts.
+ *
+ * `storage` kommt dazu, weil der Widerruf in den Einstellungen auch aus einer
+ * anderen Lasche stammen kann. Das Ereignis feuert ausdrücklich nur in den
+ * ANDEREN Laschen – der eigene Weg läuft über `horcher`.
+ */
+const horcher = new Set<() => void>();
+
+export function castErlaubnisBeobachten(melden: () => void): () => void {
+  horcher.add(melden);
+  const ausFremderLasche = (e: StorageEvent) => {
+    if (e.key === null || e.key === ERLAUBNIS_SCHLUESSEL) melden();
+  };
+  window.addEventListener('storage', ausFremderLasche);
+  return () => {
+    horcher.delete(melden);
+    window.removeEventListener('storage', ausFremderLasche);
+  };
+}
+
+/**
+ * Kann dieser Browser überhaupt casten – und wenn nein, warum nicht?
+ *
+ * Hier stand einmal ein blosses `castMoeglich(): boolean`, und daran ist die
+ * Oberfläche gescheitert: Ein Nein ohne Grund ergibt eine Leerstelle, und eine
+ * Leerstelle liest sich als Fehler der App. Der Grund – denn „geht nicht" ist drei verschiedene Sachen.
+ *
+ * Ein blosses Ja/Nein war hier zu wenig. Der häufigste Fall in der Praxis ist
+ * der mittlere, und er sieht für den Anwender aus wie ein Fehler der App:
+ *
+ *   * `geht` – Chromium auf https oder localhost.
+ *   * `kein-sicherer-kontext` – dieselbe App über `http://192.168.x.x`, also
+ *     jedes Telefon, das den Entwicklungsserver im WLAN aufruft. Die
+ *     Presentation API ist dort abgeschaltet. Der Browser KÖNNTE casten, die
+ *     Adresse verbietet es. Das ist eine Auskunft wert, keine Leerstelle.
+ *   * `browser-kann-nicht` – Safari, Firefox, und jedes iPhone: Auf iOS
+ *     schreibt Apple die WebKit-Engine vor, also kann dort auch Chrome nicht
+ *     casten. Hier hilft nur ein anderer Weg.
+ */
+export type CastGrund = 'geht' | 'kein-sicherer-kontext' | 'browser-kann-nicht';
+
+export function castGrund(): CastGrund {
+  if (typeof window === 'undefined') return 'browser-kann-nicht';
+  const presentation = typeof (navigator as Navigator & { presentation?: unknown }).presentation;
+  if (!window.isSecureContext) {
+    /*
+     * Ohne sicheren Kontext ist die Presentation API gar nicht erst
+     * vorhanden – die Unterscheidung „Browser kann nicht" gegen „Adresse
+     * erlaubt es nicht" lässt sich hier also nicht am Objekt festmachen. Sie
+     * lässt sich aber am Browser festmachen, und zwar an der einen
+     * Eigenschaft, die alle Chromium-Browser haben und sonst niemand.
+     */
+    const chromium =
+      /Chrome|Chromium|Edg|OPR/.test(navigator.userAgent) &&
+      !/OS X.*Version\//.test(navigator.userAgent);
+    const apfel = /iPhone|iPad|iPod/.test(navigator.userAgent);
+    return chromium && !apfel ? 'kein-sicherer-kontext' : 'browser-kann-nicht';
+  }
+  return presentation !== 'undefined' ? 'geht' : 'browser-kann-nicht';
 }
 
 /* ---------- Laden ---------- */
@@ -184,7 +289,7 @@ let ladeVersprechen: Promise<CastContext | null> | null = null;
  */
 export function castLaden(): Promise<CastContext | null> {
   if (ladeVersprechen) return ladeVersprechen;
-  if (!castMoeglich() || !castErlaubt()) return Promise.resolve(null);
+  if (castGrund() !== 'geht' || !castErlaubt()) return Promise.resolve(null);
 
   ladeVersprechen = new Promise<CastContext | null>((fertig) => {
     const g = welt();
@@ -244,8 +349,17 @@ function einrichten(): CastContext | null {
   return ctx;
 }
 
-/** Der Zustand, wie ihn die Oberfläche braucht. */
-export type CastZustand = 'aus' | 'keine-geraete' | 'bereit' | 'verbindet' | 'verbunden';
+/**
+ * Der Zustand, wie ihn die Oberfläche braucht.
+ *
+ * `aus` heisst „das SDK ist noch nicht da" und ist ein Durchgangszustand.
+ * `fehlgeschlagen` ist das Ende der Fahnenstange: Das Skript kam nicht – kein
+ * Netz, ein Blocker, oder die Frist von acht Sekunden ist abgelaufen. Beides
+ * auseinanderzuhalten ist der Unterschied zwischen „einen Moment noch" und
+ * einem Ladehinweis, der für immer stehen bleibt.
+ */
+export type CastZustand =
+  'aus' | 'fehlgeschlagen' | 'keine-geraete' | 'bereit' | 'verbindet' | 'verbunden';
 
 export function zustandAus(roh: string | undefined): CastZustand {
   switch (roh) {
@@ -272,31 +386,6 @@ export function castBeobachten(ctx: CastContext, melden: (z: CastZustand) => voi
   ctx.addEventListener(art, hoerer);
   melden(zustandAus(ctx.getCastState()));
   return () => ctx.removeEventListener(art, hoerer);
-}
-
-/**
- * Eine Sitzung – die vorhandene oder eine neue.
- *
- * MUSS aus einer echten Fingerbewegung heraus gerufen werden, sonst lässt
- * Chrome den Gerätewähler gar nicht erst auf.
- *
- * Der Rückgabewert des SDK ist eine Falle: `requestSession()` erfüllt sich
- * mit `null`, wenn es geklappt hat, und LEHNT AB mit einer Fehlerkennung als
- * Zeichenkette, wenn nicht. Wer auf einen Wert prüft, statt zu fangen, hält
- * den Erfolg für einen Fehlschlag.
- */
-export async function sitzungHolen(ctx: CastContext): Promise<CastSession | null> {
-  const da = ctx.getCurrentSession();
-  if (da) return da;
-  try {
-    await ctx.requestSession();
-  } catch (fehler) {
-    const kennung = typeof fehler === 'string' ? fehler : (fehler as Error)?.message;
-    // „cancel" heisst: Die Geräteliste wurde zugemacht. Das ist kein Fehler.
-    if (kennung === 'cancel' || kennung === 'CANCEL') return null;
-    throw new Error(castFehlertext(kennung));
-  }
-  return ctx.getCurrentSession();
 }
 
 /** Fehlerkennungen des SDK in Sätze, die man jemandem zeigen kann. */

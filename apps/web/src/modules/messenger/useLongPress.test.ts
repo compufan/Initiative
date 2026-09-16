@@ -132,4 +132,83 @@ describe('useLongPress', () => {
     expect(ausgeloest()).toBe(1);
     expect(verhindert).toBe(true);
   });
+
+  /*
+   * Der Ablauf auf einem Telefon – und der Fehler, den er einmal ergab.
+   *
+   * Android Chrome schiebt nach einem langen Druck sein eigenes
+   * `contextmenu` nach, etwa 500 ms nach dem Aufsetzen. Unser Wecker steht
+   * auf 450. Ohne Schutz lief der Rückruf damit ZWEIMAL je Geste.
+   *
+   * Im Chat fiel das nicht auf (ein Blatt, das zweimal aufgeht, ist offen).
+   * In der Dateiansicht ist derselbe Rückruf ein Umschalter: Die Kachel wurde
+   * ausgewählt und im selben Atemzug wieder abgewählt. Der Anwender sah die
+   * Auswahl aufblitzen und verschwinden.
+   */
+  it('löst nicht noch einmal aus, wenn nach dem Langdruck das Kontextmenü nachkommt', () => {
+    const { haken, ausgeloest } = aufbau();
+    haken.onPointerDown(zeiger(100, 100) as never);
+    vi.advanceTimersByTime(500);
+    expect(ausgeloest()).toBe(1);
+
+    haken.onContextMenu({ preventDefault: () => {} });
+    expect(ausgeloest()).toBe(1);
+
+    haken.onPointerUp();
+    expect(ausgeloest()).toBe(1);
+  });
+
+  /*
+   * Und die Gegenrichtung: Der Rechtsklick muss weiter gehen.
+   *
+   * Er steigt in `onPointerDown` bei Taste 2 sofort aus – das Zurücksetzen
+   * des Merkers muss deshalb VOR diesem Ausstieg stehen. Stünde es dahinter,
+   * bliebe der Merker aus der vorigen Geste stehen und der Rechtsklick
+   * danach täte nichts mehr.
+   */
+  /*
+   * Die Kontextmenü-Taste der Tastatur.
+   *
+   * Sie feuert `contextmenu` auf dem fokussierten Element, ganz ohne
+   * Zeigerereignis. Setzte der Menüweg den Merker selbst, bliebe er danach
+   * stehen – und der zweite Tastendruck täte nichts mehr, weil kein
+   * `pointerdown` dazwischen liegt, das ihn zurücksetzt. Die Kacheln sind
+   * echte Knöpfe mit `aria-pressed`; Tastaturbedienung ist dort vorgesehen.
+   */
+  it('lässt sich mit der Kontextmenü-Taste mehrmals hintereinander auslösen', () => {
+    const { haken, ausgeloest } = aufbau();
+    haken.onContextMenu({ preventDefault: () => {} });
+    haken.onContextMenu({ preventDefault: () => {} });
+    haken.onContextMenu({ preventDefault: () => {} });
+    expect(ausgeloest()).toBe(3);
+  });
+
+  /*
+   * Und der Portal-Schutz, den `onPointerDown` seit einem Vorfall hat und
+   * `onContextMenu` nicht hatte: React reicht auch `contextmenu` durch ein
+   * Portal hindurch am eigenen Baum entlang weiter. Ein Rechtsklick im
+   * Bildeditor, der aus der Lichtbox einer Nachricht heraus offen ist, landete
+   * damit am Nachrichtenmenü.
+   */
+  it('reagiert nicht auf ein Kontextmenü, das einem Portal gehört', () => {
+    const { haken, ausgeloest } = aufbau();
+    haken.onContextMenu({
+      preventDefault: () => {},
+      target: {} as never,
+      currentTarget: { contains: () => false },
+    });
+    expect(ausgeloest()).toBe(0);
+  });
+
+  it('lässt den Rechtsklick auch dann noch auslösen, wenn davor ein Langdruck lief', () => {
+    const { haken, ausgeloest } = aufbau();
+    haken.onPointerDown(zeiger(100, 100) as never);
+    vi.advanceTimersByTime(500);
+    expect(ausgeloest()).toBe(1);
+    haken.onPointerUp();
+
+    haken.onPointerDown({ ...zeiger(100, 100), button: 2 } as never);
+    haken.onContextMenu({ preventDefault: () => {} });
+    expect(ausgeloest()).toBe(2);
+  });
 });

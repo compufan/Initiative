@@ -288,6 +288,72 @@ hochgeladen hat oder wer den Ordner pflegen darf.
 
 **Nachrichten wandern nie.** Nur Anhänge.
 
+## Auf den Fernseher
+
+Fotos, Videos und Diashows auf dem grossen Bildschirm. Es gibt **drei Wege**,
+und das ist Absicht: Keiner davon funktioniert überall.
+
+| Weg | Womit | Was geht | Wo es geht |
+| --- | --- | --- | --- |
+| **Chromecast** (der Ein-Tipp-Weg) | Google Cast | Fotos, Videos, Diashow | Chromium-Browser (Chrome, Edge …) und **nur über https** – **nicht auf dem iPhone** |
+| **AirPlay bzw. Remote Playback** | Eingebaut im Browser | **nur Video** | Safari (AirPlay), Chrome/Edge (Remote Playback) |
+| **Code am Fernseher** (die Rückfallebene) | Der Browser des Fernsehers, eine Seite unter `/tv` | Fotos, Videos, Diashow – **in voller Grösse** | Jeder Fernseher mit Browser, jedes Telefon |
+
+Der zweite Weg erscheint nur an einem einzelnen Video, nie an einer Sammlung –
+er kann dort nichts. Es sind auch zwei verschiedene Techniken hinter einem
+Knopf: die Remote Playback API in Chromium, AirPlay in Safari. Die Oberfläche
+zeigt beide als einen Weg, weil sie sich für den Bedienenden gleich anfühlen.
+
+Im Chat heisst der dritte Weg im Nachrichtenmenü noch „Auf den Fernseher"; in
+einer Sammlung „Kein Chromecast? Code am Fernseher".
+
+Der erste Weg steht vorn, weil er ein Fingertipp ist. Der dritte ist die
+Rückfallebene – und die bessere Wahl, wenn es darauf ankommt: Er zeigt Bilder
+in voller Auflösung statt in 1280 × 720, und die Diashow **läuft weiter, wenn
+das Telefon in der Tasche steckt** (der Fernseher taktet sie selbst).
+
+### Funktioniert Chromecast mit allen Fernsehern?
+
+Nein. Google Cast ist **ein** Standard von mehreren. Der Stand (September 2026):
+
+| Plattform | Google Cast | AirPlay 2 | Browser am Gerät |
+| --- | --- | --- | --- |
+| Google TV / Android TV (Sony, TCL, Hisense, Philips, Sharp …) | ja | teilweise | nein |
+| Chromecast-Stick / Google TV Streamer | ja | nein | nein |
+| **Samsung** (Tizen) | **seit April 2026**, Modelljahre 2023–2026 per Update | ja | ja |
+| **LG** (webOS) | **ab Modelljahr 2024**, 2023er nachgerüstet | ja | ja |
+| Amazon Fire TV | nein (setzt auf Matter Casting) | nein | Silk, nachinstallierbar |
+| Roku | nein | ja | nein |
+| VIDAA (Hisense), Titan OS, TiVo OS | nein | teilweise | meist ja |
+| Apple TV | nein | ja | nein |
+
+Samsung und LG – zusammen der grösste Teil der Wohnzimmer – konnten jahrelang
+**kein** Google Cast. Samsung hat es erst im April 2026 nachgeliefert, und zwar
+nur für Geräte ab Modelljahr 2023. Ein Fernseher steht sieben bis zehn Jahre im
+Haushalt; im Bestand ist die Lücke also deutlich grösser als bei Neugeräten.
+
+**Der härtere Engpass liegt aber nicht beim Fernseher, sondern beim Telefon.**
+Das Cast-Web-SDK läuft nur in Chromium-Browsern, und auf iOS gar nicht – auch
+nicht in Chrome für iOS, weil Apple dort die WebKit-Engine vorschreibt. Jede
+Person mit einem iPhone kann aus dieser App heraus also nicht casten. Für die
+gibt es AirPlay (nur Video) und den Weg mit dem Code (alles).
+
+Die übrigen Standards – Matter Casting, DIAL, Miracast, DLNA – sind aus einer
+Web-App technisch **gar nicht** erreichbar: Sie brauchen UDP-Multicast oder
+Betriebssystem-Rechte, die eine Webseite nicht hat. Google Cast, die Remote
+Playback API in Chromium, AirPlay in Safari und der eigene Weg über den Browser
+des Fernsehers sind zusammen das Maximum dessen, was eine reine Web-App heute
+erreichen kann – und
+genau diese drei sind eingebaut.
+
+### Das Skript von Google
+
+Chromecast braucht ein Skript von `gstatic.com` – das einzige fremde Skript in
+dieser App. Es wird **erst nach ausdrücklicher Zustimmung** geladen, und die
+lässt sich unter *Profil → Einstellungen → Deine Daten* jederzeit wieder
+zurücknehmen. Wer nie zustimmt, hat eine App, die nichts von fremden Servern
+lädt – und die anderen beiden Wege stehen trotzdem offen.
+
 ## Ausgaben
 
 Wer hat ausgelegt, wer schuldet wem wie viel – ohne dass jemand mitschreiben
@@ -483,7 +549,10 @@ Die App ist dafür gebaut, dass Funklöcher, U-Bahn und Flugmodus nicht stören.
 - Die **Bildverarbeitung rechnet im Gerät**: Freistellen und Tiefenschärfe
   laden ihre Modelle vom eigenen Server und schicken keine Bilddaten irgendwohin.
 - Kein Tracking, keine Werbung, keine Weitergabe an Dritte. Die Seite lädt
-  nichts von fremden Servern – keine Schriftart, kein Symbol, kein Zählpixel.
+  **von sich aus** nichts von fremden Servern – keine Schriftart, kein Symbol,
+  kein Zählpixel. Es gibt genau eine Ausnahme, und die schaltest du selbst
+  ein: das Skript für Chromecast (siehe *Auf den Fernseher*). Solange du das
+  nicht tust, gilt der Satz ohne Einschränkung.
 - **Impressum und Datenschutzerklärung** sind ohne Anmeldung erreichbar, direkt
   aus der Fusszeile des Anmeldebildschirms.
 - **Verwendete fremde Software** steht vollständig in der App unter

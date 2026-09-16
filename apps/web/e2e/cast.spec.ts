@@ -150,7 +150,7 @@ test('ohne Zustimmung geht nichts an Google – und mit Zustimmung genau eine Da
    * erscheinen lässt. Ihn anzutippen darf noch nichts laden – erst die
    * Abfrage erklären.
    */
-  const schalter = seite.getByRole('button', { name: 'Fernseher verbinden' }).first();
+  const schalter = seite.getByRole('button', { name: /Chromecast/ }).first();
   await expect(schalter).toBeVisible({ timeout: 15_000 });
   await schalter.click();
   await expect(seite.getByText(/Skript von Google/)).toBeVisible({ timeout: 10_000 });
@@ -161,8 +161,18 @@ test('ohne Zustimmung geht nichts an Google – und mit Zustimmung genau eine Da
   // der es keine Alternative gibt, ist keine.
   await expect(seite.getByText(/Ohne Google geht es auch/)).toBeVisible();
 
+  /*
+   * Die Abfrage muss auch sagen, was NACH der Zustimmung passiert.
+   *
+   * Der Knopf hiess einmal „Erlauben und verbinden" und verband nicht: Der
+   * Gerätewähler von Chrome geht nur aus einer frischen Fingerbewegung auf,
+   * und die ist nach dem Laden des SDK vorbei. Wer das nicht sagt, lässt
+   * jemanden vor einem Bildschirm sitzen, auf dem nichts geschieht.
+   */
+  await expect(seite.getByText(/[Ee]inmal darauf tippen/)).toBeVisible();
+
   /* Jetzt erlauben – und erst jetzt darf genau eine Adresse hinausgehen. */
-  await seite.getByRole('button', { name: 'Erlauben und verbinden' }).click();
+  await seite.getByRole('button', { name: 'Erlauben', exact: true }).click();
   await expect
     .poll(() => fremd.length, {
       timeout: 15_000,
@@ -182,6 +192,44 @@ test('ohne Zustimmung geht nichts an Google – und mit Zustimmung genau eine Da
    */
   const gemerkt = await seite.evaluate(() => localStorage.getItem('initiative.cast-erlaubt'));
   expect(gemerkt).toBe('ja');
+
+  /*
+   * Und jetzt die Prüfung, die hier gefehlt hat.
+   *
+   * Dieser Test sah nach der Zustimmung nur noch auf den Netzverkehr und auf
+   * den lokalen Speicher – nie auf den Bildschirm. Deshalb blieb er grün,
+   * während ein Anwender berichtete:
+   *
+   *   „Danach passiert gar nichts. Der Fernseher-Button ist danach auch weg."
+   *
+   * Genau so war es: Die Komponente gab `null` zurück, solange das SDK noch
+   * lud, und dauerhaft, wenn kein Chromecast im WLAN steht. Auf dem Testläufer
+   * steht keiner – der schlimmste Fall ist hier also der Normalfall, und das
+   * macht ihn zur richtigen Zusicherung.
+   *
+   * Was geprüft wird, ist bewusst nicht ein bestimmter Text: Sichtbar bleiben
+   * muss ETWAS – ein Ladezeichen, der echte Cast-Knopf, ein Hinweis. Was es
+   * genau ist, hängt vom Netz des Läufers ab; dass die Stelle nicht leer ist,
+   * hängt von nichts ab.
+   */
+  const leiste = seite.locator('.fil-toolbar').first();
+  await expect(leiste).toBeVisible();
+  await expect
+    .poll(
+      async () =>
+        leiste.evaluate((el) => {
+          const cast = el.querySelector(
+            '.cast-knopf, .cast-laedt, .cast-hinweis, google-cast-launcher',
+          );
+          return cast ? 1 : 0;
+        }),
+      {
+        timeout: 20_000,
+        message:
+          'nach der Zustimmung steht an der Stelle des Cast-Knopfes nichts mehr – genau der gemeldete Fehler',
+      },
+    )
+    .toBe(1);
 });
 
 test('die Auslieferungsregel erlaubt gstatic im Skript – und sonst nirgends', () => {

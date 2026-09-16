@@ -353,26 +353,39 @@ export function DateienScreen() {
           {aktuell.myLevel !== 'none' && zeigbare > 0 && (
             <>
               {/*
-                Zwei Wege nebeneinander, und das ist Absicht.
+                Zwei Wege, und einer davon ist der erste.
 
-                Der Cast-Knopf ist der kurze: ein Fingertipp, Geräteliste von
-                Chrome, los. Er erscheint nur dort, wo es ihn gibt – Chrome
-                und Edge, https, ein Gerät in Reichweite.
+                Bis hierher standen sie gleichberechtigt nebeneinander – ein
+                nacktes Symbol neben einem beschrifteten Knopf „📺 Auf den
+                Fernseher". Der beschriftete gewinnt jeden Blick, und ein
+                Anwender hat es genau so berichtet: „In der Sammlung kann ich
+                'Auf den Fernseher' anklicken, dann kommt die Anweisung mit dem
+                Code, kein Chromecast."
 
-                „Auf den Fernseher“ daneben ist der lange und der
-                verlässlichere: Er braucht kein Chromecast, läuft in jedem
-                Browser, zeigt Bilder in voller Grösse und läuft weiter, wenn
-                das Telefon in der Tasche steckt. Wer beides hat, soll wählen
-                können; wer nur eines hat, sieht nur eines.
+                Es sind aber keine gleichwertigen Wege. Chromecast ist ein
+                Fingertipp. Der Code-Weg kostet acht Handgriffe an zwei
+                Geräten, zwei davon mit der Fernbedienung. Er ist die
+                Rückfallebene – dafür eine sehr gute, denn er läuft auf jedem
+                Fernseher mit Browser und er läuft weiter, wenn das Telefon in
+                der Tasche steckt.
+
+                Also: Cast vorn und beschriftet, der Code-Weg dahinter und
+                ohne 📺, damit er dem Cast-Symbol keine Konkurrenz macht.
               */}
-              <CastKnopf stuecke={zeigbareIds} sekunden={8} was={aktuell.name} modusWahl />
+              <CastKnopf
+                stuecke={zeigbareIds}
+                sekunden={8}
+                was={aktuell.name}
+                modusWahl
+                stil="leiste"
+              />
               <button
                 type="button"
-                className="btn btn-sm"
+                className="btn btn-sm btn-ghost"
                 onClick={() => setFernseher(true)}
-                data-tipp="Diese Sammlung als Diashow auf einem Fernseher zeigen – auch ohne Chromecast"
+                data-tipp="Läuft auf jedem Fernseher mit Browser – auch ohne Chromecast, und auch wenn das Telefon in der Tasche steckt"
               >
-                📺 Auf den Fernseher
+                Kein Chromecast? Code am Fernseher
               </button>
             </>
           )}
@@ -774,7 +787,21 @@ function DateiKachel({
         className="fil-tile-open"
         aria-pressed={auswahlAktiv ? ausgewaehlt : undefined}
         onClick={() => {
-          if (langGedrueckt.current) return;
+          /*
+           * Die Sperre wird VERBRAUCHT, nicht nur gelesen.
+           *
+           * Sie stand vorher bis zum nächsten Zeigerdruck. Für die Maus
+           * stimmte das – nach einem Rechtsklick kommt kein Klick. Für die
+           * Tastatur nicht: Enter und die Leertaste erzeugen auf einem
+           * `<button>` ein `click` ganz ohne Zeigerereignis. Wer die Kachel
+           * mit der Kontextmenü-Taste ausgewählt hatte, konnte sie danach mit
+           * Enter weder abwählen noch öffnen – die Sperre lag für immer auf
+           * genau dieser Kachel.
+           */
+          if (langGedrueckt.current) {
+            langGedrueckt.current = false;
+            return;
+          }
           if (auswahlAktiv) onWaehlen();
           else onOpen();
         }}

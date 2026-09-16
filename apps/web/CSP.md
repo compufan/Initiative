@@ -46,9 +46,17 @@ Ebene, nicht in einem Klappmenü. Ein nachgebautes Symbol wäre ein Verstoss.
 
 ## Die Wege, die ohne fremden Code auskommen
 
-Sie bleiben, und zwar nicht aus Nostalgie: Cast gibt es nur in Chrome und
-Edge, es zeigt Bilder höchstens mit 1280 × 720, und eine Bild-Diashow muss
-vom Telefon getaktet werden und endet, wenn die App zugeht.
+Sie bleiben, und zwar nicht aus Nostalgie. Cast läuft nur in Chromium-Browsern
+und auf dem iPhone **gar nicht** – auch nicht in Chrome für iOS, weil Apple
+dort die WebKit-Engine vorschreibt. Es zeigt Bilder höchstens mit 1280 × 720,
+und eine Bild-Diashow muss vom Telefon getaktet werden und endet, wenn die App
+zugeht.
+
+Auf der Empfängerseite ist die Lücke kleiner geworden – Samsung hat Google Cast
+im April 2026 nachgeliefert (Modelljahre ab 2023), LG ab Modelljahr 2024 –,
+aber ein Fernseher steht sieben bis zehn Jahre im Haushalt. Fire TV und Roku
+können es gar nicht. Die Aufstellung steht in
+[docs/FEATURES.md](../../docs/FEATURES.md#funktioniert-chromecast-mit-allen-fernsehern).
 
 
 

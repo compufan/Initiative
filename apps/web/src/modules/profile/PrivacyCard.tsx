@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react';
 import { herunterladen } from '../../lib/herunterladen.js';
 import { Sheet } from '../../components/Sheet.js';
 import { api, API_BASE } from '../../lib/api.js';
+import { castErlaubt, castErlauben, castGrund } from '../fernseher/cast.js';
 import { useSession } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
+import { Toggle } from './Toggle.js';
 
 /**
  * Deine Daten – ansehen, mitnehmen, löschen.
@@ -43,6 +45,8 @@ export function PrivacyCard() {
         keine Analyse, keine fremden Dienste im Hintergrund.
       </p>
 
+      <CastSchalter />
+
       <a
         className="btn btn-block"
         href={`${API_BASE}/datenschutz`}
@@ -71,6 +75,50 @@ export function PrivacyCard() {
 
       <LoeschSheet open={loeschen} onClose={() => setLoeschen(false)} />
     </section>
+  );
+}
+
+/**
+ * Der Widerruf für die eine Einwilligung, die diese App überhaupt einholt.
+ *
+ * Es gibt genau ein fremdes Skript in dieser App: `cast_sender.js` von Google,
+ * für das Streamen auf einen Chromecast. Es wird erst geholt, wenn jemand
+ * ausdrücklich zustimmt – und eine Einwilligung, die sich nicht so leicht
+ * zurücknehmen lässt, wie sie gegeben wurde, ist nach Art. 7 Abs. 3 DSGVO
+ * keine. Der Schalter ist also keine Bequemlichkeit, sondern die zweite Hälfte
+ * der Abfrage.
+ *
+ * Das schon geladene Skript geht damit nicht weg – dafür braucht es ein
+ * Neuladen der Seite, und das steht auch da. Was sofort geht: Ab jetzt wird es
+ * nicht mehr geholt, und der Cast-Knopf kommt zurück in seinen
+ * Ausgangszustand.
+ */
+function CastSchalter() {
+  const [an, setAn] = useState(castErlaubt);
+  // Wo Cast gar nicht geht, gibt es auch nichts zu widerrufen – und ein
+  // Schalter für etwas, das dieses Gerät nicht kann, ist nur eine Frage mehr.
+  if (castGrund() !== 'geht' && !an) return null;
+
+  return (
+    <Toggle
+      label="Streamen über Google (Chromecast)"
+      description={
+        an
+          ? 'Eingeschaltet. Beim Streamen lädt der Browser ein Skript von gstatic.com; Google erfährt dabei deine IP-Adresse.'
+          : 'Aus. Die App lädt nichts von fremden Servern. Zum Streamen auf einen Chromecast braucht es ein Skript von Google – du wirst vorher gefragt.'
+      }
+      checked={an}
+      onChange={(neu) => {
+        castErlauben(neu);
+        setAn(neu);
+        toast(
+          neu
+            ? 'Streamen über Google eingeschaltet.'
+            : 'Aus. Eine laufende Verbindung zum Fernseher ist getrennt; beim nächsten Laden der Seite ist auch das Skript wieder weg.',
+          'success',
+        );
+      }}
+    />
   );
 }
 

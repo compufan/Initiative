@@ -5,7 +5,19 @@ export interface LongPressHandlers {
   onPointerMove: (event: ReactPointerEvent) => void;
   onPointerUp: () => void;
   onPointerCancel: () => void;
-  onContextMenu: (event: { preventDefault: () => void }) => void;
+  onContextMenu: (event: {
+    preventDefault: () => void;
+    /*
+     * Beide optional und absichtlich schmal getippt.
+     *
+     * So erfüllt Reacts `MouseEvent` die Angabe von selbst (dort ist
+     * `currentTarget` das Element mit seinem `contains`), und zugleich lässt
+     * sich der Haken weiter ohne echtes Ereignis aufrufen – die Tests dieses
+     * Projekts tun genau das.
+     */
+    target?: EventTarget | null;
+    currentTarget?: { contains(ziel: Node | null): boolean } | null;
+  }) => void;
 }
 
 /**
@@ -15,6 +27,27 @@ export interface LongPressHandlers {
 export function useLongPress(onTrigger: () => void, delay = 450): LongPressHandlers {
   const timer = useRef<number | null>(null);
   const origin = useRef<{ x: number; y: number } | null>(null);
+  /**
+   * Hat diese eine Geste schon ausgelöst?
+   *
+   * # Der Fehler, den das abfängt
+   *
+   * Auf einem Telefon feuert der Browser beim langen Drücken NACH unserem
+   * Wecker noch sein eigenes `contextmenu` – Android Chrome nach etwa 500 ms,
+   * unser Wecker steht auf 450. Damit lief `onTrigger` zweimal je Geste.
+   *
+   * Im Chat fiel das nie auf: Dort öffnet es ein Blatt, und ein Blatt, das
+   * zweimal aufgeht, ist immer noch offen. In der Dateiansicht ist derselbe
+   * Rückruf ein UMSCHALTER – der erste Aufruf wählte die Kachel aus, der
+   * zweite sofort wieder ab. Der Anwender sah die Auswahl kurz aufblitzen und
+   * verschwinden, und eine zweite Kachel liess sich gar nicht mehr dazuwählen,
+   * weil die Auswahl ja nicht mehr stand.
+   *
+   * Zurückgesetzt wird beim nächsten Zeigerdruck, und zwar VOR allen frühen
+   * Ausstiegen: Ein Rechtsklick steigt gleich darunter aus (Taste 2), soll
+   * aber weiterhin über `contextmenu` auslösen dürfen.
+   */
+  const gefeuert = useRef(false);
 
   const clear = useCallback(() => {
     if (timer.current != null) {
@@ -28,6 +61,9 @@ export function useLongPress(onTrigger: () => void, delay = 450): LongPressHandl
 
   return {
     onPointerDown(event) {
+      // Eine neue Geste beginnt – siehe `gefeuert`. Diese Zeile steht mit
+      // Absicht vor jedem `return` darunter.
+      gefeuert.current = false;
       if (event.button != null && event.button !== 0) return;
       /*
        * Nur, wenn der Druck WIRKLICH auf dieser Nachricht landete.
@@ -66,6 +102,7 @@ export function useLongPress(onTrigger: () => void, delay = 450): LongPressHandl
       origin.current = { x: event.clientX, y: event.clientY };
       timer.current = window.setTimeout(() => {
         timer.current = null;
+        gefeuert.current = true;
         onTrigger();
       }, delay);
     },
@@ -77,8 +114,40 @@ export function useLongPress(onTrigger: () => void, delay = 450): LongPressHandl
     onPointerUp: clear,
     onPointerCancel: clear,
     onContextMenu(event) {
+      /*
+       * Derselbe Portal-Schutz wie oben – er fehlte hier.
+       *
+       * React leitet auch `contextmenu` am eigenen Baum entlang weiter, also
+       * durch ein Portal hindurch. Ein Rechtsklick im Bildeditor, der aus der
+       * Lichtbox einer Nachricht heraus geöffnet wurde, landete deshalb am
+       * Nachrichtenmenü. Für `onPointerDown` ist das seit einem Vorfall
+       * abgesichert; hier war es vergessen.
+       *
+       * `contains` ist optional, weil diese Haken auch ohne echtes Ereignis
+       * aufgerufen werden (Tests, künstlich ausgelöste Menüs). Fehlt die
+       * Auskunft, gilt der Druck als eigener – das ist die Richtung, in der
+       * nichts verlorengeht.
+       */
+      const ziel = event.target as Node | null;
+      if (ziel && event.currentTarget && !event.currentTarget.contains(ziel)) return;
+
+      /*
+       * `preventDefault` immer – das Systemmenü stört in beiden Fällen.
+       * Auslösen aber nur, wenn der Wecker es nicht schon getan hat.
+       *
+       * Auf der Maus ist das der Rechtsklick und der einzige Auslöser; auf
+       * dem Finger ist es das nachgeschobene Menü zu einem Druck, der längst
+       * gewirkt hat.
+       *
+       * Der Merker wird hier NICHT gesetzt. Er gehört dem Weckerweg, und
+       * dieser Weg liest ihn nur. Setzte er ihn auch, bliebe er nach einem
+       * Menü ohne Zeigerdruck stehen – die Kontextmenü-Taste der Tastatur
+       * erzeugt genau das –, und der nächste Druck derselben Taste täte
+       * nichts mehr.
+       */
       event.preventDefault();
       clear();
+      if (gefeuert.current) return;
       onTrigger();
     },
   };

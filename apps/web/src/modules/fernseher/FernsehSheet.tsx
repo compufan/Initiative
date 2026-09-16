@@ -151,6 +151,20 @@ export function FernsehSheet({
         </div>
       ) : (
         <div className="tv-einstellen">
+          {/*
+            Wozu dieser Weg da ist – bevor jemand acht Handgriffe macht.
+
+            Er ist die Rückfallebene hinter Chromecast, und das steht jetzt
+            auch dort, wo er beginnt. Aber er ist nicht die schlechtere
+            Fassung: Er läuft auf jedem Fernseher mit Browser, er zeigt Bilder
+            in voller Grösse statt in 1280 × 720, und er läuft weiter, wenn
+            das Telefon in der Tasche steckt – die Diashow taktet sich im
+            Fernseher selbst (`src/tv/tv.ts`), nicht von hier aus.
+          */}
+          <p className="tv-zeile">
+            Für jeden Fernseher mit Browser – auch ohne Chromecast. Fotos in voller Grösse, und die
+            Diashow läuft weiter, wenn das Telefon in der Tasche steckt.
+          </p>
           <ol className="tv-schritte">
             <li>
               Öffne am Fernseher den Browser und gib <strong>{tvAdresse()}</strong> ein.

@@ -161,6 +161,72 @@ test('lange drücken wählt aus, und die Auswahl bekommt eine Priorität', async
   await http.dispose();
 });
 
+test('das Kontextmenü nach dem langen Drücken hebt die Auswahl nicht wieder auf', async ({
+  browser,
+  baseURL,
+}) => {
+  /*
+   * Der Ablauf auf einem Telefon, nachgestellt.
+   *
+   * Android Chrome schiebt nach einem langen Druck sein eigenes
+   * `contextmenu` nach – etwa 500 ms nach dem Aufsetzen, unser Wecker steht
+   * auf 450. `useLongPress` löste damit zweimal aus, und weil die Auswahl ein
+   * Umschalter ist, war sie sofort wieder weg. Ein Anwender hat es so
+   * gemeldet: „Wenn ich eine Datei gedrückt halte, dann wird sie scheinbar
+   * sehr kurz ausgewählt, aber nur für einen Augenblick."
+   *
+   * Der Haken selbst hat dafür einen eigenen Test
+   * (`useLongPress.test.ts`). Hier geht es um die VERDRAHTUNG: dass die
+   * Kachel den Haken so benutzt, dass beides zusammen stimmt.
+   */
+  const http = await request.newContext();
+  const anna = await registrieren(http, 'kontext');
+  const kopf = { authorization: `Bearer ${anna.accessToken}` };
+
+  const sammlung = await (
+    await http.post(`${API}/collections`, {
+      headers: kopf,
+      data: { name: `Kontext ${Date.now()}` },
+    })
+  ).json();
+  const anhang = await hochladen(http, anna, 'strand.png');
+  await http.post(`${API}/collections/${sammlung.id}/items`, {
+    headers: kopf,
+    data: { attachmentId: anhang },
+  });
+
+  const wurzel = baseURL ?? 'http://localhost:5173';
+  const seite = await seiteFuer(browser, anna, wurzel);
+  await seite.goto(`${wurzel}/dateien/${sammlung.id}`);
+
+  const kachel = seite.locator('.fil-tile-open').filter({ hasText: 'strand.png' }).first();
+  await expect(kachel).toBeVisible({ timeout: 15_000 });
+  const kasten = await kachel.boundingBox();
+  if (!kasten) throw new Error('Die Kachel hat keine Fläche');
+
+  // Drücken und HALTEN, bis der Wecker geklingelt hat.
+  await seite.mouse.move(kasten.x + kasten.width / 2, kasten.y + kasten.height / 2);
+  await seite.mouse.down();
+  await expect(seite.getByText('1 ausgewählt')).toBeVisible({ timeout: 10_000 });
+
+  // Und jetzt das, was der Browser von sich aus nachschiebt.
+  await kachel.dispatchEvent('contextmenu');
+  await seite.mouse.up();
+
+  /*
+   * Kurz warten, damit ein zweiter Aufruf auch wirklich Zeit hätte
+   * durchzuschlagen – sonst prüfte diese Zusicherung nur, dass React noch
+   * nicht neu gezeichnet hat.
+   */
+  await seite.waitForTimeout(400);
+  await expect(
+    seite.getByText('1 ausgewählt'),
+    'das Kontextmenü hat die Auswahl wieder abgewählt',
+  ).toBeVisible();
+
+  await http.dispose();
+});
+
 test('eine ausgewählte Datei lässt sich in einen Chat weitergeben', async ({
   browser,
   baseURL,

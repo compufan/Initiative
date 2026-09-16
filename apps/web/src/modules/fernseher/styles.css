@@ -117,6 +117,76 @@
 }
 
 /*
+ * Derselbe Knopf in einer gewöhnlichen Werkzeugleiste.
+ *
+ * Weiss auf Weiss wäre hier unsichtbar – und genau das wäre wieder die
+ * Leerstelle, um die es in dieser Datei geht. In der Leiste nimmt das Symbol
+ * die Textfarbe an, und der Schatten fällt weg: Er ist dafür da, ein Symbol
+ * über einem Foto abzuheben, und auf einer ruhigen Fläche sieht er nur
+ * schmutzig aus.
+ */
+.cast-knopf-leiste google-cast-launcher {
+  --disconnected-color: var(--text);
+  filter: none;
+}
+
+/*
+ * Der Satz, der erscheint, wenn nichts gefunden wurde – oder wenn dieser
+ * Browser gar nicht casten kann.
+ *
+ * Er steht hier, weil an dieser Stelle einmal NICHTS stand: Der Knopf gab
+ * `null` zurück, und ein Anwender hat das so erlebt, dass die App nach seiner
+ * Zustimmung kaputtging. Eine Leerstelle erklärt sich nie von selbst.
+ *
+ * Deshalb auch `max-width` statt eines Umbruchverbots: Der Satz darf zwei
+ * Zeilen brauchen. Er soll gelesen werden, nicht in eine Leiste passen.
+ */
+/*
+ * Der Ladezustand zwischen Zustimmung und erstem Lebenszeichen des SDK.
+ *
+ * Er hat bewusst kein eigenes Symbol: Ab hier gehört die Rolle des
+ * Cast-Knopfes dem echten `<google-cast-launcher>` (§5.1), und ein
+ * nachgemaltes 📺 an seiner Stelle wäre genau das, was die Bedingungen
+ * ausschliessen – auch ein gesperrtes.
+ */
+.cast-laedt {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 24px;
+  min-height: 24px;
+}
+
+/*
+ * Das Symbol, das stehen bleibt, wenn kein Gerät gefunden wurde – nur in der
+ * dunklen Leiste über einem Foto, wo für einen Satz kein Platz ist.
+ *
+ * Gedämpft, aber anfassbar: Wer darauf tippt, bekommt den Satz als Meldung.
+ * Ein Knopf, der nichts tut, wäre schlechter als keiner; einer, der die
+ * Auskunft gibt, ist genau das, was an dieser Stelle gefehlt hat.
+ */
+.cast-leer-knopf {
+  opacity: 0.55;
+}
+
+.cast-hinweis {
+  max-width: 26ch;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+/*
+ * Ohne Gerät blendet `<google-cast-launcher>` sich selbst aus. Diese Regel
+ * ist der Gürtel zum Hosenträger: Sollte eine künftige Fassung des SDK das
+ * anders halten, steht hier kein toter Knopf neben dem Satz, der gerade
+ * erklärt, dass es nichts zu drücken gibt.
+ */
+.cast-knopf.ist-leer google-cast-launcher {
+  display: none;
+}
+
+/*
  * Die Abfrage vor dem ersten Mal.
  *
  * Sie ist ausdrücklich keine Wand aus Kleingedrucktem: Was Google erfährt,
