@@ -1,4 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   ATTACHMENT_KINDS,
@@ -20,11 +26,13 @@ import { toast } from '../../state/ui.js';
 import { CollectionSheet } from './CollectionSheet.js';
 import { UploadToCollectionSheet } from './UploadToCollectionSheet.js';
 import { FileViewer } from './FileViewer.js';
+import { DateiAktionen } from '../media/DateiAktionen.js';
 import { ShareSheet } from './ShareSheet.js';
 import { FernsehSheet } from '../fernseher/FernsehSheet.js';
 import { CastKnopf } from '../fernseher/CastKnopf.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 import { miniaturSrc } from '../media/helpers.js';
+import { useLongPress } from '../messenger/useLongPress.js';
 import { pfadZu, useFiles } from './state.js';
 import { MAX_KANTE } from '../bild/doc.js';
 
@@ -73,6 +81,16 @@ export function DateienScreen() {
    * faellt.
    */
   const [betrachterId, setBetrachterId] = useState<string | null>(null);
+  /**
+   * Die Mehrfachauswahl – als Kennungen der EINTRÄGE, nicht der Anhänge.
+   *
+   * Dieselbe Datei kann zweimal in derselben Sammlung liegen (einmal aus dem
+   * Chat, einmal direkt abgelegt). Mit Anhangskennungen liesse sich der eine
+   * Eintrag nicht vom anderen unterscheiden, und „diesen hier löschen" träfe
+   * beide.
+   */
+  const [auswahl, setAuswahl] = useState<string[]>([]);
+  const [auswahlAktionen, setAuswahlAktionen] = useState(false);
 
   const aktuell = collectionId ? collections.find((entry) => entry.id === collectionId) : undefined;
   // Nicht als Selektor: `childrenOf` baut jedes Mal ein neues Feld, und zustand
@@ -166,6 +184,10 @@ export function DateienScreen() {
   zuruecksetzenRef.current = filter.zuruecksetzen;
   useEffect(() => {
     zuruecksetzenRef.current();
+    // Eine Auswahl aus dem vorigen Ordner gilt hier nicht mehr. Ohne das
+    // stünde „3 ausgewählt" über einem Ordner, in dem keine dieser Dateien
+    // liegt.
+    setAuswahl([]);
   }, [collectionId]);
 
   // Der Betrachter haengt an einem Index – und zwar in GENAU der Liste, die
@@ -178,6 +200,61 @@ export function DateienScreen() {
     : -1;
   const darfAendern = aktuell ? allowsLevel(aktuell.myLevel, 'edit') : true;
   const darfBesitzen = aktuell ? allowsLevel(aktuell.myLevel, 'own') : false;
+
+  /*
+   * Die Auswahl, aber nur, was auch wirklich noch da ist.
+   *
+   * Zwischen dem Antippen und dem Handeln kann gefiltert, gelöscht oder neu
+   * geladen worden sein. Ohne diesen Abgleich stünde „5 ausgewählt" über drei
+   * Kacheln, und die Sammelaktion arbeitete auf Kennungen ins Leere.
+   */
+  const gewaehlt = useMemo(
+    () => sichtbar.filter((item) => auswahl.includes(item.id)),
+    [sichtbar, auswahl],
+  );
+  const auswahlAktiv = gewaehlt.length > 0;
+
+  function auswahlUmschalten(itemId: string) {
+    setAuswahl((liste) =>
+      liste.includes(itemId) ? liste.filter((wert) => wert !== itemId) : [...liste, itemId],
+    );
+  }
+
+  /** Alle ausgewählten Einträge entfernen – nacheinander, damit ein Fehler den Rest nicht mitnimmt. */
+  async function gewaehlteEntfernen() {
+    if (!collectionId) return;
+    let weg = 0;
+    const gescheitert: string[] = [];
+    for (const item of gewaehlt) {
+      try {
+        await api.collections.removeItem(collectionId, item.id);
+        weg += 1;
+      } catch {
+        gescheitert.push(item.title ?? item.attachment.fileName ?? 'Datei');
+      }
+    }
+    await useFiles.getState().loadItems(collectionId, true);
+    setAuswahl([]);
+    if (gescheitert.length > 0) {
+      toast(`${weg} entfernt, ${gescheitert.length} nicht: ${gescheitert.join(', ')}`, 'error');
+    } else {
+      toast(weg === 1 ? 'Entfernt.' : `${weg} Dateien entfernt.`, 'success');
+    }
+  }
+
+  /**
+   * Einen einzelnen Eintrag entfernen – aus dem Betrachter heraus.
+   *
+   * Sucht über den ANHANG, weil der Betrachter nur Anhänge kennt: Er bekommt
+   * `AttachmentDto[]`, keine Sammlungseinträge.
+   */
+  async function eintragEntfernen(anhangId: string) {
+    if (!collectionId) return;
+    const eintrag = items.find((wert) => wert.attachment.id === anhangId);
+    if (!eintrag) return;
+    await api.collections.removeItem(collectionId, eintrag.id);
+    await useFiles.getState().loadItems(collectionId, true);
+  }
 
   /**
    * Eine Sammlung löschen – mit Rückfrage und gegen Doppeltippen gesperrt.
@@ -380,15 +457,46 @@ export function DateienScreen() {
 
           {collectionId && !inhaltGeladen && !fehler && <Spinner label="Inhalt wird geladen …" />}
 
-          {items.length > 1 && filter.steuerung}
+          {items.length > 1 && !auswahlAktiv && filter.steuerung}
+
+          {/*
+            Die Auswahlleiste ersetzt die Filterleiste, statt sich darunter zu
+            schieben. Beides zugleich wären zwei Werkzeugleisten übereinander
+            auf einem Telefon – und filtern will hier gerade niemand.
+          */}
+          {auswahlAktiv && (
+            <div className="fil-toolbar fil-auswahlleiste" role="status">
+              <strong>{gewaehlt.length} ausgewählt</strong>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={() => setAuswahl(sichtbar.map((item) => item.id))}
+              >
+                Alle
+              </button>
+              <button type="button" className="btn btn-sm" onClick={() => setAuswahl([])}>
+                Aufheben
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                onClick={() => setAuswahlAktionen(true)}
+              >
+                ⋯ Aktionen
+              </button>
+            </div>
+          )}
 
           {sichtbar.length > 0 && (
             <ul className="fil-grid">
-              {sichtbar.map((item, index) => (
+              {sichtbar.map((item) => (
                 <DateiKachel
                   key={item.id}
                   item={item}
                   collectionId={collectionId!}
+                  ausgewaehlt={auswahl.includes(item.id)}
+                  auswahlAktiv={auswahlAktiv}
+                  onWaehlen={() => auswahlUmschalten(item.id)}
                   onOpen={() => setBetrachterId(item.id)}
                 />
               ))}
@@ -453,12 +561,39 @@ export function DateienScreen() {
           onConfirm={() => void loeschen()}
         />
       )}
+      {collectionId && (
+        <DateiAktionen
+          open={auswahlAktionen}
+          onClose={() => setAuswahlAktionen(false)}
+          anhaenge={gewaehlt.map((item) => item.attachment)}
+          loeschen={darfAendern ? gewaehlteEntfernen : undefined}
+          loeschText={
+            gewaehlt.every((item) => item.messageId)
+              ? 'Die Dateien bleiben in den Chats, aus denen sie kommen – sie sind nur nicht mehr in dieser Sammlung.'
+              : 'Ein Teil davon wurde direkt hier abgelegt und liegt in keinem Chat. Diese Dateien sind danach nicht mehr erreichbar.'
+          }
+          onGeaendert={() => void loadItems(collectionId, true)}
+        />
+      )}
+
       {betrachterIndex >= 0 && (
         <FileViewer
           items={anhaenge}
           index={betrachterIndex}
           onClose={() => setBetrachterId(null)}
           zielName={darfAendern ? 'In die Sammlung' : undefined}
+          aktionen={
+            collectionId
+              ? {
+                  loeschen: darfAendern ? (datei) => eintragEntfernen(datei.id) : undefined,
+                  loeschText: (datei) =>
+                    items.find((item) => item.attachment.id === datei.id)?.messageId
+                      ? 'Die Datei bleibt im Chat, aus dem sie kommt – sie ist nur nicht mehr in dieser Sammlung.'
+                      : 'Diese Datei wurde direkt hier abgelegt und liegt in keinem Chat. Nach dem Entfernen ist sie nicht mehr erreichbar.',
+                  onGeaendert: () => void loadItems(collectionId, true),
+                }
+              : undefined
+          }
           ablegen={
             darfAendern && aktuell
               ? async (blob, name) => {
@@ -562,19 +697,61 @@ function Kachelbild({ attachment }: { attachment: AttachmentDto }) {
   );
 }
 
+/**
+ * Eine Kachel – und der Einstieg in die Mehrfachauswahl.
+ *
+ * Langes Drücken wählt aus, wie überall sonst in dieser App (im Chat öffnet
+ * es das Nachrichtenmenü, hier die Auswahl). Solange etwas ausgewählt ist,
+ * wählt ein kurzer Tipp weiter aus, statt die Datei zu öffnen – sonst müsste
+ * man zwischen zwei Dateien jedes Mal den Betrachter wegklicken.
+ */
 function DateiKachel({
   item,
   collectionId,
+  ausgewaehlt,
+  auswahlAktiv,
+  onWaehlen,
   onOpen,
 }: {
   item: CollectionItemDto;
   collectionId: string;
+  ausgewaehlt: boolean;
+  auswahlAktiv: boolean;
+  onWaehlen: () => void;
   onOpen: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [frage, setFrage] = useState(false);
   const darfAendern = allowsLevel(item.myLevel, 'edit');
   const name = item.title ?? item.attachment.fileName ?? 'Datei';
+  /*
+   * Langes Drücken UND der Klick danach – das ist ein Ereignis zu viel.
+   *
+   * `useLongPress` schlägt nach 450 ms zu, der Finger liegt aber noch auf der
+   * Kachel. Beim Loslassen feuert der Browser zusätzlich ein `click`, und der
+   * traf hier denselben Knopf: Die Auswahl ging auf, und im selben Atemzug
+   * wieder zu. Sichtbar war davon nichts – man drückte lange und es geschah
+   * scheinbar gar nichts.
+   *
+   * Im Chat fällt das nicht auf, weil dort ein Blatt aufgeht und der Klick auf
+   * dessen Hintergrund landet. Hier bleibt die Kachel, wo sie ist.
+   *
+   * Zurückgesetzt wird beim nächsten Zeigerdruck und nicht nach dem Klick:
+   * Über das Kontextmenü (rechte Maustaste) folgt gar kein Klick, und eine
+   * Sperre, die dann liegen bliebe, frässe den nächsten echten Tipp.
+   */
+  const langGedrueckt = useRef(false);
+  const roh = useLongPress(() => {
+    langGedrueckt.current = true;
+    onWaehlen();
+  });
+  const langdruck = {
+    ...roh,
+    onPointerDown(event: ReactPointerEvent) {
+      langGedrueckt.current = false;
+      roh.onPointerDown(event);
+    },
+  };
 
   async function entfernen() {
     setBusy(true);
@@ -591,12 +768,40 @@ function DateiKachel({
   }
 
   return (
-    <li className="fil-tile">
-      <button type="button" className="fil-tile-open" onClick={onOpen}>
+    <li className={ausgewaehlt ? 'fil-tile is-gewaehlt' : 'fil-tile'}>
+      <button
+        type="button"
+        className="fil-tile-open"
+        aria-pressed={auswahlAktiv ? ausgewaehlt : undefined}
+        onClick={() => {
+          if (langGedrueckt.current) return;
+          if (auswahlAktiv) onWaehlen();
+          else onOpen();
+        }}
+        {...langdruck}
+      >
         <Kachelbild attachment={item.attachment} />
         <span className="fil-tile-name truncate">{name}</span>
-        <span className="fil-meta">{formatBytes(item.attachment.size)}</span>
+        <span className="fil-meta">
+          {formatBytes(item.attachment.size)}
+          {/*
+            Ein ausgelagertes Foto lädt beim ersten Mal länger. Das hier ist
+            der Unterschied zwischen „langsam" und „langsam, weil es dort
+            liegt" – und damit zwischen kaputt und erklärt.
+          */}
+          {item.attachment.ablage === 'fern' && (
+            <span data-tipp="Liegt auf dem grossen Speicher – das erste Laden dauert einen Moment länger.">
+              {' '}
+              ☁️
+            </span>
+          )}
+        </span>
       </button>
+      {auswahlAktiv && (
+        <span className="fil-tile-haken" aria-hidden="true">
+          {ausgewaehlt ? '☑️' : '⬜'}
+        </span>
+      )}
       {/*
           Das ✕ fragt nach.
 
@@ -606,7 +811,7 @@ function DateiKachel({
           Rückgängig. Überall sonst in dieser App steht vor dem Entfernen ein
           zweiter Schritt.
       */}
-      {darfAendern && (
+      {darfAendern && !auswahlAktiv && (
         <button
           type="button"
           className="fil-tile-remove"

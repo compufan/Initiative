@@ -510,6 +510,11 @@ pub struct Bilanz {
 /// liegen. Das ist die Zahl, die der Anwender meint, wenn er „Daten im
 /// Zusammenhang mit der App" sagt: Nachrichten sind Text in einer Datenbank
 /// und gegen ein einziges Video ein Rundungsfehler.
+///
+/// `quelle_id is null` zählt nur Originale. Eine in einen Chat weitergegebene
+/// Datei ist eine zweite Zeile auf denselben Bytes (Migration 0020) – sie
+/// mitzuzählen hiesse, ein dreimal geteiltes Video für vier Videos zu halten
+/// und Platz freizuräumen, den es gar nicht gibt.
 pub async fn belegt(pool: &PgPool) -> i64 {
     /*
      * Das `::bigint` ist kein Schmuck.
@@ -532,7 +537,7 @@ pub async fn belegt(pool: &PgPool) -> i64 {
      */
     match sqlx::query_scalar::<_, i64>(
         "select coalesce(sum(size), 0)::bigint from attachments
-          where ablage = 'lokal' and status = 'ready'",
+          where ablage = 'lokal' and status = 'ready' and quelle_id is null",
     )
     .fetch_one(pool)
     .await
@@ -564,6 +569,7 @@ async fn kandidaten(pool: &PgPool, erlaubt: Erlaubt) -> Vec<Kandidat> {
         "select id, size, created_at, prioritaet
            from attachments
           where ablage = 'lokal' and status = 'ready' and size > 0
+            and quelle_id is null
             and prioritaet = any($1)
           order by created_at asc
           limit 5000",
@@ -628,17 +634,31 @@ async fn umziehen(
         return Ok(0);
     };
 
-    sqlx::query("update attachments set ablage = 'wandert' where id = $1 and ablage = 'lokal'")
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(|f| f.to_string())?;
+    /*
+     * Umgeschrieben wird nach SCHLÜSSEL, nicht nach Kennung.
+     *
+     * Seit Migration 0020 können mehrere Zeilen auf denselben Bytes liegen –
+     * eine weitergegebene Datei ist dieselbe Datei. Bewegt würde sie trotzdem
+     * nur einmal (`kandidaten` sieht nur Originale), aber WISSEN müssen es
+     * alle: Eine Kopie, die weiter „lokal" behauptet, während die Bytes drüben
+     * liegen, schickt die Weiche in die falsche Ablage.
+     */
+    sqlx::query(
+        "update attachments set ablage = 'wandert'
+          where storage_key = $1 and ablage = 'lokal'",
+    )
+    .bind(&schluessel)
+    .execute(pool)
+    .await
+    .map_err(|f| f.to_string())?;
 
     let zurueck = || async {
-        let _ = sqlx::query("update attachments set ablage = 'lokal' where id = $1")
-            .bind(id)
-            .execute(pool)
-            .await;
+        let _ = sqlx::query(
+            "update attachments set ablage = 'lokal' where storage_key = $1 and ablage = 'wandert'",
+        )
+        .bind(&schluessel)
+        .execute(pool)
+        .await;
     };
 
     let Some(objekt) = warm
@@ -692,11 +712,14 @@ async fn umziehen(
         ));
     }
 
-    sqlx::query("update attachments set ablage = 'fern', ausgelagert_at = now() where id = $1")
-        .bind(id)
-        .execute(pool)
-        .await
-        .map_err(|f| f.to_string())?;
+    sqlx::query(
+        "update attachments set ablage = 'fern', ausgelagert_at = now()
+          where storage_key = $1",
+    )
+    .bind(&schluessel)
+    .execute(pool)
+    .await
+    .map_err(|f| f.to_string())?;
 
     /*
      * Erst jetzt die lokale Fassung. Scheitert das, ist es kein Drama: Die

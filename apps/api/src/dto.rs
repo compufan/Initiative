@@ -76,6 +76,25 @@ pub struct AttachmentDto {
     pub preview_data_url: Option<String>,
     pub url: String,
     pub status: String,
+    /**
+     * `niedrig` | `normal` | `hoch` – wie ungern diese Datei ausgelagert wird.
+     *
+     * Steht am Anhang und nicht am Sammlungseintrag, obwohl man sie in einer
+     * Sammlung einstellt: Es gibt die Datei nur einmal. Läge sie in zwei
+     * Sammlungen mit verschiedener Priorität, müsste der Server entscheiden,
+     * welche gilt – und was er auch entschiede, für eine der beiden Seiten
+     * wäre es falsch.
+     */
+    pub prioritaet: String,
+    /**
+     * `lokal` | `wandert` | `fern` – wo die Bytes liegen.
+     *
+     * Die Oberfläche braucht das für einen einzigen, aber wichtigen Satz:
+     * „liegt auf dem grossen Speicher, das dauert einen Moment länger". Ohne
+     * ihn wirkt eine ausgelagerte Datei einfach nur langsam, und langsam ohne
+     * Grund liest sich als kaputt.
+     */
+    pub ablage: String,
     pub created_at: DateTime<Utc>,
 }
 

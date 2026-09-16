@@ -368,3 +368,46 @@
 .fil-thumb-stapel img.fil-thumb.is-da {
   opacity: 1;
 }
+
+/*
+ * Die Mehrfachauswahl.
+ *
+ * `user-select: none` auf der Kachel, solange ausgewählt wird: Langes Drücken
+ * auf einem Telefon markiert sonst den Dateinamen, und darüber legt sich die
+ * Textauswahl des Systems mit „Kopieren / Teilen". Das ist genau die Geste,
+ * die hier etwas anderes tun soll.
+ */
+.fil-tile-open {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.fil-tile.is-gewaehlt {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/*
+ * Der Haken sitzt im Weg des Daumens – und das ist Absicht: Er zeigt an,
+ * nimmt aber keine Tipps entgegen (`pointer-events: none`). Getippt wird die
+ * Kachel, nicht das Kästchen; ein 20-Pixel-Ziel neben einem 150-Pixel-Ziel
+ * wäre nur eine Gelegenheit, danebenzutippen.
+ */
+.fil-tile-haken {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 1.1rem;
+  line-height: 1;
+  pointer-events: none;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+}
+
+.fil-auswahlleiste {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+  border-radius: var(--radius);
+}

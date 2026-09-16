@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ATTACHMENT_KINDS, type AttachmentKind } from '../constants.js';
+import { ATTACHMENT_KINDS, LIMITS, type AttachmentKind } from '../constants.js';
 
 export interface AttachmentDto {
   id: string;
@@ -17,8 +17,53 @@ export interface AttachmentDto {
   /** Relative API URL that redirects to (or streams) the stored object. */
   url: string;
   status: 'pending' | 'ready';
+  /**
+   * Wie ungern diese Datei auf den grossen, langsamen Speicher wandert.
+   *
+   * `niedrig` heisst „darf sofort dorthin", `hoch` heisst „erst, wenn es gar
+   * nicht anders geht". Die Einstellung hängt an der Datei, nicht am
+   * Sammlungseintrag: Es gibt sie nur einmal.
+   */
+  prioritaet: Prioritaet;
+  /**
+   * Wo die Bytes gerade liegen. `fern` heisst: auf dem grossen Speicher, das
+   * erste Laden dauert einen Moment länger.
+   */
+  ablage: 'lokal' | 'wandert' | 'fern';
   createdAt: string;
 }
+
+export const PRIORITAETEN = ['niedrig', 'normal', 'hoch'] as const;
+export type Prioritaet = (typeof PRIORITAETEN)[number];
+
+/** Was in der Oberfläche steht – und was es bedeutet. */
+export const PRIORITAET_TEXT: Record<Prioritaet, { label: string; hinweis: string }> = {
+  niedrig: {
+    label: 'Niedrig',
+    hinweis: 'Wandert sofort auf den grossen Speicher. Lädt dafür etwas langsamer.',
+  },
+  normal: {
+    label: 'Normal',
+    hinweis: 'Wandert, wenn der Platz knapp wird – ältere und grössere zuerst.',
+  },
+  hoch: {
+    label: 'Hoch',
+    hinweis: 'Bleibt so lange wie möglich schnell erreichbar.',
+  },
+};
+
+export const prioritaetSetzenSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(200),
+  prioritaet: z.enum(PRIORITAETEN),
+});
+export type PrioritaetSetzenInput = z.infer<typeof prioritaetSetzenSchema>;
+
+export const teilenSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(LIMITS.attachmentsPerMessage),
+  conversationId: z.string().uuid(),
+  body: z.string().max(2000).optional(),
+});
+export type TeilenInput = z.infer<typeof teilenSchema>;
 
 export const createUploadSchema = z.object({
   kind: z.enum(ATTACHMENT_KINDS),

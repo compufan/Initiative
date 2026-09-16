@@ -171,23 +171,35 @@ test('eine Kachel zeigt ein Miniaturbild vom Server, nicht den eingebetteten Kle
   // `loading="lazy"`: Was nicht zu sehen ist, wird auch nicht geholt.
 
   /*
-   * Die eine Frage: Steht in der Kachel etwas GRÖSSERES als die eingebettete
-   * Vorschau? Bei 160 stünde dort genau die, und dann hätte sich nichts
-   * geändert.
+   * Es kommt wirklich vom Server. Ein `data:`-Verweis wäre wieder die
+   * eingebettete Vorschau, nur an anderer Stelle.
    */
+  const quelle = await kachel.getAttribute('src');
+  expect(quelle, `die Kachel holt nichts vom Server: ${quelle}`).toContain('/miniatur?kante=');
+
+  /*
+   * Und es kommt in der Grösse, die die Kachel verlangt hat.
+   *
+   * Hier stand `toBeGreaterThan(160)`, und das konnte auf einem Bildschirm
+   * ohne doppelte Punktdichte gar nicht stimmen: `miniaturSrc` multipliziert
+   * die 160 der Kachel mit der Dichte, auf einem gewöhnlichen Schirm ist die
+   * eins, also verlangt sie 160 – und bekommt 160. Der Test schlug damit im
+   * Profil „Desktop Chrome" zuverlässig fehl und im Profil „Pixel 7"
+   * zuverlässig nicht.
+   *
+   * Die Behauptung, um die es geht, ist ohnehin eine andere: Die Kachel zeigt,
+   * was sie beim Server bestellt hat, und nicht den eingebetteten Klecks. Dass
+   * es nicht der Klecks ist, steht eine Zeile höher (`data:` wäre er); dass
+   * der Server die Bestellung ernst nimmt, steht hier.
+   */
+  const bestellt = Number(new URL(quelle!, wurzel).searchParams.get('kante'));
+  expect(bestellt, `keine Kantenlänge in ${quelle}`).toBeGreaterThanOrEqual(160);
   await expect
     .poll(async () => kachel.evaluate((el: HTMLImageElement) => el.naturalWidth), {
       timeout: 20_000,
       message: 'in der Kachel steht kein geladenes Miniaturbild',
     })
-    .toBeGreaterThan(160);
-
-  /*
-   * Und es kommt wirklich vom Server. Ein `data:`-Verweis wäre wieder die
-   * eingebettete Vorschau, nur an anderer Stelle.
-   */
-  const quelle = await kachel.getAttribute('src');
-  expect(quelle, `die Kachel holt nichts vom Server: ${quelle}`).toContain('/miniatur?kante=');
+    .toBe(bestellt);
 
   /*
    * Der Klecks liegt DARUNTER und bleibt liegen. Ohne ihn blitzte beim

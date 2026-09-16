@@ -26,6 +26,7 @@ import type {
   PaymentProfileInput,
   PollDto,
   SelfUserDto,
+  Prioritaet,
   StickerPackDto,
   UpdateCollectionInput,
   UpdateCollectionItemInput,
@@ -468,6 +469,23 @@ export const api = {
         name: string | null;
         gueltigSekunden: number;
       }>(`/media/${attachmentId}/fernsehticket`),
+    /**
+     * Die Priorität mehrerer Dateien auf einmal setzen.
+     *
+     * `abgelehnt` nennt die, bei denen das Recht fehlte. Eine Liste und kein
+     * Fehler für alles: Wer zwanzig Dateien auswählt und bei einer das Recht
+     * nicht hat, soll die neunzehn trotzdem bekommen.
+     */
+    prioritaet: (ids: string[], prioritaet: Prioritaet) =>
+      patch<{ geaendert: number; abgelehnt: string[] }>('/media/prioritaet', { ids, prioritaet }),
+    /**
+     * Dateien in einen Chat weitergeben.
+     *
+     * Es entsteht eine neue Nachricht, aber kein zweites Byte: Die
+     * weitergegebene Fassung zeigt auf dieselbe Datei.
+     */
+    teilen: (ids: string[], conversationId: string, body?: string) =>
+      post<MessageDto>('/media/teilen', { ids, conversationId, body }),
   },
   /**
    * Der Fernseher als zweiter Bildschirm.

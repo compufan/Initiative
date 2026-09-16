@@ -19,7 +19,9 @@ use crate::constants::{allowed_mime, max_upload_bytes, ATTACHMENT_KINDS, PREVIEW
 use crate::db::AttachmentRow;
 use crate::dto::AttachmentDto;
 use crate::error::{AppError, AppResult};
-use crate::services::attachments::{darf_anhang_sehen, load_attachment, to_attachment_dto};
+use crate::services::attachments::{
+    darf_anhang_sehen, darf_anhang_verwalten, load_attachment, to_attachment_dto,
+};
 use crate::services::miniatur;
 use crate::state::AppState;
 use crate::storage::{
@@ -41,6 +43,8 @@ pub fn router() -> Router<AppState> {
         .route("/media/{id}/miniatur", get(miniatur))
         .route("/media/{id}/zugriff", get(zugriff))
         .route("/media/{id}/fernsehticket", post(fernsehticket_ausstellen))
+        .route("/media/prioritaet", axum::routing::patch(prioritaet_setzen))
+        .route("/media/teilen", post(in_chat_teilen))
 }
 
 /**
@@ -985,12 +989,249 @@ async fn remove(
             "Bereits gesendete Anhänge können nicht gelöscht werden",
         ));
     }
-    state.storage.delete(&attachment.storage_key).await.ok();
+    /*
+     * Die Bytes nur wegräumen, wenn sie niemandem sonst gehören.
+     *
+     * Seit Migration 0020 kann eine zweite Zeile denselben `storage_key`
+     * tragen – eine in einen Chat weitergegebene Datei ist dieselbe Datei,
+     * nicht eine Kopie davon. Wer hier ohne Rückfrage löschte, nähme dem
+     * anderen das Bild unter den Füssen weg: Die Zeile stünde noch, die Bytes
+     * wären fort.
+     *
+     * Der Auslöser aus 0020 stellt dieselbe Frage für den Aufräumdienst. Hier
+     * wird sie noch einmal gestellt, weil diese Route die Bytes SOFORT
+     * wegräumt und nicht auf ihn wartet.
+     */
+    let geteilt: Option<(Uuid,)> =
+        sqlx::query_as("select id from attachments where storage_key = $1 and id <> $2 limit 1")
+            .bind(&attachment.storage_key)
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await?;
+    if geteilt.is_none() {
+        state.storage.delete(&attachment.storage_key).await.ok();
+    }
     sqlx::query("delete from attachments where id = $1")
         .bind(id)
         .execute(&state.pool)
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/* ---------- Priorität und Weitergeben ---------- */
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrioritaetInput {
+    ids: Vec<Uuid>,
+    prioritaet: String,
+}
+
+/**
+ * Die Priorität mehrerer Dateien setzen.
+ *
+ * # Warum eine Liste und kein einzelner Anhang
+ *
+ * Weil die Oberfläche es so braucht: In einer Sammlung hält man ein Foto
+ * gedrückt, wählt zwanzig weitere aus und stellt sie gemeinsam auf „niedrig".
+ * Zwanzig einzelne Anfragen wären zwanzig Gelegenheiten, dass die Hälfte
+ * durchgeht und die andere nicht – und die Oberfläche müsste erklären, welche.
+ *
+ * # Was zurückkommt
+ *
+ * `geaendert` und `abgelehnt`. Nicht ein Fehler für alles: Wer zwanzig Dateien
+ * auswählt und bei einer das Recht nicht hat, soll die neunzehn trotzdem
+ * bekommen und erfahren, dass eine übrig blieb. Ein Alles-oder-nichts wäre
+ * hier die unfreundlichere Wahrheit.
+ */
+async fn prioritaet_setzen(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(input): Json<PrioritaetInput>,
+) -> AppResult<Json<serde_json::Value>> {
+    if !matches!(input.prioritaet.as_str(), "niedrig" | "normal" | "hoch") {
+        return Err(AppError::bad_request(
+            "Priorität kennt nur niedrig, normal oder hoch",
+        ));
+    }
+    Validator::new()
+        .require("ids", !input.ids.is_empty(), "keine Datei ausgewählt")
+        .require("ids", input.ids.len() <= 200, "zu viele Dateien auf einmal")
+        .finish()?;
+
+    let mut geaendert = 0usize;
+    let mut abgelehnt: Vec<Uuid> = Vec::new();
+    for id in &input.ids {
+        if !darf_anhang_verwalten(&state.pool, *id, user.id()).await? {
+            abgelehnt.push(*id);
+            continue;
+        }
+        /*
+         * Alle Zeilen mit derselben Wurzel, nicht nur die angetippte.
+         *
+         * Auslagern richtet sich ohnehin nur nach dem Original – aber eine
+         * Kopie, die weiter „normal" anzeigt, während das Original auf „hoch"
+         * steht, wäre in der Oberfläche schlicht gelogen.
+         */
+        sqlx::query(
+            "update attachments set prioritaet = $2
+              where coalesce(quelle_id, id) = (
+                      select coalesce(quelle_id, id) from attachments where id = $1
+                    )",
+        )
+        .bind(id)
+        .bind(&input.prioritaet)
+        .execute(&state.pool)
+        .await?;
+        geaendert += 1;
+    }
+
+    Ok(Json(json!({
+        "geaendert": geaendert,
+        "abgelehnt": abgelehnt,
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TeilenInput {
+    ids: Vec<Uuid>,
+    conversation_id: Uuid,
+    #[serde(default)]
+    body: Option<String>,
+}
+
+/**
+ * Dateien in einen Chat weitergeben.
+ *
+ * # Warum das nicht der gewöhnliche Weg sein kann
+ *
+ * `create_message` bindet einen Anhang an eine Nachricht – aber nur, wenn er
+ * an keiner hängt und der Absender ihn selbst hochgeladen hat. Beides ist
+ * richtig so (sonst könnte man fremde Dateien in eigene Nachrichten hängen und
+ * eine bestehende Nachricht nachträglich um einen Anhang erleichtern), und
+ * beides schliesst genau das aus, was hier verlangt ist.
+ *
+ * # Weitergeben heisst nicht kopieren
+ *
+ * Es entsteht eine zweite Zeile, aber kein zweites Byte: `storage_key` bleibt
+ * derselbe, `quelle_id` zeigt aufs Original. Ein Video von zweihundert
+ * Megabyte, dreimal weitergegeben, läge sonst viermal auf einer Platte, deren
+ * Enge der Grund für die ganze Auslagerung war.
+ *
+ * `ablage` und `prioritaet` werden mitgenommen, nicht zurückgesetzt: Liegt die
+ * Datei schon auf dem grossen Speicher, liegt die weitergegebene Fassung
+ * genauso dort – es ist dieselbe. Eine Zeile, die „lokal" behauptet, während
+ * die Bytes drüben liegen, führte die Weiche in die Irre.
+ */
+async fn in_chat_teilen(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(input): Json<TeilenInput>,
+) -> AppResult<Json<crate::dto::MessageDto>> {
+    Validator::new()
+        .require("ids", !input.ids.is_empty(), "keine Datei ausgewählt")
+        .require(
+            "ids",
+            input.ids.len() <= crate::constants::ATTACHMENTS_PER_MESSAGE,
+            "zu viele Dateien für eine Nachricht",
+        )
+        .finish()?;
+    crate::services::conversations::assert_membership(
+        &state.pool,
+        input.conversation_id,
+        user.id(),
+    )
+    .await?;
+
+    let mut neue: Vec<Uuid> = Vec::new();
+    let mut arten: Vec<String> = Vec::new();
+    for id in &input.ids {
+        if !darf_anhang_sehen(&state.pool, *id, user.id()).await? {
+            return Err(AppError::forbidden(
+                "Auf mindestens eine dieser Dateien hast du keinen Zugriff",
+            ));
+        }
+        let row = load_attachment(&state.pool, *id).await?;
+        if row.status != "ready" {
+            return Err(AppError::bad_request(
+                "Diese Datei ist noch nicht fertig hochgeladen",
+            ));
+        }
+        let neu = Uuid::now_v7();
+        sqlx::query(
+            "insert into attachments
+               (id, message_id, uploader_id, kind, mime, size, file_name, storage_key,
+                width, height, duration_ms, waveform, preview_data_url, status,
+                ablage, prioritaet, ausgelagert_at, quelle_id)
+             values ($1, null, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'ready',
+                     $13, $14, $15, $16)",
+        )
+        .bind(neu)
+        .bind(user.id())
+        .bind(&row.kind)
+        .bind(&row.mime)
+        .bind(row.size)
+        .bind(&row.file_name)
+        .bind(&row.storage_key)
+        .bind(row.width)
+        .bind(row.height)
+        .bind(row.duration_ms)
+        .bind(&row.waveform)
+        .bind(&row.preview_data_url)
+        .bind(&row.ablage)
+        .bind(&row.prioritaet)
+        .bind(row.ausgelagert_at)
+        .bind(row.quelle_id.unwrap_or(row.id))
+        .execute(&state.pool)
+        .await?;
+        neue.push(neu);
+        arten.push(row.kind.clone());
+    }
+
+    /*
+     * Der Typ der Nachricht entscheidet, wie die Blase aussieht.
+     *
+     * `text` wäre bequem und falsch: Die Oberfläche wählt die Blase nach dem
+     * Typ aus (`messageRenderers` in `modules/media/module.ts`), und ein
+     * weitergegebenes Foto käme als Textnachricht mit einem Anhang daneben an
+     * statt als Bild. Die Anhangsarten heissen genau wie die Nachrichtentypen,
+     * also lässt sich das ableiten.
+     *
+     * Zwei Sonderfälle:
+     *
+     * **Gemischt** wird `file`. Eine Bildblase mit einem PDF darin gibt es
+     * nicht, und `file` zeigt jede Art ehrlich als Karte mit Namen und Grösse.
+     *
+     * **Sticker** wird `image`. Für `sticker` gibt es keine Blase – der Typ
+     * meint im Chat etwas anderes (ein Sticker aus einem Paket, ohne Rahmen
+     * und ohne Grösse). Ein weitergegebener Sticker ist hier schlicht ein
+     * Bild.
+     */
+    let typ = match arten.first() {
+        Some(erste) if arten.iter().all(|art| art == erste) => match erste.as_str() {
+            "sticker" => "image".to_string(),
+            anderes => anderes.to_string(),
+        },
+        _ => "file".to_string(),
+    };
+
+    let nachricht = crate::services::messages::create_message(
+        &state,
+        crate::services::messages::NewMessage {
+            conversation_id: input.conversation_id,
+            sender_id: Some(user.id()),
+            r#type: typ,
+            body: input.body,
+            attachment_ids: neue,
+            reply_to_id: None,
+            client_id: None,
+            metadata: serde_json::Value::Null,
+            silent: false,
+        },
+    )
+    .await?;
+    Ok(Json(nachricht))
 }
 
 /// Darf dieser Typ im Browser dargestellt werden, statt heruntergeladen?

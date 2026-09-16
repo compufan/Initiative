@@ -106,7 +106,8 @@ async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<V
 
 Danach eine Zeile in `modules/mod.rs`: `.merge(tasks::router())`.
 `AppState` enthält `pool`, `storage`, `hub` und `bus` (Realtime), `push`,
-`drossel` (Ratenbegrenzung) und `config`.
+`drossel` (Ratenbegrenzung), `config` und `speicher` (die rohen Ablagen, siehe
+unten – nur der Auslagerungsdienst braucht sie).
 Neue Tabellen kommen als nummerierte Datei nach `apps/api/migrations/` und
 werden beim Start automatisch angewendet (sie sind in die Binary eingebettet).
 
@@ -139,6 +140,7 @@ export default defineWebModule({
 | Ausgaben         | `expenses` · `expense_shares` · `expense_viewers` · `expense_hidden_from` · `payment_profiles`                             |
 | Spiele           | `game_sessions`                                                                                                            |
 | Speicher         | `storage_muell` – gelöschte Anhänge, deren Bytes noch wegzuräumen sind                                                     |
+| Ablage           | `attachments.ablage` / `.prioritaet` / `.quelle_id` – wo die Bytes liegen, wie ungern sie wandern, und ob es eine Weitergabe ist |
 
 Alle IDs sind **UUID v7** (zeitlich sortierbar) – dadurch funktioniert
 Keyset-Pagination (`where id < cursor`) und `id > last_read_message_id` als
@@ -204,7 +206,38 @@ sind unveränderlich).
 - **Gelöschtes verschwindet auch wirklich.** Ein Auslöser in der Datenbank
   trägt jeden gelöschten Anhang in `storage_muell` ein, ein Hintergrunddienst
   löscht die Bytes. Der Weg über die Datenbank statt über den Anwendungscode
-  ist der einzige, der auch `on delete cascade` mitbekommt.
+  ist der einzige, der auch `on delete cascade` mitbekommt. Seit Migration 0020
+  prüft der Auslöser zusätzlich, ob noch eine andere Zeile dieselbe Datei hält
+  (eine in einen Chat weitergegebene Datei ist dieselbe Datei) – sonst nähme ein
+  Löschvorgang dem anderen die Bytes weg.
+
+### Der Speicher in drei Schichten
+
+`create_storage` baut genau einen Stapel, und die Reihenfolge ist keine
+Geschmacksfrage (`storage/mod.rs`):
+
+```
+Tresor          verschlüsselt (MEDIA_KEY), ganz aussen
+  └─ Weiche     warm oder kalt? – eine Abfrage je Zugriff (storage/weiche.rs)
+       ├─ warm  Platte oder S3
+       └─ kalt  SFTP zur Storage Box (storage/sftp.rs) – optional
+```
+
+Der Tresor gehört **nach aussen**, weil sonst zweimal verschlüsselt würde –
+einmal je Ablage – und eine Datei beim Umzug von warm nach kalt umgeschlüsselt
+werden müsste. So wandert sie Byte für Byte.
+
+Die Weiche gehört **unter alles andere**, weil `state.storage` an zwölf Stellen
+benutzt wird. Eine Fallunterscheidung dort oben müsste man zwölfmal richtig
+machen, und eine vergessene Stelle wäre keine Fehlermeldung, sondern eine Datei,
+die nicht gefunden wird.
+
+`services/auslagern.rs` entscheidet, was wandert: Klasse vor Gewicht, das
+Gewicht ist `Grösse × (1 − 2^(−Alter/30 Tage))`. Er bekommt die **rohen**
+Ablagen aus `state.speicher` und nicht `state.storage` – durch den Tresor
+gelesen und wieder hineingeschrieben würde eine Datei entschlüsselt und neu
+verschlüsselt, und durch die Weiche geschrieben landete sie wieder warm, also
+genau dort, wo sie wegsollte.
 - **Metadaten verlassen das Gerät nicht**: Fotos werden vor dem Hochladen neu
   gezeichnet (EXIF fällt dabei weg), bei Videos werden die Metadaten-Boxen im
   MP4 an Ort und Stelle überschrieben – Länge unverändert, weil `stco`

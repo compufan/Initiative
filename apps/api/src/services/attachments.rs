@@ -22,6 +22,8 @@ pub fn to_attachment_dto(row: &AttachmentRow, config: &Config) -> AttachmentDto 
         preview_data_url: row.preview_data_url.clone(),
         url: config.media_url(&row.id),
         status: row.status.clone(),
+        prioritaet: row.prioritaet.clone(),
+        ablage: row.ablage.clone(),
         created_at: row.created_at,
     }
 }
@@ -113,4 +115,79 @@ pub async fn darf_anhang_sehen(
             .grund
             .erlaubt(),
     )
+}
+
+/**
+ * Darf diese Person an dieser Datei etwas ÄNDERN?
+ *
+ * Sehen und ändern sind zwei Fragen. Wer ein Foto in einem Chat sieht, darf es
+ * ansehen, weitergeben, auf den Fernseher werfen – aber nicht bestimmen, wo es
+ * gespeichert wird. Sonst stellte ein Gruppenmitglied die Urlaubsbilder eines
+ * anderen auf „niedrig", und sie wanderten auf den langsamen Speicher.
+ *
+ * Zwei Wege führen zu einem Ja:
+ *
+ * **Selbst hochgeladen.** Dann gehört die Datei einem, überall.
+ *
+ * **Änderungsrecht auf einem Sammlungseintrag, der sie enthält.** Das ist der
+ * Weg, den der Anwender meint, wenn er sagt, man solle „in einer Sammlung"
+ * Prioritäten vergeben können: Wer den Ordner pflegen darf, darf auch
+ * entscheiden, was davon schnell erreichbar bleiben muss.
+ *
+ * Eine weitergegebene Kopie zählt wie ihr Original (`coalesce(quelle_id, id)`),
+ * denn es sind dieselben Bytes: Was man an der Kopie einstellt, gilt für beide,
+ * also muss man beides dürfen.
+ *
+ * Die Stufe selbst kommt aus [`crate::services::permissions::item_level`] und
+ * wird hier NICHT noch einmal in SQL formuliert. Es gab schon einmal drei
+ * Fassungen dieser Regel in dieser Codebasis, und sie waren unterschiedlich
+ * falsch.
+ */
+pub async fn darf_anhang_verwalten(
+    pool: &PgPool,
+    attachment_id: Uuid,
+    user_id: Uuid,
+) -> AppResult<bool> {
+    let wurzel: Option<(Uuid, Option<Uuid>)> = sqlx::query_as(
+        "select coalesce(quelle_id, id), uploader_id from attachments where id = $1",
+    )
+    .bind(attachment_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((wurzel, _)) = wurzel else {
+        return Ok(false);
+    };
+
+    let ist_eigen: Option<(Uuid,)> =
+        sqlx::query_as("select id from attachments where id = $1 and uploader_id = $2")
+            .bind(wurzel)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+    if ist_eigen.is_some() {
+        return Ok(true);
+    }
+
+    /*
+     * Die Obergrenze ist keine Sparmassnahme, sondern eine Schranke: Eine
+     * Datei kann in beliebig vielen Sammlungen liegen, und jede Stufe kostet
+     * zwei Abfragen. Wer in den ersten fünfzig Einträgen kein Änderungsrecht
+     * hat, hat auch im einundfünfzigsten keines, das anders zustande käme.
+     */
+    let eintraege: Vec<(Uuid,)> = sqlx::query_as(
+        "select id from collection_items
+          where attachment_id = $1 and deleted_at is null
+          order by created_at asc
+          limit 50",
+    )
+    .bind(wurzel)
+    .fetch_all(pool)
+    .await?;
+    for (item_id,) in eintraege {
+        let stufe = crate::services::permissions::item_level(pool, item_id, user_id).await?;
+        if stufe.allows(crate::services::permissions::Level::Edit) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }

@@ -104,6 +104,8 @@ pub struct AttachmentRow {
     /// `niedrig` | `normal` | `hoch` – wie ungern diese Datei ausgelagert wird.
     pub prioritaet: String,
     pub ausgelagert_at: Option<DateTime<Utc>>,
+    /// Bei einer weitergegebenen Datei: das Original. Siehe Migration 0020.
+    pub quelle_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, FromRow)]

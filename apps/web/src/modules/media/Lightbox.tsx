@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { AttachmentDto } from '@initiative/shared';
 import { FotoWerkstatt } from './FotoWerkstatt.js';
 import { CastKnopf } from '../fernseher/CastKnopf.js';
+import { DateiAktionen } from './DateiAktionen.js';
 import { mediaDownloadSrc, mediaSrc } from './helpers.js';
 import { dialogAnmelden } from '../../lib/dialogVerlauf.js';
 
@@ -60,6 +61,7 @@ export function Lightbox({ items, index, onClose, ablegen, alsRezept, zielName }
    * blätterten hinter dem Editor weiter.
    */
   const [werkstattOffen, setWerkstattOffen] = useState(false);
+  const [aktionenOffen, setAktionenOffen] = useState(false);
   const gesture = useRef<GestureState>({
     mode: 'none',
     startDistance: 0,
@@ -108,7 +110,9 @@ export function Lightbox({ items, index, onClose, ablegen, alsRezept, zielName }
   }, []);
 
   useEffect(() => {
-    if (werkstattOffen) return undefined;
+    // Auch das Aktionsblatt nimmt die Tasten an sich: Sonst schlösse Escape
+    // beides auf einmal und die Pfeiltasten blätterten dahinter weiter.
+    if (werkstattOffen || aktionenOffen) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
       if (event.key === 'ArrowRight') go(1);
@@ -116,7 +120,7 @@ export function Lightbox({ items, index, onClose, ablegen, alsRezept, zielName }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [go, onClose, werkstattOffen]);
+  }, [go, onClose, werkstattOffen, aktionenOffen]);
 
   const toggleZoom = useCallback(() => {
     setScale((value) => (value > 1 ? 1 : DOUBLE_TAP_SCALE));
@@ -262,8 +266,32 @@ export function Lightbox({ items, index, onClose, ablegen, alsRezept, zielName }
           >
             ⬇
           </a>
+          {/*
+            Weitergeben und Priorität – aber kein Löschen.
+
+            Ein Foto im Chat hängt an einer Nachricht und geht mit ihr; das
+            steht schon im Nachrichtenmenü, mit der Unterscheidung „für mich"
+            und „für alle", die es hier gar nicht gäbe. Ein zweiter
+            Löschknopf mit einer dritten Bedeutung wäre die schlechtere Art,
+            vollständig zu sein.
+          */}
+          <button
+            type="button"
+            className="media-round-btn"
+            aria-label="Mehr"
+            title="Teilen, Priorität"
+            onClick={() => setAktionenOffen(true)}
+          >
+            ⋯
+          </button>
         </div>
       </div>
+
+      <DateiAktionen
+        open={aktionenOffen}
+        onClose={() => setAktionenOffen(false)}
+        anhaenge={[item]}
+      />
 
       <div
         className="media-zoom"

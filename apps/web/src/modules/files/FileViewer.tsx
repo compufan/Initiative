@@ -5,6 +5,7 @@ import { FotoWerkstatt } from '../media/FotoWerkstatt.js';
 import { mediaSrc, standbildHolen } from '../media/helpers.js';
 import { FernsehKnopf } from '../fernseher/FernsehKnopf.js';
 import { CastKnopf } from '../fernseher/CastKnopf.js';
+import { DateiAktionen } from '../media/DateiAktionen.js';
 
 interface FileViewerProps {
   items: AttachmentDto[];
@@ -16,6 +17,19 @@ interface FileViewerProps {
    */
   ablegen?: (blob: Blob, name: string) => Promise<void>;
   zielName?: string;
+  /**
+   * Was mit der gerade gezeigten Datei geschehen darf.
+   *
+   * Ohne diese Angabe erscheint der Knopf gar nicht – im Betrachter einer
+   * Sammlung, die man nur ansehen darf, wäre er eine Einladung zu einer
+   * Absage des Servers.
+   */
+  aktionen?: {
+    /** Diese eine Datei hier wegräumen. Fehlt der Rückruf, gibt es kein Löschen. */
+    loeschen?: (datei: AttachmentDto) => Promise<void>;
+    loeschText?: (datei: AttachmentDto) => string;
+    onGeaendert?: () => void;
+  };
 }
 
 /**
@@ -26,10 +40,18 @@ interface FileViewerProps {
  * zum Öffnen – ein leerer schwarzer Kasten wäre schlechter als die Auskunft,
  * dass dieser Dateityp sich hier nicht anzeigen lässt.
  */
-export function FileViewer({ items, index, onClose, ablegen, zielName }: FileViewerProps) {
+export function FileViewer({
+  items,
+  index,
+  onClose,
+  ablegen,
+  zielName,
+  aktionen,
+}: FileViewerProps) {
   const [aktuell, setAktuell] = useState(index);
   /** Solange Editor oder Studio offen sind, deutet der Betrachter keine Tasten. */
   const [werkstattOffen, setWerkstattOffen] = useState(false);
+  const [aktionenOffen, setAktionenOffen] = useState(false);
   const datei = items[aktuell];
 
   // Die Seite dahinter bleibt gesperrt, solange der Betrachter offen ist –
@@ -43,7 +65,7 @@ export function FileViewer({ items, index, onClose, ablegen, zielName }: FileVie
   }, []);
 
   useEffect(() => {
-    if (werkstattOffen) return undefined;
+    if (werkstattOffen || aktionenOffen) return undefined;
     const beiTaste = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose();
       if (event.key === 'ArrowRight') setAktuell((wert) => (wert + 1) % items.length);
@@ -51,7 +73,7 @@ export function FileViewer({ items, index, onClose, ablegen, zielName }: FileVie
     };
     window.addEventListener('keydown', beiTaste);
     return () => window.removeEventListener('keydown', beiTaste);
-  }, [items.length, onClose, werkstattOffen]);
+  }, [items.length, onClose, werkstattOffen, aktionenOffen]);
 
   if (!datei) return null;
 
@@ -85,6 +107,17 @@ export function FileViewer({ items, index, onClose, ablegen, zielName }: FileVie
         >
           ↗
         </a>
+        {aktionen && (
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Mehr"
+            title="Löschen, teilen, Priorität"
+            onClick={() => setAktionenOffen(true)}
+          >
+            ⋯
+          </button>
+        )}
       </header>
 
       <div className="fv-body">
@@ -111,6 +144,26 @@ export function FileViewer({ items, index, onClose, ablegen, zielName }: FileVie
             Weiter ›
           </button>
         </footer>
+      )}
+
+      {aktionen && (
+        <DateiAktionen
+          open={aktionenOffen}
+          onClose={() => setAktionenOffen(false)}
+          anhaenge={[datei]}
+          loeschen={
+            aktionen.loeschen
+              ? async () => {
+                  await aktionen.loeschen!(datei);
+                  // Die Datei, die man gerade ansieht, gibt es nicht mehr.
+                  // Ohne das bliebe ein Betrachter ohne Inhalt stehen.
+                  onClose();
+                }
+              : undefined
+          }
+          loeschText={aktionen.loeschText?.(datei)}
+          onGeaendert={aktionen.onGeaendert}
+        />
       )}
     </div>,
     document.body,

@@ -321,6 +321,36 @@ Gelöschte Nachrichten verschwinden nicht aus der Liste: `deletedAt` ist gesetzt
 | GET     | `/media/{id}/download`         | – (Capability) | –                                                              | wie oben, mit `Content-Disposition: attachment`          |
 | GET     | `/media/{id}/zugriff`          | Bearer         | –                                                              | Wer diese Datei sieht und warum – nur für den Besitzer    |
 | DELETE  | `/media/{id}`                  | Bearer         | –                                                              | `204` (nur eigene, noch nicht gesendete Anhänge)         |
+| PATCH   | `/media/prioritaet`            | Bearer         | `{ ids: string[], prioritaet }`                                | `200` `{ geaendert, abgelehnt: string[] }`               |
+| POST    | `/media/teilen`                | Bearer         | `{ ids: string[], conversationId, body? }`                     | `200` `Message` – dieselben Dateien, eine neue Nachricht |
+
+### `PATCH /media/prioritaet` – wann eine Datei ausgelagert wird
+
+`prioritaet` ist `niedrig`, `normal` (Standard) oder `hoch`. Sie entscheidet,
+wann eine Datei auf den grossen, langsamen Speicher wandert – siehe
+[DEPLOYMENT.md](DEPLOYMENT.md#zweite-ebene-die-grosse-langsame-ablage).
+
+Ändern darf sie, wer die Datei **hochgeladen** hat oder wer **Änderungsrecht
+auf einem Sammlungseintrag** hat, in dem sie liegt. Ansehen genügt nicht.
+
+Es gibt **keinen Fehler für die ganze Liste**: Was nicht geht, steht in
+`abgelehnt`. Wer zwanzig Dateien auswählt und bei einer das Recht nicht hat,
+bekommt die neunzehn – und erfährt, dass eine übrig blieb.
+
+### `POST /media/teilen` – dieselbe Datei in einen anderen Chat
+
+Der gewöhnliche Weg (`attachmentIds` beim Senden einer Nachricht) geht hier
+nicht: Er verlangt einen Anhang, der an keiner Nachricht hängt und vom Absender
+selbst hochgeladen wurde. Beides ist richtig so und schliesst das Weitergeben
+aus.
+
+Weitergeben legt deshalb eine **zweite Zeile auf derselben Datei** an – gleicher
+`storage_key`, `quelle_id` aufs Original. Ein Video von 200 MB, dreimal
+weitergegeben, belegt einmal Platz. Wer eine der Zeilen löscht, rührt die Bytes
+nicht an, solange eine andere steht.
+
+Wer die Quelldatei nicht sehen darf, bekommt `403` – sonst wäre „teilen" ein Weg
+an jeder Zugriffsprüfung vorbei.
 
 **Ablauf in drei Schritten**
 
@@ -408,9 +438,17 @@ gerade Weg kostet Bandbreite – aber nur beim Bearbeiten, nicht beim Anschauen.
   "previewDataUrl": null,
   "url": "https://api.example.com/api/v1/media/018f…",
   "status": "ready",
+  "prioritaet": "normal",
+  "ablage": "lokal",
   "createdAt": "2026-08-24T09:00:00Z"
 }
 ```
+
+`ablage` sagt, wo die Bytes gerade liegen: `lokal` auf dem Server, `fern` auf
+dem grossen Speicher, `wandert` gerade unterwegs. Für den Abruf ändert das
+nichts – dieselbe Adresse, dieselben Rechte, `Range` funktioniert genauso. Nur
+das erste Laden dauert bei `fern` länger, und die Oberfläche kann das sagen,
+statt langsam auszusehen.
 
 ## Sticker
 

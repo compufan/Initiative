@@ -247,6 +247,47 @@ wieder auftauchen.
   landet als neue Datei daneben, das Original bleibt.
 - **Eine Sammlung zu löschen löscht keine Datei.** Die Anhänge bleiben im Chat.
 
+### Was man mit einer einzelnen Datei tun kann
+
+- **Mehrere auswählen**: eine Kachel lange gedrückt halten, dann tippen. Für
+  die Auswahl gelten dieselben drei Handgriffe wie für eine einzelne Datei.
+- **Löschen** – der Eintrag verschwindet aus dieser Sammlung. Kam die Datei aus
+  einem Chat, bleibt sie dort stehen; wurde sie direkt hier abgelegt, ist sie
+  danach fort. Die Rückfrage sagt, welcher der beiden Fälle vorliegt.
+- **In einem Chat teilen** – auch eine Datei, die jemand anderes hochgeladen
+  hat, und auch eine, die schon einmal verschickt wurde. Es wird dabei **nichts
+  kopiert**: Die weitergegebene Fassung zeigt auf dieselbe Datei, ein Video von
+  200 MB belegt auch nach dreimal Weitergeben einmal Platz.
+- **Priorität ändern** – wann diese Datei auf den grossen, langsamen Speicher
+  wandern darf. Siehe unten.
+
+### Der grosse Speicher daneben
+
+Ein Server hat irgendwann keinen Platz mehr, und was ihn füllt, sind die
+Anhänge. Ist eine zweite Ablage eingerichtet (etwa eine Hetzner Storage Box),
+wandern Dateien automatisch dorthin, sobald es eng wird.
+
+**In der App ändert sich dadurch nichts**: dieselben Adressen, dieselben
+Rechte, dieselben Vorschaubilder, Vorspulen im Video funktioniert genauso. Nur
+das erste Laden des Originals dauert länger, und die Kachel sagt das mit einem
+kleinen ☁️, statt einfach langsam auszusehen. Die Kacheln selbst bleiben immer
+schnell – Miniaturbilder wandern nie mit.
+
+Welche Datei zuerst geht, entscheidet ihre Grösse, ihr Alter (ältere zuerst)
+und die Priorität, die man ihr gibt:
+
+| Priorität | Bedeutung                                                                  |
+| --------- | -------------------------------------------------------------------------- |
+| Niedrig   | Wandert sofort. „Diese Datei braucht auf dem schnellen Speicher keinen Platz." |
+| Normal    | Der Standard. Wandert, wenn der Platz knapp wird.                          |
+| Hoch      | Bleibt so lange wie möglich schnell erreichbar – wandert zuallerletzt.     |
+
+Die Priorität hängt an der **Datei**, nicht am Sammlungseintrag: Es gibt sie
+nur einmal, auch wenn sie in zwei Ordnern liegt. Ändern darf sie, wer die Datei
+hochgeladen hat oder wer den Ordner pflegen darf.
+
+**Nachrichten wandern nie.** Nur Anhänge.
+
 ## Ausgaben
 
 Wer hat ausgelegt, wer schuldet wem wie viel – ohne dass jemand mitschreiben
