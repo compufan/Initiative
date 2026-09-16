@@ -16,6 +16,7 @@ import {
   formatClock,
   pickRecorderMime,
   sendMedia,
+  standbildHolen,
   supportsCapture,
   supportsRecorder,
   timestampName,
@@ -446,13 +447,20 @@ export function CameraSheet({ conversationId, onClose }: ComposerActionProps) {
             )
           ) : (
             videoUrl && (
+              /*
+               * Kein `poster`: Die Datei liegt hier als Blob im Gerät, ein
+               * Sprung auf ein Zehntel kostet also nichts und zeigt sofort
+               * ein echtes Bild. Das Plakat wäre die Vorschau gewesen – und
+               * ausgerechnet bei der eigenen Aufnahme, die man gerade prüfen
+               * will, ist ein Klecks das Falsche.
+               */
               <video
                 className="media-camera-preview"
                 src={videoUrl}
-                poster={draft.previewDataUrl}
                 controls
                 playsInline
                 preload="metadata"
+                onLoadedMetadata={(ereignis) => standbildHolen(ereignis.currentTarget)}
               />
             )
           )

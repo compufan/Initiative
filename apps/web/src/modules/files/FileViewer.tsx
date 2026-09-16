@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { formatBytes, formatDuration, type AttachmentDto } from '@initiative/shared';
 import { FotoWerkstatt } from '../media/FotoWerkstatt.js';
-import { mediaSrc } from '../media/helpers.js';
+import { mediaSrc, standbildHolen } from '../media/helpers.js';
 
 interface FileViewerProps {
   items: AttachmentDto[];
@@ -121,15 +121,22 @@ function Inhalt({ datei }: { datei: AttachmentDto }) {
   }
 
   if (datei.kind === 'video' || mime.startsWith('video/')) {
+    /*
+     * Kein `poster`: Das wäre die eingebettete Vorschau, und die ist ein
+     * Klecks von 160 Punkten Kante – im Vollbild besonders deutlich. Statt
+     * dessen springt `standbildHolen` auf ein Zehntel und holt damit ein
+     * echtes Bild aus der Datei. Der Untergrund ist hier schwarz, nicht
+     * unscharf: In einem Vollbildbetrachter ist Schwarz der richtige Rahmen.
+     */
     return (
       // eslint-disable-next-line jsx-a11y/media-has-caption
       <video
         className="fv-video"
         src={quelle}
-        poster={datei.previewDataUrl ?? undefined}
         controls
         playsInline
         preload="metadata"
+        onLoadedMetadata={(ereignis) => standbildHolen(ereignis.currentTarget)}
       />
     );
   }

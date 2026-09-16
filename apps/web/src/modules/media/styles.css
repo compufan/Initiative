@@ -97,9 +97,20 @@
   opacity: 1;
 }
 
+/*
+ * `object-fit: contain`, damit nichts vom Bild abgeschnitten wird – anders als
+ * beim Foto, das der Rahmen füllen darf.
+ *
+ * Und KEIN schwarzer Untergrund mehr: Dahinter liegt jetzt die unscharfe
+ * Vorschau (`media-blur`), und die soll man sehen, solange das erste echte
+ * Bild noch geholt wird. Mit Schwarz wäre der Rahmen bis dahin einfach leer.
+ * Wo keine Vorschau mitgeschickt wurde, greift der Rahmen selbst mit
+ * `--surface-2`. Die Ränder eines Videos, dessen Seitenverhältnis nicht zum
+ * Rahmen passt, zeigen dabei die unscharfe Vorschau statt eines Balkens.
+ */
 .media-video {
   object-fit: contain;
-  background: #000;
+  background: transparent;
 }
 
 .media-frame-note {

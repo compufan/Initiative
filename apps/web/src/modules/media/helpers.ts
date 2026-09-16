@@ -340,3 +340,101 @@ export function fallbackPeaks(seed: string, count = 48): number[] {
   }
   return peaks;
 }
+
+/**
+ * Wohin gesprungen wird, um einen echten Einzelbildrahmen zu erzwingen.
+ *
+ * Ein Zehntel und nicht Null: Auf Null steht die Uhr schon, und ein Sprung auf
+ * die Stelle, an der man ohnehin steht, ist kein Sprung – der Browser tut
+ * dann gar nichts. Ein Zehntel liegt bei jeder üblichen Bildrate hinter dem
+ * ersten Bild, aber so nah davor, dass der Unterschied nicht zu sehen ist.
+ */
+export const STANDBILD_ZEIT = 0.1;
+
+/**
+ * Auf welche Stelle gesprungen wird, bei gegebener Länge.
+ *
+ * Eigene Funktion, weil hier zwei Sonderfälle zusammenkommen, die man im
+ * Browser nur mühsam herbeiführt:
+ *
+ *   * `Infinity`. Eine Aufnahme aus dem eigenen Rekorder hat fast immer keine
+ *     Länge im Kopf stehen – der Bildschreiber kennt sie beim Schreiben noch
+ *     nicht. Das ist KEIN Grund, den Sprung zu lassen: Die Daten sind da, nur
+ *     die Zahl fehlt. Ein früher Entwurf verlangte hier eine endliche Länge,
+ *     und damit hätte ausgerechnet das selbst aufgenommene Video kein
+ *     Standbild bekommen.
+ *   * Ein Video, das kürzer ist als der Sprung. Bei drei Hundertstel läge ein
+ *     Zehntel hinter dem Ende, und der Sprung ginge ins Leere. Die Hälfte der
+ *     Länge liegt immer drin.
+ */
+export function standbildZiel(laenge: number): number {
+  if (Number.isFinite(laenge) && laenge > 0) return Math.min(STANDBILD_ZEIT, laenge / 2);
+  return STANDBILD_ZEIT;
+}
+
+/**
+ * Das erste Bild eines Videos wirklich zeigen, statt nur den Klecks davor.
+ *
+ * # Warum die Vorschau dauerhaft unscharf war
+ *
+ * An jedem `<video>` stand `poster={previewDataUrl}` zusammen mit
+ * `preload="metadata"`. Beides zusammen heisst: Der Browser holt die Kopfdaten
+ * – Länge, Masse, Tonspur – und KEINEN einzigen Bildpunkt. Zu sehen ist
+ * deshalb ausschliesslich das Plakat, und das Plakat ist die eingebettete
+ * Vorschau: früher 48 Punkte Kante, heute 160, aber in jedem Fall ein
+ * hochskalierter Klecks. Das war nicht „die Vorschau lädt noch“ – das WAR das
+ * Video, solange niemand auf Abspielen drückte.
+ *
+ * `preload="auto"` wäre die naheliegende Antwort und die falsche: Damit lädt
+ * jedes Video in jeder sichtbaren Blase von selbst, und ein Chatverlauf mit
+ * zehn Videos zöge hunderte Megabyte über die Mobilverbindung.
+ *
+ * # Was statt dessen geschieht
+ *
+ * Es wird GESPRUNGEN. Ein Sprung zwingt den Browser, genau die Stelle zu
+ * holen und zu entschlüsseln, auf die gesprungen wird – ein paar Kilobyte
+ * statt der ganzen Datei. Danach steht ein echtes, scharfes Bild im Rahmen.
+ *
+ * Und anschliessend zurück auf Null: Sonst begänne das Abspielen bei einem
+ * Zehntel, und der Anfang fehlte. Der zweite Sprung kostet nichts, weil die
+ * Daten um Null herum nach dem ersten bereits im Zwischenspeicher liegen, und
+ * er ist nicht zu sehen, weil beide Bilder ein Zehntel auseinanderliegen.
+ *
+ * # Die Merker am Element
+ *
+ * `dataset.standbild` hält fest, wie weit das Ganze ist. Ohne den Merker
+ * liefe es im Kreis: Der zweite Sprung meldet wieder `seeked`, und das Video
+ * stünde wieder auf Null – also wieder der Zustand, in dem gesprungen wird.
+ * Der Merker ist ausserdem das, was die Prüfung liest.
+ */
+export function standbildHolen(video: HTMLVideoElement | null | undefined): void {
+  if (!video) return;
+  // Schon erledigt oder schon unterwegs.
+  if (video.dataset.standbild) return;
+  // Wer schon abspielt oder von Hand weitergespult hat, wird nicht zurückgerissen.
+  if (!video.paused || video.currentTime > 0) return;
+
+  const ziel = standbildZiel(video.duration);
+  if (!(ziel > 0)) return;
+
+  video.dataset.standbild = 'gesucht';
+  const zurueck = () => {
+    video.removeEventListener('seeked', zurueck);
+    video.dataset.standbild = 'fertig';
+    if (video.paused && video.currentTime > 0) {
+      try {
+        video.currentTime = 0;
+      } catch {
+        /* Ein Video, das nicht zurückspringen will, spielt eben ab einem Zehntel. */
+      }
+    }
+  };
+  video.addEventListener('seeked', zurueck);
+  try {
+    video.currentTime = ziel;
+  } catch {
+    // Manche Quellen lassen sich nicht spulen; dann bleibt die unscharfe Vorschau.
+    video.removeEventListener('seeked', zurueck);
+    delete video.dataset.standbild;
+  }
+}
