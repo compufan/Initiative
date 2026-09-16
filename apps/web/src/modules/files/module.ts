@@ -3,8 +3,6 @@ import { defineWebModule } from '../types.js';
 import { AddToCollectionSheet } from './AddToCollectionSheet.js';
 import { DateienScreen } from './DateienScreen.js';
 import './styles.css';
-// Der Fernsehknopf steht in dieser Ansicht – also kommt sein Blatt mit ihr.
-import '../fernseher/styles.css';
 
 /**
  * Dateien & Sammlungen.

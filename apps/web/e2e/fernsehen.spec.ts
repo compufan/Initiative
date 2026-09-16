@@ -328,3 +328,68 @@ test('die Auslieferung schreibt `/tv` wirklich auf `tv.html` um', () => {
   const auffang = vercel.rewrites.findIndex((regel) => regel.destination === '/index.html');
   expect(treffer, 'die Umschreibung steht hinter der Auffangregel').toBeLessThan(auffang);
 });
+
+/**
+ * Langes Antippen auf einer Nachricht – die Handler hängen an `.msg-col`,
+ * und es braucht die Pause zwischen Drücken und Loslassen.
+ */
+async function langAntippen(page: Page, text: string) {
+  const blase = page.locator('.msg-col').filter({ hasText: text }).first();
+  await expect(blase).toBeVisible({ timeout: 15_000 });
+  const kasten = await blase.boundingBox();
+  if (!kasten) throw new Error('Die Nachricht hat keine Fläche');
+  await page.mouse.move(kasten.x + kasten.width / 2, kasten.y + kasten.height / 2);
+  await page.mouse.down();
+  await page.waitForTimeout(800);
+  await page.mouse.up();
+}
+
+test('ein Foto aus dem Chat geht denselben Weg', async ({ browser, baseURL }) => {
+  /*
+   * Der zweite Einstieg, und er ist nicht bloss bequem.
+   *
+   * An einer Videoblase hängt bereits ein 📺 – der ist schneller, setzt aber
+   * einen Chromecast oder ein AirPlay-Gerät voraus und erscheint nur, wenn der
+   * Browser eines gefunden hat. Für ein FOTO gibt es ihn gar nicht: Remote
+   * Playback und AirPlay kennen ausschliesslich Medienelemente. Ohne diesen
+   * Weg hier bliebe „das Bild aus der Familiengruppe kurz auf dem Fernseher
+   * zeigen" unmöglich, solange kein Zusatzgerät im Haus ist.
+   */
+  const wurzel = baseURL ?? 'http://localhost:5173';
+  const http = await request.newContext();
+  const anna = await registrieren(http, 'annatv');
+  const ben = await registrieren(http, 'bentv');
+  const kopf = { authorization: `Bearer ${anna.accessToken}` };
+
+  const chat = await (
+    await http.post(`${API}/conversations`, {
+      headers: kopf,
+      data: { type: 'direct', memberIds: [ben.user.id] },
+    })
+  ).json();
+  const bild = await bildHochladen(http, kopf, 'gruss.png', 16, [30, 200, 90]);
+  await http.post(`${API}/conversations/${chat.id}/messages`, {
+    headers: kopf,
+    data: { type: 'image', body: 'Gruss vom Berg', attachmentIds: [bild] },
+  });
+
+  const tv = await (await browser.newContext()).newPage();
+  await tv.goto(`${wurzel}/tv`);
+  const codeFeld = tv.locator('#code');
+  await expect(codeFeld).not.toHaveText('…', { timeout: 20_000 });
+  const code = ((await codeFeld.textContent()) ?? '').trim();
+
+  const telefon = await seiteFuer(browser, anna, wurzel);
+  await telefon.goto(`${wurzel}/chats/${chat.id}`);
+  await langAntippen(telefon, 'Gruss vom Berg');
+  await telefon.getByText('Auf den Fernseher').click();
+  await telefon.locator('.tv-code-eingabe').fill(code);
+  await telefon.getByRole('button', { name: 'Starten' }).click();
+
+  await expect
+    .poll(() => stehendesBild(tv), {
+      timeout: 25_000,
+      message: 'das Foto aus dem Chat kam nicht auf dem Fernseher an',
+    })
+    .toBe(16);
+});

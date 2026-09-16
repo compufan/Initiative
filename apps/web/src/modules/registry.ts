@@ -4,6 +4,7 @@ import messenger from './messenger/module.js';
 import media from './media/module.js';
 import stickers from './stickers/module.js';
 import files from './files/module.js';
+import fernseher from './fernseher/module.js';
 import calendar from './calendar/module.js';
 import expenses from './expenses/module.js';
 import polls from './polls/module.js';
@@ -27,6 +28,7 @@ export const appModules: AppModuleDefinition[] = [
   messenger,
   media,
   files,
+  fernseher,
   calendar,
   expenses,
   games,
