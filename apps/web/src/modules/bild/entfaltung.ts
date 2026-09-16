@@ -40,23 +40,27 @@
  * zweitens patentfrei – die blinde Kernschätzung aus Gradientenstatistik ist
  * belastet (US 7 616 826 B2, 2021 erloschen, aber mit Nachbarn).
  *
- * # Was hier noch fehlt: die Grafikeinheit
+ * # Dies ist der Prüfmassstab, nicht der Arbeitsweg
  *
- * Diese Fassung rechnet auf dem Prozessor und ist damit für ein Telefonfoto
- * zu langsam – 36 Milliarden Rechenschritte in JavaScript sind über eine
- * Minute auf dem Hauptstrang. Sie ist der Prüfmassstab und der Weg für kleine
- * Bilder; die Oberfläche braucht eine Fassung auf der Grafikeinheit.
+ * Diese Fassung rechnet auf dem Prozessor und ist damit unbenutzbar langsam.
+ * Nachgemessen (Node 22, ein Kanal von dreien, Linienkern von 25 Punkten):
  *
- * Die ist nicht bloss eine Übersetzung, und daran ist der erste Versuch
- * gescheitert: Richardson-Lucy braucht drei Arbeitstexturen gleichzeitig
- * (Schätzung, Verhältnis, neue Schätzung – die neue darf nicht dieselbe sein,
- * aus der gelesen wird) plus das beobachtete Bild. Nachgerechnet sind das bei
- * zwölf Megapunkten in RGBA16F 366 MB und in RGBA32F 732 MB. Auf einem
- * Telefon fällt der Reiter dabei aus dem Speicher.
+ *   * 1024 × 768, EINE Faltung: 2,9 s
+ *   * 2048 × 1536, EINE Faltung: 8,5 s
+ *   * 512 × 384, dreissig Durchgänge: 27,6 s
  *
- * Es braucht also KACHELN mit Überlappung – mindestens so breit wie der Kern,
- * sonst steht an jeder Kachelgrenze eine Naht. Das ist ein eigenes Stück
- * Arbeit und wird als solches gebaut, nicht nebenbei.
+ * Ein Durchgang sind zwei Faltungen. Bei der Ausgabegrösse dieses Editors
+ * wären das rund fünfundzwanzig Minuten. Gerechnet wird deshalb in
+ * `entfaltungGpu.ts`; diese Fassung ist die Wahrheit, gegen die jene geprüft
+ * wird (`e2e/entfaltung.spec.ts` vergleicht beide Wege Punkt für Punkt).
+ *
+ * # Die Kacheln, die hier einmal gefordert waren
+ *
+ * An dieser Stelle stand, die Grafikeinheit brauche Kacheln mit Überlappung,
+ * weil vier Texturen bei zwölf Megapunkten in RGBA16F 366 MB belegen. Die
+ * Rechnung stimmt und die VORAUSSETZUNG nicht: Dieser Editor gibt nie mehr
+ * als 2560 Punkte Kantenlänge aus (`MAX_KANTE`), also höchstens gut fünf
+ * Megapunkte – rund 157 MB für alle vier, und damit keine einzige Naht.
  *
  * # Und: Stark Verwackeltes bleibt verloren. Wo die Bewegung eine Kante über
  * fünfzig Punkte gezogen hat, ist die Information physikalisch weg. Jedes
