@@ -456,6 +456,37 @@ export const api = {
         `/media/${attachmentId}/fernsehticket`,
       ),
   },
+  /**
+   * Der Fernseher als zweiter Bildschirm.
+   *
+   * Der Code entsteht AM FERNSEHER, nicht hier: Sonst müsste ihn jemand mit
+   * einer Fernbedienung abtippen – acht Zeichen auf einer Bildschirmtastatur,
+   * bei der man mit Pfeiltasten von Buchstabe zu Buchstabe fährt. So herum
+   * tippt man auf dem Telefon, und der Fernseher zeigt nur an.
+   */
+  tv: {
+    /** Verbinden und einstellen in einem Schritt – siehe `fernsehen.rs`. */
+    einstellen: (
+      code: string,
+      body: {
+        collectionId?: string;
+        attachmentIds?: string[];
+        modus?: 'linear' | 'zufall';
+        sekunden?: number;
+      },
+    ) =>
+      post<{ code: string; stueckzahl: number; modus: string; sekunden: number }>(
+        `/tv/sitzungen/${encodeURIComponent(code)}/programm`,
+        body,
+      ),
+    /** Die Fernbedienung: weiter, zurück, Pause, Reihenfolge, Tempo. */
+    steuern: (
+      code: string,
+      body: { stelle?: number; pausiert?: boolean; modus?: 'linear' | 'zufall'; sekunden?: number },
+    ) =>
+      patch<{ stelle: number; modus: string }>(`/tv/sitzungen/${encodeURIComponent(code)}`, body),
+    beenden: (code: string) => del<void>(`/tv/sitzungen/${encodeURIComponent(code)}`),
+  },
   stickers: {
     packs: () => get<ListResult<StickerPackDto>>('/stickers/packs'),
     createPack: (body: { name: string; isPublic?: boolean }) =>

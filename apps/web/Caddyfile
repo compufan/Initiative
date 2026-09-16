@@ -72,6 +72,14 @@
 		# style-Eigenschaften direkt am Element).
 		header Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self' wss:; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
 
+		# Das Blatt für den Fernseher ist ein eigener Einstiegspunkt und keine
+		# Seite der App: In einem Fernseher steckt selten ein aktueller
+		# Browser, und es läuft ohne Anmeldung. Ohne diese Umschreibung landet
+		# `/tv` über `try_files` in der App-Hülle – mit HTTP 200 und einem
+		# Anmeldeschirm, den dort niemand bedienen kann.
+		@tv path /tv /tv/
+		rewrite @tv /tv.html
+
 		try_files {path} /index.html
 
 		# `precompressed gzip` sucht zu jeder Datei eine `.gz` daneben und

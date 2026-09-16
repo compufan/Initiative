@@ -1,0 +1,83 @@
+/*
+ * „Auf den Fernseher“ – das Blatt auf dem Telefon.
+ *
+ * Es ist zweierlei nacheinander: erst eine Anleitung mit Codefeld, danach
+ * eine Fernbedienung. Deshalb kein gemeinsames Raster, sondern zwei Blöcke.
+ */
+
+.tv-schritte {
+  margin: 0 0 1rem;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.4rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/*
+ * Das Codefeld.
+ *
+ * Gleiche Laufweite und weite Sperrung, weil hier zeichenweise abgetippt wird,
+ * was drei Meter weiter auf dem Fernseher steht. In einer Proportionalschrift
+ * verliert man beim Abgleichen die Stelle.
+ *
+ * `text-transform: uppercase` ist nur Anzeige – der Server nimmt Kleinschrift,
+ * Striche und Leerzeichen ohnehin an (`code_normal`). Wer sich beim Tippen
+ * über eine automatische Grossschreibung ärgert, soll das nicht müssen.
+ */
+.tv-code-eingabe {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 1.4rem;
+  letter-spacing: 0.12em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.tv-wahl {
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tv-wahl legend {
+  padding: 0 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.tv-wahl label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tv-hinweis {
+  margin: -0.4rem 0 1rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.tv-zeile {
+  margin: 0 0 1rem;
+  color: var(--text-muted);
+}
+
+/*
+ * Die Fernbedienung.
+ *
+ * Drei gleich breite Tasten und bewusst hoch: Sie wird im Halbdunkel bedient,
+ * oft ohne hinzusehen, und ein Ziel von 44 Punkten ist dabei das Mindeste.
+ */
+.tv-tasten {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.tv-tasten .btn {
+  min-height: 48px;
+}

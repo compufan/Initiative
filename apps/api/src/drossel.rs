@@ -260,6 +260,25 @@ pub mod regeln {
     /// gewesen. Genau der Fall, für den diese App gedacht ist.
     pub const REGISTRIEREN: Regel = Regel::neu(20, Duration::from_secs(3600));
 
+    /// Ein Fernseher meldet sich an: dreissig je Stunde und Adresse.
+    ///
+    /// Das Blatt holt genau einmal beim Öffnen eine Sitzung. Dreissig deckt
+    /// ein Wohnzimmer, in dem jemand die Seite mehrmals neu lädt, und bremst
+    /// zugleich den, der den Tisch mit Sitzungen vollschreiben will.
+    pub const FERNSEHER_ANMELDEN: Regel = Regel::neu(30, Duration::from_secs(3600));
+
+    /// Einen Fernsehcode eintippen: zwanzig je Stunde und Adresse.
+    ///
+    /// Das ist die EINZIGE Stelle, an der ein Code geraten werden kann –
+    /// alles andere verlangt das Geheimnis des Fernsehers, und das hat 256
+    /// Bit. Acht Zeichen aus 32 sind gut 2^39 Möglichkeiten; mit zwanzig
+    /// Versuchen je Stunde bräuchte es Jahrmilliarden, und ein Treffer brächte
+    /// nicht einmal ein Bild, sondern nur eine gestörte fremde Sitzung.
+    ///
+    /// Zwanzig und nicht fünf: Wer den Code vom Fernseher abliest, vertippt
+    /// sich, und ein Abend mit Fotos hat mehrere Anläufe.
+    pub const FERNSEHER_VERBINDEN: Regel = Regel::neu(20, Duration::from_secs(3600));
+
     /// Erneuern des Zugangs: Das macht die App selbst, etwa alle 15 Minuten.
     /// Wer deutlich häufiger kommt, hat entweder einen Fehler oder etwas vor.
     pub const ERNEUERN: Regel = Regel::neu(30, Duration::from_secs(600));

@@ -12,6 +12,7 @@ pub mod collections;
 pub mod conversations;
 pub mod datenschutz;
 pub mod expenses;
+pub mod fernsehen;
 pub mod games;
 pub mod media;
 pub mod messages;
@@ -39,6 +40,7 @@ pub fn router() -> Router<AppState> {
         .merge(media::router())
         .merge(stickers::router())
         .merge(collections::router())
+        .merge(fernsehen::router())
         .merge(calendar::router())
         .merge(expenses::router())
         .merge(polls::router())

@@ -335,3 +335,391 @@ async fn wer_die_datei_nicht_sehen_darf_bekommt_keine_karte() {
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+/* ==========================================================================
+ * Das Blatt auf dem Fernseher: Code, Geheimnis, Diashow.
+ * ========================================================================== */
+
+impl Probe {
+    /// Ein Abruf mit Abfrageteil, ohne jeden Ausweis – so fragt das Blatt.
+    async fn ohne_konto(&self, method: &str, uri: &str) -> (StatusCode, Value) {
+        self.call(method, uri, None, None).await
+    }
+
+    async fn sammlung(&self, token: &str, name: &str) -> String {
+        let (status, antwort) = self
+            .call(
+                "POST",
+                "/api/v1/collections",
+                Some(token),
+                Some(json!({ "name": name })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{antwort}");
+        antwort["id"].as_str().expect("Kennung").to_string()
+    }
+
+    async fn einlegen(&self, token: &str, sammlung: &str, anhang: &str) {
+        let (status, antwort) = self
+            .call(
+                "POST",
+                &format!("/api/v1/collections/{sammlung}/items"),
+                Some(token),
+                Some(json!({ "attachmentId": anhang })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{antwort}");
+    }
+
+    async fn hochladen_bild(&self, token: &str, name: &str) -> String {
+        let inhalt = format!("bild {name}");
+        let (status, upload) = self
+            .call(
+                "POST",
+                "/api/v1/media/uploads",
+                Some(token),
+                Some(json!({
+                    "kind": "image",
+                    "mime": "image/jpeg",
+                    "size": inhalt.len(),
+                    "fileName": name,
+                })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{upload}");
+        let kennung = upload["attachmentId"]
+            .as_str()
+            .expect("Kennung")
+            .to_string();
+
+        let grenze = "----initiativebild";
+        let mut body = Vec::new();
+        body.extend_from_slice(format!("--{grenze}\r\n").as_bytes());
+        body.extend_from_slice(
+            format!("Content-Disposition: form-data; name=\"file\"; filename=\"{name}\"\r\n")
+                .as_bytes(),
+        );
+        body.extend_from_slice(b"Content-Type: image/jpeg\r\n\r\n");
+        body.extend_from_slice(inhalt.as_bytes());
+        body.extend_from_slice(format!("\r\n--{grenze}--\r\n").as_bytes());
+
+        let request = Request::builder()
+            .method("POST")
+            .uri(format!("/api/v1/media/uploads/{kennung}/data"))
+            .header("authorization", format!("Bearer {token}"))
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={grenze}"),
+            )
+            .body(Body::from(body))
+            .unwrap();
+        let antwort = self.router.clone().oneshot(request).await.unwrap();
+        assert_eq!(antwort.status(), StatusCode::OK, "Upload {name}");
+        kennung
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn eine_sammlung_wird_zur_diashow() {
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL fehlt – übersprungen");
+        return;
+    };
+    let token = probe.anmelden("diashow").await;
+
+    // --- Der Fernseher meldet sich an -------------------------------------
+    let (status, sitzung) = probe.ohne_konto("POST", "/api/v1/tv/sitzungen").await;
+    assert_eq!(status, StatusCode::CREATED, "{sitzung}");
+    let code = sitzung["code"].as_str().expect("Code").to_string();
+    let geheim = sitzung["geheim"].as_str().expect("Geheimnis").to_string();
+    assert_eq!(code.len(), 9, "acht Zeichen und ein Strich: {code}");
+    assert!(
+        geheim.len() >= 40,
+        "das Geheimnis ist zu kurz: {}",
+        geheim.len()
+    );
+
+    // Vor dem Verbinden gibt es nichts zu holen – das Blatt zeigt den Code.
+    let (status, stand) = probe
+        .ohne_konto(
+            "GET",
+            &format!("/api/v1/tv/sitzungen/{code}/stand?geheim={geheim}"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{stand}");
+    assert_eq!(stand["verbunden"], json!(false));
+
+    // --- Das Telefon stellt eine Sammlung ein -----------------------------
+    let sammlung = probe.sammlung(&token, "Urlaub").await;
+    let eins = probe.hochladen_bild(&token, "eins.jpg").await;
+    let zwei = probe.hochladen_bild(&token, "zwei.jpg").await;
+    probe.einlegen(&token, &sammlung, &eins).await;
+    probe.einlegen(&token, &sammlung, &zwei).await;
+
+    let (status, antwort) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/tv/sitzungen/{code}/programm"),
+            Some(&token),
+            Some(json!({ "collectionId": sammlung, "modus": "zufall", "sekunden": 4 })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+    assert_eq!(antwort["stueckzahl"], json!(2));
+
+    // --- Und der Fernseher holt sie ab ------------------------------------
+    let (status, programm) = probe
+        .ohne_konto(
+            "GET",
+            &format!("/api/v1/tv/sitzungen/{code}/programm?geheim={geheim}"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{programm}");
+    assert_eq!(programm["modus"], json!("zufall"));
+    assert_eq!(programm["sekunden"], json!(4));
+    let stuecke = programm["stuecke"].as_array().expect("Stücke");
+    assert_eq!(stuecke.len(), 2);
+    // Die Reihenfolge der Sammlung, nicht die der Datenbank.
+    assert_eq!(stuecke[0]["id"], json!(eins));
+    assert_eq!(stuecke[1]["id"], json!(zwei));
+
+    /*
+     * Der Kern: Diese Adresse muss OHNE Konto funktionieren. Der Fernseher hat
+     * keines und bekommt auch keines; wenn hier nichts kommt, bleibt das Bild
+     * schwarz.
+     */
+    let adresse = stuecke[0]["url"].as_str().expect("Adresse");
+    let (status, bytes, _) = probe.wie_ein_fernseher(&pfad(adresse), None).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "der Fernseher kommt nicht an das Foto"
+    );
+    assert_eq!(bytes, b"bild eins.jpg");
+
+    // --- Die Fernbedienung -------------------------------------------------
+    let vorher = programm["fassung"].as_i64().expect("Fassung");
+    let (status, _) = probe
+        .call(
+            "PATCH",
+            &format!("/api/v1/tv/sitzungen/{code}"),
+            Some(&token),
+            Some(json!({ "stelle": 1, "pausiert": true })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, stand) = probe
+        .ohne_konto(
+            "GET",
+            &format!("/api/v1/tv/sitzungen/{code}/stand?geheim={geheim}"),
+        )
+        .await;
+    assert_eq!(stand["stelle"], json!(1));
+    assert_eq!(stand["pausiert"], json!(true));
+    /*
+     * Die Fassungsnummer muss steigen. Sie ist das einzige, was der Fernseher
+     * im Sekundentakt abfragt – bewegt sie sich nicht, holt er die Liste nie
+     * wieder, und die Fernbedienung wäre wirkungslos.
+     */
+    assert!(
+        stand["fassung"].as_i64().expect("Fassung") > vorher,
+        "die Fassungsnummer steht still"
+    );
+
+    /*
+     * Im Kreis, nicht geklemmt: Wer beim letzten Bild „weiter" drückt, will
+     * wieder von vorn. Und „zurück" auf Stelle null darf nicht bei -1 landen.
+     */
+    let (_, antwort) = probe
+        .call(
+            "PATCH",
+            &format!("/api/v1/tv/sitzungen/{code}"),
+            Some(&token),
+            Some(json!({ "stelle": 2 })),
+        )
+        .await;
+    assert_eq!(
+        antwort["stelle"],
+        json!(0),
+        "am Ende geht es wieder von vorn"
+    );
+    let (_, antwort) = probe
+        .call(
+            "PATCH",
+            &format!("/api/v1/tv/sitzungen/{code}"),
+            Some(&token),
+            Some(json!({ "stelle": -1 })),
+        )
+        .await;
+    assert_eq!(
+        antwort["stelle"],
+        json!(1),
+        "zurück vom Anfang geht ans Ende"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ohne_geheimnis_kommt_niemand_an_die_bilder() {
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL fehlt – übersprungen");
+        return;
+    };
+    let token = probe.anmelden("geheim").await;
+    let (_, sitzung) = probe.ohne_konto("POST", "/api/v1/tv/sitzungen").await;
+    let code = sitzung["code"].as_str().expect("Code").to_string();
+    let geheim = sitzung["geheim"].as_str().expect("Geheimnis").to_string();
+
+    let sammlung = probe.sammlung(&token, "Privat").await;
+    let bild = probe.hochladen_bild(&token, "privat.jpg").await;
+    probe.einlegen(&token, &sammlung, &bild).await;
+    let (status, antwort) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/tv/sitzungen/{code}/programm"),
+            Some(&token),
+            Some(json!({ "collectionId": sammlung })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+
+    /*
+     * Der Code steht gross auf dem Fernseher und ist kurz genug zum Abtippen –
+     * also auch kurz genug zum Raten. Wäre er allein der Schlüssel, sähe jeder
+     * Rater die Diashow eines Fremden mit. Das Geheimnis entsteht beim
+     * Fernseher und steht nie auf dem Schirm.
+     */
+    for falsch in ["", "falsch", "AAAA"] {
+        let (status, _) = probe
+            .ohne_konto(
+                "GET",
+                &format!("/api/v1/tv/sitzungen/{code}/programm?geheim={falsch}"),
+            )
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "mit dem Geheimnis {falsch:?} kam jemand an die Bilder"
+        );
+    }
+    // Mit dem richtigen schon.
+    let (status, _) = probe
+        .ohne_konto(
+            "GET",
+            &format!("/api/v1/tv/sitzungen/{code}/programm?geheim={geheim}"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn eine_fremde_sammlung_kommt_nicht_auf_den_fernseher() {
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL fehlt – übersprungen");
+        return;
+    };
+    let besitzer = probe.anmelden("eigner").await;
+    let fremd = probe.anmelden("gast").await;
+    let (_, sitzung) = probe.ohne_konto("POST", "/api/v1/tv/sitzungen").await;
+    let code = sitzung["code"].as_str().expect("Code").to_string();
+
+    let sammlung = probe.sammlung(&besitzer, "Nur für mich").await;
+    let bild = probe.hochladen_bild(&besitzer, "geheim.jpg").await;
+    probe.einlegen(&besitzer, &sammlung, &bild).await;
+
+    /*
+     * Ein eigener Fernseher, aber eine fremde Sammlung. Die Sitzung gehört
+     * dem, der sie verbindet – die Bilder nicht.
+     */
+    let (status, antwort) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/tv/sitzungen/{code}/programm"),
+            Some(&fremd),
+            Some(json!({ "collectionId": sammlung })),
+        )
+        .await;
+    assert!(
+        status == StatusCode::NOT_FOUND || status == StatusCode::FORBIDDEN,
+        "eine fremde Sammlung ging auf den Fernseher: {status} {antwort}"
+    );
+
+    // Dasselbe für eine einzelne fremde Datei.
+    let (status, antwort) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/tv/sitzungen/{code}/programm"),
+            Some(&fremd),
+            Some(json!({ "attachmentIds": [bild] })),
+        )
+        .await;
+    assert!(
+        status == StatusCode::NOT_FOUND || status == StatusCode::FORBIDDEN,
+        "eine fremde Datei ging auf den Fernseher: {status} {antwort}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ein_fremdes_telefon_uebernimmt_keine_laufende_sitzung() {
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL fehlt – übersprungen");
+        return;
+    };
+    let erster = probe.anmelden("erst").await;
+    let zweiter = probe.anmelden("zweit").await;
+    let (_, sitzung) = probe.ohne_konto("POST", "/api/v1/tv/sitzungen").await;
+    let code = sitzung["code"].as_str().expect("Code").to_string();
+
+    let sammlung = probe.sammlung(&erster, "Abend").await;
+    let bild = probe.hochladen_bild(&erster, "abend.jpg").await;
+    probe.einlegen(&erster, &sammlung, &bild).await;
+    let (status, antwort) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/tv/sitzungen/{code}/programm"),
+            Some(&erster),
+            Some(json!({ "collectionId": sammlung })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+
+    /*
+     * Jetzt kennt jemand anderes den Code – abgelesen, abgefotografiert,
+     * geraten. Er darf die laufende Sitzung weder übernehmen noch steuern.
+     */
+    let eigene = probe.sammlung(&zweiter, "Meins").await;
+    let eigenes_bild = probe.hochladen_bild(&zweiter, "meins.jpg").await;
+    probe.einlegen(&zweiter, &eigene, &eigenes_bild).await;
+    let (status, _) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/tv/sitzungen/{code}/programm"),
+            Some(&zweiter),
+            Some(json!({ "collectionId": eigene })),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "ein Fremder hat eine laufende Sitzung übernommen"
+    );
+
+    let (status, _) = probe
+        .call(
+            "PATCH",
+            &format!("/api/v1/tv/sitzungen/{code}"),
+            Some(&zweiter),
+            Some(json!({ "stelle": 5 })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "ein Fremder hat gesteuert");
+
+    let (status, _) = probe
+        .call(
+            "DELETE",
+            &format!("/api/v1/tv/sitzungen/{code}"),
+            Some(&zweiter),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "ein Fremder hat beendet");
+}

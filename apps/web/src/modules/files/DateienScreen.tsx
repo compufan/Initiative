@@ -21,6 +21,7 @@ import { CollectionSheet } from './CollectionSheet.js';
 import { UploadToCollectionSheet } from './UploadToCollectionSheet.js';
 import { FileViewer } from './FileViewer.js';
 import { ShareSheet } from './ShareSheet.js';
+import { FernsehSheet } from '../fernseher/FernsehSheet.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 import { pfadZu, useFiles } from './state.js';
 import { MAX_KANTE } from '../bild/doc.js';
@@ -59,6 +60,7 @@ export function DateienScreen() {
   const [hochladen, setHochladen] = useState(false);
   const [bearbeiten, setBearbeiten] = useState(false);
   const [teilen, setTeilen] = useState(false);
+  const [fernseher, setFernseher] = useState(false);
   /**
    * Welche Datei im Betrachter offen ist – als Kennung, nicht als Platznummer.
    *
@@ -81,6 +83,16 @@ export function DateienScreen() {
     [collections, collectionId],
   );
   const items = collectionId ? (alleItems[collectionId] ?? []) : [];
+  /*
+   * Wie viel sich davon überhaupt auf einem Fernseher zeigen lässt.
+   *
+   * Ein Ordner mit Tonaufnahmen und PDFs bekommt keinen Fernsehknopf: Der
+   * Server wiese die Liste ab („weder Fotos noch Videos"), und ein Knopf, der
+   * zuverlässig eine Fehlermeldung ergibt, ist schlechter als keiner.
+   */
+  const zeigbare = items.filter(
+    (eintrag) => eintrag.attachment.kind === 'image' || eintrag.attachment.kind === 'video',
+  ).length;
   const inhaltGeladen = collectionId ? Boolean(geladen[collectionId]) : true;
 
   useEffect(() => {
@@ -254,6 +266,20 @@ export function DateienScreen() {
       {aktuell && (
         <div className="fil-toolbar">
           <span className="fil-badge">{RECHT_TEXT[aktuell.myLevel]}</span>
+          {/*
+           * Auch für den, der nur ansehen darf: Etwas auf dem eigenen
+           * Fernseher zu zeigen ist Ansehen, nicht Ändern.
+           */}
+          {aktuell.myLevel !== 'none' && zeigbare > 0 && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setFernseher(true)}
+              data-tipp="Diese Sammlung als Diashow auf einem Fernseher zeigen"
+            >
+              📺 Auf den Fernseher
+            </button>
+          )}
           {darfBesitzen && (
             <>
               <button type="button" className="btn btn-sm" onClick={() => setTeilen(true)}>
@@ -386,6 +412,14 @@ export function DateienScreen() {
       )}
       {aktuell && teilen && (
         <ShareSheet open={teilen} onClose={() => setTeilen(false)} collection={aktuell} />
+      )}
+      {aktuell && fernseher && (
+        <FernsehSheet
+          open={fernseher}
+          onClose={() => setFernseher(false)}
+          collection={aktuell}
+          titel={`„${aktuell.name}“ auf den Fernseher`}
+        />
       )}
 
       {aktuell && (

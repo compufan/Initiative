@@ -55,6 +55,34 @@ export default defineConfig(({ mode }) => {
       target: 'es2022',
       sourcemap: true,
       rollupOptions: {
+        /*
+         * Zwei Einstiegspunkte: die App und das Blatt für den Fernseher.
+         *
+         * `tv.html` ist bewusst KEINE Seite der App. In einem Fernseher steckt
+         * selten ein aktueller Browser, und die App zieht React, den Wegweiser
+         * und die Freistell-Bausteine mit sich. Das Blatt daneben lädt ein
+         * paar Kilobyte und braucht keine einzige fremde Bibliothek.
+         *
+         * Dazu kommt, dass es OHNE Anmeldung laufen muss – ein Fernseher hat
+         * kein Konto. In der App liegt alles hinter dem Anmeldeschirm, und das
+         * soll so bleiben.
+         */
+        input: {
+          index: fileURLToPath(new URL('./index.html', import.meta.url)),
+          tv: fileURLToPath(new URL('./tv.html', import.meta.url)),
+        },
+        /*
+         * Die Adresse ist `/tv`, die Datei heisst `tv.html`.
+         *
+         * Der Entwicklungsserver löst das von SELBST auf – nachgemessen: Ein
+         * Einstiegspunkt namens `tv.html` beantwortet auch `/tv`. Ein eigenes
+         * Zwischenstück dafür stand hier und war tote Arbeit.
+         *
+         * In der Auslieferung tut das niemand von selbst. Dort schreiben
+         * `Caddyfile` und `vercel.json` `/tv` auf `tv.html` um, und weil der
+         * Entwicklungsserver den Fehler nicht zeigen kann, hält
+         * `e2e/fernsehen.spec.ts` beide Stellen ausdrücklich fest.
+         */
         output: {
           manualChunks: {
             react: ['react', 'react-dom', 'react-router-dom'],

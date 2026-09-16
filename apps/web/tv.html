@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <!--
+      Das Blatt für den Fernseher.
+
+      Ein EIGENER Einstiegspunkt und nicht eine Seite der App. Der Grund ist
+      der Browser am anderen Ende: In einem Fernseher steckt selten ein
+      aktueller. Die App zieht React, den Wegweiser und die Freistell-Bausteine
+      mit sich; hier lädt ein Blatt von wenigen Kilobyte, das keine einzige
+      fremde Bibliothek braucht.
+
+      Dazu kommt: Diese Seite läuft OHNE Anmeldung. In der App liegt alles
+      hinter dem Anmeldeschirm, und das soll auch so bleiben.
+    -->
+    <title>Fernseher – Initiative</title>
+    <link rel="stylesheet" href="/src/tv/tv.css" />
+  </head>
+  <body>
+    <main id="blatt" class="warten">
+      <section id="anmeldung" class="mitte">
+        <p class="klein">Diashow und Videos aus deinen Sammlungen</p>
+        <h1 id="code" class="code">…</h1>
+        <p class="anweisung">
+          Öffne die App auf dem Telefon, gehe zu <strong>Dateien</strong>, tippe auf
+          <strong>📺 Auf den Fernseher</strong> und gib diesen Code ein.
+        </p>
+        <p id="fehler" class="fehler" hidden></p>
+      </section>
+
+      <section id="buehne" class="buehne" hidden>
+        <img id="bildA" class="bild" alt="" />
+        <img id="bildB" class="bild" alt="" />
+        <video id="film" class="film" playsinline hidden></video>
+        <div id="hinweis" class="hinweis" hidden></div>
+      </section>
+    </main>
+    <script type="module" src="/src/tv/tv.ts"></script>
+  </body>
+</html>

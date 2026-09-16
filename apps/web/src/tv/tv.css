@@ -1,0 +1,151 @@
+/*
+ * Das Blatt auf dem Fernseher.
+ *
+ * Gerechnet ist hier für vier Meter Abstand und eine Fernbedienung, nicht für
+ * eine Armlänge und einen Finger. Das ändert drei Dinge grundlegend:
+ *
+ *   * Schriftgrössen in `vw` statt in Punkten. Ein Fernseher ist zwischen 32
+ *     und 85 Zoll gross und meldet in fast allen Fällen dieselben 1920 Punkte
+ *     Breite – die absolute Grösse sagt also nichts darüber, wie gross etwas
+ *     WIRKT. Der Anteil an der Bildschirmbreite schon.
+ *   * Schwarz als Untergrund. Nicht aus Geschmack: Ein heller Rand um ein Foto
+ *     blendet in einem abgedunkelten Zimmer, und bei einem OLED leuchtet jeder
+ *     weisse Bildpunkt wirklich.
+ *   * Ein Sicherheitsrand. Etliche Fernseher schneiden bis zu fünf Prozent des
+ *     Bildes ab („Overscan"). Der Code säse sonst halb ausserhalb.
+ */
+
+:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #000;
+  color: #fff;
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  overflow: hidden;
+}
+
+#blatt {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.mitte {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2vh;
+  /* Der Sicherheitsrand gegen Overscan. */
+  padding: 5vh 5vw;
+  text-align: center;
+}
+
+.klein {
+  margin: 0;
+  font-size: 2vw;
+  opacity: 0.65;
+}
+
+/*
+ * Der Code – das Einzige, was aus vier Metern wirklich lesbar sein muss.
+ *
+ * `monospace` und weite Sperrung: Wer ihn abtippt, liest Zeichen für Zeichen.
+ * In einer Proportionalschrift stehen `W` und `J` unterschiedlich weit, und
+ * beim Abzählen verliert man die Stelle.
+ */
+.code {
+  margin: 0;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11vw;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.1;
+}
+
+.anweisung {
+  margin: 0;
+  max-width: 60vw;
+  font-size: 2.2vw;
+  line-height: 1.5;
+  opacity: 0.85;
+}
+
+.fehler {
+  margin: 0;
+  font-size: 1.8vw;
+  color: #ffb4a8;
+}
+
+.buehne {
+  position: absolute;
+  inset: 0;
+  background: #000;
+}
+
+/*
+ * Zwei Bilder übereinander, von denen genau eines sichtbar ist.
+ *
+ * `object-fit: contain` und nicht `cover`: Ein Hochformat auf einem
+ * Breitbildschirm würde beim Füllen oben und unten abgeschnitten – und
+ * abgeschnitten wird bei Fotos ausgerechnet das, worauf es ankommt.
+ */
+.bild {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+  transition: opacity 600ms ease;
+}
+
+.bild.sichtbar {
+  opacity: 1;
+}
+
+.film {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.hinweis {
+  position: absolute;
+  left: 5vw;
+  bottom: 5vh;
+  padding: 1vh 2vw;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.6);
+  font-size: 1.6vw;
+}
+
+/*
+ * Kein Mauszeiger auf einem Fernseher.
+ *
+ * Manche Geräte haben einen Zeiger (LG Magic Remote) und blenden ihn nach
+ * einigen Sekunden von selbst aus – andere lassen ihn mitten im Bild stehen.
+ */
+.spielt {
+  cursor: none;
+}
