@@ -583,6 +583,43 @@ async fn eine_sammlung_wird_zur_diashow() {
     );
     assert_eq!(bytes, b"bild eins.jpg");
 
+    /*
+     * --- Die Fernbedienung wiederfinden ---------------------------------
+     *
+     * Ein Anwender hat berichtet, die Fernbedienung lasse sich „schliessen,
+     * aber nicht wieder öffnen, während weiter gestreamt wird". Der Grund
+     * war, dass der Code allein im Blatt auf dem Telefon lebte – und am
+     * Fernseher stand er auch nicht mehr, weil dort die Diashow lief.
+     *
+     * Der Server weiss es ohnehin. Diese Route ist die Auskunft, und sie
+     * wird hier geprüft, BEVOR die Fernbedienung benutzt wird: Wer sie nicht
+     * hat, kommt an den Rest gar nicht heran.
+     */
+    let (status, meine) = probe
+        .call("GET", "/api/v1/tv/meine", Some(&token), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{meine}");
+    let liste = meine["items"].as_array().expect("Liste");
+    assert_eq!(liste.len(), 1, "die laufende Sitzung fehlt: {meine}");
+    assert_eq!(liste[0]["code"], json!(code.replace('-', "")));
+    assert_eq!(liste[0]["stueckzahl"], json!(2));
+    assert!(
+        liste[0]["gesehenVorSekunden"].as_i64().unwrap_or(9999) < 60,
+        "der Fernseher gilt als still, obwohl er gerade abgeholt hat: {meine}"
+    );
+
+    // Und ein anderer sieht sie nicht – es ist nicht seine.
+    let fremder = probe.anmelden("diashowfremd").await;
+    let (status, fremd) = probe
+        .call("GET", "/api/v1/tv/meine", Some(&fremder), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{fremd}");
+    assert_eq!(
+        fremd["items"].as_array().map(Vec::len),
+        Some(0),
+        "eine fremde Sitzung steht in der Liste: {fremd}"
+    );
+
     // --- Die Fernbedienung -------------------------------------------------
     let vorher = programm["fassung"].as_i64().expect("Fassung");
     let (status, _) = probe

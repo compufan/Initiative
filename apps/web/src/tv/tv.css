@@ -149,3 +149,28 @@ body {
 .spielt {
   cursor: none;
 }
+
+/*
+ * Das Zeichen der Gruppe auf dem Wartebild.
+ *
+ * Gross genug, um aus vier Metern erkannt zu werden, und mit Abstand zum Code
+ * darunter: Er ist das, was abgetippt wird, und darf nicht mit dem Logo um
+ * den Blick ringen.
+ *
+ * `min(…)` statt einer festen Grösse – ein Fernseher meldet fast immer 1920
+ * Punkte Breite, aber ein Rechnerbildschirm, auf dem jemand das Blatt zum
+ * Ausprobieren öffnet, eben nicht.
+ */
+.mitte .marke {
+  width: min(22vw, 30vh);
+  max-width: 340px;
+  height: auto;
+  margin-bottom: 2.4vh;
+  /*
+   * Die Scheibe des Logos ist schwarz, der Untergrund hier auch. Ein leiser
+   * Schein hebt sie ab, ohne einen Rahmen zu zeichnen – in einem abgedunkelten
+   * Zimmer ist das der Unterschied zwischen „schwebt" und „liegt in einem
+   * Kasten".
+   */
+  filter: drop-shadow(0 0 3vh rgba(255, 255, 255, 0.09));
+}

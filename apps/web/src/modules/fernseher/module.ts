@@ -1,5 +1,6 @@
 import { defineWebModule } from '../types.js';
 import { AufDenFernseher } from './AufDenFernseher.js';
+import { FernsehBalken } from './FernsehBalken.js';
 import './styles.css';
 
 /**
@@ -21,6 +22,14 @@ export default defineWebModule({
   key: 'fernseher',
   title: 'Fernseher',
   description: 'Fotos, Videos und Diashows auf einen Fernseher – ohne Zusatzgerät und ohne SDK.',
+  /*
+   * Der Balken, der die Fernbedienung zurückholt.
+   *
+   * Als Overlay des Moduls und nicht als Teil eines Bildschirms: Wer eine
+   * Diashow laufen lässt, sitzt danach im Chat, nicht in der Sammlung. Ein
+   * Weg zurück, den man erst suchen muss, ist für diesen Moment keiner.
+   */
+  overlay: FernsehBalken,
   messageActions: [
     {
       key: 'auf-den-fernseher',

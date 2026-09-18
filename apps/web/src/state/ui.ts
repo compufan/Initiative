@@ -12,14 +12,28 @@ export interface Toast {
 
 export type ThemePreference = 'system' | 'light' | 'dark';
 
+/**
+ * Wie kräftig das Gruppenlogo im Hintergrund steht.
+ *
+ * Drei Stufen und nicht ein Schalter, weil hier zwei Dinge gegeneinander
+ * stehen: Es ist das Zeichen der Gruppe und soll zu sehen sein – und darüber
+ * liegen Chatblasen, Listen und Formulare, die gelesen werden müssen.
+ *
+ * `dezent` ist der Standard: gerade so sichtbar, dass man es bemerkt, wenn
+ * man hinsieht, und nie so, dass ein Text darum kämpfen muss.
+ */
+export type MarkePraesenz = 'aus' | 'dezent' | 'deutlich';
+
 interface UiState {
   toasts: Toast[];
   theme: ThemePreference;
+  marke: MarkePraesenz;
   installPrompt: BeforeInstallPromptEvent | null;
   swUpdateReady: (() => void) | null;
   toast: (message: string, kind?: ToastKind) => void;
   dismissToast: (id: string) => void;
   setTheme: (theme: ThemePreference) => void;
+  setMarke: (marke: MarkePraesenz) => void;
   setInstallPrompt: (event: BeforeInstallPromptEvent | null) => void;
   setSwUpdate: (apply: (() => void) | null) => void;
 }
@@ -30,6 +44,7 @@ export interface BeforeInstallPromptEvent extends Event {
 }
 
 const THEME_KEY = 'initiative.theme';
+const MARKE_KEY = 'initiative.marke';
 
 function readTheme(): ThemePreference {
   try {
@@ -39,6 +54,28 @@ function readTheme(): ThemePreference {
     /* ignore */
   }
   return 'system';
+}
+
+function readMarke(): MarkePraesenz {
+  try {
+    const gemerkt = localStorage.getItem(MARKE_KEY);
+    if (gemerkt === 'aus' || gemerkt === 'dezent' || gemerkt === 'deutlich') return gemerkt;
+  } catch {
+    /* ignore */
+  }
+  return 'dezent';
+}
+
+/**
+ * Das Logo im Hintergrund an- oder abschalten.
+ *
+ * Über ein Datenattribut am Wurzelelement, genau wie das Farbschema: Damit
+ * steht die Entscheidung im CSS und nicht in einem Dutzend Komponenten, und
+ * sie gilt auch für Bildschirme, die es noch gar nicht gibt – Anmeldung,
+ * Splash, jede künftige Seite.
+ */
+export function applyMarke(marke: MarkePraesenz): void {
+  document.documentElement.dataset.marke = marke;
 }
 
 export function applyTheme(theme: ThemePreference): void {
@@ -93,6 +130,7 @@ export function toastLoslassen(id: string): void {
 export const useUi = create<UiState>((set) => ({
   toasts: [],
   theme: readTheme(),
+  marke: readMarke(),
   installPrompt: null,
   swUpdateReady: null,
 
@@ -117,6 +155,16 @@ export const useUi = create<UiState>((set) => ({
     set({ theme });
   },
 
+  setMarke(marke) {
+    try {
+      localStorage.setItem(MARKE_KEY, marke);
+    } catch {
+      /* ignore */
+    }
+    applyMarke(marke);
+    set({ marke });
+  },
+
   setInstallPrompt(event) {
     set({ installPrompt: event });
   },
@@ -132,6 +180,7 @@ export function toast(message: string, kind: ToastKind = 'info'): void {
 
 if (typeof window !== 'undefined') {
   applyTheme(readTheme());
+  applyMarke(readMarke());
   window.matchMedia('(prefers-color-scheme: light)').addEventListener('change', () => {
     if (useUi.getState().theme === 'system') applyTheme('system');
   });

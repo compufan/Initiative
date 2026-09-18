@@ -6,6 +6,7 @@ import {
   Diashow,
   abspielen,
   castBeobachten,
+  EMPFAENGER,
   castErlaubnisBeobachten,
   castErlaubt,
   castErlauben,
@@ -15,6 +16,8 @@ import {
   type CastZustand,
 } from './cast.js';
 import { castAnzeige } from './castAnzeige.js';
+import { CastDiagnose } from './CastDiagnose.js';
+import { FernsehSheet } from './FernsehSheet.js';
 
 /**
  * Der Cast-Knopf – und zwar der ECHTE.
@@ -159,6 +162,23 @@ export function CastKnopf({ stuecke, sekunden, was, modusWahl, stil = 'rund' }: 
    */
   const erlaubt = useSyncExternalStore(castErlaubnisBeobachten, castErlaubt, () => false);
   const [frage, setFrage] = useState(false);
+  /**
+   * Das Blatt mit dem Code – der Weg, der ohne Chromecast funktioniert.
+   *
+   * Es hängt hier und nicht in einem eigenen Knopf daneben, und das ist der
+   * Punkt: Der Moment, in dem jemand erfährt „kein Chromecast gefunden", ist
+   * genau der Moment, in dem er den anderen Weg braucht. Vorher stand dort ein
+   * Satz, der ihn erwähnte – als Meldung, die man nicht antippen kann. Eine
+   * Sackgasse mit Wegbeschreibung ist immer noch eine Sackgasse.
+   *
+   * Ein zweiter Knopf in der Leiste wäre die Alternative gewesen und die
+   * schlechtere: §5.1 der Cast-Bedingungen verlangt den echten Launcher auf
+   * oberster Ebene, und ein zweiter Fernsehknopf unmittelbar daneben ist die
+   * Konkurrenz, die in der Sammlung schon einmal aufgelöst werden musste.
+   */
+  const [codeWeg, setCodeWeg] = useState(false);
+  /** „Warum wird nichts gefunden?" – die Auskunft, die den Fall entscheidet. */
+  const [diagnose, setDiagnose] = useState(false);
   const [laeuft, setLaeuft] = useState(false);
   /** Läuft die Schonfrist, in der „nichts gefunden" noch „wird gesucht" heisst? */
   const [sucht, setSucht] = useState(false);
@@ -306,11 +326,24 @@ export function CastKnopf({ stuecke, sekunden, was, modusWahl, stil = 'rund' }: 
 
   if (anzeige === 'geht-hier-nicht') {
     return (
-      <span className="cast-hinweis" role="status">
-        {grund === 'kein-sicherer-kontext'
-          ? 'Chromecast braucht https – über diese Adresse geht nur der Weg mit dem Code.'
-          : 'Dieser Browser kann kein Chromecast – auf dem iPhone und in Safari geht nur der Weg mit dem Code.'}
-      </span>
+      <>
+        <Auskunft
+          stil={stil}
+          zeichen="ⓘ"
+          text={
+            grund === 'kein-sicherer-kontext'
+              ? 'Chromecast braucht https – über diese Adresse geht nur der Weg mit dem Code.'
+              : 'Dieser Browser kann kein Chromecast – auf dem iPhone und in Safari geht nur der Weg mit dem Code.'
+          }
+          weiter={() => setCodeWeg(true)}
+        />
+        <CodeWeg
+          offen={codeWeg}
+          zu={() => setCodeWeg(false)}
+          stuecke={stuecke}
+          sekunden={sekunden}
+        />
+      </>
     );
   }
 
@@ -418,7 +451,24 @@ export function CastKnopf({ stuecke, sekunden, was, modusWahl, stil = 'rund' }: 
      * Browser, der zweite ist fehlendes Netz – beides erklärt sich nicht von
      * selbst, und beides ist kein Grund, still zu verschwinden.
      */
-    return <Auskunft stil={stil} zeichen="⚠" text={NICHT_GELADEN} />;
+    return (
+      <>
+        <Auskunft stil={stil} zeichen="⚠" text={NICHT_GELADEN} weiter={() => setDiagnose(true)} />
+        <CodeWeg
+          offen={codeWeg}
+          zu={() => setCodeWeg(false)}
+          stuecke={stuecke}
+          sekunden={sekunden}
+        />
+        <CastDiagnose
+          offen={diagnose}
+          zu={() => setDiagnose(false)}
+          zustand={zustand}
+          empfaenger={EMPFAENGER}
+          zumCodeWeg={() => setCodeWeg(true)}
+        />
+      </>
+    );
   }
 
   const keineGeraete = anzeige === 'kein-geraet';
@@ -490,13 +540,19 @@ export function CastKnopf({ stuecke, sekunden, was, modusWahl, stil = 'rund' }: 
          * ein eigenes Zeichen an der Stelle des Cast-Knopfes ist das, was
          * §5.1 ausschliesst. Ein Auskunftszeichen behauptet nichts und
          * verspricht nichts.
+         *
+         * Solange noch gesucht wird, führt es auch nirgendwohin: Wer nach drei
+         * Sekunden auf „Suche Fernseher …" tippt, will nicht in ein Blatt
+         * geschickt werden, das ihm den Umweg erklärt.
          */
         <Auskunft
           stil={stil}
           zeichen={sucht ? '⋯' : 'ⓘ'}
           text={sucht ? KEIN_GERAET_SUCHT : KEIN_GERAET_TEXT}
+          weiter={sucht ? undefined : () => setCodeWeg(true)}
         />
       )}
+      <CodeWeg offen={codeWeg} zu={() => setCodeWeg(false)} stuecke={stuecke} sekunden={sekunden} />
       {zustand === 'verbunden' && !modusWahl && (
         <button
           type="button"
@@ -533,6 +589,38 @@ export function CastKnopf({ stuecke, sekunden, was, modusWahl, stil = 'rund' }: 
 }
 
 /**
+ * Der Weg mit dem Code, aufgehängt am Cast-Knopf.
+ *
+ * Eine eigene kleine Komponente, weil dasselbe Blatt an drei Stellen
+ * gebraucht wird – kein Gerät gefunden, Skript nicht geladen, Browser kann
+ * nicht – und es an allen dreien dasselbe tut.
+ */
+function CodeWeg({
+  offen,
+  zu,
+  stuecke,
+  sekunden,
+}: {
+  offen: boolean;
+  zu: () => void;
+  stuecke: string[];
+  sekunden?: number;
+}) {
+  if (!offen) return null;
+  return (
+    <FernsehSheet
+      open
+      onClose={zu}
+      attachmentIds={stuecke}
+      sekundenVorgabe={sekunden}
+      titel={
+        stuecke.length === 1 ? 'Auf den Fernseher' : `${stuecke.length} Stück auf den Fernseher`
+      }
+    />
+  );
+}
+
+/**
  * Eine Auskunft, die sich nach dem Platz richtet.
  *
  * Es gibt zwei Stellen mit sehr verschiedenem Platzangebot, und dieselbe
@@ -553,30 +641,44 @@ function Auskunft({
   stil,
   zeichen,
   text,
+  weiter,
 }: {
   stil: 'rund' | 'leiste';
   zeichen: string;
   text: string;
+  /** Der Weg, der trotzdem geht. Ohne ihn bliebe es bei der Mitteilung. */
+  weiter?: () => void;
 }) {
+  const oeffnen = (ereignis: { stopPropagation: () => void }) => {
+    // Bleibt hier: Der Wunschmerker am Wrapper darf diesen Tipp nicht als
+    // „auf den Fernseher" zählen – siehe `onClickCapture` oben.
+    ereignis.stopPropagation();
+    if (weiter) weiter();
+    else toast(text);
+  };
+
   if (stil === 'leiste') {
+    /*
+     * In der Leiste ist Platz für den Satz – und der Satz ist anklickbar.
+     *
+     * Ein `<button>` mit Fliesstext darin, nicht ein Satz mit einem Link
+     * daneben: Wer liest, dass kein Chromecast gefunden wurde, tippt als
+     * Nächstes genau darauf.
+     */
     return (
-      <span className="cast-hinweis" role="status">
+      <button type="button" className="cast-hinweis cast-hinweis-knopf" onClick={oeffnen}>
         {text}
-      </span>
+        {weiter && <span className="cast-hinweis-mehr"> Hier tippen.</span>}
+      </button>
     );
   }
   return (
     <button
       type="button"
       className="media-round-btn cast-leer-knopf"
-      aria-label={text}
+      aria-label={weiter ? `${text} Zum Weg mit dem Code.` : text}
       title={text}
-      onClick={(ereignis) => {
-        // Bleibt hier: Der Wunschmerker am Wrapper darf diesen Tipp nicht als
-        // „auf den Fernseher" zählen – siehe `onClickCapture` oben.
-        ereignis.stopPropagation();
-        toast(text);
-      }}
+      onClick={oeffnen}
     >
       {zeichen}
     </button>

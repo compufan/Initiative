@@ -517,6 +517,26 @@ export const api = {
     ) =>
       patch<{ stelle: number; modus: string }>(`/tv/sitzungen/${encodeURIComponent(code)}`, body),
     beenden: (code: string) => del<void>(`/tv/sitzungen/${encodeURIComponent(code)}`),
+    /**
+     * Was gerade auf einem Fernseher läuft – für diese Person.
+     *
+     * Die Fernbedienung lebte einmal allein im Blatt: zumachen hiess, den
+     * Code zu verlieren, und am Fernseher stand er auch nicht mehr, weil dort
+     * ja die Diashow lief. Der Server weiss es ohnehin; hier wird er gefragt.
+     */
+    meine: () =>
+      get<{
+        items: {
+          code: string;
+          stueckzahl: number;
+          stelle: number;
+          pausiert: boolean;
+          modus: 'linear' | 'zufall';
+          sekunden: number;
+          /** Wie lange der Fernseher sich nicht gemeldet hat. */
+          gesehenVorSekunden: number;
+        }[];
+      }>('/tv/meine'),
   },
   stickers: {
     packs: () => get<ListResult<StickerPackDto>>('/stickers/packs'),

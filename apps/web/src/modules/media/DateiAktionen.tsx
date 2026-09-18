@@ -13,6 +13,7 @@ import { api } from '../../lib/api.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 import { conversationTitle } from '../messenger/helpers.js';
+import { FernsehSheet } from '../fernseher/FernsehSheet.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 
 interface DateiAktionenProps {
@@ -62,6 +63,17 @@ export function DateiAktionen({
   const [laedtChats, setLaedtChats] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loeschFrage, setLoeschFrage] = useState(false);
+  /**
+   * Der Weg auf den Fernseher, der ohne Chromecast auskommt.
+   *
+   * Er stand bis hierher nur in der Werkzeugleiste einer Sammlung – nicht bei
+   * einem einzelnen Foto und nicht bei einem einzelnen Video. Ein Anwender hat
+   * genau das gemeldet. Hier ist der richtige Platz dafür: Dieses Blatt hängt
+   * schon an der Lichtbox im Chat und am Betrachter in den Dateien, es kennt
+   * die Anhänge, und es ist der Ort, an dem man nachsieht, was mit einer Datei
+   * geht.
+   */
+  const [fernseher, setFernseher] = useState(false);
   /** Welcher Bereich offen ist – sonst wäre das Blatt eine Wand aus Knöpfen. */
   const [bereich, setBereich] = useState<'keiner' | 'prioritaet' | 'chat'>('keiner');
 
@@ -83,6 +95,14 @@ export function DateiAktionen({
   }, [anhaenge]);
 
   const ausgelagert = anhaenge.filter((anhang) => anhang.ablage === 'fern').length;
+  /*
+   * Was sich überhaupt auf einem Fernseher zeigen lässt.
+   *
+   * Der Server weist eine Liste ab, in der weder Foto noch Video steht – ein
+   * Knopf, der zuverlässig eine Fehlermeldung ergibt, ist schlechter als
+   * keiner.
+   */
+  const zeigbar = anhaenge.filter((anhang) => anhang.kind === 'image' || anhang.kind === 'video');
 
   useEffect(() => {
     if (!open || bereich !== 'chat' || chats.length > 0) return undefined;
@@ -187,6 +207,18 @@ export function DateiAktionen({
             )}
           </p>
 
+          {/* --- Auf den Fernseher --- */}
+          {zeigbar.length > 0 && (
+            <button
+              type="button"
+              className="btn btn-block"
+              onClick={() => setFernseher(true)}
+              data-tipp="Läuft auf jedem Fernseher mit Browser – auch ohne Chromecast"
+            >
+              📺 Auf den Fernseher (Code)
+            </button>
+          )}
+
           {/* --- Priorität --- */}
           <section className="stack">
             <button
@@ -273,6 +305,17 @@ export function DateiAktionen({
           )}
         </div>
       </Sheet>
+
+      {fernseher && (
+        <FernsehSheet
+          open
+          onClose={() => setFernseher(false)}
+          attachmentIds={zeigbar.map((anhang) => anhang.id)}
+          titel={
+            zeigbar.length === 1 ? 'Auf den Fernseher' : `${zeigbar.length} Stück auf den Fernseher`
+          }
+        />
+      )}
 
       {loeschen && (
         <ConfirmDialog

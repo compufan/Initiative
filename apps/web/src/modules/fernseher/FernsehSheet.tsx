@@ -4,6 +4,7 @@ import { Sheet } from '../../components/Sheet.js';
 import { api } from '../../lib/api.js';
 import { errorMessage } from '../media/helpers.js';
 import { toast } from '../../state/ui.js';
+import { useFernseher } from './state.js';
 
 /**
  * „Auf den Fernseher“ – der Weg für Fotos, Videos und die ganze Diashow.
@@ -29,6 +30,7 @@ export function FernsehSheet({
   collection,
   attachmentIds,
   titel,
+  sekundenVorgabe,
 }: {
   open: boolean;
   onClose: () => void;
@@ -37,24 +39,50 @@ export function FernsehSheet({
   /** Oder eine Handvoll einzelner Dateien. */
   attachmentIds?: string[];
   titel?: string;
+  /** Wie lange ein Foto stehen soll, wenn der Aufrufer eine Meinung hat. */
+  sekundenVorgabe?: number;
 }) {
   const [code, setCode] = useState('');
   const [modus, setModus] = useState<'linear' | 'zufall'>('linear');
-  const [sekunden, setSekunden] = useState(6);
+  const [sekunden, setSekunden] = useState(sekundenVorgabe ?? 6);
   const [busy, setBusy] = useState(false);
-  const [laeuft, setLaeuft] = useState<{ code: string; stueckzahl: number } | null>(null);
+  /*
+   * Die laufende Sitzung kommt aus dem gemeinsamen Speicher, nicht aus einem
+   * `useState` hier.
+   *
+   * Sie stand einmal hier – und beim Schliessen wurde sie auf `null` gesetzt.
+   * Ein Anwender hat berichtet, die Fernbedienung lasse sich „schliessen, aber
+   * nicht wieder öffnen, während weiter gestreamt wird". Genau so war es: Der
+   * Code lebte nur in diesem Blatt, und am Fernseher stand er auch nicht mehr,
+   * weil dort die Diashow lief.
+   */
+  const laeuft = useFernseher((zustand) => zustand.laufend);
+  const merken = useFernseher((zustand) => zustand.merken);
+  const vergessen = useFernseher((zustand) => zustand.vergessen);
   /** Wo die Diashow gerade steht – die Fernbedienung rechnet von hier aus weiter. */
   const [stelle, setStelle] = useState(0);
   const [pause, setPause] = useState(false);
 
+  /*
+   * Beim Öffnen nachsehen, ob schon etwas läuft.
+   *
+   * Der Server weiss es (`GET /tv/meine`), und er ist die einzige Quelle, die
+   * auch ein zweites Telefon und einen geleerten Browserspeicher überlebt.
+   */
   useEffect(() => {
     if (!open) {
-      setLaeuft(null);
       setBusy(false);
-      setStelle(0);
-      setPause(false);
+      return;
     }
+    void useFernseher.getState().nachsehen();
   }, [open]);
+
+  // Was die laufende Sitzung meldet, gilt – auch Stelle und Pause.
+  useEffect(() => {
+    if (!laeuft) return;
+    setStelle(laeuft.stelle);
+    setPause(laeuft.pausiert);
+  }, [laeuft]);
 
   const starten = async () => {
     const sauber = code.trim();
@@ -70,7 +98,15 @@ export function FernsehSheet({
         modus,
         sekunden,
       });
-      setLaeuft({ code: antwort.code, stueckzahl: antwort.stueckzahl });
+      merken({
+        code: antwort.code,
+        stueckzahl: antwort.stueckzahl,
+        stelle: 0,
+        pausiert: false,
+        modus,
+        sekunden,
+        gesehenVorSekunden: 0,
+      });
       toast(`Läuft auf dem Fernseher – ${antwort.stueckzahl} Stück.`, 'success');
     } catch (fehler) {
       toast(
@@ -112,7 +148,7 @@ export function FernsehSheet({
     if (!laeuft) return;
     try {
       await api.tv.beenden(laeuft.code);
-      setLaeuft(null);
+      vergessen();
       setStelle(0);
       setPause(false);
       onClose();

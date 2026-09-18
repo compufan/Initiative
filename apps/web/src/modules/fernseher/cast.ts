@@ -85,7 +85,7 @@ const STANDARD_EMPFAENGER = 'CC1AD845';
  * für Bilder weg, das „Playing Default Media Receiver"-Schild verschwindet,
  * und die Diashow könnte auf dem GERÄT laufen statt im Telefon.
  */
-const EMPFAENGER = import.meta.env.VITE_CAST_APP_ID || STANDARD_EMPFAENGER;
+export const EMPFAENGER = import.meta.env.VITE_CAST_APP_ID || STANDARD_EMPFAENGER;
 
 const LADER = 'https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1';
 
@@ -303,10 +303,29 @@ export function castLaden(): Promise<CastContext | null> {
      * immer.
      */
     let erledigt = false;
+    /*
+     * Ein Fehlschlag darf nicht endgültig sein.
+     *
+     * `ladeVersprechen` bleibt sonst für die ganze Lebensdauer der Seite auf
+     * einem Versprechen stehen, das `null` geliefert hat – und jeder weitere
+     * Aufruf bekommt dasselbe `null` zurück, ohne es je wieder zu versuchen.
+     * Ein Netz, das eine Sekunde später da ist, hilft dann nicht mehr; man
+     * muss die App neu laden, und das weiss niemand.
+     */
+    const scheitern = () => {
+      ladeVersprechen = null;
+      fertig(null);
+    };
     g.__onGCastApiAvailable = (da: boolean) => {
       if (erledigt) return;
       erledigt = true;
-      fertig(da ? einrichten() : null);
+      if (!da) {
+        scheitern();
+        return;
+      }
+      const ctx = einrichten();
+      if (ctx) fertig(ctx);
+      else scheitern();
     };
     const skript = document.createElement('script');
     skript.src = LADER;
@@ -314,7 +333,7 @@ export function castLaden(): Promise<CastContext | null> {
     skript.onerror = () => {
       if (erledigt) return;
       erledigt = true;
-      fertig(null);
+      scheitern();
     };
     document.head.appendChild(skript);
     /*
@@ -324,7 +343,18 @@ export function castLaden(): Promise<CastContext | null> {
     setTimeout(() => {
       if (erledigt) return;
       erledigt = true;
-      fertig(welt().cast?.framework ? einrichten() : null);
+      /*
+       * Die Frist ist abgelaufen – aber vielleicht ist das Skript trotzdem
+       * da und nur der Rückruf ist ausgeblieben. Also nachsehen, statt
+       * blind aufzugeben.
+       *
+       * Und wenn wirklich nichts da ist: `scheitern()`, nicht einfach
+       * `fertig(null)`. Sonst wäre Cast auf dieser Seite für immer tot,
+       * auch wenn das Netz zwei Sekunden später zurückkommt.
+       */
+      const ctx = welt().cast?.framework ? einrichten() : null;
+      if (ctx) fertig(ctx);
+      else scheitern();
     }, 8000);
   });
   return ladeVersprechen;

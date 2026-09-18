@@ -22,11 +22,31 @@
   <body>
     <main id="blatt" class="warten">
       <section id="anmeldung" class="mitte">
+        <!--
+          Das Zeichen der Gruppe, bevor irgendetwas läuft.
+
+          Der Fernseher steht im Wohnzimmer, und zwischen dem Einschalten und
+          dem ersten Foto vergeht die Zeit, die jemand braucht, um das Telefon
+          zu holen und acht Zeichen abzutippen. In dieser Zeit stand hier
+          schwarze Fläche mit einem Code. Jetzt steht dort, wem der Abend
+          gehört.
+
+          `eager` und `fetchpriority`: Es ist das Erste, was zu sehen sein
+          soll, nicht das Letzte, was nachgeladen wird.
+        -->
+        <img
+          class="marke"
+          src="/marke/logo@2x.webp"
+          alt="Initiative Wir für Bier"
+          loading="eager"
+          fetchpriority="high"
+          decoding="sync"
+        />
         <p class="klein">Diashow und Videos aus deinen Sammlungen</p>
         <h1 id="code" class="code">…</h1>
         <p class="anweisung">
-          Öffne die App auf dem Telefon, gehe zu <strong>Dateien</strong>, tippe auf
-          <strong>📺 Auf den Fernseher</strong> und gib diesen Code ein.
+          Öffne die App auf dem Telefon, öffne ein Foto oder eine Sammlung, tippe auf
+          <strong>Code am Fernseher</strong> und gib diesen Code ein.
         </p>
         <p id="fehler" class="fehler" hidden></p>
       </section>

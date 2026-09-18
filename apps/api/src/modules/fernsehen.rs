@@ -59,6 +59,7 @@ use crate::state::AppState;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/tv/sitzungen", post(sitzung_anlegen))
+        .route("/tv/meine", get(meine))
         .route("/tv/sitzungen/{code}/stand", get(stand))
         .route(
             "/tv/sitzungen/{code}/programm",
@@ -649,6 +650,78 @@ async fn beenden(
     .execute(&state.pool)
     .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/**
+ * Was gerade auf einem Fernseher läuft – für DIESE Person.
+ *
+ * # Der Fehler, den diese Route behebt
+ *
+ * Die Fernbedienung lebte allein im Blatt auf dem Telefon: `useState`, und
+ * beim Schliessen weg. Ein Anwender hat berichtet, dass sie sich „schliessen,
+ * aber nicht wieder öffnen" lässt, während weiter gestreamt wird – und das
+ * stimmte. Der Code stand nur noch im Blatt, und am Fernseher stand er auch
+ * nicht mehr: Dort lief ja die Diashow.
+ *
+ * Ihn auf dem Telefon zu merken wäre die halbe Antwort gewesen. Die ganze
+ * steht hier, weil der Server es ohnehin weiss: `fernsehsitzungen.besitzer_id`
+ * ist genau diese Auskunft, und der Index dafür liegt seit Migration 0017.
+ * Damit findet auch ein zweites Telefon die laufende Schau – und ein Telefon,
+ * dessen Speicher der Browser geleert hat.
+ *
+ * `gesehen_at` kommt mit: Ein Fernseher, der sich seit Minuten nicht gemeldet
+ * hat, ist wahrscheinlich aus. Das Telefon kann das sagen, statt eine
+ * Fernbedienung ins Leere anzubieten.
+ *
+ * `jsonb_array_length(stuecke) > 0` ist ein Gürtel zum Hosenträger und als
+ * solcher nicht geprüft: Eine Sitzung bekommt ihren Besitzer und ihre Stücke
+ * in derselben Anweisung (`einstellen`), und `beenden` nimmt beides zusammen
+ * wieder weg. Eine Sitzung mit Besitzer und ohne Stücke entsteht also nicht –
+ * aber falls doch einmal, wäre eine Fernbedienung für nichts das Letzte, was
+ * jemand braucht.
+ */
+#[derive(Debug, sqlx::FromRow)]
+struct MeineZeile {
+    code: String,
+    stuecke: Value,
+    stelle: i32,
+    pausiert: bool,
+    modus: String,
+    sekunden: i32,
+    gesehen_at: chrono::DateTime<chrono::Utc>,
+}
+
+async fn meine(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<Value>> {
+    let zeilen = sqlx::query_as::<_, MeineZeile>(
+        "select code, stuecke, stelle, pausiert, modus, sekunden, gesehen_at
+           from fernsehsitzungen
+          where besitzer_id = $1
+            and gueltig_bis > now()
+            and jsonb_array_length(stuecke) > 0
+          order by gesehen_at desc
+          limit 8",
+    )
+    .bind(user.id())
+    .fetch_all(&state.pool)
+    .await?;
+
+    let jetzt = chrono::Utc::now();
+    let sitzungen: Vec<Value> = zeilen
+        .into_iter()
+        .map(|zeile| {
+            json!({
+                "code": zeile.code,
+                "stueckzahl": zeile.stuecke.as_array().map(|a| a.len()).unwrap_or(0),
+                "stelle": zeile.stelle,
+                "pausiert": zeile.pausiert,
+                "modus": zeile.modus,
+                "sekunden": zeile.sekunden,
+                "gesehenVorSekunden": (jetzt - zeile.gesehen_at).num_seconds().max(0),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({ "items": sitzungen })))
 }
 
 async fn besitz_pruefen(state: &AppState, code: &str, user_id: Uuid) -> AppResult<SitzungRow> {

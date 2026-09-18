@@ -177,14 +177,21 @@
 }
 
 /*
- * Ohne Gerät blendet `<google-cast-launcher>` sich selbst aus. Diese Regel
- * ist der Gürtel zum Hosenträger: Sollte eine künftige Fassung des SDK das
- * anders halten, steht hier kein toter Knopf neben dem Satz, der gerade
- * erklärt, dass es nichts zu drücken gibt.
+ * Hier stand einmal `display: none`, wenn kein Gerät gefunden war – als
+ * „Gürtel zum Hosenträger" gedacht, falls das SDK sich nicht selbst
+ * ausblendet.
+ *
+ * Es war das Gegenteil einer Absicherung. Das Antippen des Launchers ist in
+ * Chrome die Handlung, die eine GRÜNDLICHE Gerätesuche auslöst; die
+ * Hintergrundsuche ist sparsam und findet einen Chromecast oft erst beim
+ * zweiten Hinsehen. Wer den Knopf wegnimmt, nimmt genau den Weg weg, der
+ * geholfen hätte – und ein Anwender berichtet dann, es werde „konsequent
+ * nichts gefunden".
+ *
+ * Der Launcher bleibt also anfassbar. Blendet er sich selbst aus, ist das
+ * seine Entscheidung; unsere Auskunft daneben sagt in diesem Fall, was los
+ * ist, und führt zum Weg mit dem Code.
  */
-.cast-knopf.ist-leer google-cast-launcher {
-  display: none;
-}
 
 /*
  * Die Abfrage vor dem ersten Mal.
@@ -213,4 +220,119 @@
 
 .cast-frage .btn {
   margin-top: 0.4rem;
+}
+
+/*
+ * Der Balken „läuft auf dem Fernseher".
+ *
+ * Er sitzt über der Navigationsleiste, nicht darüber im Bild: Was da läuft,
+ * läuft im Nebenzimmer, und der Balken ist eine Erinnerung, kein Ereignis.
+ * Deshalb eine Zeile, nicht ein Kasten – und deshalb mit `pointer-events` nur
+ * auf dem Knopf, damit er nichts blockiert, was darunter liegt.
+ *
+ * `--tv-balken-unten` wird in `FernsehBalken.tsx` gemessen, nicht hier
+ * geraten: Die Navigationsleiste hat keine feste Höhe – sie wächst mit der
+ * Schriftgrösse des Systems, nimmt unten den sicheren Bereich des Geräts mit
+ * und verschwindet auf manchen Bildschirmen ganz.
+ */
+.tv-balken {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--tv-balken-unten, 58px) + 8px);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  max-width: min(94vw, 520px);
+  padding: 0.45rem 0.5rem 0.45rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  font-size: 0.86rem;
+}
+
+.tv-balken-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tv-balken-klein {
+  color: var(--text-muted);
+}
+
+/*
+ * Der Hinweis „kein Chromecast gefunden" ist ein Knopf geworden.
+ *
+ * Er sieht weiter wie ein Satz aus – ein Knopf mit Rahmen neben dem echten
+ * Cast-Knopf wäre wieder die Konkurrenz, die §5.1 nicht will. Was ihn als
+ * anfassbar ausweist, ist der Zeiger und das unterstrichene „Hier tippen".
+ */
+.cast-hinweis-knopf {
+  display: inline;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cast-hinweis-mehr {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/*
+ * Das Blatt „Warum wird kein Fernseher gefunden?"
+ *
+ * Die Liste ist eine Beschreibungsliste und keine Tabelle: Es sind Paare aus
+ * Frage und Befund, keine Zeilen mit mehreren Spalten. Zwei Spalten im Raster,
+ * damit die Befunde untereinander stehen und sich mit einem Blick überfliegen
+ * lassen.
+ */
+.cast-diagnose-titel {
+  margin: 0.6rem 0 0.2rem;
+  font-size: 0.95rem;
+}
+
+.cast-diagnose-liste {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.35rem 0.8rem;
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.cast-diagnose-liste dt {
+  color: var(--text-muted);
+}
+
+.cast-diagnose-liste dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+/*
+ * Grün und rot, aber nie NUR grün und rot: Vor jedem Befund steht ein Haken
+ * oder ein Kreuz. Wer Farben schlecht unterscheidet, liest das Zeichen.
+ */
+.cast-diagnose-liste .ist-gut {
+  color: var(--success);
+}
+
+.cast-diagnose-liste .ist-schlecht {
+  color: var(--warning);
+}
+
+.cast-diagnose-tipps {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.88rem;
+  color: var(--text-muted);
 }

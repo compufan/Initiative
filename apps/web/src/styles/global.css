@@ -22,7 +22,9 @@ body {
   font-size: 16px;
   line-height: 1.45;
   color: var(--text);
-  background: var(--bg);
+  /* Die Hintergrundfarbe steht weiter unten bei „Das Zeichen der Gruppe" –
+     zusammen mit dem Bild, das darauf liegt. Eine Kurzform hier setzte das
+     Bild jedes Mal zurück. */
   overscroll-behavior-y: none;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
@@ -82,7 +84,14 @@ canvas {
   display: flex;
   flex-direction: column;
   height: 100dvh;
-  background: var(--bg);
+  /*
+   * Durchsichtig, nicht `var(--bg)`.
+   *
+   * Die Farbe trägt der Rumpf – und mit ihr das Zeichen der Gruppe, das dort
+   * als Hintergrundbild liegt (siehe „Das Zeichen der Gruppe" weiter unten).
+   * Eine Farbe hier oben legte sich darüber und machte es unsichtbar.
+   */
+  background: transparent;
 }
 
 .app-main {
@@ -811,4 +820,95 @@ canvas {
 .modal.is-beiseite,
 .backdrop.is-beiseite {
   visibility: hidden;
+}
+
+/*
+ * Das Zeichen der Gruppe im Hintergrund.
+ *
+ * # Warum am Rumpf und nicht an einer Komponente
+ *
+ * Weil „die komplette App" genau das heisst: Chats, Dateien, Kalender,
+ * Anmeldung – und jeder Bildschirm, den es noch gar nicht gibt. Am Rumpf
+ * angebracht gilt es für alle, und keine künftige Seite muss daran denken.
+ *
+ * # Warum ein Schleier statt einer Deckkraft
+ *
+ * Ein eigenes Element mit `opacity` wäre der naheliegende Weg und der
+ * fehleranfälligere: Es müsste sich in die Stapelreihenfolge einfügen, ohne
+ * Tipps abzufangen und ohne über dem Inhalt zu liegen – und bei jedem
+ * künftigen Bildschirm mit eigenem Hintergrund stünde die Frage neu.
+ *
+ * Zwei Hintergrundbilder übereinander lösen das ohne Element: unten das Logo,
+ * darüber ein Schleier in genau der Hintergrundfarbe. Wie viel davon
+ * durchkommt, sagt eine einzige Zahl – und zwar dieselbe, die die Oberfläche
+ * dem Menschen anbietet.
+ *
+ * # Warum es nicht formatfüllend ist
+ *
+ * Ein Logo ist kein Tapetenmuster. Auf 428 Punkten gebaut und über einen
+ * Bildschirm gezogen wäre es ein Brei; gekachelt wäre es Kirmes. Es steht
+ * einmal, mittig, in seiner Grösse – und wächst nur mit dem kleineren
+ * Fenstermass mit, damit es auf dem Telefon nicht über den Rand hinausragt.
+ *
+ * # Warum es so blass ist
+ *
+ * Weil darüber gelesen wird. Ein Hintergrund, der mit dem Text um
+ * Aufmerksamkeit ringt, macht die App jeden Tag schlechter, während das Logo
+ * nur am ersten auffällt. Wem das zu wenig ist, stellt in den Einstellungen
+ * auf „deutlich"; wen es stört, schaltet es ab.
+ */
+:root {
+  /*
+   * Die doppelt so grosse Fassung, einfach immer.
+   *
+   * `image-set` mit 1x/2x wäre die feinere Wahl und die brüchigere: Ältere
+   * Safari-Fassungen kennen es nur mit Präfix und zeigen sonst gar nichts.
+   * Der Unterschied sind 16 Kilobyte, einmal geladen – gegen einen
+   * Hintergrund, der auf manchen Geräten fehlt, ist das kein Handel.
+   */
+  --marke-bild: url('/marke/logo@2x.webp');
+  /* Wie viel Hintergrundfarbe über dem Logo liegt. 100% heisst: unsichtbar. */
+  --marke-schleier: 100%;
+}
+
+[data-marke='dezent'] {
+  --marke-schleier: 93%;
+}
+
+/*
+ * Auf hellem Grund braucht es mehr Schleier, nicht weniger.
+ *
+ * Die Scheibe des Logos ist schwarz. Auf dem dunklen Thema verschwindet sie
+ * fast von selbst und nur das Herz leuchtet; auf hellem Grund steht sie als
+ * dunkler Kreis da und wiegt bei gleicher Zahl doppelt so schwer.
+ */
+[data-theme='light'][data-marke='dezent'] {
+  --marke-schleier: 95.5%;
+}
+
+[data-marke='deutlich'] {
+  --marke-schleier: 84%;
+}
+
+[data-theme='light'][data-marke='deutlich'] {
+  --marke-schleier: 90%;
+}
+
+body {
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--bg) var(--marke-schleier), transparent),
+      color-mix(in srgb, var(--bg) var(--marke-schleier), transparent)
+    ),
+    var(--marke-bild);
+  background-repeat: no-repeat, no-repeat;
+  background-position: center, center;
+  background-size: cover, min(62vmin, 440px);
+  /*
+   * `fixed`, damit das Herz nicht durch den Chat wandert, wenn gescrollt
+   * wird. Die App scrollt ohnehin in ihren eigenen Bereichen, aber der
+   * Anmeldebildschirm und lange Formulare tun es am Rumpf.
+   */
+  background-attachment: fixed, fixed;
 }
