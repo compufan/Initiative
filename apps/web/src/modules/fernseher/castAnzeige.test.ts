@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { castAnzeige, type CastLage } from './castAnzeige.js';
+import { castAnzeige, castWeiter, type CastAnzeige, type CastLage } from './castAnzeige.js';
 import type { CastGrund, CastZustand } from './cast.js';
 
 const ZUSTAENDE: CastZustand[] = [
@@ -81,6 +81,56 @@ describe('castAnzeige', () => {
   it('zeigt den echten Knopf, sobald ein Gerät da ist', () => {
     for (const zustand of ['bereit', 'verbindet', 'verbunden'] as CastZustand[]) {
       expect(castAnzeige({ grund: 'geht', erlaubt: true, zustand, stil: 'rund' })).toBe('knopf');
+    }
+  });
+});
+
+describe('castWeiter', () => {
+  const ALLE: CastAnzeige[] = [
+    'nichts',
+    'schalter',
+    'geht-hier-nicht',
+    'laedt',
+    'fehlgeschlagen',
+    'kein-geraet',
+    'knopf',
+  ];
+
+  it('führt in die Erklärung, wo es etwas zu erklären gibt', () => {
+    /*
+     * Die beiden Zustände, in denen ein Anwender wissen will, warum sein
+     * Fernseher nicht auftaucht. `kein-geraet` ist der gemeldete Fall – dort
+     * führte der Weg früher unmittelbar in den Code, an der Erklärung vorbei.
+     */
+    expect(castWeiter('fehlgeschlagen', false)).toBe('diagnose');
+    expect(castWeiter('kein-geraet', false)).toBe('diagnose');
+  });
+
+  it('schickt niemanden am Grund vorbei in den Code-Weg', () => {
+    /*
+     * Die eigentliche Zusicherung, und sie gilt über ALLE Zustände: Der
+     * Code-Weg ist die Rückfallebene und steht am Ende der Erklärung, nicht an
+     * ihrer Stelle. Wer ihn von hier aus unmittelbar anbietet, nimmt dem
+     * Anwender die Antwort auf die Frage, die er gerade gestellt hat.
+     *
+     * `CastDiagnose` endet mit dem Knopf dorthin – verloren geht nichts.
+     */
+    for (const anzeige of ALLE) {
+      for (const sucht of [false, true]) {
+        expect(castWeiter(anzeige, sucht)).not.toBe('code');
+      }
+    }
+  });
+
+  it('lässt die Auskunft still, solange gesucht wird', () => {
+    // Wer nach drei Sekunden auf „Suche Fernseher …" tippt, will nicht ein
+    // Blatt über Umwege lesen – er will, dass die Suche fertig wird.
+    expect(castWeiter('kein-geraet', true)).toBe('nichts');
+  });
+
+  it('führt nirgendwohin, wo es nichts zu erklären gibt', () => {
+    for (const anzeige of ['nichts', 'schalter', 'geht-hier-nicht', 'laedt', 'knopf'] as const) {
+      expect(castWeiter(anzeige, false)).toBe('nichts');
     }
   });
 });

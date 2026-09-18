@@ -318,3 +318,32 @@
   color: var(--text-muted);
   font-size: 0.78rem;
 }
+
+/*
+ * Die Einstellungen zum Antippen.
+ *
+ * `.bild-unterzeile` gibt den eingerückten Balken links, der sagt: Das hier
+ * gehört zum Knopf darüber. Was fehlt, ist der senkrechte Fluss – die
+ * Unterzeile ist sonst immer eine einzelne Reihe, hier stehen Knöpfe, ein
+ * Regler und ein Satz untereinander.
+ */
+.bild-antippen {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/*
+ * Der Toleranzregler.
+ *
+ * Auf der vollen Breite und nicht neben den Knöpfen: Er wird mit dem Daumen
+ * gezogen, während die andere Hand das Telefon hält, und ein Regler von
+ * Fingerbreite trifft nicht. `.feld` bringt die Beschriftung darüber mit.
+ */
+.bild-tipp-regler {
+  margin: 0;
+}
+
+.bild-tipp-regler input[type='range'] {
+  width: 100%;
+}

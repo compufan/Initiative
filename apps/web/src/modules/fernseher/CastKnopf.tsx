@@ -15,7 +15,7 @@ import {
   stueckFuer,
   type CastZustand,
 } from './cast.js';
-import { castAnzeige } from './castAnzeige.js';
+import { castAnzeige, castWeiter, type CastAnzeige } from './castAnzeige.js';
 import { CastDiagnose } from './CastDiagnose.js';
 import { FernsehSheet } from './FernsehSheet.js';
 
@@ -145,8 +145,17 @@ const WUNSCH_GILT_MS = 60_000;
 const KEIN_GERAET_SUCHT = 'Suche Fernseher im WLAN …';
 const NICHT_GELADEN =
   'Chromecast liess sich nicht laden – meist hält ein Inhaltsblocker im Browser gstatic.com auf. Dann hilft der Weg mit dem Code.';
+/*
+ * Kurz bleiben, obwohl es viel zu sagen gäbe.
+ *
+ * Dieser Satz landet je nach Stil als `title` und `aria-label` an einem runden
+ * Knopf, als Meldung – oder als der ganze Text einer Leiste. Die Erklärung,
+ * warum ein Fernseher, auf den YouTube zuverlässig streamt, hier nicht
+ * auftaucht, ist vier Absätze lang und gehört in keine dieser drei Formen.
+ * Sie steht in `CastDiagnose`, und dieser Satz führt dorthin.
+ */
 const KEIN_GERAET_TEXT =
-  'Kein Chromecast im WLAN gefunden. Er muss eingeschaltet und im selben Netz sein – sonst hilft der Weg mit dem Code.';
+  'Kein Chromecast im WLAN gefunden. Ein Fernseher mit YouTube ist nicht automatisch ein Chromecast – warum, steht hier.';
 
 export function CastKnopf({ stuecke, sekunden, was, modusWahl, stil = 'rund' }: CastKnopfProps) {
   const [zustand, setZustand] = useState<CastZustand>('aus');
@@ -322,6 +331,26 @@ export function CastKnopf({ stuecke, sekunden, was, modusWahl, stil = 'rund' }: 
    */
   const anzeige = castAnzeige({ grund, erlaubt, zustand, stil });
 
+  /**
+   * Wohin ein Tipp auf die Auskunft führt – aus `castWeiter`, nicht von Hand.
+   *
+   * Der Umweg über die Funktion ist der Punkt: Die Erklärung war schon
+   * einmal geschrieben und nur an EINEM der beiden Zweige montiert, die sie
+   * brauchen. Steht die Regel in einer Funktion, prüft ein Test sie über alle
+   * Zustände – auch über die, die auf dem Testläufer nie eintreten, weil dort
+   * kein Chromecast im WLAN steht.
+   */
+  const fuehrtZu = (fuer: CastAnzeige) => {
+    switch (castWeiter(fuer, sucht)) {
+      case 'diagnose':
+        return () => setDiagnose(true);
+      case 'code':
+        return () => setCodeWeg(true);
+      case 'nichts':
+        return undefined;
+    }
+  };
+
   if (anzeige === 'nichts') return null;
 
   if (anzeige === 'geht-hier-nicht') {
@@ -453,7 +482,12 @@ export function CastKnopf({ stuecke, sekunden, was, modusWahl, stil = 'rund' }: 
      */
     return (
       <>
-        <Auskunft stil={stil} zeichen="⚠" text={NICHT_GELADEN} weiter={() => setDiagnose(true)} />
+        <Auskunft
+          stil={stil}
+          zeichen="⚠"
+          text={NICHT_GELADEN}
+          weiter={fuehrtZu('fehlgeschlagen')}
+        />
         <CodeWeg
           offen={codeWeg}
           zu={() => setCodeWeg(false)}
@@ -549,9 +583,31 @@ export function CastKnopf({ stuecke, sekunden, was, modusWahl, stil = 'rund' }: 
           stil={stil}
           zeichen={sucht ? '⋯' : 'ⓘ'}
           text={sucht ? KEIN_GERAET_SUCHT : KEIN_GERAET_TEXT}
-          weiter={sucht ? undefined : () => setCodeWeg(true)}
+          weiter={fuehrtZu('kein-geraet')}
         />
       )}
+      {/*
+          Die Auskunft führt in die DIAGNOSE, nicht unmittelbar in den
+          Code-Weg.
+
+          Sie war vorher nur im Zweig „Skript nicht geladen“ montiert – und der
+          ist der seltenere. Wer meldet, es werde „konsequent kein Chromecast
+          gefunden“, steht in genau diesem Zweig hier, und der schickte ihn
+          wortlos zum Code-Weg: acht Zeichen abtippen, ohne je zu erfahren,
+          warum sein Fernseher fehlt. Die Erklärung war geschrieben und stand
+          an einer Tür, durch die er nie kam.
+      
+          Der Code-Weg geht dabei nicht verloren. `CastDiagnose` endet mit dem
+          Knopf dorthin – er ist einen Tipp weiter entfernt und steht jetzt
+          HINTER der Erklärung statt an ihrer Stelle.
+      */}
+      <CastDiagnose
+        offen={diagnose}
+        zu={() => setDiagnose(false)}
+        zustand={zustand}
+        empfaenger={EMPFAENGER}
+        zumCodeWeg={() => setCodeWeg(true)}
+      />
       <CodeWeg offen={codeWeg} zu={() => setCodeWeg(false)} stuecke={stuecke} sekunden={sekunden} />
       {zustand === 'verbunden' && !modusWahl && (
         <button

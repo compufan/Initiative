@@ -211,8 +211,76 @@ export interface TiefenTeil {
   readonly marke: number;
 }
 
+/**
+ * Wie weit die Farbflutung von einem Tipp aus wandert, 0 … 255.
+ *
+ * Steht hier und nicht bei der Rechnung, weil das Rezept sie braucht, um eine
+ * Datei ohne diesen Wert zu lesen – und das Rezept soll keine Modelle in
+ * seinen Modulgraphen ziehen.
+ */
+export const TOLERANZ_VORGABE = 32;
+
+/**
+ * Angetippte Stellen – der dritte Weg zu einer Maske.
+ *
+ * Verlauf und Radial beschreiben eine FORM, der Pinsel eine BEWEGUNG, das
+ * Netz ein GANZES Motiv. Hier zeigt jemand auf eine Stelle und meint: das da,
+ * und was farblich dazugehört. Genau so wird im Sticker-Studio freigestellt,
+ * und es ist der einzige Weg, der auch an einem Ding funktioniert, für das
+ * kein Modell je trainiert wurde – ein Schatten auf einer Wand, ein Stück
+ * Himmel zwischen zwei Ästen.
+ *
+ * # Warum die Punkte bleiben und nicht nur die Maske
+ *
+ * Weil man sonst nichts zurücknehmen könnte ausser allem. Aus der Punktliste
+ * lässt sich die Maske jederzeit neu rechnen; aus der Maske die Punkte nie.
+ * „Letzten Tipp zurück" ist damit: Punkt streichen, neu rechnen.
+ *
+ * # Warum je Vorzeichen ein eigenes Teil
+ *
+ * Ein Maskenteil hat GENAU EINEN `modus`. Ein Plus-Tipp und ein Minus-Tipp
+ * sind also zwei Teile – und das trifft die Sache: Der Minus-Tipp sagt nicht
+ * „dieser Punkt gehört nicht zum vorigen Ding", sondern „finde, was hier
+ * liegt, und nimm es weg". Im Sticker-Studio hat genau diese Unterscheidung
+ * einmal gefehlt, und ein Minus-Tipp gegen ein Modellergebnis blieb wirkungslos.
+ *
+ * Wie beim Netzteil ist die Grösse die der VORLAGE, nicht die des Originals.
+ */
+export interface TippTeil {
+  art: 'tipp';
+  /**
+   * Ob die Maske vom Netz kommt oder von der Farbflutung.
+   *
+   * Steht am Teil und nicht an einer Einstellung des Editors, weil ein
+   * gespeichertes Bild später noch sagen können soll, womit gerechnet wurde –
+   * und weil beide in EINEM Bereich nebeneinander vorkommen dürfen: das Motiv
+   * mit dem Netz gegriffen, der Schatten daneben nach Farbe.
+   */
+  readonly mitNetz: boolean;
+  /**
+   * Die angetippten Stellen, in Punkten der Vorlage (`breite` × `hoehe`).
+   *
+   * Nicht in Originalpunkten: Die Maske wird auf der Vorlage gerechnet, und
+   * zwei Räume für dieselbe Liste sind eine Umrechnung, die irgendwann
+   * jemand vergisst.
+   */
+  readonly punkte: readonly { readonly x: number; readonly y: number }[];
+  /**
+   * Wie weit die Farbflutung von jedem Punkt aus wandert, 0 … 255.
+   *
+   * Beim Netz ohne Bedeutung und trotzdem mitgeführt: Wer ein Teil vom Netz
+   * auf Farbe umstellt, hat dann einen Wert und nicht eine Rückfrage.
+   */
+  readonly toleranz: number;
+  readonly breite: number;
+  readonly hoehe: number;
+  readonly alpha: Uint8Array;
+  /** Ersatzidentität – wie bei `NetzTeil`, aus demselben Grund. */
+  readonly marke: number;
+}
+
 export type Maskenteil = { id: string; modus: Maskenmodus; umkehren: boolean } & (
-  VerlaufTeil | RadialTeil | PinselTeil | NetzTeil | TiefenTeil
+  VerlaufTeil | RadialTeil | PinselTeil | NetzTeil | TiefenTeil | TippTeil
 );
 
 /**

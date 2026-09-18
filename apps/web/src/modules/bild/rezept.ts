@@ -69,6 +69,7 @@
 
 import {
   BEREICHE_MAX,
+  TOLERANZ_VORGABE,
   neuesDoc,
   type Bereich,
   type Bereichston,
@@ -120,19 +121,39 @@ export const REZEPT_GRENZEN = {
   /**
    * Und entpackt. Ohne diese Grenze wäre eine Zip-Bombe möglich.
    *
-   * Was eine echte Datei höchstens braucht, lässt sich ausrechnen: acht
-   * Rasterteile zu 1536 × 1536 sind 18,9 MB, als Base64 25,2 MB; dazu die
-   * Striche (siehe `punkteGesamt`) und der Rest des Dokuments. Rund 27 MB –
-   * der Deckel liegt gut zweimal darüber, weil er eine Schranke gegen
-   * Missbrauch sein soll und keine Falle für den Grenzfall.
+   * Was eine echte Datei höchstens braucht, lässt sich ausrechnen: zwölf
+   * Rasterteile zu 1536 × 1536 sind 28,3 MB, als Base64 37,8 MB; dazu die
+   * Striche (siehe `punkteGesamt`) und der Rest des Dokuments. Rund 40 MB –
+   * der Deckel liegt darüber, weil er eine Schranke gegen Missbrauch sein
+   * soll und keine Falle für den Grenzfall. Er ist seit dem Antippen
+   * enger, als er war (vorher lag er gut zweimal über dem Bedarf); enger
+   * als nötig ist er nicht.
    */
   textBytes: 64 * 1024 * 1024,
   bereiche: BEREICHE_MAX,
   teileJeBereich: 12,
   /** Rasterpunkte eines Netz- oder Tiefenteils – 1536 × 1536. */
   rasterPunkte: 1536 * 1536,
-  /** Wieviele Rasterteile ein Dokument insgesamt tragen darf. */
-  rasterTeile: 8,
+  /**
+   * Wieviele Rasterteile ein Dokument insgesamt tragen darf.
+   *
+   * Von acht auf zwölf angehoben, als das Antippen dazukam. Vorher waren
+   * Rasterteile etwas, das man je Bereich EINMAL anlegt – ein Freisteller,
+   * eine Tiefenkarte. Ein Tippteil ist zwei davon (dazunehmen und wegnehmen
+   * sind je eines), und wer in allen vier Bereichen antippt, sass mit acht
+   * an der Grenze, ohne sie je genannt bekommen zu haben: Die Zahl wirkt
+   * beim LADEN, ein Teil zu viel wäre also nach dem nächsten Öffnen
+   * wortlos fort gewesen.
+   */
+  rasterTeile: 12,
+  /**
+   * Wieviele Stellen ein Tippteil tragen darf.
+   *
+   * Jede kostet beim Neuberechnen mit Netz einen Decoderlauf. Zwölf sind
+   * mehr, als je jemand von Hand tippt; die Zahl ist eine Schranke gegen
+   * eine Datei, die den Editor beim Öffnen minutenlang rechnen lässt.
+   */
+  tippPunkte: 12,
   pinselstriche: 400,
   /** Zahlen je Strich, also halb so viele Punkte. */
   strichZahlen: 40_000,
@@ -482,6 +503,26 @@ function teilNachRoh(teil: Maskenteil): unknown {
         fokus: teil.fokus,
         spanne: teil.spanne,
       };
+    /*
+     * Die Maske UND die Punkte.
+     *
+     * Die Maske, weil sie sonst beim Öffnen neu gerechnet werden müsste –
+     * mit Netz wären das Sekunden, und auf einem Gerät ohne das Modell ginge
+     * es gar nicht. Die Punkte, weil ohne sie „Letzten Tipp zurück“ nach dem
+     * Öffnen nicht mehr ginge und die Toleranz nicht mehr zu verschieben
+     * wäre: Beides rechnet aus der Liste neu.
+     */
+    case 'tipp':
+      return {
+        ...kopf,
+        art: 'tipp',
+        mitNetz: teil.mitNetz,
+        punkte: teil.punkte.map((p) => [p.x, p.y]),
+        toleranz: teil.toleranz,
+        breite: teil.breite,
+        hoehe: teil.hoehe,
+        alpha: nachBase64(teil.alpha),
+      };
     default:
       return null;
   }
@@ -579,6 +620,43 @@ function teilAusRoh(
         ...kopf,
         art: 'netz',
         netz: (NETZE.has(q.netz as string) ? q.netz : 'object') as 'person' | 'object' | 'birefnet',
+        breite: raster.breite,
+        hoehe: raster.hoehe,
+        alpha: raster.feld,
+        marke: naechsteMarke(),
+      };
+    }
+    case 'tipp': {
+      const raster = rasterAusRoh(q, 'alpha', zaehler);
+      if (!raster) return null;
+      const punkte: { x: number; y: number }[] = [];
+      for (const roheStelle of liste(q.punkte, REZEPT_GRENZEN.tippPunkte)) {
+        // Als Paar `[x, y]` und nicht als `{x, y}`: Es sind zwölf Stück, und
+        // zwei Zahlen brauchen keine zwei Namen.
+        if (!Array.isArray(roheStelle) || roheStelle.length < 2) continue;
+        punkte.push({
+          // Gegen die Grösse des RASTERS begrenzt, nicht gegen die des
+          // Originals: Die Punkte liegen in der Vorlage, und eine Stelle
+          // ausserhalb wäre eine Saat, die `flutmaske` wortlos überspringt.
+          x: zahl(roheStelle[0], 0, raster.breite, 0),
+          y: zahl(roheStelle[1], 0, raster.hoehe, 0),
+        });
+      }
+      /*
+       * Ein Tippteil ohne Punkte wird verworfen, obwohl seine Maske heil ist.
+       *
+       * Die Maske allein liesse sich zeigen – aber nicht mehr zurücknehmen,
+       * nicht nachjustieren, und der Knopf „Letzten Tipp zurück“ hinge daran
+       * ins Leere. Ein Teil, das aussieht wie die anderen und sich nicht wie
+       * sie bedienen lässt, ist schlimmer als ein Teil, das fehlt.
+       */
+      if (punkte.length === 0) return null;
+      return {
+        ...kopf,
+        art: 'tipp',
+        mitNetz: jaNein(q.mitNetz),
+        punkte,
+        toleranz: zahl(q.toleranz, 0, 255, TOLERANZ_VORGABE),
         breite: raster.breite,
         hoehe: raster.hoehe,
         alpha: raster.feld,

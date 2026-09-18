@@ -88,3 +88,57 @@ export function castAnzeige({ grund, erlaubt, zustand, stil }: CastLage): CastAn
       return 'knopf';
   }
 }
+
+/**
+ * Wohin ein Tipp auf die Auskunft führt – wieder als reine Entscheidung.
+ *
+ * # Warum das dieselbe Behandlung verdient
+ *
+ * Weil hier derselbe Fehler noch einmal gemacht wurde, eine Ebene tiefer. Die
+ * Erklärung, warum ein Fernseher, auf den YouTube zuverlässig streamt, hier
+ * nicht auftaucht (`CastDiagnose`), war geschrieben – aber nur im Zweig
+ * „Skript nicht geladen" montiert. Der gemeldete Fall ist ein anderer:
+ *
+ *   „Es werden konsequent keine Chromecasts gefunden. Auch von Fernsehern,
+ *   auf die man bspw. mit YouTube oder Disney Plus zuverlässig streamt."
+ *
+ * Das ist `kein-geraet`, und dort führte die Auskunft wortlos zum Code-Weg.
+ * Die Antwort auf seine Frage stand hinter einer Tür, durch die er nie kam.
+ *
+ * Auch das ist in der Komponente nicht festzuhalten: Welchen Zweig ein
+ * Browsertest erreicht, hängt davon ab, ob im WLAN des Testläufers ein
+ * Chromecast steht. Als Funktion gilt die Regel über alle Zustände:
+ *
+ *   **Wo eine Erklärung nötig ist, ist sie auch erreichbar.** Kein Zustand,
+ *   der etwas erklärt, darf unmittelbar in den Code-Weg führen – der ist die
+ *   Rückfallebene und steht am Ende der Erklärung, nicht an ihrer Stelle.
+ */
+export type CastWeiter =
+  /** Nirgendwohin – es gibt nichts zu erklären, oder es wird noch gesucht. */
+  | 'nichts'
+  /** Das Blatt mit der Erklärung und der Lage der Dinge. */
+  | 'diagnose'
+  /** Unmittelbar der Weg mit dem Code am Fernseher. */
+  | 'code';
+
+export function castWeiter(anzeige: CastAnzeige, sucht: boolean): CastWeiter {
+  switch (anzeige) {
+    case 'fehlgeschlagen':
+      return 'diagnose';
+    case 'kein-geraet':
+      /*
+       * Solange noch gesucht wird, führt die Auskunft nirgendwohin.
+       *
+       * Wer nach drei Sekunden auf „Suche Fernseher …" tippt, will nicht in
+       * ein Blatt geschickt werden, das ihm den Umweg erklärt – er will, dass
+       * die Suche fertig wird. Danach ist die Erklärung das Richtige.
+       */
+      return sucht ? 'nichts' : 'diagnose';
+    case 'geht-hier-nicht':
+    case 'nichts':
+    case 'schalter':
+    case 'laedt':
+    case 'knopf':
+      return 'nichts';
+  }
+}

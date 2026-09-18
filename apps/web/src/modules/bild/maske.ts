@@ -480,6 +480,14 @@ export function teilBauen(teil: Maskenteil, raster: Raster): Uint8Array {
       for (const strich of teil.striche) strichStempeln(feld, raster, strich);
       break;
     case 'netz':
+    /*
+     * Dasselbe wie beim Netzteil, und das ist kein Zufall: Beide tragen ein
+     * fertig gerechnetes Byte je Bildpunkt in der Grösse der Vorlage. Der
+     * Unterschied liegt davor – WER die Maske gerechnet hat – und danach –
+     * dass ein Tippteil sie aus seinen Punkten neu rechnen kann. Hier unten
+     * ist er verschwunden.
+     */
+    case 'tipp':
       feld = maskeUmrastern(teil.alpha, teil.breite, teil.hoehe, raster.breite, raster.hoehe);
       break;
     case 'tiefe':
@@ -625,6 +633,26 @@ export function teilSchluessel(teil: Maskenteil): string {
     }
     case 'netz':
       return `${kopf}|${teil.netz}|${teil.breite}x${teil.hoehe}|${teil.marke}`;
+    /*
+     * Die Marke, nicht die Punkte.
+     *
+     * Die Punktliste steht im Teil, aber sie beschreibt nicht die Maske –
+     * sie beschreibt, woraus sie einmal gerechnet wurde. Wer sie in den
+     * Schlüssel nähme, bekäme bei einem Netztipp zwei verschiedene
+     * Schlüssel für dieselbe Maske (der Lauf ist nicht Bit für Bit
+     * wiederholbar) und, schlimmer, denselben Schlüssel für zwei Masken,
+     * wenn jemand nur die Toleranz verschiebt. Die Marke wechselt bei jeder
+     * Neuberechnung; genau dafür ist sie da.
+     *
+     * `toleranz` steht trotzdem drin – nicht als Kennzeichen der Maske,
+     * sondern weil ein Teil mit gleicher Marke und anderer Toleranz ein
+     * Fehler wäre, den man dann im Zwischenspeicher sieht statt im Bild.
+     */
+    case 'tipp':
+      return (
+        `${kopf}|${teil.mitNetz ? 'netz' : 'farbe'}|${teil.breite}x${teil.hoehe}` +
+        `|${teil.marke}|${teil.toleranz}`
+      );
     // Fokus und Spanne MÜSSEN hinein: Sie ändern die Maske, ohne die Karte
     // anzufassen – das ist ja gerade der Sinn des Umwegs über die Entfernung.
     // Die Karte selbst geht wie beim Netzteil nur über die Marke ein.

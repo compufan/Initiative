@@ -2162,3 +2162,136 @@ test('die Güte gilt für „Motiv" UND für „Motiv + Tiefe"', async ({ browse
 
   await alicePage.context().close();
 });
+
+/**
+ * Zwei Farbflächen nebeneinander – für das Antippen ohne Netz.
+ *
+ * Die Farbflutung wächst über farblich verwandte Nachbarn. Auf einer
+ * gleichmässigen Fläche liefe sie über das ganze Bild, und der Test bewiese
+ * nur, dass sie überhaupt läuft. Mit einer senkrechten Kante in der Mitte
+ * beweist er, dass sie an ihr HALT MACHT – und das ist das Eigentliche.
+ *
+ * Unbunt, aus demselben Grund wie bei `motivPng`: Der Maskenschleier wird über
+ * seinen Rotstich gemessen, und ein farbiges Bild brächte einen eigenen mit.
+ */
+function zweitonPng(breite: number, hoehe: number): Buffer {
+  return pngAus(breite, hoehe, (x) => (x < breite / 2 ? [40, 40, 40] : [215, 215, 215]));
+}
+
+test('ein Tipp ohne Netz macht eine Maske aus der Farbflaeche darunter', async ({ browser }) => {
+  /*
+   * Der Wunsch war wörtlich: „Kannst du das Antippen mit und ohne Netz wie bei
+   * der Stickererstellung bei Bereiche beim Foto Bearbeiten verfügbar machen?"
+   *
+   * Geprüft wird der Weg OHNE Netz, und zwar aus einem Grund, der über den
+   * Test hinausgeht: Er ist der einzige, der auf jedem Gerät läuft. Das Netz
+   * (MobileSAM, 30 MB) ist von Haus aus abgeschaltet, auf manchen Geräten gar
+   * nicht möglich – wäre nur es geprüft, bliebe der Weg ungeprüft, den die
+   * meisten Menschen tatsächlich gehen.
+   *
+   * Gemessen wird am Schleier: Er zeigt rot, wo die Maske greift. Auf einem
+   * unbunten Bild ist r − b ohne Schleier exakt null.
+   */
+  const alice = credentials('tipp');
+  const bob = credentials('tziel');
+  const alicePage = await signUp(browser, alice);
+  await signUp(browser, bob);
+
+  await alicePage.getByRole('button', { name: 'Neuer Chat' }).click();
+  await alicePage.getByPlaceholder('Wen möchtest du anschreiben?').fill(bob.username);
+  await alicePage.getByText(bob.displayName).first().click();
+  await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
+  await alicePage.getByText('Foto/Video').click();
+  await alicePage.locator('input[type=file]').setInputFiles({
+    name: 'zweiton.png',
+    mimeType: 'image/png',
+    buffer: zweitonPng(320, 240),
+  });
+  await alicePage.getByRole('button', { name: /^Senden \(/ }).click();
+  const bild = alicePage.locator('.media-image').first();
+  await expect(bild).toBeVisible({ timeout: 30_000 });
+  await expect
+    .poll(async () => bild.evaluate((el: HTMLImageElement) => el.naturalWidth), {
+      timeout: 30_000,
+    })
+    .toBeGreaterThan(0);
+  await bild.click();
+  await alicePage.getByRole('button', { name: 'Bild bearbeiten' }).click();
+  const leinwand = alicePage.locator('.bild-leinwand');
+  await expect(leinwand).toBeVisible({ timeout: 30_000 });
+  await alicePage.getByRole('button', { name: /Bereiche$/ }).click();
+
+  /** Der Rotstich eines senkrechten Streifens – so misst sich der Schleier. */
+  const rotstich = async (vonAnteil: number, bisAnteil: number) =>
+    alicePage.evaluate(
+      ({ von, bis }) => {
+        const c = document.querySelector('.bild-leinwand') as HTMLCanvasElement | null;
+        const ctx = c?.getContext('2d');
+        const d = c && ctx ? ctx.getImageData(0, 0, c.width, c.height).data : null;
+        if (!c || !d) return -1;
+        let summe = 0;
+        let n = 0;
+        for (let y = 0; y < c.height; y += 1)
+          for (let x = Math.round(c.width * von); x < Math.round(c.width * bis); x += 1) {
+            const at = (y * c.width + x) * 4;
+            summe += d[at] - d[at + 2];
+            n += 1;
+          }
+        return n > 0 ? summe / n : -1;
+      },
+      { von: vonAnteil, bis: bisAnteil },
+    );
+
+  // Der Schalter ist ein Schalter und sagt es auch.
+  const antippen = alicePage.getByRole('button', { name: /👆 Antippen/ });
+  await expect(antippen).toHaveAttribute('aria-pressed', 'false');
+  await antippen.click();
+  await expect(antippen).toHaveAttribute('aria-pressed', 'true');
+
+  /*
+   * Ohne Netz steht der Toleranzregler da, mit Netz nicht.
+   *
+   * Ein Regler, der sichtbar ist und nichts bewirkt, ist schlimmer als keiner:
+   * Wer damit eine schlechte Maske zu retten versucht, dreht minutenlang an
+   * etwas, das gar nicht zuhört. Hier ist das Netz abgeschaltet (Vorgabe),
+   * also muss er da sein.
+   */
+  await expect(alicePage.getByText(/Farbtoleranz/)).toBeVisible();
+
+  const kasten = await leinwand.boundingBox();
+  if (!kasten) throw new Error('Die Leinwand hat keine Masse.');
+
+  // In die dunkle linke Hälfte tippen.
+  await alicePage.mouse.click(kasten.x + kasten.width * 0.25, kasten.y + kasten.height * 0.5);
+
+  // Der Tipp legt ein Maskenteil an – und benennt es nach seinem Verfahren.
+  await expect(alicePage.getByRole('button', { name: /\+ Farbe 1/ })).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(alicePage.getByText(/1 Stelle dazugenommen/)).toBeVisible();
+
+  /*
+   * Und jetzt das Eigentliche: Die Maske deckt die linke Hälfte und HÄLT AN
+   * DER KANTE. Ohne diese zweite Zusicherung wäre der Test auch dann grün,
+   * wenn die Flutung über das ganze Bild liefe.
+   *
+   * Gemessen wird mit Abstand zur Naht (0,05–0,40 und 0,60–0,95): `flutmaske`
+   * zieht am Ende eine weiche Kante über das Ergebnis, die zwangsläufig ein
+   * paar Punkte über die Grenze greift.
+   */
+  await expect.poll(async () => rotstich(0.05, 0.4), { timeout: 30_000 }).toBeGreaterThan(8);
+  expect(await rotstich(0.6, 0.95)).toBeLessThan(2);
+
+  /*
+   * „Letzten Tipp zurück" – beim einzigen Tipp verschwindet das ganze Teil.
+   *
+   * Ein Maskenteil ohne Stellen wäre eine Zeile in der Liste, die man nicht
+   * mehr loswird: Es liesse sich nicht zurücknehmen und nicht nachjustieren.
+   */
+  await alicePage.getByRole('button', { name: /Letzten Tipp zurück/ }).click();
+  await expect(alicePage.getByRole('button', { name: /\+ Farbe 1/ })).toHaveCount(0);
+  await expect.poll(async () => rotstich(0.05, 0.4), { timeout: 30_000 }).toBeLessThan(2);
+
+  await alicePage.context().close();
+});

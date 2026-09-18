@@ -28,14 +28,17 @@ import {
   zuschnittInAnsicht,
   BEREICHE_MAX,
   BEREICH_NEUTRAL,
+  TOLERANZ_VORGABE,
   type Bereich,
   type Bereichston,
   type BildDoc,
   type Malstrich,
+  type Maskenmodus,
   type Maskenteil,
   type Pinselstrich,
   type RadialTeil,
   type Schriftzug,
+  type TippTeil,
   type VerlaufTeil,
   type Zuschnitt,
 } from './doc.js';
@@ -64,6 +67,7 @@ import { maskeFuerBereich } from './maskenSpeicher.js';
 import { teilBefund } from './maske.js';
 import { netzGrund, netzTeilRechnen, netzVerfuegbar, type Netzart } from './netzMaske.js';
 import { tiefeGrund, tiefeVerfuegbar, tiefenTeilRechnen } from './tiefeNetz.js';
+import { tippNetzVerfuegbar, tippTeilRechnen, tippVorlage } from './tippMaske.js';
 import { engineInfo, firstUseMb } from '../stickers/engines/index.js';
 import {
   freistellerFuer,
@@ -73,7 +77,7 @@ import {
   type Qualitaet,
 } from '../stickers/engines/settings.js';
 import type { EngineKey } from '../stickers/engines/types.js';
-import { writeEngineSetting } from '../stickers/engines/settings.js';
+import { isEngineEnabled, writeEngineSetting } from '../stickers/engines/settings.js';
 import { SCHRIFTEN, trifftText, zeichneAnsicht, zeichneAusgabe } from './zeichnen.js';
 import { alleSchriftenBereit, schriftenBereit } from '../../lib/schriften.js';
 import { rezeptHindernis, rezeptLohnt, rezeptMoeglich, rezeptSchreiben } from './rezept.js';
@@ -509,6 +513,23 @@ export function BildEditor({
   const [vorlageStaerke, setVorlageStaerke] = useState(1);
   const pinselAbziehen = pinselModus === 'radieren';
   const [schleier, setSchleier] = useState(true);
+  /*
+   * Das Antippen in den Bereichen – dieselbe Handhabung wie im Sticker-Studio.
+   *
+   * `bereichModus` steht hier und nicht als sechstes Werkzeug oben: Antippen
+   * ist kein anderes WERKZEUG, es ist eine andere Art, im selben Werkzeug eine
+   * Maske zu machen. Wer es als Werkzeug führte, müsste beim Wechsel den
+   * Bereich neu wählen und die Maskenliste verlöre ihren Platz.
+   */
+  const [bereichModus, setBereichModus] = useState<'griffe' | 'antippen'>('griffe');
+  /*
+   * „mit Netz“ aus derselben Kiste wie im Studio (`localStorage`, Schlüssel
+   * der Verfahren). Wer dort einmal eingeschaltet hat, findet es hier an –
+   * es ist dasselbe Modell und dieselbe Entscheidung über 30 MB.
+   */
+  const [tippMitNetz, setTippMitNetz] = useState(() => isEngineEnabled('tippen'));
+  const [tippVorzeichen, setTippVorzeichen] = useState<'dazu' | 'weg'>('dazu');
+  const [tippToleranz, setTippToleranz] = useState(TOLERANZ_VORGABE);
   /** Was das Netz gerade tut – oder woran es gescheitert ist. */
   const [netzLaeuft, setNetzLaeuft] = useState<string | null>(null);
   const [netzFehler, setNetzFehler] = useState<string | null>(null);
@@ -531,6 +552,30 @@ export function BildEditor({
   const bereichRef = useRef<string | null>(null);
   const teilRef = useRef<string | null>(null);
   const pinselBreiteRef = useRef(pinselBreite);
+  const bereichModusRef = useRef(bereichModus);
+  const tippMitNetzRef = useRef(tippMitNetz);
+  const tippVorzeichenRef = useRef(tippVorzeichen);
+  const tippToleranzRef = useRef(tippToleranz);
+  /**
+   * Ob gerade ein Tipp gerechnet wird.
+   *
+   * Von Hand gesetzt und nicht aus `netzLaeuft` abgeleitet: Zwei Tipps im
+   * selben Bild sähen sonst beide ein freies Netz, weil der Zustand erst
+   * nach dem nächsten Bild bei den Zeigerbehandlern ankommt. Genau dieser
+   * Fehler ist im Sticker-Studio schon einmal gemacht worden.
+   */
+  const tippRechnetRef = useRef(false);
+  /**
+   * Die Nummer des laufenden Tipps.
+   *
+   * Steigt bei jedem Lauf. Kommt ein Ergebnis zurück, dessen Nummer nicht
+   * mehr die aktuelle ist, gehört es zu einem Stand, den es nicht mehr gibt –
+   * es wird fallen gelassen, statt eine Maske wieder auferstehen zu lassen,
+   * die jemand gerade zurückgenommen hat.
+   */
+  const tippLaufRef = useRef(0);
+  /** Der Wecker des Toleranzreglers – siehe `toleranzSchieben`. */
+  const toleranzUhr = useRef<number | null>(null);
   const pinselModusRef = useRef(pinselModus);
   const pinselAbziehenRef = useRef(pinselAbziehen);
   const schleierRef = useRef(schleier);
@@ -540,7 +585,7 @@ export function BildEditor({
   const massRef = useRef({ faktor: 1, breite: 1, hoehe: 1, versatz: { x: 0, y: 0 } });
   const rahmen = useRef<number | null>(null);
   const zug = useRef<{
-    art: 'keiner' | 'zuschnitt' | 'malen' | 'text' | 'bereich' | 'pinsel';
+    art: 'keiner' | 'zuschnitt' | 'malen' | 'text' | 'bereich' | 'pinsel' | 'antippen';
     griff: string;
     /** Das Maskenteil, wie es beim Aufsetzen aussah – Griffe rechnen daraus. */
     startTeil: VerlaufTeil | RadialTeil | null;
@@ -588,6 +633,25 @@ export function BildEditor({
   useEffect(() => {
     pinselBreiteRef.current = pinselBreite;
   }, [pinselBreite]);
+  /*
+   * Der Wecker des Toleranzreglers, wenn der Editor zugeht.
+   *
+   * Ohne das schlägt er eine Fünftelsekunde nach dem Schliessen noch einmal
+   * an, greift auf `docRef` zu und setzt Zustand an einer Komponente, die es
+   * nicht mehr gibt.
+   */
+  useEffect(
+    () => () => {
+      if (toleranzUhr.current !== null) window.clearTimeout(toleranzUhr.current);
+    },
+    [],
+  );
+  useEffect(() => {
+    bereichModusRef.current = bereichModus;
+    tippMitNetzRef.current = tippMitNetz;
+    tippVorzeichenRef.current = tippVorzeichen;
+    tippToleranzRef.current = tippToleranz;
+  }, [bereichModus, tippMitNetz, tippVorzeichen, tippToleranz]);
   useEffect(() => {
     pinselModusRef.current = pinselModus;
     pinselAbziehenRef.current = pinselAbziehen;
@@ -1149,6 +1213,31 @@ export function BildEditor({
     if (werkzeugRef.current === 'bereich') {
       const teil = teilFinden(aktuell);
       const amBild = nachOriginal(punkt, W, H, aktuell);
+      /*
+       * Im Antipp-Modus wird nichts gegriffen.
+       *
+       * Diese Prüfung steht VOR der Griffsuche, und das ist Absicht: Wer
+       * antippt, tippt auch einmal dorthin, wo zufällig ein Griff eines
+       * anderen Maskenteils liegt. Griffe zu ziehen, während der Knopf
+       * „Antippen“ leuchtet, wäre genau die Art von halbem Modus, bei der
+       * man nie weiss, was der nächste Finger bewirkt.
+       *
+       * Gewirkt wird erst beim Loslassen – bis dahin kann aus dem Finger
+       * noch eine Zwei-Finger-Geste werden, und ein Tipp mitten im
+       * Heranzoomen wäre ein Fleck, den niemand bestellt hat.
+       */
+      if (bereichModusRef.current === 'antippen') {
+        zug.current = {
+          art: 'antippen',
+          griff: '',
+          startTeil: null,
+          start: amBild,
+          startZ: leer,
+          startText: { x: 0, y: 0 },
+          begonnen: false,
+        };
+        return;
+      }
       if (teil && (teil.art === 'verlauf' || teil.art === 'radial')) {
         const griff = griffTreffer(griffeVon(teil), amBild, fangBereich(massRef.current.faktor));
         if (griff) {
@@ -1363,6 +1452,32 @@ export function BildEditor({
     const W = quellBild.naturalWidth;
     const H = quellBild.naturalHeight;
 
+    /*
+     * Ein Tipp zieht nichts – aber ein Wischen ist auch kein Tipp.
+     *
+     * Ab einem Fingerbreit Weg gilt der Zug als begonnen, und `zugBeenden`
+     * lässt ihn dann fallen. Ohne das würde jedes Verrutschen beim Halten
+     * des Telefons eine Maske an der Stelle anlegen, an der der Finger
+     * aufgesetzt hat.
+     *
+     * Der Fangbereich statt einer festen Zahl: Bei achtfacher Lupe sind 22
+     * Leinwandpunkte neun Originalpunkte, herausgezoomt dreiundsiebzig.
+     * Wie weit der Finger gerutscht IST, misst der Bildschirm – nicht das
+     * Bild.
+     *
+     * Und das steht VOR `merken()`: Ein Zug, der nichts ändert, darf keinen
+     * Rückgängig-Schritt anlegen. Genau dafür ist `zugGemerkt` da.
+     */
+    if (art === 'antippen') {
+      const amBild = nachOriginal(punkt, W, H, aktuell);
+      const dx = amBild.x - zug.current.start.x;
+      const dy = amBild.y - zug.current.start.y;
+      if (Math.hypot(dx, dy) > fangBereich(massRef.current.faktor)) {
+        zug.current.begonnen = true;
+      }
+      return;
+    }
+
     // Jetzt bewegt sich wirklich etwas – jetzt lohnt ein Rückgängig-Schritt.
     // Beim blossen Antippen der Fläche entsteht keiner mehr.
     if (!zugGemerkt.current) {
@@ -1560,6 +1675,13 @@ export function BildEditor({
     if (!aktuell || !quellBild) return;
     const W = quellBild.naturalWidth;
     const H = quellBild.naturalHeight;
+
+    if (zustand.art === 'antippen') {
+      // `start` liegt schon in Originalpunkten – anders als beim Malen, wo
+      // der Ansichtspunkt gemerkt wird. Siehe den Zweig in `onPointerDown`.
+      void tippAnwenden(zustand.start);
+      return;
+    }
 
     if (zustand.art === 'malen') {
       // Ein Tupfen: ein Strich aus einem einzigen Punkt.
@@ -1843,6 +1965,25 @@ export function BildEditor({
     [aktiverBereich, teilId],
   );
 
+  /** Ob antippen gerade an ist – und das Werkzeug überhaupt das richtige. */
+  const tippAktiv = werkzeug === 'bereich' && bereichModus === 'antippen';
+  /** Ob „mit Netz“ gerade wirklich gilt – der Haken allein reicht nicht. */
+  const tippNetzGilt = tippMitNetz && tippNetzVerfuegbar();
+  /**
+   * Das Tippteil, an das der nächste Tipp ginge.
+   *
+   * Dieselbe Suche wie in `tippTeilFinden`, nur aus dem Bild statt aus den
+   * Spiegeln – hier hängt eine Zahl daran („3 Stellen“) und ob „Letzten Tipp
+   * zurück“ überhaupt etwas zurücknehmen kann.
+   */
+  const tippTeilJetzt = useMemo(
+    () =>
+      (aktiverBereich?.teile.find(
+        (t) => t.art === 'tipp' && t.modus === tippVorzeichen && t.mitNetz === tippNetzGilt,
+      ) as (TippTeil & { id: string }) | undefined) ?? null,
+    [aktiverBereich, tippVorzeichen, tippNetzGilt],
+  );
+
   /**
    * Legt ein Maskenteil an – und mit ihm bei Bedarf einen neuen Bereich.
    *
@@ -1956,6 +2097,216 @@ export function BildEditor({
     } finally {
       setNetzLaeuft(null);
     }
+  }
+
+  /**
+   * Das Teil, an das ein Tipp geht – oder `null`, wenn es noch keines gibt.
+   *
+   * Gesucht wird nach VORZEICHEN und VERFAHREN, nicht nach der Auswahl in der
+   * Maskenliste. Zwei Gründe: Ein Plus- und ein Minus-Tipp sind zwangsläufig
+   * zwei Teile (ein Maskenteil hat genau einen `modus`), und wer zwischendurch
+   * den Haken „mit Netz“ umlegt, bekommt ein eigenes Teil – die Punktliste
+   * eines Teils wird als Ganzes mit EINEM Verfahren gerechnet, gemischt ergäbe
+   * sie beim nächsten Neurechnen etwas anderes als beim ersten Mal.
+   */
+  function tippTeilFinden(
+    aktuell: BildDoc,
+    bereichId: string | null,
+    modus: 'dazu' | 'weg',
+    mitNetz: boolean,
+  ): (TippTeil & { id: string; modus: Maskenmodus; umkehren: boolean }) | null {
+    const bereich = aktuell.bereiche.find((b) => b.id === bereichId);
+    if (!bereich) return null;
+    for (const teil of bereich.teile) {
+      if (teil.art === 'tipp' && teil.modus === modus && teil.mitNetz === mitNetz) return teil;
+    }
+    return null;
+  }
+
+  /**
+   * Rechnet ein Tippteil neu und setzt es an die Stelle des alten.
+   *
+   * Der eine Weg für alle drei Anlässe: ein Tipp mehr, ein Tipp weniger, eine
+   * andere Toleranz. Vorher stand dieselbe Rechnung dreimal da, und der dritte
+   * Aufrufer vergass jedes Mal etwas anderes.
+   *
+   * Ist die Punktliste leer, verschwindet das Teil – ein Maskenteil, das nichts
+   * mehr abdeckt, wäre eine Zeile in der Liste, die man nicht loswird.
+   */
+  async function tippTeilSetzen(
+    vorlageTeil: (TippTeil & { id: string; modus: Maskenmodus }) | null,
+    punkte: { x: number; y: number }[],
+    wahl: { modus: 'dazu' | 'weg'; mitNetz: boolean; toleranz: number },
+  ) {
+    const quellBild = bildRef.current;
+    const aktuell = docRef.current;
+    if (!quellBild || !aktuell) return;
+
+    /*
+     * Ein leerer Tipp ist kein Lauf, sondern eine Löschung.
+     *
+     * Und sie geschieht SOFORT, ohne auf ein Modell zu warten: „Letzten Tipp
+     * zurück“ beim einzigen Tipp ist die eine Stelle, an der ein Anwender
+     * schon weiss, was herauskommt.
+     */
+    if (punkte.length === 0) {
+      if (vorlageTeil) teilLoeschen(vorlageTeil.id);
+      return;
+    }
+
+    // Ein zweiter Tipp, während der erste noch rechnet, würde dessen Punkt
+    // überschreiben – die Liste käme aus dem Dokument von VOR dem ersten.
+    if (tippRechnetRef.current) return;
+    tippRechnetRef.current = true;
+    const meinLauf = (tippLaufRef.current += 1);
+    setNetzFehler(null);
+    setNetzLaeuft(wahl.mitNetz ? 'Wird angesehen …' : 'Farben werden verfolgt …');
+    try {
+      const teil = await tippTeilRechnen(
+        quellBild,
+        punkte,
+        {
+          ...wahl,
+          id: vorlageTeil?.id,
+          vorher: vorlageTeil ? { punkte: vorlageTeil.punkte, alpha: vorlageTeil.alpha } : null,
+        },
+        (text) => setNetzLaeuft(text),
+      );
+      /*
+       * Ein Ergebnis, das niemand mehr bestellt hat, wird fallen gelassen.
+       *
+       * Zwischen Start und Ende dieses Laufs kann ↺ gedrückt worden sein oder
+       * das Bild gewechselt haben. Die Maske dann doch noch einzusetzen
+       * hiesse: eine Fläche taucht wieder auf, die der Anwender gerade
+       * weggenommen hat – ein Bild, das sich von selbst ändert.
+       */
+      if (!teil || meinLauf !== tippLaufRef.current || bildRef.current !== quellBild) return;
+      if (vorlageTeil) {
+        merken();
+        const bereichJetzt = bereichRef.current;
+        setDoc((wert) =>
+          wert
+            ? {
+                ...wert,
+                bereiche: wert.bereiche.map((b) =>
+                  b.id === bereichJetzt
+                    ? { ...b, teile: b.teile.map((t) => (t.id === teil.id ? teil : t)) }
+                    : b,
+                ),
+              }
+            : wert,
+        );
+      } else {
+        // Kein `merken()` davor: `teilEinsetzen` merkt selbst, und zwei
+        // Schritte für einen Tipp hiessen, dass der erste Druck auf ↺ nichts
+        // tut. Denselben Fehler gab es einmal beim Löschen von Pinselstrichen.
+        teilEinsetzen([teil], 'Antippen');
+        setTeilId(teil.id);
+      }
+    } catch (fehler) {
+      setNetzFehler(errorMessage(fehler, 'Der Tipp konnte nicht gerechnet werden'));
+    } finally {
+      tippRechnetRef.current = false;
+      setNetzLaeuft(null);
+    }
+  }
+
+  /**
+   * Ein Tipp auf das Bild – die Stelle kommt in Originalpunkten herein.
+   *
+   * Umgerechnet wird auf die VORLAGE, weil dort gerechnet wird: `tippVorlage`
+   * liefert dieselbe verkleinerte Fassung, die auch die Netze bekommen, und
+   * nur weil es dieselbe ist, muss das Netz das Bild nicht bei jedem Tipp neu
+   * ansehen.
+   */
+  async function tippAnwenden(imOriginal: { x: number; y: number }) {
+    const quellBild = bildRef.current;
+    const aktuell = docRef.current;
+    if (!quellBild || !aktuell || tippRechnetRef.current) return;
+    if (!vorhandenOderPlatz(aktuell)) return;
+
+    const vorlage = tippVorlage(quellBild);
+    const stelle = {
+      x: imOriginal.x * vorlage.faktor,
+      y: imOriginal.y * vorlage.faktor,
+    };
+    /*
+     * Ein Tipp neben das Bild ist kein Tipp.
+     *
+     * Bei gedrehtem oder zugeschnittenem Foto liegt die Leinwand nicht auf dem
+     * Bild; `nachOriginal` rechnet dann auch Stellen aus, die es nicht gibt.
+     * Die Flutung überspringt solche Saat wortlos – und wortlos ist genau das
+     * Falsche: Der Knopf hätte etwas getan, das Bild nicht.
+     */
+    if (
+      stelle.x < 0 ||
+      stelle.y < 0 ||
+      stelle.x >= vorlage.image.width ||
+      stelle.y >= vorlage.image.height
+    ) {
+      setNetzFehler('Diese Stelle liegt ausserhalb des Bildes.');
+      return;
+    }
+
+    const modus = tippVorzeichenRef.current;
+    const mitNetz = tippMitNetzRef.current && tippNetzVerfuegbar();
+    const toleranz = tippToleranzRef.current;
+    const vorher = tippTeilFinden(aktuell, bereichRef.current, modus, mitNetz);
+    await tippTeilSetzen(vorher, [...(vorher?.punkte ?? []), stelle], {
+      modus,
+      mitNetz,
+      toleranz,
+    });
+  }
+
+  /**
+   * Die Farbtoleranz verschieben – und die Maske gleich mitziehen.
+   *
+   * Nicht erst beim nächsten Tipp: Wer die Toleranz anfasst, hat gerade
+   * gesehen, dass der Ausschnitt nicht passt, und will ihn WACHSEN sehen. Ein
+   * Regler, dessen Wirkung man erst nach „zurück“ und noch einem Tipp sieht,
+   * ist ein Ratespiel.
+   *
+   * Gebremst um eine Fünftelsekunde, weil ein Regler auf einem Telefon
+   * dreissig Ereignisse je Sekunde liefert und jedes davon eine Flutung über
+   * das ganze Bild anstiesse. Die Zahl an der Beschriftung springt trotzdem
+   * sofort mit – das ist es, was den Regler flüssig aussehen lässt.
+   */
+  function toleranzSchieben(wert: number) {
+    setTippToleranz(wert);
+    if (toleranzUhr.current !== null) window.clearTimeout(toleranzUhr.current);
+    toleranzUhr.current = window.setTimeout(() => {
+      toleranzUhr.current = null;
+      const aktuell = docRef.current;
+      if (!aktuell) return;
+      /*
+       * Nur die Teile ohne Netz. Bei einem Netzteil ist die Toleranz eine
+       * mitgeführte Zahl ohne Wirkung – es neu zu rechnen hiesse, das Modell
+       * für nichts laufen zu lassen. Der Regler steht dort auch gar nicht.
+       */
+      const teil = tippTeilFinden(aktuell, bereichRef.current, tippVorzeichenRef.current, false);
+      if (!teil) return;
+      void tippTeilSetzen(teil, [...teil.punkte], {
+        modus: teil.modus === 'weg' ? 'weg' : 'dazu',
+        mitNetz: false,
+        toleranz: wert,
+      });
+    }, 200);
+  }
+
+  /** „Letzten Tipp zurück“ – Punkt streichen, Maske neu rechnen. */
+  async function tippZurueck() {
+    const aktuell = docRef.current;
+    if (!aktuell) return;
+    const modus = tippVorzeichenRef.current;
+    const mitNetz = tippMitNetzRef.current && tippNetzVerfuegbar();
+    const vorher = tippTeilFinden(aktuell, bereichRef.current, modus, mitNetz);
+    if (!vorher) return;
+    await tippTeilSetzen(vorher, vorher.punkte.slice(0, -1), {
+      modus,
+      mitNetz,
+      toleranz: vorher.toleranz,
+    });
   }
 
   /**
@@ -2876,6 +3227,30 @@ export function BildEditor({
               >
                 🔭 Tiefe
               </button>
+              {/*
+                  „Antippen“ steht in DIESER Reihe, obwohl es ein Zustand ist
+                  und kein einzelner Griff.
+
+                  Weil es hier gesucht wird: Die Reihe beantwortet die Frage
+                  „wie mache ich eine Maske?“, und antippen ist eine Antwort
+                  darauf – für alles, wofür kein Modell trainiert wurde und was
+                  keine Form hat, die sich ziehen liesse. Ein Schatten auf einer
+                  Wand, ein Stück Himmel zwischen zwei Ästen.
+
+                  `aria-pressed` und der Name „an/aus“ sagen, dass er anders
+                  ist als seine Nachbarn: Die legen sofort etwas an, dieser
+                  wartet auf einen Finger im Bild.
+              */}
+              <button
+                type="button"
+                className={`btn btn-sm ${tippAktiv ? 'is-active' : ''}`}
+                aria-pressed={tippAktiv}
+                onClick={() => setBereichModus(tippAktiv ? 'griffe' : 'antippen')}
+                disabled={netzLaeuft !== null}
+                title="Tippe ins Bild auf das, was in den Bereich gehört"
+              >
+                👆 Antippen {tippAktiv ? 'an' : 'aus'}
+              </button>
               <button
                 type="button"
                 className="btn btn-sm"
@@ -2890,6 +3265,102 @@ export function BildEditor({
                 🎯 Motiv + Tiefe
               </button>
             </div>
+
+            {/*
+                Die Einstellungen zum Antippen – eingerückt, wie die Güte
+                darunter und wie der Antipp-Schalter im Sticker-Studio.
+
+                Sie stehen nur da, solange antippen an ist. Vier Knöpfe und ein
+                Regler, die dauerhaft unter der Formenreihe hängen, sind für die
+                meisten Bilder Lärm: Wer einen Verlauf zieht, hat mit der
+                Farbtoleranz nichts zu schaffen.
+            */}
+            {tippAktiv && (
+              <div className="bild-antippen bild-unterzeile">
+                <div className="bild-reihe">
+                  {/*
+                      Der Netz-Schalter lädt NICHTS, solange niemand tippt – er
+                      ist eine Absichtserklärung. Die Zahl steht dran, solange
+                      das Modell nicht da ist: 30 MB auf einem Mobilfunkvertrag
+                      sind eine Entscheidung, keine Fussnote.
+                  */}
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${tippMitNetz ? 'is-active' : ''}`}
+                    aria-pressed={tippMitNetz}
+                    onClick={() => {
+                      const naechst = !tippMitNetz;
+                      setTippMitNetz(naechst);
+                      // Derselbe Schalter wie im Sticker-Studio, dieselbe
+                      // Kiste: Es ist dasselbe Modell und dieselbe
+                      // Entscheidung über den Download.
+                      writeEngineSetting('tippen', naechst);
+                    }}
+                    disabled={netzLaeuft !== null}
+                    title="Statt nach Farbe zu fluten, versteht ein Netz, was ein Gegenstand ist."
+                  >
+                    {tippMitNetz ? '☑' : '☐'} mit Netz
+                    {!tippNetzVerfuegbar() && ` — einmalig ${firstUseMb(engineInfo('tippen'))} MB`}
+                  </button>
+                  {/*
+                      Plus und Minus gelten für BEIDE Wege. Ein Minus-Tipp
+                      heisst nicht „dieser Punkt gehört nicht zum vorigen Ding“,
+                      sondern „finde, was hier liegt, und nimm es weg“ – das
+                      kann die Farbflutung genauso.
+                  */}
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${tippVorzeichen === 'weg' ? 'is-active' : ''}`}
+                    aria-pressed={tippVorzeichen === 'weg'}
+                    onClick={() => setTippVorzeichen(tippVorzeichen === 'weg' ? 'dazu' : 'weg')}
+                    disabled={netzLaeuft !== null}
+                  >
+                    {tippVorzeichen === 'weg' ? '➖ Wegnehmen' : '➕ Dazunehmen'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => void tippZurueck()}
+                    disabled={netzLaeuft !== null || !tippTeilJetzt}
+                  >
+                    ↩ Letzten Tipp zurück
+                  </button>
+                </div>
+                {/*
+                    Die Toleranz nur OHNE Netz.
+
+                    Mit Netz entscheidet das Modell, was ein Gegenstand ist –
+                    ein Farbabstand kommt darin nicht vor. Ein Regler, der
+                    sichtbar ist und nichts bewirkt, ist schlimmer als keiner:
+                    Wer damit eine schlechte Maske zu retten versucht, dreht
+                    minutenlang an etwas, das gar nicht zuhört.
+                */}
+                {!tippNetzGilt && (
+                  <label className="feld bild-tipp-regler">
+                    <span>Farbtoleranz {tippToleranz}</span>
+                    <input
+                      type="range"
+                      min={2}
+                      max={160}
+                      step={1}
+                      value={tippToleranz}
+                      disabled={netzLaeuft !== null}
+                      onChange={(ereignis) => toleranzSchieben(Number(ereignis.target.value))}
+                    />
+                  </label>
+                )}
+                <p className="bild-hinweis">
+                  {tippTeilJetzt
+                    ? `${tippTeilJetzt.punkte.length === 1 ? '1 Stelle' : `${tippTeilJetzt.punkte.length} Stellen`} ${
+                        tippVorzeichen === 'weg' ? 'weggenommen' : 'dazugenommen'
+                      }. `
+                    : ''}
+                  {tippNetzGilt
+                    ? 'Tippe mitten auf das Ding – das Netz nimmt es mit seiner ganzen Kante.'
+                    : 'Tippe auf eine Farbfläche. Passt der Ausschnitt nicht, zieh die Toleranz – die Maske rechnet mit.'}
+                </p>
+              </div>
+            )}
 
             {/*
                 Die Güte als Schalter, nicht als eigener Knopf.
@@ -3043,7 +3514,11 @@ export function BildEditor({
                             ? 'Pinsel'
                             : teil.art === 'tiefe'
                               ? 'Tiefe'
-                              : 'Motiv'}{' '}
+                              : teil.art === 'tipp'
+                                ? teil.mitNetz
+                                  ? 'Getippt'
+                                  : 'Farbe'
+                                : 'Motiv'}{' '}
                       {nummer + 1}
                     </button>
                   ))}

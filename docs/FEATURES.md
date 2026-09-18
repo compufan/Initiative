@@ -180,8 +180,25 @@ Fünf Werkzeuge, alle im Gerät – kein Bild verlässt es dabei.
   Rose und ein blauer Himmel gleicher Helligkeit denselben Grauton.
 - **Bereiche**: Anpassungen, die nur an einer Stelle wirken – der Himmel
   dunkler, das Gesicht heller. Die Fläche dafür entsteht als Verlauf, Ellipse,
-  gemalter Pinselstrich oder aus einem der Freistellmodelle („Person",
-  „Motiv"). Bis zu vier Bereiche je Bild, jeder mit denselben Farbreglern.
+  gemalter Pinselstrich, durch **Antippen** oder aus einem der Freistellmodelle
+  („Person", „Motiv"). Bis zu vier Bereiche je Bild, jeder mit denselben
+  Farbreglern.
+- **Antippen**: Derselbe Griff wie im Sticker-Studio, jetzt auch für Bereiche.
+  Du tippst ins Bild auf das, was in den Bereich gehört – **ohne Netz** flutet
+  die App nach Farbe (auf jedem Gerät, sofort, ohne Download; die Toleranz
+  hängt an einem Regler, und die Maske zieht beim Schieben mit), **mit Netz**
+  versteht ein Modell, was ein Gegenstand ist, und nimmt ihn mit seiner ganzen
+  Kante. „Wegnehmen" heisst dabei nicht „dieser Punkt gehört nicht dazu",
+  sondern „finde, was hier liegt, und nimm es weg" – es wirkt auch gegen die
+  Maske eines Freistellmodells. Der letzte Tipp lässt sich einzeln
+  zurücknehmen, und beides zusammen darf in einem Bereich stehen: das Motiv
+  mit dem Netz gegriffen, der Schatten daneben nach Farbe.
+
+  Ohne Netz ist der Weg gröber – ein rotes Trikot vor einer roten Wand fliesst
+  über –, aber er braucht kein Modell. Für eine Wand oder ein Stück Himmel
+  zwischen zwei Ästen ist er sogar der bessere: Beides ist für kein Modell ein
+  Gegenstand.
+
 - **Tiefenschärfe**: Ein Regler „Weichzeichnen" je Bereich zerstreut das Bild
   dahinter zu einer Scheibe – wie ein Objektiv, nicht wie ein Weichzeichner.
   Mit dem Knopf **„Tiefe"** schätzt ein Modell für jeden Bildpunkt die
@@ -276,11 +293,11 @@ schnell – Miniaturbilder wandern nie mit.
 Welche Datei zuerst geht, entscheidet ihre Grösse, ihr Alter (ältere zuerst)
 und die Priorität, die man ihr gibt:
 
-| Priorität | Bedeutung                                                                  |
-| --------- | -------------------------------------------------------------------------- |
+| Priorität | Bedeutung                                                                      |
+| --------- | ------------------------------------------------------------------------------ |
 | Niedrig   | Wandert sofort. „Diese Datei braucht auf dem schnellen Speicher keinen Platz." |
-| Normal    | Der Standard. Wandert, wenn der Platz knapp wird.                          |
-| Hoch      | Bleibt so lange wie möglich schnell erreichbar – wandert zuallerletzt.     |
+| Normal    | Der Standard. Wandert, wenn der Platz knapp wird.                              |
+| Hoch      | Bleibt so lange wie möglich schnell erreichbar – wandert zuallerletzt.         |
 
 Die Priorität hängt an der **Datei**, nicht am Sammlungseintrag: Es gibt sie
 nur einmal, auch wenn sie in zwei Ordnern liegt. Ändern darf sie, wer die Datei
@@ -293,11 +310,11 @@ hochgeladen hat oder wer den Ordner pflegen darf.
 Fotos, Videos und Diashows auf dem grossen Bildschirm. Es gibt **drei Wege**,
 und das ist Absicht: Keiner davon funktioniert überall.
 
-| Weg | Womit | Was geht | Wo es geht |
-| --- | --- | --- | --- |
-| **Chromecast** (der Ein-Tipp-Weg) | Google Cast | Fotos, Videos, Diashow | Chromium-Browser (Chrome, Edge …) und **nur über https** – **nicht auf dem iPhone** |
-| **AirPlay bzw. Remote Playback** | Eingebaut im Browser | **nur Video** | Safari (AirPlay), Chrome/Edge (Remote Playback) |
-| **Code am Fernseher** (die Rückfallebene) | Der Browser des Fernsehers, eine Seite unter `/tv` | Fotos, Videos, Diashow – **in voller Grösse** | Jeder Fernseher mit Browser, jedes Telefon |
+| Weg                                       | Womit                                              | Was geht                                      | Wo es geht                                                                          |
+| ----------------------------------------- | -------------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------- |
+| **Chromecast** (der Ein-Tipp-Weg)         | Google Cast                                        | Fotos, Videos, Diashow                        | Chromium-Browser (Chrome, Edge …) und **nur über https** – **nicht auf dem iPhone** |
+| **AirPlay bzw. Remote Playback**          | Eingebaut im Browser                               | **nur Video**                                 | Safari (AirPlay), Chrome/Edge (Remote Playback)                                     |
+| **Code am Fernseher** (die Rückfallebene) | Der Browser des Fernsehers, eine Seite unter `/tv` | Fotos, Videos, Diashow – **in voller Grösse** | Jeder Fernseher mit Browser, jedes Telefon                                          |
 
 Der zweite Weg erscheint nur an einem einzelnen Video, nie an einer Sammlung –
 er kann dort nichts. Es sind auch zwei verschiedene Techniken hinter einem
@@ -316,16 +333,16 @@ das Telefon in der Tasche steckt** (der Fernseher taktet sie selbst).
 
 Nein. Google Cast ist **ein** Standard von mehreren. Der Stand (September 2026):
 
-| Plattform | Google Cast | AirPlay 2 | Browser am Gerät |
-| --- | --- | --- | --- |
-| Google TV / Android TV (Sony, TCL, Hisense, Philips, Sharp …) | ja | teilweise | nein |
-| Chromecast-Stick / Google TV Streamer | ja | nein | nein |
-| **Samsung** (Tizen) | **seit April 2026**, Modelljahre 2023–2026 per Update | ja | ja |
-| **LG** (webOS) | **ab Modelljahr 2024**, 2023er nachgerüstet | ja | ja |
-| Amazon Fire TV | nein (setzt auf Matter Casting) | nein | Silk, nachinstallierbar |
-| Roku | nein | ja | nein |
-| VIDAA (Hisense), Titan OS, TiVo OS | nein | teilweise | meist ja |
-| Apple TV | nein | ja | nein |
+| Plattform                                                     | Google Cast                                           | AirPlay 2 | Browser am Gerät        |
+| ------------------------------------------------------------- | ----------------------------------------------------- | --------- | ----------------------- |
+| Google TV / Android TV (Sony, TCL, Hisense, Philips, Sharp …) | ja                                                    | teilweise | nein                    |
+| Chromecast-Stick / Google TV Streamer                         | ja                                                    | nein      | nein                    |
+| **Samsung** (Tizen)                                           | **seit April 2026**, Modelljahre 2023–2026 per Update | ja        | ja                      |
+| **LG** (webOS)                                                | **ab Modelljahr 2024**, 2023er nachgerüstet           | ja        | ja                      |
+| Amazon Fire TV                                                | nein (setzt auf Matter Casting)                       | nein      | Silk, nachinstallierbar |
+| Roku                                                          | nein                                                  | ja        | nein                    |
+| VIDAA (Hisense), Titan OS, TiVo OS                            | nein                                                  | teilweise | meist ja                |
+| Apple TV                                                      | nein                                                  | ja        | nein                    |
 
 Samsung und LG – zusammen der grösste Teil der Wohnzimmer – konnten jahrelang
 **kein** Google Cast. Samsung hat es erst im April 2026 nachgeliefert, und zwar
@@ -346,11 +363,47 @@ des Fernsehers sind zusammen das Maximum dessen, was eine reine Web-App heute
 erreichen kann – und
 genau diese drei sind eingebaut.
 
+### Lässt sich die ganze App auf den Fernseher spiegeln?
+
+**Nein – Pixel-Spiegeln kann eine Web-App nicht.** Das ist keine Frage des
+Aufwands, sondern eine Grenze der Plattform, und sie ist an vier Stellen
+nachgeschlagen:
+
+- **Presentation API mit einer beliebigen `https`-Adresse.** Das W3C-Wiki sagt
+  „Presentation of any `https` URL is supported" – und meint den _1-UA-Modus_:
+  Chrome lädt die Seite in einem unsichtbaren Tab auf dem **eigenen** Rechner
+  und schickt ein Video davon hinüber. Dafür braucht es ein Desktop-Chrome
+  (`chrome.tabCapture.captureOffscreenTab`). Auf einem Telefon fällt das weg.
+  Wer es am Schreibtisch ausprobiert, hält es für gelöst.
+- **Presentation API mit `cast:<app-id>`.** Startet den Empfänger, trägt aber
+  keine Nachrichten: „the Chromecast does not implement the Presentation
+  Receiver API" (offizielles Chrome-Beispiel). Also kein Fernsteuern vom
+  Telefon aus – und das merkt man erst, wenn alles gebaut ist.
+- **`getDisplayMedia`.** Liefert einen `MediaStream`. Ein Chromecast holt sich
+  Dateien aber über eine **Adresse** und rendert selbst; ein Bildschirmmitschnitt
+  hat keine. Die Remote-Playback-Spezifikation nennt genau diesen Fall
+  (Abschnitt 5.2.2, „media flinging").
+- **Site-Initiated Mirroring.** Ein Vorschlag für genau diesen Wunsch. Chrome
+  hat 2021 ein „Intent to Prototype" geschrieben; ausgeliefert ist seither
+  nichts.
+
+Was stattdessen geht und mehr ist als Spiegelung: Der Weg mit dem Code bekommt
+weitere **Programmarten**. Der Fernseher zeigt heute Fotos und Videos; dieselbe
+Sitzung, derselbe Code, dieselbe Fernbedienung könnten ebenso einen
+Gesprächsverlauf gross anzeigen. Das läuft auf jedem Fernseher mit Browser
+statt nur auf Chromecast, ist aus vier Metern lesbar statt eine geschrumpfte
+Telefonoberfläche, und es läuft weiter, wenn das Telefon in der Tasche steckt.
+
+„Die gesamte App" wörtlich zu nehmen wäre trotzdem ein Versprechen, das
+niemand hält: Kalender, Ausgaben, Umfragen, Spiele und der Fotoeditor wären
+jeder eine eigene Fernsehansicht. Der ehrliche Zuschnitt ist eine Ansicht je
+Modul, in der Reihenfolge, in der sie im Wohnzimmer Sinn ergibt.
+
 ### Das Skript von Google
 
 Chromecast braucht ein Skript von `gstatic.com` – das einzige fremde Skript in
 dieser App. Es wird **erst nach ausdrücklicher Zustimmung** geladen, und die
-lässt sich unter *Profil → Einstellungen → Deine Daten* jederzeit wieder
+lässt sich unter _Profil → Einstellungen → Deine Daten_ jederzeit wieder
 zurücknehmen. Wer nie zustimmt, hat eine App, die nichts von fremden Servern
 lädt – und die anderen beiden Wege stehen trotzdem offen.
 
@@ -551,7 +604,7 @@ Die App ist dafür gebaut, dass Funklöcher, U-Bahn und Flugmodus nicht stören.
 - Kein Tracking, keine Werbung, keine Weitergabe an Dritte. Die Seite lädt
   **von sich aus** nichts von fremden Servern – keine Schriftart, kein Symbol,
   kein Zählpixel. Es gibt genau eine Ausnahme, und die schaltest du selbst
-  ein: das Skript für Chromecast (siehe *Auf den Fernseher*). Solange du das
+  ein: das Skript für Chromecast (siehe _Auf den Fernseher_). Solange du das
   nicht tust, gilt der Satz ohne Einschränkung.
 - **Impressum und Datenschutzerklärung** sind ohne Anmeldung erreichbar, direkt
   aus der Fusszeile des Anmeldebildschirms.
