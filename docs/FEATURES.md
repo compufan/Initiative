@@ -387,17 +387,47 @@ nachgeschlagen:
   hat 2021 ein „Intent to Prototype" geschrieben; ausgeliefert ist seither
   nichts.
 
-Was stattdessen geht und mehr ist als Spiegelung: Der Weg mit dem Code bekommt
-weitere **Programmarten**. Der Fernseher zeigt heute Fotos und Videos; dieselbe
-Sitzung, derselbe Code, dieselbe Fernbedienung könnten ebenso einen
-Gesprächsverlauf gross anzeigen. Das läuft auf jedem Fernseher mit Browser
-statt nur auf Chromecast, ist aus vier Metern lesbar statt eine geschrumpfte
+Was stattdessen geht und mehr ist als Spiegelung: Der Weg mit dem Code hat
+**zwei Programmarten**. Der Fernseher zeigt Fotos und Videos – und seit
+Migration 0021 auch einen **Chat**. Dieselbe Sitzung, derselbe Code, dieselbe
+Fernbedienung. Das läuft auf jedem Fernseher mit Browser statt nur auf
+Chromecast, ist aus vier Metern lesbar statt eine geschrumpfte
 Telefonoberfläche, und es läuft weiter, wenn das Telefon in der Tasche steckt.
+
+### Chat auf dem Fernseher
+
+Im Chat-Menü: **„📺 Diesen Chat auf den Fernseher"**. Der Fernseher zeigt den
+Namen des Gesprächs und die letzten zwölf Nachrichten mit Absender, Uhrzeit und
+Bildern; die Fernbedienung am Telefon blättert seitenweise zurück und wieder
+zum Neuesten.
+
+Vier Dinge sind hier anders als bei Fotos, und jedes davon mit Absicht:
+
+- **Die Rechte werden bei JEDEM Abruf geprüft**, nicht nur beim Einstellen. Bei
+  einer Diashow wird die Liste eingefroren; ein Gesprächsverlauf wächst weiter,
+  und mit ihm wüchse sonst ein Fernseher, der jemandem gehört, der längst nicht
+  mehr dabei ist. **Wer die Gruppe verlässt, dessen Fernseher geht in derselben
+  Sekunde dunkel.**
+- **Es gibt eine Frist.** Nach einer halben Stunde, in der niemand schreibt und
+  niemand blättert, fällt der Chat vom Schirm und der Fernseher zeigt wieder
+  seinen Code. Eine Sitzung lebt zwölf Stunden – für Urlaubsfotos richtig, für
+  Nachrichten das Gegenteil davon.
+- **Das Telefon fragt einmal nach**, bevor es losgeht, und der Name des
+  Gesprächs steht auf dem Fernseher, bevor die erste Nachricht kommt. Ein
+  vertippter Code trifft nur mit sehr kleiner Wahrscheinlichkeit eine fremde
+  Sitzung; bei Urlaubsfotos wäre das peinlich, bei Nachrichten ein Leck in eine
+  fremde Wohnung.
+- **Der Fernseher löst keine Gelesen-Markierung aus.** Sonst verschwänden
+  Ungelesen-Punkte, weil ein Gerät mitgelaufen ist, vor dem niemand sass.
+
+Zurückgenommene Nachrichten, für sich ausgeblendete und alles vor der eigenen
+Verlaufsgrenze stehen nicht auf dem Fernseher – dieselben Filter wie in der App.
 
 „Die gesamte App" wörtlich zu nehmen wäre trotzdem ein Versprechen, das
 niemand hält: Kalender, Ausgaben, Umfragen, Spiele und der Fotoeditor wären
 jeder eine eigene Fernsehansicht. Der ehrliche Zuschnitt ist eine Ansicht je
-Modul, in der Reihenfolge, in der sie im Wohnzimmer Sinn ergibt.
+Modul, in der Reihenfolge, in der sie im Wohnzimmer Sinn ergibt – Chat zuerst,
+weil danach gefragt wurde.
 
 ### Das Skript von Google
 

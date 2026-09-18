@@ -402,3 +402,134 @@ test('ein Foto aus dem Chat geht denselben Weg', async ({ browser, baseURL }) =>
     })
     .toBe(16);
 });
+
+test('ein Chat steht gross auf dem Fernseher – und fremder Text bleibt Text', async ({
+  browser,
+  baseURL,
+}) => {
+  /*
+   * Der Wunsch war „die gesamte App auf dem Fernseher spiegeln, um bspw. auch
+   * Chats zu zeigen". Pixel-Spiegeln kann eine Web-App nicht – die Belege
+   * stehen in docs/FEATURES.md. Was geht, ist eine zweite ANSICHT: derselbe
+   * Code, dieselbe Sitzung, dieselbe Fernbedienung, nur eine andere Art von
+   * Programm.
+   *
+   * Zwei Dinge kann nur ein Browsertest beantworten:
+   *
+   *  1. Steht der Verlauf wirklich auf dem Fernseher – über die Umschreibung
+   *     von `/tv`, das Blatt ohne React, den Abruf OHNE Anmeldung und den
+   *     Abdruck, an dem das Blatt merkt, dass jemand geschrieben hat?
+   *  2. Bleibt fremder Text TEXT? Eine Nachricht ist das, was irgendwer
+   *     getippt hat. Auf einem Gerät ohne Adresszeile, das im Wohnzimmer
+   *     steht, wäre `innerHTML` die teuerste Bequemlichkeit dieses Projekts.
+   */
+  const wurzel = baseURL ?? 'http://localhost:5173';
+  const http = await request.newContext();
+  const anna = await registrieren(http, 'tvchata');
+  const bert = await registrieren(http, 'tvchatb');
+  const kopfAnna = { Authorization: `Bearer ${anna.accessToken}` };
+  const kopfBert = { Authorization: `Bearer ${bert.accessToken}` };
+
+  const chat = await (
+    await http.post(`${API}/conversations`, {
+      headers: kopfAnna,
+      data: { type: 'group', title: 'Wir für Bier', memberIds: [bert.user.id] },
+    })
+  ).json();
+
+  const BOESE = '<img src=x onerror="document.title=\'gekapert\'">';
+  for (const [kopf, text] of [
+    [kopfAnna, 'Kommt ihr heute?'],
+    [kopfBert, 'Bin um acht da'],
+    [kopfBert, BOESE],
+  ] as const) {
+    const gesendet = await http.post(`${API}/conversations/${chat.id}/messages`, {
+      headers: kopf,
+      data: { type: 'text', body: text },
+    });
+    expect(gesendet.ok(), `Nachricht: ${gesendet.status()}`).toBeTruthy();
+  }
+
+  // ---- Der Fernseher: ein Fenster ohne jede Anmeldung --------------------
+  const tv = await (await browser.newContext()).newPage();
+  await tv.goto(`${wurzel}/tv`);
+  const codeFeld = tv.locator('#code');
+  await expect(codeFeld).not.toHaveText('…', { timeout: 20_000 });
+  const code = ((await codeFeld.textContent()) ?? '').trim();
+
+  // ---- Das Telefon: Chat-Info öffnen und den Verlauf schicken ------------
+  const telefon = await seiteFuer(browser, anna, wurzel);
+  await telefon.getByText('Wir für Bier').first().click();
+  await telefon
+    .getByRole('button', { name: /Chat-Info|Wir für Bier/ })
+    .first()
+    .click();
+  await telefon.getByRole('button', { name: /Diesen Chat auf den Fernseher/ }).click();
+  await telefon.locator('.tv-code-eingabe').fill(code);
+
+  /*
+   * Zweimal drücken – und das ist die eigentliche Prüfung an dieser Stelle.
+   *
+   * Ein Chat auf dem Fernseher bekommt eine Rückfrage, eine Diashow nicht.
+   * Der Grund: Der Code ist acht Zeichen aus vierundzwanzig, ein Fehlgriff auf
+   * eine fremde laufende Sitzung also sehr unwahrscheinlich – bei
+   * Urlaubsfotos peinlich, bei Nachrichten ein Leck in eine fremde Wohnung.
+   * Fiele die Rückfrage weg, liefe der erste Druck sofort durch, und dieser
+   * Test bliebe grün, wenn er hier nicht auf sie wartete.
+   */
+  await telefon.getByRole('button', { name: 'Starten' }).click();
+  const rueckfrage = telefon.getByRole('button', { name: /wirklich zeigen\?/ });
+  await expect(rueckfrage).toBeVisible();
+  await rueckfrage.click();
+
+  // ---- Und der Fernseher zeigt ihn --------------------------------------
+  await expect(tv.locator('#verlauf')).toBeVisible({ timeout: 25_000 });
+  await expect(tv.locator('#verlauf-titel')).toHaveText('Wir für Bier');
+  await expect(tv.locator('.verlauf-text').first()).toHaveText('Kommt ihr heute?');
+  // Wer es geschrieben hat, steht dran – sonst ist ein Gruppenverlauf aus vier
+  // Metern nur eine Reihe von Sätzen ohne Absender.
+  await expect(tv.locator('.verlauf-name').first()).toHaveText(anna.user.displayName);
+
+  /*
+   * Der Kern der Sicherheit: Der Text steht als TEXT da.
+   *
+   * `toHaveText` liest `textContent` – wäre daraus ein `<img>` geworden, stünde
+   * hier nichts. Und der Titel des Blattes ist der zweite Zeuge: `onerror`
+   * feuert bei einer Adresse `x` verlässlich, also hätte ein `innerHTML` ihn
+   * längst umgeschrieben.
+   */
+  await expect(tv.locator('.verlauf-text').last()).toHaveText(BOESE);
+  expect(await tv.title()).not.toBe('gekapert');
+  expect(await tv.locator('#verlauf-liste img').count()).toBe(0);
+
+  /*
+   * ---- Und der Fernseher merkt, dass jemand schreibt --------------------
+   *
+   * Das ist der Unterschied zur Diashow, und er ist an genau einer Stelle
+   * eingebaut: `fassung` steigt nur, wenn jemand die SITZUNG ändert. Eine neue
+   * Nachricht tut das nicht. Ohne den Abdruck daneben bliebe der Fernseher auf
+   * dem Stand vom Einstellen stehen – lautlos, ohne Fehler.
+   */
+  await http.post(`${API}/conversations/${chat.id}/messages`, {
+    headers: kopfBert,
+    data: { type: 'text', body: 'Bring ich was mit?' },
+  });
+  await expect(tv.locator('.verlauf-text').last()).toHaveText('Bring ich was mit?', {
+    timeout: 20_000,
+  });
+
+  /*
+   * ---- Die Fernbedienung ------------------------------------------------
+   *
+   * Der Balken am unteren Rand holt sie zurück – und er weiss, dass dort ein
+   * Chat läuft und keine Diashow. Stünde dort „0 Stücke", läse es sich wie ein
+   * Fehler statt wie eine andere Art von Programm.
+   */
+  await expect(telefon.getByText(/Chat auf dem Fernseher/).first()).toBeVisible({
+    timeout: 20_000,
+  });
+
+  await http.dispose();
+  await telefon.context().close();
+  await tv.context().close();
+});

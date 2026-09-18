@@ -19,6 +19,8 @@ import {
   roleLabel,
 } from './helpers.js';
 
+import { FernsehSheet } from '../fernseher/FernsehSheet.js';
+
 /** Was addMembersSchema erlaubt (packages/shared/src/schemas/conversation.ts). */
 const HINZU_MAX = 100;
 
@@ -40,6 +42,7 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
   const myId = useMyId();
   const presence = useChat((state) => state.presence);
   const conversations = useChat((state) => state.conversations);
+  const [aufFernseher, setAufFernseher] = useState(false);
   const [adding, setAdding] = useState(false);
   const [picked, setPicked] = useState<string[]>([]);
 
@@ -224,6 +227,31 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
           </span>
         )}
       </section>
+
+      {/*
+          „Auf den Fernseher" im Chat-Menü.
+
+          Hier und nicht im Nachrichtenmenü daneben: Dort ginge es um EINE
+          Nachricht, hier geht es um den Verlauf. Und es steht über den
+          Mitgliedern, weil es eine Handlung ist und keine Auskunft.
+
+          Es ist die ehrliche Fassung des Wunsches, „die gesamte App auf dem
+          Fernseher zu spiegeln". Pixel spiegeln kann eine Web-App nicht – die
+          Belege dafür stehen in `docs/FEATURES.md`. Eine zweite Ansicht, vom
+          Telefon ferngesteuert, geht auf jedem Fernseher mit Browser und ist
+          aus vier Metern lesbar statt eine geschrumpfte Telefonoberfläche.
+      */}
+      <section className="stack">
+        <button type="button" className="btn btn-block" onClick={() => setAufFernseher(true)}>
+          📺 Diesen Chat auf den Fernseher
+        </button>
+      </section>
+      <FernsehSheet
+        open={aufFernseher}
+        onClose={() => setAufFernseher(false)}
+        gespraech={{ id: conversation.id, name: conversationTitle(conversation, myId) }}
+        titel="Chat auf den Fernseher"
+      />
 
       <section className="stack">
         <span className="msg-info-label">

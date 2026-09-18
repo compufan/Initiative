@@ -502,14 +502,19 @@ export const api = {
       body: {
         collectionId?: string;
         attachmentIds?: string[];
+        /** Oder ein Gespräch – dann zeigt der Fernseher den Verlauf. */
+        conversationId?: string;
         modus?: 'linear' | 'zufall';
         sekunden?: number;
       },
     ) =>
-      post<{ code: string; stueckzahl: number; modus: string; sekunden: number }>(
-        `/tv/sitzungen/${encodeURIComponent(code)}/programm`,
-        body,
-      ),
+      post<{
+        code: string;
+        stueckzahl: number;
+        art?: 'diashow' | 'chat';
+        modus?: string;
+        sekunden?: number;
+      }>(`/tv/sitzungen/${encodeURIComponent(code)}/programm`, body),
     /** Die Fernbedienung: weiter, zurück, Pause, Reihenfolge, Tempo. */
     steuern: (
       code: string,
@@ -528,6 +533,9 @@ export const api = {
       get<{
         items: {
           code: string;
+          /** `diashow` oder `chat` – die Fernbedienung sieht dann anders aus. */
+          art?: 'diashow' | 'chat';
+          gespraechId?: string | null;
           stueckzahl: number;
           stelle: number;
           pausiert: boolean;

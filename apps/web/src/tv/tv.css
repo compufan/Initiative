@@ -174,3 +174,153 @@ body {
    */
   filter: drop-shadow(0 0 3vh rgba(255, 255, 255, 0.09));
 }
+
+/*
+ * Der Gesprächsverlauf.
+ *
+ * Dieselbe Rechnung wie für alles hier: vier Meter Abstand, `vw` statt Punkte.
+ * Der Unterschied zur Bühne ist, dass hier GELESEN wird – und lesen aus vier
+ * Metern hat eine harte Untergrenze. Eine Schriftgrösse von 1,6 vw sind auf
+ * 1920 Punkten rund 31 Punkte; auf einem 55-Zoll-Gerät ist das etwa so gross
+ * wie eine Zeitungsüberschrift aus Armlänge. Darunter liest niemand mehr mit,
+ * und der ganze Weg wäre umsonst.
+ */
+.verlauf {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  /* Der Sicherheitsrand gegen Overscan – wie bei `.mitte`. */
+  padding: 5vh 5vw;
+  background: #000;
+}
+
+.verlauf-kopf {
+  display: flex;
+  align-items: center;
+  gap: 1.5vw;
+  padding-bottom: 1.6vh;
+  margin-bottom: 1.6vh;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+/*
+ * Das Zeichen der Gruppe, klein, neben dem Namen.
+ *
+ * Es steht auf dem Wartebild gross – hier ist es nur noch die Bestätigung,
+ * dass man beim Richtigen gelandet ist. Gross wäre es ein Bild, das mit den
+ * Nachrichten um den Platz ringt.
+ */
+.verlauf-marke {
+  width: 4.5vw;
+  max-width: 72px;
+  height: auto;
+  flex: 0 0 auto;
+}
+
+.verlauf-titel {
+  margin: 0;
+  font-size: 2.6vw;
+  font-weight: 700;
+  flex: 1 1 auto;
+  /* Ein langer Gruppenname darf den Kopf nicht zweizeilig machen. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.verlauf-seite {
+  font-size: 1.5vw;
+  opacity: 0.6;
+  flex: 0 0 auto;
+}
+
+.verlauf-liste {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 1.4vh;
+  /*
+   * Überlaufen statt schrumpfen.
+   *
+   * Zwölf Nachrichten passen in aller Regel; eine mit einem langen Text
+   * sprengt es. Dann lieber oben abschneiden und das Neueste zeigen (siehe
+   * `verlaufZeichnen`) als alles so klein machen, dass niemand mehr mitliest.
+   */
+  overflow: hidden;
+}
+
+.verlauf-zeile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 78%;
+}
+
+/* Eigene Nachrichten rechts – wie in der App, damit es sich gleich liest. */
+.verlauf-zeile.ist-eigen {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.verlauf-wer {
+  display: flex;
+  align-items: baseline;
+  gap: 0.8vw;
+  margin-bottom: 0.4vh;
+  font-size: 1.25vw;
+}
+
+.verlauf-name {
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.verlauf-zeit {
+  opacity: 0.5;
+}
+
+.verlauf-blase {
+  padding: 1.1vh 1.6vw;
+  border-radius: 1.6vw;
+  background: #1c2647;
+  max-width: 100%;
+}
+
+.verlauf-zeile.ist-eigen .verlauf-blase {
+  background: #2a3f7a;
+}
+
+.verlauf-text {
+  margin: 0;
+  font-size: 1.7vw;
+  line-height: 1.4;
+  /*
+   * Lange Wörter umbrechen.
+   *
+   * Eine Adresse ohne Leerzeichen schöbe die Blase sonst über den Bildrand
+   * hinaus – und ein Fernseher hat keinen waagerechten Rollbalken, mit dem
+   * man ihr folgen könnte.
+   */
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* „Foto", „Umfrage" – kein Text, sondern die Auskunft, dass etwas da ist. */
+.verlauf-text.ist-ersatz {
+  opacity: 0.65;
+  font-style: italic;
+}
+
+.verlauf-bild {
+  display: block;
+  max-width: 100%;
+  max-height: 22vh;
+  border-radius: 1vw;
+  margin-bottom: 0.8vh;
+  object-fit: contain;
+}

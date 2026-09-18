@@ -221,6 +221,11 @@ impl Probe {
     }
 
     async fn anmelden(&self, was: &str) -> String {
+        self.anmelden_mit_id(was, "Fernseh Test").await.0
+    }
+
+    /// Dasselbe, aber mit Kennung und Anzeigename – für Chats braucht es beides.
+    async fn anmelden_mit_id(&self, was: &str, anzeige: &str) -> (String, String) {
         let kennung = Uuid::now_v7().simple().to_string();
         let name = format!("{was}{}", &kennung[kennung.len() - 12..]);
         let (status, konto) = self
@@ -230,13 +235,56 @@ impl Probe {
                 None,
                 Some(json!({
                     "username": &name,
-                    "displayName": "Fernseh Test",
+                    "displayName": anzeige,
                     "password": "richtigespasswort",
                 })),
             )
             .await;
         assert_eq!(status, StatusCode::CREATED, "{konto}");
-        konto["accessToken"].as_str().expect("Token").to_string()
+        (
+            konto["accessToken"].as_str().expect("Token").to_string(),
+            konto["user"]["id"].as_str().expect("Kennung").to_string(),
+        )
+    }
+
+    /// Ein Gespräch anlegen und seine Kennung zurückgeben.
+    async fn gespraech(&self, token: &str, mit: &[&str], titel: Option<&str>) -> String {
+        let mut koerper = json!({
+            "type": if titel.is_some() { "group" } else { "direct" },
+            "memberIds": mit,
+        });
+        if let Some(titel) = titel {
+            koerper["title"] = json!(titel);
+        }
+        let (status, chat) = self
+            .call("POST", "/api/v1/conversations", Some(token), Some(koerper))
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{chat}");
+        chat["id"].as_str().expect("Kennung").to_string()
+    }
+
+    /// Eine Textnachricht schicken und ihre Kennung zurückgeben.
+    async fn schreiben(&self, token: &str, gespraech: &str, text: &str) -> String {
+        let (status, nachricht) = self
+            .call(
+                "POST",
+                &format!("/api/v1/conversations/{gespraech}/messages"),
+                Some(token),
+                Some(json!({ "type": "text", "body": text })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{nachricht}");
+        nachricht["id"].as_str().expect("Kennung").to_string()
+    }
+
+    /// Einen Fernseher anmelden: Code und Geheimnis.
+    async fn fernseher(&self) -> (String, String) {
+        let (status, sitzung) = self.ohne_konto("POST", "/api/v1/tv/sitzungen").await;
+        assert_eq!(status, StatusCode::CREATED, "{sitzung}");
+        (
+            sitzung["code"].as_str().expect("Code").to_string(),
+            sitzung["geheim"].as_str().expect("Geheimnis").to_string(),
+        )
     }
 }
 
@@ -982,5 +1030,386 @@ async fn ein_miniaturbild_kostet_ein_paar_kilobyte_und_haelt_dieselbe_tuer_zu() 
         status,
         StatusCode::NOT_FOUND,
         "ein Video bekam ein Miniaturbild"
+    );
+}
+
+/* ---------- Der Chat auf dem Fernseher ---------- */
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ein_chat_kommt_auf_den_fernseher() {
+    /*
+     * Der Wunsch war „die gesamte App auf dem Fernseher spiegeln, um bspw.
+     * auch Chats zu zeigen". Pixel-Spiegeln kann eine Web-App nicht (die
+     * Belege stehen in docs/FEATURES.md); was geht, ist eine zweite ANSICHT,
+     * vom Telefon ferngesteuert – derselbe Code, dieselbe Sitzung, dieselbe
+     * Fernbedienung wie bei der Diashow, nur eine andere Art von Programm.
+     *
+     * Dieser Test geht den ganzen Weg: anmelden, einstellen, abholen – und
+     * prüft die eine Sache, die eine Diashow nicht hat und ein Chat braucht:
+     * dass der Fernseher MERKT, wenn jemand schreibt.
+     */
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL fehlt – übersprungen");
+        return;
+    };
+    let (anna, _) = probe.anmelden_mit_id("chatanna", "Anna").await;
+    let (bert, bert_id) = probe.anmelden_mit_id("chatbert", "Bert").await;
+    let chat = probe.gespraech(&anna, &[&bert_id], None).await;
+    probe.schreiben(&anna, &chat, "Kommt ihr heute?").await;
+    probe.schreiben(&bert, &chat, "Bin um acht da").await;
+
+    let (code, geheim) = probe.fernseher().await;
+
+    // --- Das Telefon stellt den Chat ein ----------------------------------
+    let (status, antwort) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/tv/sitzungen/{code}/programm"),
+            Some(&anna),
+            Some(json!({ "conversationId": chat })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+    assert_eq!(antwort["art"], json!("chat"));
+
+    // --- Und der Fernseher holt ihn ab ------------------------------------
+    let (status, programm) = probe
+        .ohne_konto(
+            "GET",
+            &format!("/api/v1/tv/sitzungen/{code}/programm?geheim={geheim}"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{programm}");
+    assert_eq!(programm["art"], json!("chat"));
+    /*
+     * Der Name steht auf dem Schirm, BEVOR die erste Nachricht kommt.
+     *
+     * Ein Zweiergespräch hat keinen Titel – sein Name ist „die andere
+     * Person", und die ist je nach Blickrichtung eine andere. Aus Annas Sicht
+     * heisst der Chat also „Bert". Das ist nicht Beiwerk: Ein vertippter Code
+     * trifft mit sehr kleiner Wahrscheinlichkeit eine fremde Sitzung, und bei
+     * Nachrichten wäre das ein Leck in eine fremde Wohnung. Wer den Namen
+     * liest, merkt es.
+     */
+    assert_eq!(programm["titel"], json!("Bert"));
+
+    let nachrichten = programm["nachrichten"].as_array().expect("Nachrichten");
+    assert_eq!(nachrichten.len(), 2, "{programm}");
+    // Von oben nach unten wie im Chat: die älteste zuerst.
+    assert_eq!(nachrichten[0]["text"], json!("Kommt ihr heute?"));
+    assert_eq!(nachrichten[1]["text"], json!("Bin um acht da"));
+    assert_eq!(nachrichten[0]["absender"], json!("Anna"));
+    assert_eq!(nachrichten[1]["absender"], json!("Bert"));
+    // Aus Sicht des Besitzers der Sitzung – daran hängt die Seite, auf der
+    // eine Blase steht.
+    assert_eq!(nachrichten[0]["eigen"], json!(true));
+    assert_eq!(nachrichten[1]["eigen"], json!(false));
+
+    /*
+     * --- Der Kern: Der Fernseher merkt, dass jemand geschrieben hat -------
+     *
+     * `fassung` steigt nur, wenn jemand die SITZUNG ändert. Eine neue
+     * Nachricht tut das nicht. Ohne eine eigene Ableitung bliebe der
+     * Fernseher auf dem Stand vom Einstellen stehen – lautlos, ohne Fehler,
+     * und niemand käme auf die Idee, die Sitzung zu verdächtigen.
+     */
+    let (status, vorher) = probe
+        .ohne_konto(
+            "GET",
+            &format!("/api/v1/tv/sitzungen/{code}/stand?geheim={geheim}"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{vorher}");
+    assert_eq!(vorher["art"], json!("chat"));
+    assert_eq!(vorher["verbunden"], json!(true));
+
+    probe.schreiben(&bert, &chat, "Bring ich was mit?").await;
+
+    let (_, nachher) = probe
+        .ohne_konto(
+            "GET",
+            &format!("/api/v1/tv/sitzungen/{code}/stand?geheim={geheim}"),
+        )
+        .await;
+    assert_ne!(
+        vorher["marke"], nachher["marke"],
+        "der Fernseher hat nicht gemerkt, dass eine Nachricht dazugekommen ist"
+    );
+    assert_eq!(
+        vorher["fassung"], nachher["fassung"],
+        "eine neue Nachricht ändert die SITZUNG nicht – nur, was auf dem Schirm steht"
+    );
+
+    /*
+     * --- Und die Fernbedienung findet auch einen Chat --------------------
+     *
+     * `meine` verlangte einmal `jsonb_array_length(stuecke) > 0`. Ein Chat
+     * HAT keine Stücke – mit der alten Bedingung wäre seine Fernbedienung
+     * nicht zurückzuholen gewesen, also genau der Fehler, den diese Route
+     * behoben hat, noch einmal.
+     */
+    let (status, meine) = probe
+        .call("GET", "/api/v1/tv/meine", Some(&anna), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{meine}");
+    let laufend = meine["items"].as_array().expect("Liste");
+    assert_eq!(laufend.len(), 1, "{meine}");
+    assert_eq!(laufend[0]["art"], json!("chat"));
+    assert_eq!(laufend[0]["gespraechId"], json!(chat));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ein_fremder_chat_kommt_nicht_auf_den_fernseher() {
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL fehlt – übersprungen");
+        return;
+    };
+    let (anna, _) = probe.anmelden_mit_id("fremdanna", "Anna").await;
+    let (bert, bert_id) = probe.anmelden_mit_id("fremdbert", "Bert").await;
+    let (clara, _) = probe.anmelden_mit_id("fremdclara", "Clara").await;
+    let chat = probe.gespraech(&anna, &[&bert_id], None).await;
+    probe.schreiben(&bert, &chat, "unter uns").await;
+
+    let (code, geheim) = probe.fernseher().await;
+    let (status, antwort) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/tv/sitzungen/{code}/programm"),
+            Some(&clara),
+            Some(json!({ "conversationId": chat })),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "ein fremdes Gespräch ist auf einen Fernseher gekommen: {antwort}"
+    );
+
+    // Und der Fernseher hat auch nichts zu holen.
+    let (status, _) = probe
+        .ohne_konto(
+            "GET",
+            &format!("/api/v1/tv/sitzungen/{code}/programm?geheim={geheim}"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn wer_die_gruppe_verlaesst_dessen_fernseher_geht_dunkel() {
+    /*
+     * Der Unterschied zur Diashow, und der wichtigste Satz dieses Weges.
+     *
+     * Bei Fotos wird EINMAL beim Einstellen geprüft und die Liste eingefroren
+     * – die Begründung steht in Migration 0017, und sie ist dort richtig. Ein
+     * Gesprächsverlauf ist aber nichts, was man einfriert: Er wächst weiter,
+     * und mit ihm wüchse ein Fernseher, der einer Person gehört, die längst
+     * nicht mehr dabei ist.
+     *
+     * Deshalb wird hier bei JEDEM Abruf geprüft. Das ist strenger als der
+     * Fotoweg und kostet nichts.
+     */
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL fehlt – übersprungen");
+        return;
+    };
+    let (anna, anna_id) = probe.anmelden_mit_id("raus_anna", "Anna").await;
+    let (bert, bert_id) = probe.anmelden_mit_id("raus_bert", "Bert").await;
+    let chat = probe
+        .gespraech(&anna, &[&bert_id], Some("Wir für Bier"))
+        .await;
+    probe.schreiben(&anna, &chat, "Prost").await;
+
+    let (code, geheim) = probe.fernseher().await;
+    let (status, _) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/tv/sitzungen/{code}/programm"),
+            Some(&bert),
+            Some(json!({ "conversationId": chat })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Solange er dabei ist, läuft es – und die Gruppe heisst, wie sie heisst.
+    let (status, programm) = probe
+        .ohne_konto(
+            "GET",
+            &format!("/api/v1/tv/sitzungen/{code}/programm?geheim={geheim}"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{programm}");
+    assert_eq!(programm["titel"], json!("Wir für Bier"));
+
+    // Anna wirft Bert aus der Gruppe.
+    let (status, raus) = probe
+        .call(
+            "DELETE",
+            &format!("/api/v1/conversations/{chat}/members/{bert_id}"),
+            Some(&anna),
+            None,
+        )
+        .await;
+    assert!(
+        status.is_success(),
+        "das Entfernen ging nicht: {status} {raus}"
+    );
+    let _ = anna_id;
+
+    // Und in derselben Sekunde ist der Fernseher dunkel.
+    let (status, antwort) = probe
+        .ohne_konto(
+            "GET",
+            &format!("/api/v1/tv/sitzungen/{code}/programm?geheim={geheim}"),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "der Fernseher zeigt den Chat einer Person weiter, die nicht mehr dabei ist: {antwort}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn geloeschte_nachrichten_bleiben_vom_schirm() {
+    /*
+     * Die Filter müssen mitwandern. Der Fernseher fragt niemanden – was
+     * einmal in der Antwort steht, steht auf dem Schirm, vier Meter breit, im
+     * Wohnzimmer, vor Gästen.
+     *
+     * Die App zeigt für eine zurückgenommene Nachricht einen Platzhalter. Auf
+     * dem Fernseher wäre eine Reihe von „Nachricht gelöscht" nur Rauschen
+     * zwischen dem, was zählt – und im schlimmsten Fall die Einladung,
+     * nachzufragen, was da stand.
+     */
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL fehlt – übersprungen");
+        return;
+    };
+    let (anna, _) = probe.anmelden_mit_id("weganna", "Anna").await;
+    let (bert, bert_id) = probe.anmelden_mit_id("wegbert", "Bert").await;
+    let chat = probe.gespraech(&anna, &[&bert_id], None).await;
+    let peinlich = probe.schreiben(&anna, &chat, "das war peinlich").await;
+    probe.schreiben(&bert, &chat, "alles gut").await;
+
+    let (code, geheim) = probe.fernseher().await;
+    probe
+        .call(
+            "POST",
+            &format!("/api/v1/tv/sitzungen/{code}/programm"),
+            Some(&anna),
+            Some(json!({ "conversationId": chat })),
+        )
+        .await;
+
+    let (status, weg) = probe
+        .call(
+            "DELETE",
+            &format!("/api/v1/messages/{peinlich}"),
+            Some(&anna),
+            None,
+        )
+        .await;
+    assert!(status.is_success(), "{status} {weg}");
+
+    let (status, programm) = probe
+        .ohne_konto(
+            "GET",
+            &format!("/api/v1/tv/sitzungen/{code}/programm?geheim={geheim}"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{programm}");
+    let nachrichten = programm["nachrichten"].as_array().expect("Nachrichten");
+    assert_eq!(nachrichten.len(), 1, "{programm}");
+    assert_eq!(nachrichten[0]["text"], json!("alles gut"));
+    assert!(
+        !programm.to_string().contains("das war peinlich"),
+        "eine zurückgenommene Nachricht steht auf dem Fernseher: {programm}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ein_chat_und_bilder_zusammen_geht_nicht() {
+    /*
+     * „Diashow UND Chat" wäre ein dritter Zustand, den jemand auf dem
+     * Fernseher anzeigen, auf dem Telefon steuern und in der Datenbank prüfen
+     * müsste – und es gibt keinen Wunsch dahinter. Die Absage steht in der
+     * Bedingung von Migration 0021; hier steht sie als Satz, den ein Mensch
+     * liest.
+     */
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL fehlt – übersprungen");
+        return;
+    };
+    let (anna, _) = probe.anmelden_mit_id("beidesanna", "Anna").await;
+    let (_, bert_id) = probe.anmelden_mit_id("beidesbert", "Bert").await;
+    let chat = probe.gespraech(&anna, &[&bert_id], None).await;
+    let bild = probe.hochladen_bild(&anna, "eins.jpg").await;
+
+    let (code, _) = probe.fernseher().await;
+    let (status, antwort) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/tv/sitzungen/{code}/programm"),
+            Some(&anna),
+            Some(json!({ "conversationId": chat, "attachmentIds": [bild] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{antwort}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nach_einem_chat_laeuft_wieder_eine_diashow() {
+    /*
+     * Derselbe Fernseher, dasselbe Blatt, ein anderes Programm.
+     *
+     * Die Bedingung in Migration 0021 lässt `art = 'chat'` nur mit einem
+     * Gespräch zu und `art = 'diashow'` nur ohne. Wer beim Umstellen auf eine
+     * Diashow `art` und `gespraech_id` stehen liesse, bekäme einen Fehler aus
+     * der Datenbank – und der Anwender einen Fernseher, der beim zweiten
+     * Programm nicht mehr mitmacht.
+     */
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL fehlt – übersprungen");
+        return;
+    };
+    let (anna, _) = probe.anmelden_mit_id("zurueckanna", "Anna").await;
+    let (_, bert_id) = probe.anmelden_mit_id("zurueckbert", "Bert").await;
+    let chat = probe.gespraech(&anna, &[&bert_id], None).await;
+    probe.schreiben(&anna, &chat, "hallo").await;
+    let bild = probe.hochladen_bild(&anna, "eins.jpg").await;
+
+    let (code, geheim) = probe.fernseher().await;
+    let (status, _) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/tv/sitzungen/{code}/programm"),
+            Some(&anna),
+            Some(json!({ "conversationId": chat })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, antwort) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/tv/sitzungen/{code}/programm"),
+            Some(&anna),
+            Some(json!({ "attachmentIds": [bild] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+
+    let (status, programm) = probe
+        .ohne_konto(
+            "GET",
+            &format!("/api/v1/tv/sitzungen/{code}/programm?geheim={geheim}"),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{programm}");
+    assert_eq!(programm["stuecke"].as_array().expect("Stücke").len(), 1);
+    assert!(
+        programm["nachrichten"].is_null(),
+        "nach dem Umstellen standen noch Nachrichten im Programm: {programm}"
     );
 }

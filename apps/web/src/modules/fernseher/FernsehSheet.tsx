@@ -29,6 +29,7 @@ export function FernsehSheet({
   onClose,
   collection,
   attachmentIds,
+  gespraech,
   titel,
   sekundenVorgabe,
 }: {
@@ -38,6 +39,16 @@ export function FernsehSheet({
   collection?: CollectionDto;
   /** Oder eine Handvoll einzelner Dateien. */
   attachmentIds?: string[];
+  /**
+   * Oder ein Gespräch – dann zeigt der Fernseher den Verlauf statt Bilder.
+   *
+   * Das ist die ehrliche Fassung von „die App auf dem Fernseher spiegeln":
+   * Pixel zu spiegeln kann eine Web-App nicht (die Belege stehen in
+   * `docs/FEATURES.md`), eine zweite ANSICHT zu zeigen schon – und die ist in
+   * Wahrheit besser: aus vier Metern lesbar statt eine geschrumpfte
+   * Telefonoberfläche.
+   */
+  gespraech?: { id: string; name: string };
   titel?: string;
   /** Wie lange ein Foto stehen soll, wenn der Aufrufer eine Meinung hat. */
   sekundenVorgabe?: number;
@@ -62,6 +73,8 @@ export function FernsehSheet({
   /** Wo die Diashow gerade steht – die Fernbedienung rechnet von hier aus weiter. */
   const [stelle, setStelle] = useState(0);
   const [pause, setPause] = useState(false);
+  /** Ob die Rückfrage vor einem Chat schon beantwortet ist – siehe `starten`. */
+  const [sicher, setSicher] = useState(false);
 
   /*
    * Beim Öffnen nachsehen, ob schon etwas läuft.
@@ -72,6 +85,9 @@ export function FernsehSheet({
   useEffect(() => {
     if (!open) {
       setBusy(false);
+      // Eine halb beantwortete Rückfrage darf ein zweites Öffnen nicht
+      // überleben – sonst startete der nächste Druck sofort.
+      setSicher(false);
       return;
     }
     void useFernseher.getState().nachsehen();
@@ -90,16 +106,42 @@ export function FernsehSheet({
       toast('Der Code vom Fernseher fehlt noch.', 'error');
       return;
     }
+    /*
+     * Bei einem Chat wird EINMAL nachgefragt – bei Fotos nie.
+     *
+     * Der Code ist acht Zeichen aus vierundzwanzig, also gut 2^36; ein
+     * Fehlgriff, der zufällig eine andere laufende Sitzung trifft, ist sehr
+     * unwahrscheinlich. Bei Urlaubsfotos wäre so ein Treffer peinlich. Bei
+     * Nachrichten ist er ein Datenleck in eine fremde Wohnung, und dafür ist
+     * „sehr unwahrscheinlich" die falsche Grössenordnung.
+     *
+     * Deshalb steht der Name des Gesprächs auch auf dem Fernseher, bevor die
+     * erste Nachricht kommt: Wer hier bestätigt und dort etwas anderes liest,
+     * merkt es sofort.
+     *
+     * Zweimal DERSELBE Knopf und kein `confirm()` – so hält es diese App auch
+     * beim Verlassen eines Chats und beim Löschen für alle. Der native Kasten
+     * hält den Hauptfaden an, sieht auf jedem Gerät anders aus, und manche
+     * App-interne Browser unterdrücken ihn ganz. Dann wäre die Rückfrage
+     * genau dort still, wo sie gebraucht wird.
+     */
+    if (gespraech && !sicher) {
+      setSicher(true);
+      return;
+    }
     setBusy(true);
     try {
       const antwort = await api.tv.einstellen(sauber, {
         collectionId: collection?.id,
-        attachmentIds: collection ? undefined : attachmentIds,
+        attachmentIds: collection || gespraech ? undefined : attachmentIds,
+        conversationId: gespraech?.id,
         modus,
         sekunden,
       });
       merken({
         code: antwort.code,
+        art: gespraech ? 'chat' : 'diashow',
+        gespraechId: gespraech?.id ?? null,
         stueckzahl: antwort.stueckzahl,
         stelle: 0,
         pausiert: false,
@@ -107,7 +149,12 @@ export function FernsehSheet({
         sekunden,
         gesehenVorSekunden: 0,
       });
-      toast(`Läuft auf dem Fernseher – ${antwort.stueckzahl} Stück.`, 'success');
+      toast(
+        gespraech
+          ? `„${gespraech.name}" läuft auf dem Fernseher.`
+          : `Läuft auf dem Fernseher – ${antwort.stueckzahl} Stück.`,
+        'success',
+      );
     } catch (fehler) {
       toast(
         errorMessage(fehler, 'Der Code passt nicht. Steht er noch so auf dem Fernseher?'),
@@ -115,6 +162,27 @@ export function FernsehSheet({
       );
     } finally {
       setBusy(false);
+    }
+  };
+
+  /**
+   * Läuft dort ein Chat?
+   *
+   * Aus der laufenden Sitzung, nicht aus der Eigenschaft `gespraech`: Der
+   * Balken am unteren Rand holt dieses Blatt zurück, ohne zu wissen, was
+   * eingestellt wurde – er kennt nur den Code. Aus der Eigenschaft gelesen
+   * zeigte er dann die Knöpfe einer Diashow für einen Chat.
+   */
+  const istChat = laeuft?.art === 'chat';
+
+  /** Zurück zum Neuesten – die Seite null. */
+  const zumNeuesten = async () => {
+    if (!laeuft) return;
+    try {
+      const jetzt = await api.tv.steuern(laeuft.code, { stelle: 0 });
+      setStelle(jetzt.stelle);
+    } catch (fehler) {
+      toast(errorMessage(fehler, 'Der Fernseher antwortet nicht mehr.'), 'error');
     }
   };
 
@@ -167,20 +235,60 @@ export function FernsehSheet({
       {laeuft ? (
         <div className="tv-fern">
           <p className="tv-zeile">
-            {laeuft.stueckzahl} {laeuft.stueckzahl === 1 ? 'Stück' : 'Stücke'} · Code{' '}
-            <strong>{laeuft.code}</strong>
+            {istChat
+              ? 'Der Chat läuft auf dem Fernseher'
+              : `${laeuft.stueckzahl} ${laeuft.stueckzahl === 1 ? 'Stück' : 'Stücke'}`}{' '}
+            · Code <strong>{laeuft.code}</strong>
           </p>
+          {/*
+              Dieselben drei Knöpfe, eine andere Bedeutung.
+
+              Bei der Diashow ist die Stelle die Nummer des Bildes; bei einem
+              Chat die SEITE im Verlauf, zwölf Nachrichten je Seite. Und die
+              Pause dazwischen gibt es beim Chat nicht – da läuft nichts
+              weiter, was sich anhalten liesse. An ihrer Stelle steht der Weg
+              zurück zum Neuesten: Wer drei Seiten zurückgeblättert hat, will
+              nicht dreimal „weiter" drücken.
+
+              „Zurück" heisst beim Chat WEITER ZURÜCK im Verlauf, also eine
+              höhere Stelle. Das Vorzeichen dreht sich, die Beschriftung
+              nicht – ‹ zeigt in beiden Fällen dorthin, wo man herkommt.
+          */}
           <div className="tv-tasten">
-            <button type="button" className="btn" onClick={() => void springen(-1)}>
-              ‹ Zurück
+            <button type="button" className="btn" onClick={() => void springen(istChat ? 1 : -1)}>
+              ‹ {istChat ? 'Früher' : 'Zurück'}
             </button>
-            <button type="button" className="btn" onClick={() => void pausieren()}>
-              {pause ? '▶ Weiter' : '⏸ Pause'}
-            </button>
-            <button type="button" className="btn" onClick={() => void springen(1)}>
-              Weiter ›
+            {istChat ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => void zumNeuesten()}
+                disabled={stelle === 0}
+              >
+                ⤓ Neueste
+              </button>
+            ) : (
+              <button type="button" className="btn" onClick={() => void pausieren()}>
+                {pause ? '▶ Weiter' : '⏸ Pause'}
+              </button>
+            )}
+            <button type="button" className="btn" onClick={() => void springen(istChat ? -1 : 1)}>
+              {istChat ? 'Später' : 'Weiter'} ›
             </button>
           </div>
+          {istChat && (
+            /*
+             * Die Frist gehört auf den Schirm, nicht in eine Fussnote.
+             *
+             * Ein Chat fällt nach einer halben Stunde ohne Lebenszeichen vom
+             * Fernseher. Wer das nicht weiss, hält es für einen Fehler – und
+             * wer es weiss, versteht, warum er nichts tun muss, wenn er geht.
+             */
+            <p className="tv-hinweis">
+              Der Fernseher zeigt nur die letzten Nachrichten und hört von selbst auf, wenn eine
+              halbe Stunde lang niemand schreibt oder blättert.
+            </p>
+          )}
           <button type="button" className="btn btn-danger btn-block" onClick={() => void beenden()}>
             Beenden
           </button>
@@ -198,8 +306,9 @@ export function FernsehSheet({
             Fernseher selbst (`src/tv/tv.ts`), nicht von hier aus.
           */}
           <p className="tv-zeile">
-            Für jeden Fernseher mit Browser – auch ohne Chromecast. Fotos in voller Grösse, und die
-            Diashow läuft weiter, wenn das Telefon in der Tasche steckt.
+            {gespraech
+              ? `„${gespraech.name}" gross auf dem Fernseher – auf jedem Gerät mit Browser, ohne Chromecast und ohne App.`
+              : 'Für jeden Fernseher mit Browser – auch ohne Chromecast. Fotos in voller Grösse, und die Diashow läuft weiter, wenn das Telefon in der Tasche steckt.'}
           </p>
           <ol className="tv-schritte">
             <li>
@@ -223,55 +332,80 @@ export function FernsehSheet({
             />
           </label>
 
-          <fieldset className="tv-wahl">
-            <legend>Reihenfolge</legend>
-            <label>
-              <input
-                type="radio"
-                name="tv-modus"
-                checked={modus === 'linear'}
-                onChange={() => setModus('linear')}
-              />
-              Der Reihe nach
-            </label>
-            <label>
-              <input
-                type="radio"
-                name="tv-modus"
-                checked={modus === 'zufall'}
-                onChange={() => setModus('zufall')}
-              />
-              Gemischt
-            </label>
-          </fieldset>
-
-          <label className="feld">
-            <span>Ein Foto steht {sekunden} Sekunden</span>
-            <input
-              type="range"
-              min={2}
-              max={30}
-              step={1}
-              value={sekunden}
-              onChange={(ereignis) => setSekunden(Number(ereignis.target.value))}
-            />
-          </label>
           {/*
-           * Videos laufen ganz durch, egal was hier steht. Ein Video nach
-           * sechs Sekunden abzuschneiden, weil das die Diashow-Zeit ist, wäre
-           * die schlechtere Voreinstellung – und ohne diesen Satz hielte man
-           * es für einen Fehler.
-           */}
-          <p className="tv-hinweis">Videos laufen immer ganz durch.</p>
+              Reihenfolge und Standzeit gibt es beim Chat nicht.
+
+              Ein Gesprächsverlauf hat eine Reihenfolge – seine eigene –, und
+              „gemischt" wäre dafür kein Wunsch, sondern ein Fehler. Die
+              Standzeit ebenso: Es taktet nichts weiter, es steht, bis jemand
+              schreibt. Beides abgeblendet stehen zu lassen wäre schlechter als
+              es wegzulassen; ein grauer Regler lädt zum Ziehen ein.
+          */}
+          {!gespraech && (
+            <>
+              <fieldset className="tv-wahl">
+                <legend>Reihenfolge</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="tv-modus"
+                    checked={modus === 'linear'}
+                    onChange={() => setModus('linear')}
+                  />
+                  Der Reihe nach
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="tv-modus"
+                    checked={modus === 'zufall'}
+                    onChange={() => setModus('zufall')}
+                  />
+                  Gemischt
+                </label>
+              </fieldset>
+
+              <label className="feld">
+                <span>Ein Foto steht {sekunden} Sekunden</span>
+                <input
+                  type="range"
+                  min={2}
+                  max={30}
+                  step={1}
+                  value={sekunden}
+                  onChange={(ereignis) => setSekunden(Number(ereignis.target.value))}
+                />
+              </label>
+              {/*
+               * Videos laufen ganz durch, egal was hier steht. Ein Video nach
+               * sechs Sekunden abzuschneiden, weil das die Diashow-Zeit ist, wäre
+               * die schlechtere Voreinstellung – und ohne diesen Satz hielte man
+               * es für einen Fehler.
+               */}
+              <p className="tv-hinweis">Videos laufen immer ganz durch.</p>
+            </>
+          )}
+          {gespraech && (
+            <p className="tv-hinweis">
+              Der Fernseher zeigt die letzten Nachrichten und hört von selbst auf, wenn eine halbe
+              Stunde lang niemand schreibt oder blättert. Wer den Chat verlässt, dessen Fernseher
+              geht sofort aus.
+            </p>
+          )}
 
           <button
             type="button"
-            className="btn btn-primary btn-block"
+            className={`btn btn-block ${sicher ? 'btn-danger' : 'btn-primary'}`}
             disabled={busy}
             onClick={() => void starten()}
           >
-            {busy ? 'Wird gestartet …' : 'Starten'}
+            {busy
+              ? 'Wird gestartet …'
+              : sicher
+                ? `„${gespraech?.name}" wirklich zeigen?`
+                : 'Starten'}
           </button>
+          {sicher && <p className="tv-hinweis">Jeder im Raum kann den Verlauf dann mitlesen.</p>}
         </div>
       )}
     </Sheet>

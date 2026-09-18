@@ -92,12 +92,23 @@ export function FernsehBalken() {
     <>
       <div className="tv-balken">
         <span className="tv-balken-text">
-          <span aria-hidden="true">📺</span> Läuft auf dem Fernseher
-          <span className="tv-balken-klein">
-            {' '}
-            · {laufend.stueckzahl} {laufend.stueckzahl === 1 ? 'Stück' : 'Stücke'}
-            {laufend.pausiert && ' · pausiert'}
-          </span>
+          <span aria-hidden="true">📺</span>{' '}
+          {laufend.art === 'chat' ? 'Chat auf dem Fernseher' : 'Läuft auf dem Fernseher'}
+          {/*
+              Bei einem Chat steht hier KEINE Stückzahl.
+
+              Er hat keine – seine Liste steht nicht in der Sitzung, sondern
+              wird bei jedem Abruf frisch geholt. „0 Stücke" hätte da gestanden,
+              und das liest sich wie ein Fehler statt wie eine andere Art von
+              Programm.
+          */}
+          {laufend.art !== 'chat' && (
+            <span className="tv-balken-klein">
+              {' '}
+              · {laufend.stueckzahl} {laufend.stueckzahl === 1 ? 'Stück' : 'Stücke'}
+              {laufend.pausiert && ' · pausiert'}
+            </span>
+          )}
         </span>
         <button
           type="button"

@@ -28,6 +28,7 @@
  */
 
 import { reihenfolge } from './mischen.js';
+import { verlaufZeichnen, type ChatProgramm } from './chat.js';
 
 const API = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');
 const WURZEL = `${API}/api/v1/tv/sitzungen`;
@@ -45,7 +46,8 @@ interface Stueck {
 }
 
 interface Programm {
-  fassung: number;
+  art?: string;
+  marke: string;
   modus: string;
   saat: number;
   sekunden: number;
@@ -63,10 +65,27 @@ const hinweisFeld = document.getElementById('hinweis') as HTMLElement;
 const bildA = document.getElementById('bildA') as HTMLImageElement;
 const bildB = document.getElementById('bildB') as HTMLImageElement;
 const film = document.getElementById('film') as HTMLVideoElement;
+const verlauf = document.getElementById('verlauf') as HTMLElement;
+const verlaufListe = document.getElementById('verlauf-liste') as HTMLElement;
+const verlaufTitel = document.getElementById('verlauf-titel') as HTMLElement;
+const verlaufSeite = document.getElementById('verlauf-seite') as HTMLElement;
 
 let code = '';
 let geheim = '';
-let fassung = -1;
+/*
+ * Woran der Fernseher merkt, dass sich etwas getan hat.
+ *
+ * Eine Zeichenkette und keine Zahl – und das ist der Unterschied zwischen
+ * Diashow und Chat. Bei einer Diashow ist es die Fassungsnummer der Sitzung;
+ * die steigt, wenn jemand am Telefon blättert. Bei einem Chat steckt darin
+ * zusätzlich ein Abdruck der sichtbaren Nachrichten, denn eine NEUE Nachricht
+ * ändert die Sitzung nicht. Ohne das bliebe der Fernseher auf dem Stand vom
+ * Einstellen stehen – lautlos, ohne Fehler.
+ *
+ * Verglichen wird nur auf Gleichheit, nie auf grösser. Deshalb darf hier auch
+ * etwas stehen, das keine Ordnung hat.
+ */
+let marke = '';
 let programm: Programm | null = null;
 let folge: number[] = [];
 let stelle = 0;
@@ -168,27 +187,43 @@ async function nachsehen(): Promise<void> {
   }
 
   if (!stand.verbunden) {
+    /*
+     * „Nicht verbunden" heisst bei einem Chat auch: Die Frist ist um.
+     *
+     * Ein Chat fällt nach einer halben Stunde ohne Lebenszeichen vom Schirm –
+     * ein Fernseher im Wohnzimmer soll Nachrichten nicht stundenlang in ein
+     * leeres Zimmer zeigen. Der Server meldet das als `verbunden: false`, und
+     * hier muss dafür keine zweite Regel stehen: Der Fernseher zeigt wieder
+     * seinen Code, und ein neues Programm läuft sofort.
+     */
     zeigeAnmeldung();
-    fassung = -1;
+    marke = '';
     return;
   }
-  if (Number(stand.fassung) !== fassung) {
+  if (String(stand.marke ?? '') !== marke) {
     await programmHolen();
   }
 }
 
 async function programmHolen(): Promise<void> {
   try {
-    const neu = (await holen(
-      `${WURZEL}/${code}/programm?geheim=${encodeURIComponent(geheim)}`,
-    )) as unknown as Programm;
+    const roh = await holen(`${WURZEL}/${code}/programm?geheim=${encodeURIComponent(geheim)}`);
+    if (roh.art === 'chat') {
+      const chat = roh as unknown as ChatProgramm;
+      programm = null;
+      marke = chat.marke;
+      zeigeVerlauf();
+      verlaufZeichnen(verlaufListe, verlaufTitel, verlaufSeite, chat);
+      return;
+    }
+    const neu = roh as unknown as Programm;
     if (!neu.stuecke || neu.stuecke.length === 0) {
       zeigeAnmeldung();
       return;
     }
     const wechsel = !programm || neu.saat !== programm.saat || neu.modus !== programm.modus;
     programm = neu;
-    fassung = neu.fassung;
+    marke = neu.marke;
     if (wechsel) folge = reihenfolge(neu.stuecke.length, neu.modus, neu.saat);
     stelle = Math.max(0, Math.min(neu.stelle, folge.length - 1));
     pausiert = neu.pausiert;
@@ -208,8 +243,34 @@ function zeigeAnmeldung(): void {
   programm = null;
   anmeldung.hidden = false;
   buehne.hidden = true;
+  verlauf.hidden = true;
+  /*
+   * Die Liste leeren, nicht nur verstecken.
+   *
+   * Ein `hidden`-Abschnitt voller Nachrichten ist immer noch ein Abschnitt
+   * voller Nachrichten: Er steht im Quelltext, er steht im Speicher, und die
+   * nächste Bildschirmaufnahme eines Fernsehers, der zu früh aufwacht, hätte
+   * ihn. Auf einem Gerät, das im Wohnzimmer steht, ist das kein theoretischer
+   * Einwand.
+   */
+  verlaufListe.replaceChildren();
+  verlaufTitel.textContent = '';
   blatt.className = 'warten';
   anhalten();
+}
+
+/** Der Verlauf tritt an die Stelle der Bühne – immer genau einer von beiden. */
+function zeigeVerlauf(): void {
+  if (!buehne.hidden) {
+    film.pause();
+    film.removeAttribute('src');
+    film.load();
+  }
+  anhalten();
+  anmeldung.hidden = true;
+  buehne.hidden = true;
+  verlauf.hidden = false;
+  blatt.className = 'liest';
 }
 
 function zeigeBuehne(): void {

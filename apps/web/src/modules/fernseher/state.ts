@@ -26,6 +26,15 @@ import { api } from '../../lib/api.js';
  */
 export interface LaufendeSitzung {
   code: string;
+  /**
+   * Was auf dem Fernseher läuft.
+   *
+   * Fehlt der Wert, ist es eine Diashow – so sieht eine Antwort aus, die von
+   * einem Server ohne Chat-Programme kommt, und so soll sie sich auch
+   * verhalten.
+   */
+  art?: 'diashow' | 'chat';
+  gespraechId?: string | null;
   stueckzahl: number;
   stelle: number;
   pausiert: boolean;

@@ -51,6 +51,24 @@
         <p id="fehler" class="fehler" hidden></p>
       </section>
 
+      <!--
+        Der Chat als dritter Abschnitt – nicht in der Bühne.
+
+        Die Bühne ist schwarz und randlos gebaut: zwei Bilder übereinander,
+        `object-fit: contain`, kein Platz für irgendetwas daneben. Ein
+        Gesprächsverlauf braucht das Gegenteil – Ränder, Zeilen, einen Kopf
+        mit dem Namen. Zwei Abschnitte, von denen immer genau einer sichtbar
+        ist, sind ehrlicher als ein Abschnitt, der zwei Dinge kann.
+      -->
+      <section id="verlauf" class="verlauf" hidden>
+        <header class="verlauf-kopf">
+          <img class="verlauf-marke" src="/marke/logo@2x.webp" alt="" aria-hidden="true" />
+          <h2 id="verlauf-titel" class="verlauf-titel"></h2>
+          <span id="verlauf-seite" class="verlauf-seite"></span>
+        </header>
+        <ol id="verlauf-liste" class="verlauf-liste"></ol>
+      </section>
+
       <section id="buehne" class="buehne" hidden>
         <img id="bildA" class="bild" alt="" />
         <img id="bildB" class="bild" alt="" />
