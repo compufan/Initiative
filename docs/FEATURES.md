@@ -152,7 +152,7 @@ Startbildschirm legen und funktioniert auch ohne Netz weiter.
 | Video                   | 200 MB         |
 | Sprachnachricht / Audio | 50 MB          |
 | Datei                   | 100 MB         |
-| Sticker                 | 2 MB           |
+| Sticker                 | 4 MB           |
 
 Bis zu 10 Anhänge pro Nachricht.
 
@@ -237,6 +237,46 @@ Rückgängig und Wiederherstellen gelten für alles; ein Zug ist ein Schritt.
   Die grösseren Verfahren sind von Haus aus abgeschaltet, weil sie beim ersten
   Benutzen einen Download kosten; einschalten kann man sie einzeln unter
   Profil → Einstellungen.
+
+### Sticker mit Ton
+
+Ein Sticker darf klingen. Beim Speichern lässt sich eine Tonspur anhängen –
+selbst aufgenommen oder als Datei –, und wer sie im Chat antippt, hört sie.
+
+- **Bis zu acht Sekunden.** Ein Sticker ist eine Geste: angetippt, gesagt,
+  vorbei. Was länger dauert, ist eine Sprachnachricht.
+- **Nie von selbst.** Ein Tipp startet, der nächste hält an, und es klingt
+  immer nur einer – dieselbe Regel wie bei Sprachnachrichten und Videos.
+  (Browser lassen automatisches Abspielen ohnehin nicht zu, und ein Chat mit
+  zwanzig klingenden Stickern wäre auch sonst keine gute Idee.)
+- Ein **🔊** auf der Kachel sagt schon in der Tastatur, dass dieser Sticker
+  einen Ton hat.
+- Ton lässt sich **nachträglich** anhängen, austauschen und wieder entfernen –
+  der Sticker bleibt dabei derselbe.
+
+### Ton zuschneiden und verbiegen
+
+Dieselbe Werkstatt steht an zwei Stellen: beim Sticker und bei der
+**Sprachnachricht**.
+
+- **Ausschnitt wählen** an zwei Griffen auf der Wellenform. Was wegfällt,
+  bleibt blass sichtbar – wer zu weit gezogen hat, sieht es.
+- **✂ Stille weg** findet den Anfang und das Ende von selbst. Es misst die
+  Energie in Zwanzig-Millisekunden-Fenstern und lässt vorn und hinten etwas
+  stehen, damit ein „P" nicht abreisst und ein „s" nicht abgeschnitten wird.
+  Findet es nichts, sagt es das – statt eine leise Aufnahme wegzuschneiden.
+- **Neun Klangprofile**: Ohne, Telefon, Radio, Megafon, Roboter, Tief, Hoch,
+  Halle, Unterwasser.
+- **Fünf Regler**: Tonhöhe (ändert auch das Tempo), Verzerrung, Tiefen, Höhen,
+  Hall.
+- **Vorhören** vor dem Übernehmen, über dieselbe Kette, die danach in die
+  Datei geht.
+
+Gerechnet wird im Gerät, mit den Bausteinen, die jeder Browser mitbringt – es
+wird nichts nachgeladen und nichts verschickt. Wer nichts ändert, verschickt
+die Originalaufnahme unverändert: Bearbeiteter Ton wird unkomprimiert
+gespeichert, deshalb steht die Werkstatt bei Sprachnachrichten nur bis
+neunzig Sekunden zur Verfügung.
 
 - **Pakete** anlegen, umbenennen, Titelbild wählen, löschen.
 - Ein Paket **öffentlich** stellen, damit andere es finden und installieren

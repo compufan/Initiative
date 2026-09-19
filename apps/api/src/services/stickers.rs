@@ -19,6 +19,8 @@ pub fn to_sticker_dto(row: &StickerRow, pack_name: &str, config: &Config) -> Sti
         pack_id: row.pack_id,
         pack_name: pack_name.to_string(),
         url: config.media_url(&row.attachment_id),
+        ton_url: row.ton_attachment_id.map(|id| config.media_url(&id)),
+        ton_dauer_ms: row.ton_dauer_ms,
         emoji: row.emoji.clone(),
         width: row.width,
         height: row.height,
@@ -122,6 +124,35 @@ pub async fn require_pack(state: &AppState, pack_id: Uuid) -> AppResult<StickerP
         .ok_or_else(|| AppError::not_found("Sticker-Paket nicht gefunden"))
 }
 
+/**
+ * Dasselbe fuer die TONSPUR – und hier waere genau das Gegenteil richtig.
+ *
+ * `claim_attachment` schreibt `kind = 'sticker'` fest, und das ist dort
+ * richtig: Ein Sticker-Bild soll nie als gewoehnlicher Anhang durchgehen.
+ * Fuer den Ton waere es ein Fehler mit langer Wirkung. Ein Anhang mit
+ * `kind = 'sticker'` faellt aus der MIME-Pruefung beim Hochladen
+ * (`modules/media.rs`, die Positivliste haengt am `kind`) und aus dem Filter
+ * „Ton" in der Dateiansicht. Die Datei waere danach eine Tondatei, die das
+ * System fuer ein Bild haelt.
+ *
+ * `kind = 'audio'` erbt dagegen alles kostenlos: die erlaubten MIME-Typen,
+ * die Groessengrenze und `darf_angezeigt_werden`.
+ */
+pub async fn claim_ton_attachment(
+    state: &AppState,
+    attachment_id: Uuid,
+) -> AppResult<AttachmentRow> {
+    sqlx::query_as::<_, AttachmentRow>(
+        "update attachments set status = 'ready'
+         where id = $1 and message_id is null and kind = 'audio'
+         returning *",
+    )
+    .bind(attachment_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("Tondatei nicht gefunden"))
+}
+
 /// Attachments backing a sticker must never be reused as chat attachments.
 pub async fn claim_attachment(state: &AppState, attachment_id: Uuid) -> AppResult<AttachmentRow> {
     sqlx::query_as::<_, AttachmentRow>(
@@ -154,8 +185,33 @@ impl MessageExpander for StickerExpander {
         if ids.is_empty() {
             return Ok(HashMap::new());
         }
-        let rows = sqlx::query_as::<_, (Uuid, Uuid, Uuid, Option<String>, i32, i32, chrono::DateTime<chrono::Utc>, String)>(
-            "select s.id, s.pack_id, s.attachment_id, s.emoji, s.width, s.height, s.created_at, p.name
+        /*
+         * Diese Abfrage zaehlt die Spalten EINZELN auf, anders als
+         * `load_pack_dtos` mit seinem `select *`.
+         *
+         * Das ist die Falle dieses Moduls: Wer eine Spalte hinzufuegt und sie
+         * hier vergisst, bekommt keinen Fehler. Der Code uebersetzt weiter,
+         * die Bibliothek zeigt den Ton – und im Gespraech bleibt derselbe
+         * Sticker stumm.
+         */
+        #[allow(clippy::type_complexity)]
+        let rows = sqlx::query_as::<
+            _,
+            (
+                Uuid,
+                Uuid,
+                Uuid,
+                Option<Uuid>,
+                Option<i32>,
+                Option<String>,
+                i32,
+                i32,
+                chrono::DateTime<chrono::Utc>,
+                String,
+            ),
+        >(
+            "select s.id, s.pack_id, s.attachment_id, s.ton_attachment_id, s.ton_dauer_ms,
+                    s.emoji, s.width, s.height, s.created_at, p.name
              from stickers s
              join sticker_packs p on p.id = s.pack_id
              where s.id = any($1)",
@@ -167,7 +223,18 @@ impl MessageExpander for StickerExpander {
         let stickers: HashMap<Uuid, StickerDto> = rows
             .into_iter()
             .map(
-                |(id, pack_id, attachment_id, emoji, width, height, created_at, pack_name)| {
+                |(
+                    id,
+                    pack_id,
+                    attachment_id,
+                    ton_attachment_id,
+                    ton_dauer_ms,
+                    emoji,
+                    width,
+                    height,
+                    created_at,
+                    pack_name,
+                )| {
                     (
                         id,
                         StickerDto {
@@ -175,6 +242,8 @@ impl MessageExpander for StickerExpander {
                             pack_id,
                             pack_name,
                             url: state.config.media_url(&attachment_id),
+                            ton_url: ton_attachment_id.map(|tid| state.config.media_url(&tid)),
+                            ton_dauer_ms,
                             emoji,
                             width,
                             height,

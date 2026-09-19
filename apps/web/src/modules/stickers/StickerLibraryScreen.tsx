@@ -49,6 +49,14 @@ function PackGrid({
           disabled={!onPick}
         >
           <img src={stickerSrc(sticker.url)} alt="" loading="lazy" decoding="async" />
+          {sticker.tonUrl && (
+            /* Nur das Abzeichen: Gehoert wird beim Antippen im Gespraech. Ein
+               Vorhoeren in der Tastatur hiesse, dass ein Wischen durch sechzig
+               Kacheln sechzig Toene anstoesst. */
+            <span className="stk-kachel-ton" aria-hidden="true">
+              🔊
+            </span>
+          )}
         </button>
       ))}
     </div>

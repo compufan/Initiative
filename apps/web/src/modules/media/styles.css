@@ -892,3 +892,207 @@
   background: var(--accent, #2f6bff);
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
 }
+
+/* ---------- Die Tonwerkstatt ---------- */
+
+.ton-werkstatt {
+  gap: var(--space-3);
+}
+
+/*
+ * Die Wellenform.
+ *
+ * `position: relative`, weil Griffe, Schleier und Abspielzeiger absolut darin
+ * sitzen – alles drei muss an einer STELLE liegen, nicht zwischen Balken.
+ *
+ * `touch-action: none` an den Griffen, nicht hier: Über der Welle soll man die
+ * Seite noch scrollen können, an einem Griff nicht.
+ */
+.ton-wave {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  height: 84px;
+  padding: 0 2px;
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.ton-balken {
+  flex: 1 1 0;
+  min-width: 1px;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  opacity: 0.22;
+}
+
+/* Was im Ausschnitt liegt, ist kräftig – der Rest bleibt als Umriss sichtbar. */
+.ton-balken.ist-drin {
+  opacity: 0.85;
+  color: var(--accent-strong);
+}
+
+/*
+ * Der Schleier über dem, was wegfällt.
+ *
+ * Nicht ausblenden: Wer den Griff zu weit gezogen hat, muss sehen, WAS er
+ * gerade wegschneidet – sonst zieht er blind zurück.
+ */
+.ton-schleier {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
+  pointer-events: none;
+}
+
+.ton-schleier-links {
+  left: 0;
+}
+
+.ton-schleier-rechts {
+  right: 0;
+}
+
+.ton-zeiger {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent-2);
+  pointer-events: none;
+}
+
+/*
+ * Die Griffe.
+ *
+ * Sichtbar sind drei Punkte Breite, greifbar sind vierundvierzig – das ist die
+ * kleinste Fläche, die ein Daumen zuverlässig trifft. Der Unterschied steckt
+ * im durchsichtigen Rand: Ein Griff, den man dreimal verfehlt, fühlt sich
+ * kaputt an, auch wenn er tadellos funktioniert.
+ */
+.ton-griff {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 44px;
+  margin-left: -22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.ton-griff::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 3px;
+  margin-left: -1.5px;
+  border-radius: var(--radius-full);
+  background: var(--accent-strong);
+}
+
+.ton-griff::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 22px;
+  margin: -11px 0 0 -7px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-strong);
+}
+
+.ton-griff:focus-visible::after {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+}
+
+.ton-zeile {
+  align-items: center;
+}
+
+/*
+ * Die Kachelreihe der Klangprofile.
+ *
+ * Waagerecht scrollbar statt umgebrochen: Neun Kacheln in zwei Reihen schieben
+ * die Regler darunter aus dem Bild, und auf einem Telefon ist gerade das der
+ * Teil, an dem man danach dreht.
+ */
+.ton-profile {
+  display: flex;
+  gap: var(--space-2);
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+
+.ton-profil {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 72px;
+  padding: var(--space-2) 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+
+.ton-profil.ist-aktiv {
+  border-color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent-strong) 18%, transparent);
+}
+
+.ton-profil-zeichen {
+  font-size: 1.3rem;
+  line-height: 1.1;
+}
+
+.ton-profil-titel {
+  text-align: center;
+  line-height: 1.2;
+}
+
+.ton-hinweis,
+.ton-fehler {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.ton-fehler {
+  color: var(--danger, #ff6b6b);
+}
+
+.ton-regler {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ton-schieber {
+  margin: 0;
+}
+
+.ton-schieber input[type='range'] {
+  width: 100%;
+}
+
+.ton-zusatz {
+  color: var(--text-muted);
+  font-weight: 400;
+}

@@ -63,6 +63,14 @@ export const LIMITS = {
   eventTitleMax: 160,
   eventDescriptionMax: 4000,
   stickerPackNameMax: 60,
+  /**
+   * Wie lang die Tonspur eines Stickers hoechstens sein darf.
+   *
+   * Acht Sekunden, dieselbe Zahl wie `TON_MAX_MS` in `apps/api/src/constants.rs`.
+   * Ein Sticker ist eine Geste: angetippt, gesagt, vorbei. Was laenger dauert,
+   * ist eine Sprachnachricht.
+   */
+  stickerTonMaxMs: 8_000,
   stickersPerPackMax: 120,
   collectionNameMax: 120,
   collectionDescriptionMax: 2000,

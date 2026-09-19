@@ -6,6 +6,14 @@ export interface StickerDto {
   packId: string;
   packName: string;
   url: string;
+  /**
+   * Adresse der Tonspur, falls der Sticker klingt.
+   *
+   * Optional und nicht Teil des Bildes: Kein Stickerformat traegt eine
+   * Tonspur, es sind zwangslaeufig zwei Dateien (siehe Migration 0022).
+   */
+  tonUrl?: string | null;
+  tonDauerMs?: number | null;
   emoji: string | null;
   width: number;
   height: number;
@@ -39,4 +47,12 @@ export const updateStickerPackSchema = z.object({
 export const addStickerSchema = z.object({
   attachmentId: z.string().uuid(),
   emoji: z.string().max(16).nullable().optional(),
+  tonAttachmentId: z.string().uuid().optional(),
+  tonDauerMs: z.number().int().min(0).max(LIMITS.stickerTonMaxMs).optional(),
+});
+
+/** Ton nachtraeglich an einen vorhandenen Sticker haengen. */
+export const setzeTonSchema = z.object({
+  attachmentId: z.string().uuid(),
+  dauerMs: z.number().int().min(0).max(LIMITS.stickerTonMaxMs).optional(),
 });

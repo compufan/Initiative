@@ -98,6 +98,8 @@
 }
 
 .stk-cell {
+  /* `relative`, damit das Ton-Abzeichen in der Ecke sitzen kann. */
+  position: relative;
   aspect-ratio: 1 / 1;
   display: grid;
   place-items: center;
@@ -670,4 +672,67 @@
   height: 100%;
   background: var(--accent);
   transition: width 120ms linear;
+}
+
+/* ---------- Sticker mit Ton ---------- */
+
+/*
+ * Der Sticker wird zum Knopf, sobald er klingt.
+ *
+ * Ein `<button>` und kein `onClick` am Bild: Wer mit der Tastatur oder mit
+ * einem Screenreader unterwegs ist, braucht etwas, das sich anwählen und mit
+ * der Leertaste auslösen lässt. Das Bild darin behält seine Masse.
+ */
+.stk-bubble-knopf {
+  position: relative;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.stk-bubble-knopf:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 3px;
+  border-radius: var(--radius-md);
+}
+
+/*
+ * Das Abzeichen unten rechts.
+ *
+ * Es sagt zwei Dinge auf einmal: dass dieser Sticker klingt, und ob er gerade
+ * klingt. Ohne das Erste tippt niemand darauf; ohne das Zweite weiss niemand,
+ * ob der Tipp angekommen ist.
+ */
+.stk-bubble-ton {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(6px);
+  font-size: 0.72rem;
+  line-height: 1;
+}
+
+.stk-bubble-knopf.ist-aktiv .stk-bubble-ton {
+  background: var(--accent-strong);
+  color: #fff;
+}
+
+/* Das Abzeichen auf einer Kachel in Tastatur und Bibliothek. */
+.stk-kachel-ton {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  font-size: 0.7rem;
+  line-height: 1;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
 }

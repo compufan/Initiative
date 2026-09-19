@@ -8,11 +8,13 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
-use crate::constants::{STICKERS_PER_PACK_MAX, STICKER_PACK_NAME_MAX};
+use crate::constants::{STICKERS_PER_PACK_MAX, STICKER_PACK_NAME_MAX, TON_MAX_MS};
 use crate::db::{StickerPackRow, StickerRow};
 use crate::dto::{ListResult, StickerPackDto};
 use crate::error::{AppError, AppResult};
-use crate::services::stickers::{claim_attachment, load_pack_dto, load_pack_dtos, require_pack};
+use crate::services::stickers::{
+    claim_attachment, claim_ton_attachment, load_pack_dto, load_pack_dtos, require_pack,
+};
 use crate::state::AppState;
 use crate::validate::Validator;
 
@@ -28,6 +30,17 @@ pub fn router() -> Router<AppState> {
         .route(
             "/stickers/packs/{id}/stickers/{sticker_id}",
             axum::routing::delete(remove_sticker),
+        )
+        /*
+         * Ton nachtraeglich anhaengen oder wegnehmen.
+         *
+         * Eine eigene Route und kein Feld am Sticker-Anlegen allein: Der Ton
+         * ist optional, und wer einen vorhandenen Sticker vertonen will, soll
+         * ihn nicht loeschen und neu bauen muessen.
+         */
+        .route(
+            "/stickers/packs/{id}/stickers/{sticker_id}/ton",
+            axum::routing::put(setze_ton).delete(entferne_ton),
         )
         .route(
             "/stickers/packs/{id}/install",
@@ -233,10 +246,36 @@ async fn delete_pack(
     Path(id): Path<Uuid>,
 ) -> AppResult<StatusCode> {
     own_pack(&state, id, user.id()).await?;
+
+    /*
+     * Erst die Anhaenge einsammeln, dann das Paket loeschen.
+     *
+     * `sticker_packs` kaskadiert auf `stickers`, aber NICHT auf
+     * `attachments` – die Dateien blieben also liegen, und der Speicher-Muell
+     * wird ausschliesslich vom Loesch-Ausloeser auf `attachments` gespeist
+     * (Migration 0013). Das war schon vor der Tonspur eine Luecke; mit ihr
+     * waeren es doppelt so viele Waisen.
+     */
+    let anhaenge: Vec<(Uuid,)> = sqlx::query_as(
+        "select attachment_id from stickers where pack_id = $1
+         union
+         select ton_attachment_id from stickers
+          where pack_id = $1 and ton_attachment_id is not null",
+    )
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await?;
+
     sqlx::query("delete from sticker_packs where id = $1")
         .bind(id)
         .execute(&state.pool)
         .await?;
+    if !anhaenge.is_empty() {
+        sqlx::query("delete from attachments where id = any($1)")
+            .bind(anhaenge.into_iter().map(|(id,)| id).collect::<Vec<Uuid>>())
+            .execute(&state.pool)
+            .await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -245,6 +284,9 @@ async fn delete_pack(
 struct AddStickerInput {
     attachment_id: Uuid,
     emoji: Option<String>,
+    /// Optionale Tonspur, gleich beim Anlegen.
+    ton_attachment_id: Option<Uuid>,
+    ton_dauer_ms: Option<i32>,
 }
 
 async fn add_sticker(
@@ -277,13 +319,30 @@ async fn add_sticker(
     }
 
     let attachment = claim_attachment(&state, input.attachment_id).await?;
+
+    /*
+     * Die Tonspur wird ERST geholt, wenn das Bild schon steht.
+     *
+     * Reihenfolge ist hier keine Geschmacksfrage: Scheitert der Ton, ist ein
+     * Sticker ohne Ton immer noch ein Sticker. Andersherum laege eine
+     * Tondatei ohne Sticker herum, und niemand wuesste, wozu sie gehoert.
+     */
+    let ton = match input.ton_attachment_id {
+        Some(ton_id) => Some(ton_besitz_pruefen(&state, ton_id, user.id()).await?),
+        None => None,
+    };
+
     sqlx::query(
-        "insert into stickers (id, pack_id, attachment_id, emoji, width, height, position)
-         values ($1, $2, $3, $4, $5, $6, $7)",
+        "insert into stickers
+             (id, pack_id, attachment_id, ton_attachment_id, ton_dauer_ms,
+              emoji, width, height, position)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(Uuid::now_v7())
     .bind(id)
     .bind(attachment.id)
+    .bind(ton.as_ref().map(|zeile| zeile.id))
+    .bind(ton_dauer(input.ton_dauer_ms))
     .bind(
         input
             .emoji
@@ -322,12 +381,156 @@ async fn remove_sticker(
     .await?;
 
     if let Some(sticker) = removed {
-        sqlx::query("delete from attachments where id = $1")
-            .bind(sticker.attachment_id)
+        // BEIDE Anhaenge. Der Ton haengt an `set null` und wuerde sonst als
+        // Waise liegenbleiben – und der Speicher-Muell wird ausschliesslich
+        // vom Loesch-Ausloeser auf `attachments` gespeist (Migration 0013).
+        sqlx::query("delete from attachments where id = any($1)")
+            .bind(
+                [Some(sticker.attachment_id), sticker.ton_attachment_id]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<Uuid>>(),
+            )
             .execute(&state.pool)
             .await?;
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetzeTonInput {
+    attachment_id: Uuid,
+    dauer_ms: Option<i32>,
+}
+
+/**
+ * Pruefen, dass eine Tondatei dem Anfragenden gehoert und noch frei ist.
+ *
+ * Dieselbe Pruefung wie beim Bild, und aus demselben Grund: Ohne sie koennte
+ * jemand die Kennung einer fremden Datei einsetzen und sie damit an seinen
+ * eigenen Sticker haengen – und ueber `zugriff.rs` fuer alle sichtbar machen,
+ * die dieses Paket sehen.
+ */
+async fn ton_besitz_pruefen(
+    state: &AppState,
+    ton_id: Uuid,
+    user_id: Uuid,
+) -> AppResult<crate::db::AttachmentRow> {
+    let besitzer: Option<(Option<Uuid>,)> =
+        sqlx::query_as("select uploader_id from attachments where id = $1")
+            .bind(ton_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    match besitzer {
+        Some((Some(uploader),)) if uploader == user_id => {}
+        _ => return Err(AppError::forbidden("Tondatei gehoert dir nicht")),
+    }
+    /*
+     * Und dass sie nicht schon an einem anderen Sticker haengt.
+     *
+     * `claim_ton_attachment` prueft nur `message_id is null` – ein Anhang,
+     * der bereits an einem Sticker haengt, kaeme damit durch. Zwei Sticker
+     * mit derselben Tondatei sind an sich harmlos; der Tag, an dem einer von
+     * beiden geloescht wird, ist es nicht: Dann verstummt auch der andere.
+     */
+    let schon_vergeben: bool = sqlx::query_scalar(
+        "select exists (select 1 from stickers where ton_attachment_id = $1)",
+    )
+    .bind(ton_id)
+    .fetch_one(&state.pool)
+    .await?;
+    if schon_vergeben {
+        return Err(AppError::bad_request(
+            "Diese Tondatei haengt schon an einem Sticker.",
+        ));
+    }
+    claim_ton_attachment(state, ton_id).await
+}
+
+/// Die Dauer in einen Bereich klemmen, den ein Sticker haben darf.
+fn ton_dauer(roh: Option<i32>) -> Option<i32> {
+    roh.map(|ms| ms.clamp(0, TON_MAX_MS))
+}
+
+async fn setze_ton(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((id, sticker_id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<SetzeTonInput>,
+) -> AppResult<Json<StickerPackDto>> {
+    own_pack(&state, id, user.id()).await?;
+    let ton = ton_besitz_pruefen(&state, input.attachment_id, user.id()).await?;
+
+    /*
+     * Ein etwaiger alter Ton wird eingesammelt, BEVOR die Spalte umgesetzt
+     * wird – danach ist er nicht mehr zu finden und bliebe als Waise liegen.
+     */
+    /*
+     * Der ALTE Ton kommt aus einem CTE, nicht aus einer Unterabfrage im
+     * `returning`.
+     *
+     * Eine Unterabfrage dort laese zwar auch den Stand von vor der Aenderung
+     * – aber nur, weil Postgres innerhalb einer Anweisung einen festen
+     * Schnappschuss benutzt. Das ist wahr und trotzdem der falsche Grund,
+     * sich darauf zu verlassen: Wer die Zeile spaeter liest, muss diese Regel
+     * kennen, um sie zu verstehen. Ein CTE wird sichtbar EINMAL gerechnet.
+     */
+    let alt: Option<(Option<Uuid>,)> = sqlx::query_as(
+        "with vorher as (
+             select ton_attachment_id from stickers where id = $1 and pack_id = $2
+         )
+         update stickers set ton_attachment_id = $3, ton_dauer_ms = $4
+          where id = $1 and pack_id = $2
+          returning (select ton_attachment_id from vorher)",
+    )
+    .bind(sticker_id)
+    .bind(id)
+    .bind(ton.id)
+    .bind(ton_dauer(input.dauer_ms))
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((alter_ton,)) = alt else {
+        return Err(AppError::not_found("Sticker nicht gefunden"));
+    };
+    if let Some(alter_ton) = alter_ton.filter(|vorher| *vorher != ton.id) {
+        sqlx::query("delete from attachments where id = $1")
+            .bind(alter_ton)
+            .execute(&state.pool)
+            .await?;
+    }
+
+    Ok(Json(load_pack_dto(&state, id, user.id()).await?))
+}
+
+async fn entferne_ton(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path((id, sticker_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<Json<StickerPackDto>> {
+    own_pack(&state, id, user.id()).await?;
+    let alt: Option<(Option<Uuid>,)> = sqlx::query_as(
+        "with vorher as (
+             select ton_attachment_id from stickers where id = $1 and pack_id = $2
+         )
+         update stickers set ton_attachment_id = null, ton_dauer_ms = null
+          where id = $1 and pack_id = $2
+          returning (select ton_attachment_id from vorher)",
+    )
+    .bind(sticker_id)
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((alter_ton,)) = alt else {
+        return Err(AppError::not_found("Sticker nicht gefunden"));
+    };
+    if let Some(alter_ton) = alter_ton {
+        sqlx::query("delete from attachments where id = $1")
+            .bind(alter_ton)
+            .execute(&state.pool)
+            .await?;
+    }
+    Ok(Json(load_pack_dto(&state, id, user.id()).await?))
 }
 
 async fn install(

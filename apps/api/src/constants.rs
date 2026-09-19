@@ -35,6 +35,19 @@ pub const POLL_OPTIONS_MAX: usize = 30;
 pub const EVENT_TITLE_MAX: usize = 160;
 pub const EVENT_DESCRIPTION_MAX: usize = 4000;
 pub const STICKER_PACK_NAME_MAX: usize = 60;
+
+/**
+ * Wie lang die Tonspur eines Stickers hoechstens sein darf, in Millisekunden.
+ *
+ * Acht Sekunden. Nicht aus technischer Not, sondern weil ein Sticker eine
+ * Geste ist: Er wird angetippt, sagt etwas, und ist vorbei. Was laenger
+ * dauert, ist eine Sprachnachricht, und dafuer gibt es eine.
+ *
+ * Die Zahl haelt ausserdem das Verhaeltnis gerade. Ohne sie haengt an einem
+ * Sticker von 4 MB eine Tonspur von 40 MB – die Grenze fuer `audio` ist
+ * 50 MB, und die gilt fuer Sprachnachrichten, nicht hierfuer.
+ */
+pub const TON_MAX_MS: i32 = 8_000;
 pub const STICKERS_PER_PACK_MAX: i64 = 120;
 
 pub const COLLECTION_NAME_MAX: usize = 120;

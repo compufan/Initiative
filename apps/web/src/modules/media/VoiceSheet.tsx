@@ -5,6 +5,7 @@ import { EmptyState } from '../../components/Feedback.js';
 import { waveformFromBlob } from '../../lib/upload.js';
 import type { ComposerActionProps } from '../types.js';
 import { toast } from '../../state/ui.js';
+import { TonWerkstatt } from './TonWerkstatt.js';
 import {
   AUDIO_MIME_CANDIDATES,
   baseMime,
@@ -29,6 +30,35 @@ interface Recording {
 
 const MAX_VOICE_MS = 5 * 60 * 1000;
 
+/**
+ * Bis zu welcher Länge die Werkstatt angeboten wird.
+ *
+ * # Warum es diese Grenze gibt
+ *
+ * Eine bearbeitete Aufnahme muss neu geschrieben werden, und der einzige
+ * Kodierer, den ein Browser überall mitbringt, ist keiner: WAV packt nicht.
+ * Mono bei 24 kHz sind 48 kB je Sekunde – fünf Minuten wären rund 14 MB statt
+ * der 400 kB, die derselbe Ton als Opus wiegt. Das liegt unter der Grenze von
+ * 50 MB und ist trotzdem eine Frechheit gegenüber jedem Mobilfunkvertrag.
+ *
+ * Neunzig Sekunden sind rund 4 MB. Das ist die Zahl, bei der es noch
+ * vertretbar ist.
+ *
+ * # Was oberhalb passiert
+ *
+ * Nichts Schlimmes: Die Vorschau und der Sendeknopf bleiben, wie sie immer
+ * waren. Es fehlt nur der Knopf zur Werkstatt – niemand verliert etwas, das
+ * er vorher hatte.
+ *
+ * # Wie die Grenze wieder wegkommt
+ *
+ * Mit einem Kodierer, der packt. `AudioEncoder` aus WebCodecs liefert rohe
+ * Opus-Pakete; der Ogg-Behälter drumherum wäre von Hand zu schreiben, so wie
+ * hier auch GIF und PNG von Hand geschrieben werden. Dann wären aus 14 MB
+ * rund 1 MB. Solange das nicht steht, steht diese Zahl.
+ */
+const WERKSTATT_MAX_MS = 90 * 1000;
+
 /** Voice message recorder with live level meter, preview and waveform upload. */
 export function VoiceSheet({ conversationId, onClose }: ComposerActionProps) {
   const supported = supportsRecorder() && supportsCapture();
@@ -46,6 +76,14 @@ export function VoiceSheet({ conversationId, onClose }: ComposerActionProps) {
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [result, setResult] = useState<Recording | null>(null);
+  /*
+   * Ob die Werkstatt offen ist.
+   *
+   * Sie ersetzt das Blatt nicht, sondern tritt an die Stelle der Vorschau –
+   * wer nur aufnehmen und senden will, sieht sie nie. Genau das ist der
+   * Punkt: Der häufigste Weg bleibt zwei Fingertipps lang.
+   */
+  const [werkstattOffen, setWerkstattOffen] = useState(false);
   const [sending, setSending] = useState(false);
   const previewUrl = useObjectUrl(result?.blob ?? null);
 
@@ -180,6 +218,7 @@ export function VoiceSheet({ conversationId, onClose }: ComposerActionProps) {
 
   const discard = () => {
     setResult(null);
+    setWerkstattOffen(false);
     setElapsed(0);
     elapsedRef.current = 0;
   };
@@ -225,6 +264,29 @@ export function VoiceSheet({ conversationId, onClose }: ComposerActionProps) {
             </button>
           }
         />
+      ) : result && werkstattOffen ? (
+        /*
+         * Die Werkstatt schreibt das Ergebnis zurück und schliesst sich.
+         *
+         * Wurde nichts geändert, kommt der ORIGINALBLOB heraus – sonst würde
+         * aus 400 kB Opus ein WAV von mehreren Megabyte, nur weil jemand die
+         * Werkstatt aufgemacht und wieder zugemacht hat. Die Entscheidung
+         * trifft `fassungBeruehrt`, nicht dieser Aufrufer.
+         */
+        <TonWerkstatt
+          blob={result.blob}
+          uebernehmenText="Fertig"
+          onAbbruch={() => setWerkstattOffen(false)}
+          onFertig={(ergebnis) => {
+            setResult({
+              blob: ergebnis.blob,
+              mime: ergebnis.mime,
+              durationMs: ergebnis.dauerMs,
+            });
+            setWerkstattOffen(false);
+            if (ergebnis.bearbeitet) toast('Ton übernommen.', 'success');
+          }}
+        />
       ) : result ? (
         <div className="stack">
           <div className="media-voice-result">
@@ -233,6 +295,22 @@ export function VoiceSheet({ conversationId, onClose }: ComposerActionProps) {
           </div>
           {previewUrl && (
             <audio className="media-voice-player" src={previewUrl} controls preload="metadata" />
+          )}
+          {result.durationMs <= WERKSTATT_MAX_MS ? (
+            <button
+              type="button"
+              className="btn btn-block"
+              onClick={() => setWerkstattOffen(true)}
+              disabled={sending}
+            >
+              🎛 Zuschneiden und verzerren
+            </button>
+          ) : (
+            <p className="ton-hinweis">
+              Zum Zuschneiden und Verzerren darf die Aufnahme höchstens{' '}
+              {Math.round(WERKSTATT_MAX_MS / 1000)} Sekunden lang sein – bearbeiteter Ton wird
+              unkomprimiert gespeichert und würde hier zu gross.
+            </p>
           )}
           <div className="row row-between">
             <button type="button" className="btn btn-danger" onClick={discard} disabled={sending}>

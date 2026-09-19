@@ -553,8 +553,23 @@ export const api = {
     updatePack: (id: string, body: Record<string, unknown>) =>
       patch<StickerPackDto>(`/stickers/packs/${id}`, body),
     deletePack: (id: string) => del<void>(`/stickers/packs/${id}`),
-    addSticker: (packId: string, body: { attachmentId: string; emoji?: string | null }) =>
-      post<StickerPackDto>(`/stickers/packs/${packId}/stickers`, body),
+    addSticker: (
+      packId: string,
+      body: {
+        attachmentId: string;
+        emoji?: string | null;
+        tonAttachmentId?: string;
+        tonDauerMs?: number;
+      },
+    ) => post<StickerPackDto>(`/stickers/packs/${packId}/stickers`, body),
+    /** Ton an einen vorhandenen Sticker haengen – oder einen anderen daraufsetzen. */
+    setzeTon: (
+      packId: string,
+      stickerId: string,
+      body: { attachmentId: string; dauerMs?: number },
+    ) => put<StickerPackDto>(`/stickers/packs/${packId}/stickers/${stickerId}/ton`, body),
+    entferneTon: (packId: string, stickerId: string) =>
+      del<StickerPackDto>(`/stickers/packs/${packId}/stickers/${stickerId}/ton`),
     removeSticker: (packId: string, stickerId: string) =>
       del<void>(`/stickers/packs/${packId}/stickers/${stickerId}`),
     install: (packId: string) => post<StickerPackDto>(`/stickers/packs/${packId}/install`),

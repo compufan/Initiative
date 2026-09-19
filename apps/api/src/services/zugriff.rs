@@ -154,19 +154,24 @@ select art, bezug from (
     join conversation_members cm on cm.conversation_id = c.id
    where c.avatar_attachment_id = $1 and cm.user_id = $2
   union all
+  -- Bild ODER Tonspur: Ein Sticker hat seit Migration 0022 zwei Anhaenge, und
+  -- beide muessen denselben Weg gehen. Stuende hier nur `s.attachment_id`,
+  -- erschiene das Bild und der Ton lieferte 404 – und zwar NUR bei anderen,
+  -- weil beim Hochladenden schon der Zweig `besitz` greift. Ein Fehler, den
+  -- man beim Ausprobieren nie sieht.
   select 'sticker_oeffentlich', null::uuid, 4
     from stickers s join sticker_packs p on p.id = s.pack_id
-   where s.attachment_id = $1 and p.is_public
+   where $1 in (s.attachment_id, s.ton_attachment_id) and p.is_public
   union all
   select 'sticker_eigenes', null::uuid, 5
     from stickers s join sticker_packs p on p.id = s.pack_id
-   where s.attachment_id = $1 and p.owner_id = $2
+   where $1 in (s.attachment_id, s.ton_attachment_id) and p.owner_id = $2
   union all
   select 'sticker_gespraech', m.conversation_id, 6
     from stickers s
     join messages m on m.metadata ->> 'stickerId' = s.id::text
     join conversation_members cm on cm.conversation_id = m.conversation_id
-   where s.attachment_id = $1 and cm.user_id = $2
+   where $1 in (s.attachment_id, s.ton_attachment_id) and cm.user_id = $2
      and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
   union all
   select 'sammlung', i.collection_id, 7
@@ -262,7 +267,7 @@ pub async fn wer_sieht_anhang(pool: &PgPool, attachment_id: Uuid) -> AppResult<K
     let alle_angemeldeten: bool = sqlx::query_scalar(
         "select exists (select 1 from users where avatar_attachment_id = $1)
              or exists (select 1 from stickers s join sticker_packs p on p.id = s.pack_id
-                         where s.attachment_id = $1 and p.is_public)",
+                         where $1 in (s.attachment_id, s.ton_attachment_id) and p.is_public)",
     )
     .bind(attachment_id)
     .fetch_one(pool)
@@ -288,13 +293,13 @@ select person, art, bezug from (
   union all
   select p.owner_id, 'sticker_eigenes', null::uuid, 5
     from stickers s join sticker_packs p on p.id = s.pack_id
-   where s.attachment_id = $1 and p.owner_id is not null
+   where $1 in (s.attachment_id, s.ton_attachment_id) and p.owner_id is not null
   union all
   select cm.user_id, 'sticker_gespraech', m.conversation_id, 6
     from stickers s
     join messages m on m.metadata ->> 'stickerId' = s.id::text
     join conversation_members cm on cm.conversation_id = m.conversation_id
-   where s.attachment_id = $1
+   where $1 in (s.attachment_id, s.ton_attachment_id)
      and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
   union all
   select p, 'sammlung', i.collection_id, 7

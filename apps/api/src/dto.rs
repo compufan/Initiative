@@ -190,6 +190,9 @@ pub struct StickerDto {
     pub pack_id: Uuid,
     pub pack_name: String,
     pub url: String,
+    /// Adresse der Tonspur, falls der Sticker eine hat.
+    pub ton_url: Option<String>,
+    pub ton_dauer_ms: Option<i32>,
     pub emoji: Option<String>,
     pub width: i32,
     pub height: i32,

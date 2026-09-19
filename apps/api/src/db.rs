@@ -131,6 +131,10 @@ pub struct StickerRow {
     pub id: Uuid,
     pub pack_id: Uuid,
     pub attachment_id: Uuid,
+    /// Optionale Tonspur – siehe Migration 0022.
+    pub ton_attachment_id: Option<Uuid>,
+    /// Ihre Laenge, absichtlich doppelt gehalten (spart der Tastatur einen Verbund).
+    pub ton_dauer_ms: Option<i32>,
     pub emoji: Option<String>,
     pub width: i32,
     pub height: i32,
