@@ -239,9 +239,24 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
  * Farbflutung von Millisekunden, eine Tiefenkarte sind zweieinhalb Sekunden.
  * Eine Schätzung, die so tut, als wüsste sie das genau, wäre falscher als
  * eine, die nur die Grössenordnung trifft.
+ *
+ * Die Zahlen sind trotzdem gemessen, nicht geraten:
+ *
+ * – Lesen: 75 ms je Bild bei 1280 × 720 (siehe `bilderLesen.ts`).
+ * – Zeichnen und Kodieren zusammen: 13,5 ms bei 192 × 144, 9,4 ms bei
+ *   640 × 360, 14,1 ms bei 960 × 540. Die Zahl wächst NICHT mit der Fläche,
+ *   und das ist kein Messfehler: `zeichneAusgabe` rechnet auf der
+ *   Grafikeinheit, und dort kostet ein grösseres Bild kaum mehr. Deshalb
+ *   steht hier eine feste Zahl und keine, die mit der Fläche skaliert.
+ * – Ein Modellauf: u2netp 1874 bis 2180 ms, die Tiefenkarte rund 2500 ms.
+ *   2000 liegt dazwischen.
+ * – Schieben: rund 10 ms, siehe `verfolgung.ts`.
+ *
+ * Nachgerechnet an einem Lauf mit Tiefe: fünf Bilder, zwei Modelläufe –
+ * geschätzt 6,25 s, gemessen 6,35 s.
  */
 const JE_BILD_LESEN = 75;
-const JE_BILD_RECHNEN = 120;
+const JE_BILD_RECHNEN = 15;
 const JE_LAUF_MASKE = 2000;
 const JE_BILD_SCHIEBEN = 10;
 

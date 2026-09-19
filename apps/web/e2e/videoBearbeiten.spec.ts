@@ -309,3 +309,118 @@ test('ein Bereich mit Netz wird über die Bilder hinweg neu gerechnet', async ({
   expect([ergebnis.videoBreite, ergebnis.videoHoehe]).toEqual([192, 144]);
   expect(ergebnis.dauer).toBeGreaterThan(0.45);
 });
+
+test('die Tiefenkarte läuft über den Film – mit EINER Sitzung', async ({ page }) => {
+  /*
+   * Die teuerste Prüfung dieses Projektes, und die einzige, die zeigt, dass
+   * die Tiefe im Film wirklich ankommt: ein Modell von 20,6 MB, gemessen
+   * 0,8 s zum Öffnen der Sitzung und rund 2,5 s je Lauf.
+   *
+   * Sie ist die Antwort auf eine Frage, die sich ohne Browser nicht stellen
+   * lässt: `folgeTeile.test.ts` prüft mit einem Ersatz, dass die Sitzung
+   * EINMAL geöffnet wird. Ob dieselbe Sitzung danach ein zweites und drittes
+   * Bild rechnet, ohne dass ONNX die Tensoren durcheinanderbringt, kann nur
+   * ONNX beantworten.
+   */
+  test.setTimeout(300_000);
+  await page.goto('/');
+  await page.evaluate(() => {
+    // „Tiefenschärfe" ist in der App absichtlich aus, bis jemand sie
+    // einschaltet – 20,6 MB Modell holt man nicht ungefragt.
+    localStorage.setItem('initiative.cutout-engines', JSON.stringify({ tiefe: true }));
+  });
+
+  const ergebnis = await page.evaluate(async (code) => {
+    const bauenPfad = '/src/modules/video/videoBauen.ts';
+    const docPfad = '/src/modules/bild/doc.ts';
+    const schreibenPfad = '/src/modules/video/schreiben.ts';
+    const bauen = (await import(
+      /* @vite-ignore */ bauenPfad
+    )) as typeof import('../src/modules/video/videoBauen.js');
+    const docModul = (await import(
+      /* @vite-ignore */ docPfad
+    )) as typeof import('../src/modules/bild/doc.js');
+    const schreiben = (await import(
+      /* @vite-ignore */ schreibenPfad
+    )) as typeof import('../src/modules/video/schreiben.js');
+    if (!(await schreiben.videoTauglich(320, 240)).moeglich) return { uebersprungen: true };
+
+    const aufnehmen = eval(code) as () => Promise<Blob>;
+    const datei = await aufnehmen();
+
+    const leer = docModul.neuesDoc(192, 144);
+    const doc = {
+      ...leer,
+      bereiche: [
+        {
+          id: 'b1',
+          name: 'Tiefe',
+          aktiv: true,
+          teile: [
+            {
+              id: 'd1',
+              modus: 'dazu' as const,
+              umkehren: false,
+              art: 'tiefe' as const,
+              breite: 4,
+              hoehe: 4,
+              karte: new Uint8Array(16),
+              fokus: 1,
+              spanne: 0.5,
+              marke: 1,
+            },
+          ],
+          anpassung: { ...docModul.BEREICH_NEUTRAL, unschaerfe: 0.8 },
+        },
+      ],
+    };
+
+    const t0 = performance.now();
+    const fertig = await bauen.videoAusVideo({
+      datei,
+      doc,
+      vonMs: 0,
+      bisMs: 500,
+      bildrate: 10,
+      kante: 192,
+      schluesselAbstand: 4,
+      maxBilder: 30,
+    });
+    const gebraucht = performance.now() - t0;
+
+    const video = document.createElement('video');
+    video.muted = true;
+    video.src = URL.createObjectURL(fertig.blob);
+    const geladen = await new Promise<boolean>((auf) => {
+      video.onloadedmetadata = () => auf(true);
+      video.onerror = () => auf(false);
+      setTimeout(() => auf(false), 8000);
+    });
+
+    return {
+      uebersprungen: false,
+      bilder: fertig.bilder,
+      laeufe: fertig.laeufe,
+      geladen,
+      videoBreite: video.videoWidth,
+      videoHoehe: video.videoHeight,
+      msGesamt: Math.round(gebraucht),
+    };
+  }, AUFNEHMEN);
+
+  if (ergebnis.uebersprungen) {
+    test.skip(true, 'Kein Videokodierer in diesem Browser');
+    return;
+  }
+
+  // eslint-disable-next-line no-console
+  console.log(
+    `gemessen: ${ergebnis.bilder} Bilder mit Tiefe, ${ergebnis.laeufe} Modelläufe, ${ergebnis.msGesamt} ms gesamt`,
+  );
+
+  // Fünf Bilder bei Abstand vier: 0 und das letzte (4).
+  expect(ergebnis.bilder).toBe(5);
+  expect(ergebnis.laeufe).toBe(2);
+  expect(ergebnis.geladen, 'der Film mit Tiefenschärfe lässt sich nicht laden').toBe(true);
+  expect([ergebnis.videoBreite, ergebnis.videoHoehe]).toEqual([192, 144]);
+});
