@@ -48,6 +48,20 @@ export class VideoLeseError extends Error {
   }
 }
 
+/**
+ * Ein Abbruch, der die schon gelesenen Bilder mitbringt.
+ *
+ * Bei fünfzig Bildern à 75 ms sind das knapp vier Sekunden Arbeit. Wer
+ * mittendrin abbricht, will meistens „dann eben kürzer" und nicht „von
+ * vorn" – mit den Bildern in der Hand lässt sich das anbieten.
+ */
+export class LeseAbbruch extends AbbruchError {
+  constructor(readonly fertig: readonly GelesenesBild[]) {
+    super();
+    this.name = 'LeseAbbruch';
+  }
+}
+
 /* ---------- Das Rechenbare ---------- */
 
 /**
@@ -192,7 +206,8 @@ export async function videoBilderLesen(datei: Blob, auftrag: LeseAuftrag): Promi
     const bilder: GelesenesBild[] = [];
     const gesamt = auftrag.zeitpunkte.length;
     for (let i = 0; i < gesamt; i += 1) {
-      if (auftrag.abbruch?.aborted) throw new AbbruchError();
+      // Der Abbruch nimmt mit, was bis hierher gelesen ist – siehe `LeseAbbruch`.
+      if (auftrag.abbruch?.aborted) throw new LeseAbbruch(bilder);
       /*
        * Das letzte Bild eines Videos ist NICHT bei `duration`.
        *

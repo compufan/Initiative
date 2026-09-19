@@ -40,6 +40,8 @@
  * Platz und damit einen leicht anderen Ton.
  */
 
+import { AbbruchError } from './engines/index.js';
+
 /** Ein Teilbild samt seiner Standzeit. */
 export interface Teilbild {
   daten: ImageData;
@@ -220,6 +222,83 @@ export function naechsterPlatz(tafel: number[], r: number, g: number, b: number)
   return beste;
 }
 
+/* ---------- Ein wachsender Bytepuffer ---------- */
+
+/**
+ * Bytes sammeln, ohne sie einzeln zu verpacken.
+ *
+ * Ein `number[]` wäre kürzer und für einen Sticker mit zehn Teilbildern auch
+ * gut genug. Für ein GIF aus einem Video ist er es nicht: Bei 150 Bildern
+ * kommen gut zehn Millionen Bytes zusammen, und die liegen in einem
+ * JavaScript-Feld als je acht Byte – achtzig Megabyte für zehn. Auf einem
+ * Telefon ist das der Unterschied zwischen „dauert" und „die Seite wurde neu
+ * geladen".
+ *
+ * Verdoppelt wird beim Wachsen, nicht um einen festen Betrag: Sonst kostet
+ * das Umkopieren quadratisch, und genau das sollte der Puffer ja verhindern.
+ */
+export class Bytepuffer {
+  private daten: Uint8Array;
+  private laenge = 0;
+
+  constructor(anfang = 1 << 16) {
+    this.daten = new Uint8Array(anfang);
+  }
+
+  private platzSchaffen(zusatz: number): void {
+    if (this.laenge + zusatz <= this.daten.length) return;
+    let groesse = this.daten.length;
+    while (groesse < this.laenge + zusatz) groesse *= 2;
+    const neu = new Uint8Array(groesse);
+    neu.set(this.daten.subarray(0, this.laenge));
+    this.daten = neu;
+  }
+
+  byte(wert: number): void {
+    this.platzSchaffen(1);
+    this.daten[this.laenge] = wert;
+    this.laenge += 1;
+  }
+
+  bytes(...werte: number[]): void {
+    this.platzSchaffen(werte.length);
+    for (const wert of werte) {
+      this.daten[this.laenge] = wert;
+      this.laenge += 1;
+    }
+  }
+
+  /** Ein ganzes Feld anhängen – ohne Umweg über einzelne Aufrufe. */
+  feld(werte: Uint8Array): void {
+    this.platzSchaffen(werte.length);
+    this.daten.set(werte, this.laenge);
+    this.laenge += werte.length;
+  }
+
+  /** Eine Zahl in zwei Bytes, kleinstes zuerst – so will es das Format. */
+  zahl16(wert: number): void {
+    this.bytes(wert & 0xff, (wert >> 8) & 0xff);
+  }
+
+  text(wort: string): void {
+    for (const zeichen of wort) this.byte(zeichen.charCodeAt(0));
+  }
+
+  get groesse(): number {
+    return this.laenge;
+  }
+
+  /**
+   * Der fertige Inhalt.
+   *
+   * `slice` und nicht `subarray`: Eine Ansicht hielte den ganzen – womöglich
+   * doppelt so grossen – Puffer am Leben, solange die Datei existiert.
+   */
+  fertig(): Uint8Array {
+    return this.daten.slice(0, this.laenge);
+  }
+}
+
 /* ---------- LZW ---------- */
 
 /**
@@ -239,14 +318,14 @@ export function lzwPacken(indizes: Uint8Array, mindestBreite: number): Uint8Arra
   let breite = mindestBreite + 1;
   let naechster = ende + 1;
 
-  const raus: number[] = [];
+  const raus = new Bytepuffer(Math.max(1024, indizes.length));
   let sammler = 0;
   let bits = 0;
   const schreiben = (wert: number) => {
     sammler |= wert << bits;
     bits += breite;
     while (bits >= 8) {
-      raus.push(sammler & 0xff);
+      raus.byte(sammler & 0xff);
       sammler >>= 8;
       bits -= 8;
     }
@@ -262,8 +341,8 @@ export function lzwPacken(indizes: Uint8Array, mindestBreite: number): Uint8Arra
   schreiben(loeschen);
   if (indizes.length === 0) {
     schreiben(ende);
-    if (bits > 0) raus.push(sammler & 0xff);
-    return inBloecke(raus);
+    if (bits > 0) raus.byte(sammler & 0xff);
+    return inBloecke(raus.fertig());
   }
 
   let praefix = indizes[0];
@@ -295,8 +374,8 @@ export function lzwPacken(indizes: Uint8Array, mindestBreite: number): Uint8Arra
   }
   schreiben(praefix);
   schreiben(ende);
-  if (bits > 0) raus.push(sammler & 0xff);
-  return inBloecke(raus);
+  if (bits > 0) raus.byte(sammler & 0xff);
+  return inBloecke(raus.fertig());
 }
 
 /**
@@ -305,14 +384,19 @@ export function lzwPacken(indizes: Uint8Array, mindestBreite: number): Uint8Arra
  * Das verlangt das Format: Vor jedem Stück steht seine Länge in einem Byte,
  * und eine Null beendet die Kette.
  */
-function inBloecke(bytes: number[]): Uint8Array {
-  const raus: number[] = [];
-  for (let at = 0; at < bytes.length; at += 255) {
-    const stueck = bytes.slice(at, at + 255);
-    raus.push(stueck.length, ...stueck);
+function inBloecke(bytes: Uint8Array): Uint8Array {
+  // Die Grösse steht vorher fest: je Block ein Längenbyte, am Ende eine Null.
+  const bloecke = Math.ceil(bytes.length / 255);
+  const raus = new Uint8Array(bytes.length + bloecke + 1);
+  let at = 0;
+  for (let von = 0; von < bytes.length; von += 255) {
+    const laenge = Math.min(255, bytes.length - von);
+    raus[at] = laenge;
+    raus.set(bytes.subarray(von, von + laenge), at + 1);
+    at += laenge + 1;
   }
-  raus.push(0);
-  return Uint8Array.from(raus);
+  raus[at] = 0;
+  return raus;
 }
 
 /* ---------- Die Datei ---------- */
@@ -325,12 +409,28 @@ export interface GifOptionen {
 }
 
 /**
- * Aus Teilbildern eine GIF-Datei.
+ * Aus Teilbildern eine GIF-Datei – Teilbild für Teilbild.
  *
- * Alle Teilbilder müssen dieselbe Grösse haben – das prüft diese Funktion,
+ * # Warum ein Generator und nicht einfach eine Funktion
+ *
+ * Weil das Schreiben bei einem Sticker mit zehn Teilbildern in einem
+ * Wimpernschlag erledigt ist und bei einem GIF aus einem Video Sekunden
+ * dauert – gemessen 2866 ms für fünfzig Bilder à 512 × 512. Sekunden in einem
+ * Rutsch heisst: Die Oberfläche steht, der Abbrechen-Knopf reagiert nicht,
+ * und Android zeigt „Die Seite reagiert nicht".
+ *
+ * Ein Generator gibt nach jedem Teilbild ab. Wer es eilig hat, dreht ihn
+ * sofort durch (`gifSchreiben`); wer eine Oberfläche hat, lässt zwischendurch
+ * los (`gifSchreibenSchrittweise`). Beide schreiben BYTEGLEICH dasselbe, weil
+ * es derselbe Code ist.
+ *
+ * Alle Teilbilder müssen dieselbe Grösse haben – das prüft dieser Generator,
  * statt eine Datei zu schreiben, die kein Leser mag.
  */
-export function gifSchreiben(teilbilder: Teilbild[], optionen: GifOptionen = {}): Uint8Array {
+export function* gifLauf(
+  teilbilder: Teilbild[],
+  optionen: GifOptionen = {},
+): Generator<number, Uint8Array, void> {
   if (teilbilder.length === 0) throw new Error('Ein GIF ohne Teilbilder gibt es nicht');
   const breite = teilbilder[0].daten.width;
   const hoehe = teilbilder[0].daten.height;
@@ -353,23 +453,22 @@ export function gifSchreiben(teilbilder: Teilbild[], optionen: GifOptionen = {})
   const tafelBits = Math.max(1, Math.ceil(Math.log2(Math.max(2, tafel.length + 1))));
   const tafelPlaetze = 1 << tafelBits;
 
-  const bytes: number[] = [];
-  const zahl16 = (wert: number) => bytes.push(wert & 0xff, (wert >> 8) & 0xff);
+  const puffer = new Bytepuffer();
+  const zahl16 = (wert: number) => puffer.zahl16(wert);
 
   // Kopf
-  for (const zeichen of 'GIF89a') bytes.push(zeichen.charCodeAt(0));
+  puffer.text('GIF89a');
   // Logical Screen Descriptor
   zahl16(breite);
   zahl16(hoehe);
   // Globale Tafel vorhanden (0x80), Farbtiefe (egal), Tafelgrösse
-  bytes.push(0x80 | ((tafelBits - 1) & 0x07));
-  bytes.push(0); // Hintergrundfarbe
-  bytes.push(0); // Seitenverhältnis: keins
+  puffer.byte(0x80 | ((tafelBits - 1) & 0x07));
+  puffer.bytes(0, 0); // Hintergrundfarbe, dann Seitenverhältnis: keins
 
   // Die Tafel, auf die volle Zweierpotenz aufgefüllt.
   for (let i = 0; i < tafelPlaetze; i += 1) {
     const farbe = i < tafel.length ? tafel[i] : 0;
-    bytes.push((farbe >> 16) & 0xff, (farbe >> 8) & 0xff, farbe & 0xff);
+    puffer.bytes((farbe >> 16) & 0xff, (farbe >> 8) & 0xff, farbe & 0xff);
   }
 
   /*
@@ -377,11 +476,11 @@ export function gifSchreiben(teilbilder: Teilbild[], optionen: GifOptionen = {})
    * die nie in der Spezifikation stand und ohne die jedes GIF genau einmal
    * läuft.
    */
-  bytes.push(0x21, 0xff, 11);
-  for (const zeichen of 'NETSCAPE2.0') bytes.push(zeichen.charCodeAt(0));
-  bytes.push(3, 1);
+  puffer.bytes(0x21, 0xff, 11);
+  puffer.text('NETSCAPE2.0');
+  puffer.bytes(3, 1);
   zahl16(optionen.wiederholungen ?? 0);
-  bytes.push(0);
+  puffer.byte(0);
 
   const mindestBreite = Math.max(2, tafelBits);
   /*
@@ -398,7 +497,8 @@ export function gifSchreiben(teilbilder: Teilbild[], optionen: GifOptionen = {})
    * und die Ausgabe ist Byte für Byte dieselbe.
    */
   const gemerkt = new Map<number, number>();
-  for (const teil of teilbilder) {
+  for (let nummer = 0; nummer < teilbilder.length; nummer += 1) {
+    const teil = teilbilder[nummer];
     const d = teil.daten.data;
     const indizes = new Uint8Array(breite * hoehe);
     /*
@@ -422,7 +522,7 @@ export function gifSchreiben(teilbilder: Teilbild[], optionen: GifOptionen = {})
     }
 
     // Graphic Control Extension: Standzeit und durchsichtiger Platz.
-    bytes.push(0x21, 0xf9, 4);
+    puffer.bytes(0x21, 0xf9, 4);
     /*
      * Entsorgungsart 2 („auf den Hintergrund zurücksetzen“) und
      * durchsichtiger Platz an.
@@ -432,26 +532,77 @@ export function gifSchreiben(teilbilder: Teilbild[], optionen: GifOptionen = {})
      * vorhergehende Teilbild durchscheinen. Bei einer Figur, die sich bewegt,
      * zieht sie damit eine Spur hinter sich her.
      */
-    bytes.push((2 << 2) | 0x01);
+    puffer.byte((2 << 2) | 0x01);
     // Die Standzeit zählt in Hundertstelsekunden. Mindestens zwei: Bei null
     // oder eins rechnen etliche Leser auf zehn hoch, und die Bewegung wird
     // langsamer statt schneller.
     zahl16(Math.max(2, Math.round(teil.dauerMs / 10)));
-    bytes.push(durchsichtig);
-    bytes.push(0);
+    puffer.bytes(durchsichtig, 0);
 
     // Image Descriptor – volle Fläche, keine eigene Tafel.
-    bytes.push(0x2c);
+    puffer.byte(0x2c);
     zahl16(0);
     zahl16(0);
     zahl16(breite);
     zahl16(hoehe);
-    bytes.push(0);
+    puffer.byte(0);
 
-    bytes.push(mindestBreite);
-    for (const byte of lzwPacken(indizes, mindestBreite)) bytes.push(byte);
+    puffer.byte(mindestBreite);
+    puffer.feld(lzwPacken(indizes, mindestBreite));
+    yield nummer;
   }
 
-  bytes.push(0x3b);
-  return Uint8Array.from(bytes);
+  puffer.byte(0x3b);
+  return puffer.fertig();
+}
+
+/**
+ * Der bequeme Weg: alles auf einmal.
+ *
+ * Für Sticker – dort sind es eine Handvoll Teilbilder, und ein `await` wäre
+ * nur Umstand.
+ */
+export function gifSchreiben(teilbilder: Teilbild[], optionen: GifOptionen = {}): Uint8Array {
+  const lauf = gifLauf(teilbilder, optionen);
+  let schritt = lauf.next();
+  while (!schritt.done) schritt = lauf.next();
+  return schritt.value;
+}
+
+export interface SchrittOptionen extends GifOptionen {
+  /** Anteil 0…1 und ein Satz, den man zeigen kann. */
+  fortschritt?: (anteil: number, text: string) => void;
+  abbruch?: AbortSignal;
+}
+
+/**
+ * Der geduldige Weg: nach jedem Teilbild einmal loslassen.
+ *
+ * # Warum `setTimeout` und nicht `await Promise.resolve()`
+ *
+ * Weil ein aufgelöstes Versprechen eine MIKROaufgabe ist. Die läuft noch vor
+ * dem nächsten Bildaufbau – die Oberfläche käme also gar nicht dran, und der
+ * Abbrechen-Knopf bliebe genauso tot wie ohne. Erst eine gewöhnliche Aufgabe
+ * lässt den Browser dazwischen zeichnen.
+ */
+export async function gifSchreibenSchrittweise(
+  teilbilder: Teilbild[],
+  optionen: SchrittOptionen = {},
+): Promise<Uint8Array> {
+  if (optionen.abbruch?.aborted) throw new AbbruchError();
+  const gesamt = teilbilder.length;
+  const lauf = gifLauf(teilbilder, optionen);
+  let schritt = lauf.next();
+  while (!schritt.done) {
+    if (optionen.abbruch?.aborted) {
+      // Den Generator sauber beenden, damit seine Puffer freigegeben werden.
+      lauf.return(new Uint8Array());
+      throw new AbbruchError();
+    }
+    const fertig = schritt.value + 1;
+    optionen.fortschritt?.(fertig / gesamt, `GIF: Bild ${fertig} von ${gesamt}`);
+    await new Promise((weiter) => setTimeout(weiter, 0));
+    schritt = lauf.next();
+  }
+  return schritt.value;
 }
