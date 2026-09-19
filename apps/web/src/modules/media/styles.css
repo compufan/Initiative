@@ -1096,3 +1096,31 @@
   color: var(--text-muted);
   font-weight: 400;
 }
+
+/*
+ * „GIF daraus machen" auf einem Video im Chat.
+ *
+ * Dieselbe Scheibe wie der Fernsehknopf, nur einen Knopf weiter links – und
+ * das ist der ganze Zweck der eigenen Klasse: `media-tv-btn` sitzt fest an
+ * `right: 8px`, und zwei Knöpfe an derselben Stelle lägen übereinander.
+ */
+.media-gif-btn {
+  position: absolute;
+  top: 8px;
+  right: 52px;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--radius-full);
+  background: rgba(4, 8, 20, 0.62);
+  color: #fff;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.media-gif-btn[disabled] {
+  opacity: 0.5;
+}

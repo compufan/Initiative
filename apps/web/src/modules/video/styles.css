@@ -1,0 +1,291 @@
+/*
+ * GIF aus einem Video.
+ *
+ * Die Klassen tragen alle das Kürzel `vg-`, damit sie sich nicht mit dem
+ * Sticker-Studio (`stk-`) oder den Medien (`media-`) ins Gehege kommen. Was
+ * dort schon steht, wird wiederverwendet: `.stk-balken` und `.stk-lauf` für
+ * den Fortschritt – ein zweiter Balken mit denselben sechs Pixeln wäre nur
+ * eine weitere Stelle zum Vergessen.
+ */
+
+.vg-hinweis {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.vg-absage {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--text);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+/* ---------- Der Filmstreifen ---------- */
+
+/*
+ * Die Standbilder liegen nebeneinander und teilen sich die Breite zu gleichen
+ * Teilen – `flex: 1` und `min-width: 0`, damit ein Bild mit ungewöhnlichem
+ * Seitenverhältnis die anderen nicht wegdrückt.
+ */
+.vg-streifen {
+  position: relative;
+  display: flex;
+  height: 64px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--surface-2);
+  /* Sonst wählt ein Ziehen über den Streifen die Bilder darunter aus. */
+  user-select: none;
+  touch-action: none;
+}
+
+.vg-streifen.ist-aus {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.vg-streifen > img {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+
+/* Was ausserhalb der Auswahl liegt, wird abgedunkelt – nicht ausgeblendet:
+   Man muss sehen, was man gerade NICHT nimmt, um den Griff dorthin zu ziehen. */
+.vg-schatten {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(4, 8, 20, 0.62);
+  pointer-events: none;
+}
+
+/*
+ * Der Griff ist 28 Punkte breit, obwohl der Strich darin zwei ist.
+ *
+ * Eine Fingerkuppe trifft keine zwei Punkte. Die Fläche ist durchsichtig, der
+ * Strich sitzt in der Mitte – so sieht es schmal aus und lässt sich trotzdem
+ * fassen.
+ */
+.vg-griff {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 28px;
+  margin-left: -14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.vg-griff::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 13px;
+  width: 3px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  box-shadow: 0 0 0 1px rgba(4, 8, 20, 0.45);
+}
+
+.vg-griff:focus-visible::before {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* ---------- Kacheln und Schalter ---------- */
+
+.vg-gruppe {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.vg-gruppe:disabled {
+  opacity: 0.55;
+}
+
+.vg-gruppe > legend {
+  padding: 0;
+  font-size: 0.8rem;
+  font-weight: 650;
+  color: var(--text-muted);
+}
+
+.vg-kacheln {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.vg-kachel {
+  flex: 1 1 auto;
+  min-width: 64px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.vg-kachel.ist-aktiv {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/*
+ * Eine nicht mögliche Stufe wird blasser – bleibt aber ANKLICKBAR.
+ *
+ * Das ist Absicht: Wer darauf tippt, bekommt den Satz zu lesen, warum es
+ * nicht geht. Ein `disabled` verschluckt jeden Klick und damit auch die
+ * Erklärung, und zurück bleibt ein grauer Knopf ohne Grund.
+ */
+.vg-kachel.ist-aus {
+  opacity: 0.6;
+}
+
+.vg-kachel-breit {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+}
+
+.vg-kachel-breit > small {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.vg-schalter {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  cursor: pointer;
+}
+
+.vg-schalter > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vg-schalter small {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+/* ---------- Antippen ---------- */
+
+.vg-antippen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.vg-tippflaeche {
+  position: relative;
+  display: block;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--surface-2);
+  cursor: crosshair;
+  /* Sonst zoomt ein Doppeltipp das Bild, statt einen Punkt zu setzen. */
+  touch-action: manipulation;
+}
+
+.vg-tippflaeche > img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/*
+ * Der Punkt sitzt MIT SEINER MITTE auf der getippten Stelle.
+ *
+ * Ohne die Verschiebung um die halbe Kante läge seine obere linke Ecke dort –
+ * und jeder Punkt sässe sichtbar unten rechts neben dem, was gemeint war.
+ */
+.vg-punkt {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.85);
+  pointer-events: none;
+}
+
+.vg-punkt.ist-weg {
+  background: var(--danger);
+}
+
+/* ---------- Nachfrage und Ergebnis ---------- */
+
+.vg-nachfrage {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+
+.vg-nachfrage > p {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.vg-ergebnis {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/*
+ * Das Karomuster hinter der Vorschau.
+ *
+ * Ein freigestelltes GIF ist an den Rändern durchsichtig, und auf einem
+ * einfarbigen Untergrund sieht man nicht, ob dort nichts ist oder etwas in
+ * dieser Farbe. Das Karo beantwortet das ohne ein Wort.
+ */
+.vg-vorschau {
+  width: 100%;
+  max-height: 46dvh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  background-color: var(--surface-2);
+  background-image:
+    linear-gradient(45deg, var(--border) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--border) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--border) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--border) 75%);
+  background-size: 16px 16px;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+}

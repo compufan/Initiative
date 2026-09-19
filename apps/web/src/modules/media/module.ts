@@ -11,6 +11,8 @@ import { VoiceSheet } from './VoiceSheet.js';
 import './styles.css';
 // Der Cast-Knopf sitzt in der Lightbox – also kommt sein Blatt mit ihr.
 import '../fernseher/styles.css';
+// „GIF aus Video" hängt an der Videoblase – also kommen seine Formen mit ihr.
+import '../video/styles.css';
 
 /**
  * Media module – camera, gallery, voice messages and files.

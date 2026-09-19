@@ -170,6 +170,16 @@ export interface VideoBilder {
   readonly bilder: readonly GelesenesBild[];
   readonly breite: number;
   readonly hoehe: number;
+  /**
+   * Die Masse des Videos selbst – nicht die der gelieferten Bilder.
+   *
+   * Gebraucht von jedem, der die gelieferte Grösse nicht übernimmt: Die
+   * Oberfläche holt sich den Filmstreifen in 96 Punkten, rechnet das GIF aber
+   * in 384. Ohne diese Zahlen müsste sie aus einem Vorschaubild auf das
+   * Original zurückschliessen – und läge um den Faktor vier daneben.
+   */
+  readonly quellBreite: number;
+  readonly quellHoehe: number;
   /** Die tatsächliche Länge des Videos in Millisekunden. */
   readonly dauerMs: number;
 }
@@ -223,7 +233,14 @@ export async function videoBilderLesen(datei: Blob, auftrag: LeseAuftrag): Promi
       auftrag.fortschritt?.((i + 1) / gesamt, `Bild ${i + 1} von ${gesamt}`);
     }
 
-    return { bilder, breite: b, hoehe: h, dauerMs: Math.round(dauerS * 1000) };
+    return {
+      bilder,
+      breite: b,
+      hoehe: h,
+      quellBreite: video.videoWidth,
+      quellHoehe: video.videoHeight,
+      dauerMs: Math.round(dauerS * 1000),
+    };
   } finally {
     /*
      * Erst die Quelle leeren, dann die Adresse freigeben. Andersherum lädt

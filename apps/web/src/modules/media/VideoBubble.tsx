@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { formatDuration } from '@initiative/shared';
 import type { MessageRendererProps } from '../types.js';
 import { FernsehKnopf } from '../fernseher/FernsehKnopf.js';
+import { VideoWerkstatt } from '../video/VideoWerkstatt.js';
 import { MediaCaption, PendingMedia } from './MediaFrame.js';
 import { claimPlayback, mediaSrc, releasePlayback, standbildHolen } from './helpers.js';
 
@@ -44,6 +45,12 @@ export function VideoBubble({ message, isMine }: MessageRendererProps) {
           onPause={(ereignis) => releasePlayback(ereignis.currentTarget)}
         />
         <FernsehKnopf video={video} attachmentId={attachment.id} />
+        {/*
+          „GIF daraus machen" sitzt neben dem Fernsehknopf und nicht im
+          Nachrichtenmenü: Wer ein Video sieht und daraus ein GIF will, sucht
+          nicht erst unter „Weiterleiten" und „Löschen" danach.
+        */}
+        <VideoWerkstatt video={attachment} className="media-gif-btn" />
         {attachment.durationMs != null && attachment.durationMs > 0 && (
           <span className="media-badge">{formatDuration(attachment.durationMs)}</span>
         )}

@@ -17,6 +17,17 @@ import { isEngineEnabled } from '../stickers/engines/settings.js';
  * | BiRefNet (Grafik) |  2,0 s  |     100 s |
  * | BiRefNet (Proz.)  |  295 s  |  über 4 h |
  *
+ * u2netp wurde später in `e2e/videoFreistellen.spec.ts` noch einmal gemessen
+ * und kam dort auf 2,18 s. Unten steht deshalb die grössere Zahl: Eine
+ * Schätzung, die zu kurz ausfällt, ärgert; eine, die zu lang ausfällt, wird
+ * angenehm überholt.
+ *
+ * Die Reihenfolge der Liste unten richtet sich nach der GÜTE, nicht nach dem
+ * Preis. Das ist kein Versehen: BiRefNet auf einer Grafikeinheit ist schneller
+ * als u2netp auf dem Prozessor und trotzdem das bessere Netz. Gebraucht wird
+ * die Reihenfolge für den Rückfall in `gueteWaehlen` – und der soll zur
+ * nächstschlechteren Güte führen, nicht zur nächstbilligeren.
+ *
  * Die letzte Zeile ist der Grund, warum „Sehr genau" ohne taugliche
  * Grafikeinheit GAR NICHT angeboten wird – und zwar mit einem Satz, der das
  * sagt, statt mit einem abgeblendeten Knopf. Ein abgeblendeter Knopf lässt
@@ -69,7 +80,7 @@ export const VIDEO_GUETEN: readonly GueteInfo[] = [
     netz: 'object',
     schluesselAbstand: 4,
     kante: 384,
-    jeNetzlaufMs: 1600,
+    jeNetzlaufMs: 2200,
     brauchtGrafik: false,
   },
   {

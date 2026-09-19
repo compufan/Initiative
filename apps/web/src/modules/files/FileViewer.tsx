@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { formatBytes, formatDuration, type AttachmentDto } from '@initiative/shared';
 import { FotoWerkstatt } from '../media/FotoWerkstatt.js';
+import { VideoWerkstatt } from '../video/VideoWerkstatt.js';
 import { mediaSrc, standbildHolen } from '../media/helpers.js';
 import { FernsehKnopf } from '../fernseher/FernsehKnopf.js';
 import { CastKnopf } from '../fernseher/CastKnopf.js';
@@ -93,6 +94,14 @@ export function FileViewer({
         {datei.kind === 'image' && (
           <FotoWerkstatt
             foto={datei}
+            ablegen={ablegen}
+            zielName={zielName}
+            onOffen={setWerkstattOffen}
+          />
+        )}
+        {datei.kind === 'video' && (
+          <VideoWerkstatt
+            video={datei}
             ablegen={ablegen}
             zielName={zielName}
             onOffen={setWerkstattOffen}

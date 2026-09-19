@@ -47,19 +47,25 @@ beforeEach(() => {
 });
 
 describe('Die Liste der Güten', () => {
-  it('steht in der Reihenfolge, in der sie teurer wird', () => {
+  it('steht in der Reihenfolge, in der sie anspruchsvoller wird', () => {
     /*
-     * Daran hängt `gueteWaehlen`: Der Rückfall läuft die Liste RÜCKWÄRTS,
-     * also von teuer nach billig. Wäre die Reihenfolge anders, fiele „Sehr
-     * genau" ohne Grafikeinheit auf etwas Teureres zurück statt auf etwas
-     * Billigeres.
+     * Daran hängt `gueteWaehlen`: Der Rückfall läuft die Liste RÜCKWÄRTS und
+     * soll bei der nächstSCHLECHTEREN Güte landen.
+     *
+     * Geprüft wird darum der Anspruch und nicht der Preis – der wäre die
+     * naheliegende und die falsche Regel: BiRefNet auf einer Grafikeinheit
+     * rechnet schneller als u2netp auf dem Prozessor und ist trotzdem das
+     * bessere Netz. Anspruch heisst hier: Die Rechengrösse wird nie kleiner,
+     * und was einmal eine Grafikeinheit braucht, kommt danach nicht mehr ohne
+     * aus.
      */
     for (let i = 1; i < VIDEO_GUETEN.length; i += 1) {
       const vorher = VIDEO_GUETEN[i - 1];
       const jetzt = VIDEO_GUETEN[i];
-      const kostenVorher = vorher.jeNetzlaufMs / vorher.schluesselAbstand;
-      const kostenJetzt = jetzt.jeNetzlaufMs / jetzt.schluesselAbstand;
-      expect(kostenJetzt, `${vorher.key} → ${jetzt.key}`).toBeGreaterThan(kostenVorher);
+      expect(jetzt.kante, `${vorher.key} → ${jetzt.key}`).toBeGreaterThanOrEqual(vorher.kante);
+      if (vorher.brauchtGrafik) {
+        expect(jetzt.brauchtGrafik, `${vorher.key} → ${jetzt.key}`).toBe(true);
+      }
     }
   });
 
