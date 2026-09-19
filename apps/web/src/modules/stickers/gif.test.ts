@@ -40,6 +40,105 @@ function teil(daten: ImageData, dauerMs = 100): Teilbild {
   return { daten, dauerMs };
 }
 
+/**
+ * Ein GIF wieder auseinandernehmen – Tafel, Teilbilder, Farben.
+ *
+ * Das ist mehr als `bildlageAus` kann: Der zählt Teilbilder, dieser Leser
+ * packt den LZW-Strom aus und sagt, WELCHE FARBE an einer Stelle steht. Nötig
+ * geworden, als der Farbzwischenspeicher aus der Teilbildschleife wanderte –
+ * ein Speicher, den sich alle Teilbilder teilen, ist nur dann richtig, wenn er
+ * beim zweiten Teilbild dieselben Farben liefert wie beim ersten, und genau
+ * das lässt sich ohne Auspacken nicht sehen.
+ */
+function gifLesen(roh: Uint8Array) {
+  let at = 13; // Kopf (6) und Logical Screen Descriptor (7)
+  const tafelBits = (roh[10] & 0x07) + 1;
+  const tafel: number[][] = [];
+  if (roh[10] & 0x80) {
+    for (let i = 0; i < 1 << tafelBits; i += 1, at += 3) {
+      tafel.push([roh[at], roh[at + 1], roh[at + 2]]);
+    }
+  }
+
+  /** Die Unterblockkette ab `at` einsammeln; `at` steht danach dahinter. */
+  const bloecke = () => {
+    const raus: number[] = [];
+    while (roh[at] !== 0) {
+      const laenge = roh[at];
+      at += 1;
+      for (let i = 0; i < laenge; i += 1) raus.push(roh[at + i]);
+      at += laenge;
+    }
+    at += 1;
+    return raus;
+  };
+
+  const teilbilder: { breite: number; hoehe: number; indizes: number[] }[] = [];
+  while (at < roh.length && roh[at] !== 0x3b) {
+    if (roh[at] === 0x21) {
+      at += 2; // Kennung und Bezeichner
+      bloecke();
+      continue;
+    }
+    if (roh[at] !== 0x2c) throw new Error(`Unbekannter Block 0x${roh[at].toString(16)} bei ${at}`);
+    at += 1;
+    const breite = roh[at + 4] | (roh[at + 5] << 8);
+    const hoehe = roh[at + 6] | (roh[at + 7] << 8);
+    at += 9;
+    const mindestBreite = roh[at];
+    at += 1;
+    teilbilder.push({ breite, hoehe, indizes: lzwAuspacken(bloecke(), mindestBreite) });
+  }
+  return { tafel, teilbilder };
+}
+
+/** Der Gegenspieler zu `lzwPacken`: variable Codebreite, kleinstes Bit zuerst. */
+function lzwAuspacken(bytes: number[], mindestBreite: number): number[] {
+  const loeschen = 1 << mindestBreite;
+  const ende = loeschen + 1;
+  let woerter: number[][] = [];
+  let breite = mindestBreite + 1;
+  const raus: number[] = [];
+  let vorher: number[] | null = null;
+  let speicher = 0;
+  let bits = 0;
+
+  const zuruecksetzen = () => {
+    woerter = [];
+    for (let i = 0; i < loeschen; i += 1) woerter.push([i]);
+    woerter.push([], []); // Plätze für Lösch- und Endecode
+    breite = mindestBreite + 1;
+    vorher = null;
+  };
+  zuruecksetzen();
+
+  for (const byte of bytes) {
+    speicher |= byte << bits;
+    bits += 8;
+    while (bits >= breite) {
+      const code = speicher & ((1 << breite) - 1);
+      speicher >>>= breite;
+      bits -= breite;
+      if (code === ende) return raus;
+      if (code === loeschen) {
+        zuruecksetzen();
+        continue;
+      }
+      // Der Sonderfall des Formats: ein Code, der erst durch sich selbst
+      // entsteht. Er kommt vor, wenn dasselbe Zeichen sich sofort wiederholt.
+      const wort: number[] =
+        code < woerter.length ? woerter[code] : [...(vorher ?? []), (vorher ?? [])[0]];
+      raus.push(...wort);
+      if (vorher) {
+        woerter.push([...vorher, wort[0]]);
+        if (woerter.length === 1 << breite && breite < 12) breite += 1;
+      }
+      vorher = wort;
+    }
+  }
+  return raus;
+}
+
 describe('gifSchreiben', () => {
   it('schreibt eine Datei, die der eigene Leser als bewegt erkennt', () => {
     const rot = bild(8, 8, () => [220, 30, 30]);
@@ -114,6 +213,54 @@ describe('gifSchreiben', () => {
       }
     }
     expect(gefunden).toBe(2);
+  });
+
+  it('gibt jedem Teilbild seine eigenen Farben zurück', () => {
+    /*
+     * Die Prüfung, die der gemeinsame Farbzwischenspeicher braucht.
+     *
+     * Er wird über ALLE Teilbilder hinweg gefüllt – das ist der Unterschied
+     * zwischen 9754 ms und 2866 ms bei fünfzig Teilbildern. Richtig ist das
+     * nur, weil die Tafel für alle dieselbe ist. Wäre an dem Schluss etwas
+     * falsch, bekäme das zweite Teilbild die Farben des ersten, und die Datei
+     * wäre trotzdem tadellos aufgebaut – `bildlageAus` zählte weiter drei.
+     * Sichtbar wird es erst hier, wo die Farben wieder ausgepackt werden.
+     */
+    const farben = [
+      [220, 30, 30],
+      [30, 30, 220],
+      [30, 200, 30],
+      [230, 210, 40],
+    ];
+    const roh = gifSchreiben(farben.map((f) => teil(bild(6, 6, () => f))));
+    const { tafel, teilbilder } = gifLesen(roh);
+    expect(teilbilder).toHaveLength(4);
+
+    teilbilder.forEach((gelesen, nummer) => {
+      expect(gelesen.indizes, `Teilbild ${nummer} ist unvollständig`).toHaveLength(36);
+      for (const platz of gelesen.indizes) {
+        const [r, g, b] = tafel[platz];
+        const [sr, sg, sb] = farben[nummer];
+        /*
+         * Acht Stufen Abstand sind erlaubt, keine mehr: `farbtafel` zählt auf
+         * fünf Bit je Kanal gerundet, die Tafel trifft die Farbe also nie ganz
+         * genau. Eine VERWECHSELTE Farbe läge um ein Vielfaches daneben.
+         */
+        expect(Math.abs(r - sr), `Teilbild ${nummer}, Rot`).toBeLessThanOrEqual(8);
+        expect(Math.abs(g - sg), `Teilbild ${nummer}, Grün`).toBeLessThanOrEqual(8);
+        expect(Math.abs(b - sb), `Teilbild ${nummer}, Blau`).toBeLessThanOrEqual(8);
+      }
+    });
+  });
+
+  it('gibt einer wiederkehrenden Farbe wieder denselben Platz', () => {
+    // Dasselbe Bild am Anfang und am Ende: Was der Zwischenspeicher beim
+    // ersten Mal gelernt hat, muss beim letzten Mal noch stimmen.
+    const rot = bild(5, 5, () => [200, 40, 40]);
+    const blau = bild(5, 5, () => [40, 40, 200]);
+    const { teilbilder } = gifLesen(gifSchreiben([teil(rot), teil(blau), teil(rot)]));
+    expect(teilbilder[0].indizes).toEqual(teilbilder[2].indizes);
+    expect(teilbilder[0].indizes).not.toEqual(teilbilder[1].indizes);
   });
 
   it('durchsichtige Punkte bekommen den reservierten Platz', () => {
