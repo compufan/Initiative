@@ -223,8 +223,21 @@ const JE_BILD_SCHIEBEN_MS = 10;
 const JE_BILD_SCHREIBEN_MS = 57;
 const GEMESSEN_KANTE = 512;
 
-export function dauerSchaetzenMs(bilder: number, guete: GueteInfo, freistellen: boolean): number {
-  const flaeche = (guete.kante * guete.kante) / (GEMESSEN_KANTE * GEMESSEN_KANTE);
+export function dauerSchaetzenMs(
+  bilder: number,
+  guete: GueteInfo,
+  freistellen: boolean,
+  /*
+   * Die Kante, in der wirklich geschrieben wird.
+   *
+   * Ohne Angabe die der Güte. Ohne Freistellen ist es aber eine andere –
+   * dann läuft kein Netz, und die Güte hat nichts mehr zu sagen (siehe
+   * `VOLLBILD_KANTE` in `gifBauen.ts`). Sie hier trotzdem zu benutzen hiesse,
+   * mit einer Zahl zu rechnen, die für diesen Lauf gar nicht gilt.
+   */
+  kante = guete.kante,
+): number {
+  const flaeche = (kante * kante) / (GEMESSEN_KANTE * GEMESSEN_KANTE);
   let summe = bilder * (JE_BILD_LESEN_MS + JE_BILD_SCHREIBEN_MS * flaeche);
   if (freistellen) {
     const laeufe = Math.ceil(bilder / guete.schluesselAbstand);
@@ -249,8 +262,13 @@ export interface Phasen {
   readonly schreiben: number;
 }
 
-export function phasenGewichte(bilder: number, guete: GueteInfo, freistellen: boolean): Phasen {
-  const flaeche = (guete.kante * guete.kante) / (GEMESSEN_KANTE * GEMESSEN_KANTE);
+export function phasenGewichte(
+  bilder: number,
+  guete: GueteInfo,
+  freistellen: boolean,
+  kante = guete.kante,
+): Phasen {
+  const flaeche = (kante * kante) / (GEMESSEN_KANTE * GEMESSEN_KANTE);
   const lesen = bilder * JE_BILD_LESEN_MS;
   const schreiben = bilder * JE_BILD_SCHREIBEN_MS * flaeche;
   let frei = 0;

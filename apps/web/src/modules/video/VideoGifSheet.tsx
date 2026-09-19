@@ -25,7 +25,13 @@ import {
   writeVideoGuete,
   type VideoGuete,
 } from './einstellungen.js';
-import { ABSCHNITT_TITEL, BauAbbruch, gifAusVideo, type Abschnitt } from './gifBauen.js';
+import {
+  ABSCHNITT_TITEL,
+  BauAbbruch,
+  VOLLBILD_KANTE,
+  gifAusVideo,
+  type Abschnitt,
+} from './gifBauen.js';
 
 /**
  * Aus einem Video ein GIF machen.
@@ -92,6 +98,15 @@ export function VideoGifSheet({
   const [freistellen, setFreistellen] = useState(false);
   const [tipps, setTipps] = useState<Tipp[]>([]);
   const [tippMinus, setTippMinus] = useState(false);
+  /**
+   * Das Bild, auf das getippt wird – genau bei `vonMs`.
+   *
+   * Nicht das nächstgelegene Standbild aus dem Streifen: Der zeigt bei einem
+   * Video von zwanzig Sekunden alle zweieinhalb Sekunden eines, und so weit
+   * ist eine gehende Person längst woanders. Getippt würde dann auf den
+   * Hintergrund, und das Netz fände dort auch etwas – nur nicht das Gemeinte.
+   */
+  const [anfangsbild, setAnfangsbild] = useState<string | null>(null);
   const [grafikTauglich, setGrafikTauglich] = useState(false);
   const [lauf, setLauf] = useState<Lauf | null>(null);
   const [ergebnis, setErgebnis] = useState<{ url: string; blob: Blob; text: string } | null>(null);
@@ -189,7 +204,59 @@ export function VideoGifSheet({
    * werden die Tipps als Anteile gemerkt und erst hier in Punkte umgerechnet:
    * Ein Wechsel der Güte verschiebt sonst jeden gesetzten Tipp.
    */
-  const masseBild = quelle ? masse(quelle.b, quelle.h, info.kante) : null;
+  /*
+   * Die Kante, in der wirklich gerechnet wird.
+   *
+   * Mit Freistellen die der Güte – dort hängt die Kante der Maske daran, und
+   * bei BiRefNet sind es zwingend 512. Ohne Freistellen läuft kein Netz, und
+   * dann hat die Güte nichts mehr zu sagen: siehe `VOLLBILD_KANTE`.
+   */
+  const rechenKante = freistellen ? info.kante : VOLLBILD_KANTE;
+  const masseBild = quelle ? masse(quelle.b, quelle.h, rechenKante) : null;
+
+  /* ---------- Das Bild zum Antippen ---------- */
+
+  useEffect(() => {
+    if (!freistellen || dauerMs === 0) {
+      setAnfangsbild(null);
+      return undefined;
+    }
+    let gilt = true;
+    const abbruch = new AbortController();
+    /*
+     * Ein Viertelsekunde Ruhe abwarten.
+     *
+     * Am Griff wird gezogen, nicht getippt – ohne diese Pause löste jede
+     * Zwischenstellung einen Sprung im Video aus, und bei gemessenen 75 ms je
+     * Sprung stapelten sich die Anfragen schneller, als sie abgearbeitet
+     * werden.
+     */
+    const uhr = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const gelesen = await videoBilderLesen(video, {
+            zeitpunkte: [vonMs],
+            kante: 320,
+            abbruch: abbruch.signal,
+          });
+          if (!gilt) return;
+          const flaeche = document.createElement('canvas');
+          flaeche.width = gelesen.breite;
+          flaeche.height = gelesen.hoehe;
+          flaeche.getContext('2d')?.putImageData(gelesen.bilder[0].daten, 0, 0);
+          setAnfangsbild(flaeche.toDataURL('image/webp', 0.8));
+        } catch {
+          // Klappt es nicht, bleibt das Standbild aus dem Streifen – ungenau,
+          // aber besser als eine leere Fläche.
+        }
+      })();
+    }, 250);
+    return () => {
+      gilt = false;
+      window.clearTimeout(uhr);
+      abbruch.abort();
+    };
+  }, [freistellen, vonMs, dauerMs, video]);
 
   /* ---------- Was dabei herauskommt ---------- */
 
@@ -198,8 +265,8 @@ export function VideoGifSheet({
     [vonMs, bisMs, bildrate],
   );
   const anzahl = plan.zeitpunkte.length;
-  const bytes = groesseSchaetzenB(anzahl, info.kante, freistellen);
-  const dauer = dauerSchaetzenMs(anzahl, info, freistellen);
+  const bytes = groesseSchaetzenB(anzahl, rechenKante, freistellen);
+  const dauer = dauerSchaetzenMs(anzahl, info, freistellen, rechenKante);
 
   /* ---------- Rechnen ---------- */
 
@@ -445,7 +512,8 @@ export function VideoGifSheet({
               {!machbar.moeglich && <p className="vg-absage">{machbar.grund}</p>}
               {streifen.length > 0 && (
                 <Antippen
-                  bild={streifen[Math.min(streifen.length - 1, naechsterStreifen(streifen, vonMs))]}
+                  bild={anfangsbild ?? streifen[naechsterStreifen(streifen, vonMs)].bild}
+                  genau={anfangsbild !== null}
                   tipps={tipps}
                   minus={tippMinus}
                   onTipp={(tipp) => setTipps((alt) => [...alt, tipp])}
@@ -528,13 +596,16 @@ function naechsterStreifen(bilder: { zeitMs: number }[], vonMs: number): number 
 
 function Antippen({
   bild,
+  genau,
   tipps,
   minus,
   onTipp,
   onZurueck,
   onMinus,
 }: {
-  bild: { bild: string };
+  bild: string;
+  /** Ob das Bild wirklich vom Anfang kommt oder nur das nächstgelegene ist. */
+  genau: boolean;
   tipps: Tipp[];
   minus: boolean;
   onTipp: (tipp: Tipp) => void;
@@ -546,6 +617,7 @@ function Antippen({
       <p className="vg-hinweis">
         Tipp an, was bleiben soll. Die Stelle wandert mit dem Bild mit – ein Tipp auf eine Person
         bleibt auf ihr, auch wenn sie sich bewegt.
+        {!genau && ' Das Bild wird noch geholt …'}
       </p>
       <button
         type="button"
@@ -559,7 +631,7 @@ function Antippen({
           });
         }}
       >
-        <img src={bild.bild} alt="Erstes Bild des Ausschnitts" />
+        <img src={bild} alt="Erstes Bild des Ausschnitts" />
         {tipps.map((tipp, i) => (
           <span
             key={`${tipp.ax}-${tipp.ay}-${i}`}

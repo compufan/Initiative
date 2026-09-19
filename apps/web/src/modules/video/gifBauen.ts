@@ -22,6 +22,21 @@ import { MAX_BILDER, phasenGewichte, type GueteInfo } from './einstellungen.js';
  * das nimmt bewegte Bilder längst entgegen (`bewegtLesen.ts`).
  */
 
+/**
+ * Die Kante eines GIF OHNE Freistellen.
+ *
+ * Ohne Freistellen läuft kein Netz, und damit hat die Güte nichts mehr zu
+ * sagen – ihre Kante zu benutzen hiesse, die Grösse des Ergebnisses von einer
+ * Einstellung abhängig zu machen, die gar nicht mehr angezeigt wird. Wer
+ * „Schnell" stehen hatte, bekäme 320; wer einmal „Sehr genau" probiert hat,
+ * 512, und nichts erklärte den Unterschied.
+ *
+ * 384 ist die Mitte und für ein Vollbild-GIF ohnehin die Obergrenze des
+ * Sinnvollen: Fünfzig Bilder à 512² wiegen gemessen 6,2 MB und passen damit
+ * nicht einmal mehr als Bild in eine Nachricht.
+ */
+export const VOLLBILD_KANTE = 384;
+
 export interface BauAuftrag {
   readonly datei: Blob;
   readonly vonMs: number;
@@ -90,7 +105,8 @@ export async function gifAusVideo(auftrag: BauAuftrag): Promise<BauErgebnis> {
   if (auftrag.abbruch?.aborted) throw new AbbruchError();
 
   const plan = zeitpunkte(auftrag.vonMs, auftrag.bisMs, auftrag.bildrate, MAX_BILDER);
-  const gewicht = phasenGewichte(plan.zeitpunkte.length, auftrag.guete, auftrag.freistellen);
+  const kante = auftrag.freistellen ? auftrag.guete.kante : VOLLBILD_KANTE;
+  const gewicht = phasenGewichte(plan.zeitpunkte.length, auftrag.guete, auftrag.freistellen, kante);
   const melden = (abschnitt: Abschnitt, anteil: number, text: string) => {
     const vorher =
       abschnitt === 'lesen'
@@ -111,7 +127,7 @@ export async function gifAusVideo(auftrag: BauAuftrag): Promise<BauErgebnis> {
   try {
     gelesen = await videoBilderLesen(auftrag.datei, {
       zeitpunkte: plan.zeitpunkte,
-      kante: auftrag.guete.kante,
+      kante,
       fortschritt: (anteil, text) => melden('lesen', anteil, text),
       abbruch: auftrag.abbruch,
     });
