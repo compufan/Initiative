@@ -384,7 +384,18 @@ export function VideoEditorSheet({
           </>
         )}
 
-        <fieldset className="vg-gruppe" disabled={lauf !== null}>
+        {/*
+          Die Grösse steht FEST, sobald etwas eingestellt ist – und das ist
+          keine Bequemlichkeit.
+
+          Ein `BildDoc` steht in Punkten seines Quellbildes. Eingestellt wird
+          an einem Standbild in der Rechengrösse; ein Zuschnitt „von 0 bis
+          160" meint bei 640 die linke Hälfte und bei 1280 das linke Viertel.
+          Wer die Grösse danach wechselt, bekäme einen Ausschnitt, den er nie
+          gewählt hat – ohne Fehlermeldung und ohne dass irgendwo stünde,
+          woran es liegt.
+        */}
+        <fieldset className="vg-gruppe" disabled={lauf !== null || doc !== null}>
           <legend>Grösse</legend>
           <div className="vg-kacheln">
             {KANTEN.map((wahl) => (
@@ -399,6 +410,19 @@ export function VideoEditorSheet({
               </button>
             ))}
           </div>
+          {doc && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={lauf !== null}
+              onClick={() => {
+                setDoc(null);
+                setStandbild(null);
+              }}
+            >
+              Grösse ändern – verwirft die Bearbeitung
+            </button>
+          )}
         </fieldset>
 
         <fieldset className="vg-gruppe" disabled={lauf !== null}>

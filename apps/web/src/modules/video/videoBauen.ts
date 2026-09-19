@@ -165,6 +165,28 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
   const stift = quelle.getContext('2d');
   if (!stift) throw new Error('Diese Ansicht kann keine Bilder zeichnen');
 
+  /*
+   * Passt das Dokument überhaupt zu dieser Bildgrösse?
+   *
+   * Ein `BildDoc` steht in Punkten SEINES Quellbildes. Kommt es von einem
+   * Standbild in 640 und wird hier in 192 gerechnet, meint sein Zuschnitt
+   * eine Fläche, die es gar nicht gibt – `wirksamerZuschnitt` liefert dann
+   * brav den alten Ausschnitt, und heraus kommt ein Film in einer Grösse,
+   * die niemand gewählt hat. Ohne Fehler, ohne Warnung.
+   *
+   * Nachgemessen: Ein Dokument von 320 × 240 auf Bildern von 192 × 144 ergab
+   * einen Film von 320 × 240. Die Oberfläche verhindert das, indem sie die
+   * Grösse festhält, sobald etwas eingestellt ist – dieser Riegel ist der
+   * zweite, für alle anderen Aufrufer.
+   */
+  const z = auftrag.doc.zuschnitt;
+  if (z.x + z.w > gelesen.breite + 1 || z.y + z.h > gelesen.hoehe + 1) {
+    throw new Error(
+      `Diese Bearbeitung gehört zu einem Bild von mindestens ${z.x + z.w} × ${z.y + z.h}, ` +
+        `gerechnet wird aber in ${gelesen.breite} × ${gelesen.hoehe}.`,
+    );
+  }
+
   // Einmal zeichnen, um die Ausgabegrösse zu erfahren – sie hängt am
   // Zuschnitt und an der Drehung, nicht nur an der Quelle.
   stift.putImageData(gelesen.bilder[0].daten, 0, 0);
