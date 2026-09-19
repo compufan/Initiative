@@ -20,6 +20,7 @@ let hoechstens = 0;
 /** Die Punkte, mit denen `tippTeilRechnen` gerufen wurde – je Aufruf eine Liste. */
 let letzteSaaten: { x: number; y: number }[][] = [];
 let mitNetzGesehen: boolean[] = [];
+let toleranzGesehen: number[] = [];
 
 vi.mock('../stickers/engines/index.js', async () => {
   const echt = await vi.importActual<typeof import('../stickers/engines/index.js')>(
@@ -57,10 +58,11 @@ vi.mock('../bild/tippMaske.js', async () => {
     tippTeilRechnen: async (
       bild: ImageData,
       punkte: readonly { x: number; y: number }[],
-      wahl: { mitNetz: boolean },
+      wahl: { mitNetz: boolean; toleranz: number },
     ) => {
       letzteSaaten.push(punkte.map(({ x, y }) => ({ x, y })));
       mitNetzGesehen.push(wahl.mitNetz);
+      toleranzGesehen.push(wahl.toleranz);
       return {
         id: 't1',
         modus: 'dazu' as const,
@@ -68,7 +70,7 @@ vi.mock('../bild/tippMaske.js', async () => {
         art: 'tipp' as const,
         mitNetz: wahl.mitNetz,
         punkte: [...punkte],
-        toleranz: 32,
+        toleranz: wahl.toleranz,
         breite: bild.width,
         hoehe: bild.height,
         alpha: new Uint8Array(bild.width * bild.height),
@@ -116,6 +118,7 @@ function folge(anzahl: number, schritt = 2): GelesenesBild[] {
 beforeEach(() => {
   letzteSaaten = [];
   mitNetzGesehen = [];
+  toleranzGesehen = [];
   gleichzeitig = 0;
   hoechstens = 0;
 });
@@ -223,6 +226,22 @@ describe('folgeMasken', () => {
     expect(letzteSaaten).toHaveLength(2);
     expect(letzteSaaten[0]).toHaveLength(2);
     expect(letzteSaaten[1]).toHaveLength(1);
+  });
+
+  it('reicht die Toleranz durch, statt sie fest zu setzen', async () => {
+    /*
+     * Ohne Netz entscheidet die Toleranz alles: Auf einer glatten Fläche
+     * verschluckt schon eine kleine das ganze Ding, auf einem körnigen Grund
+     * reicht auch eine grosse nicht über den Rand. Ein fester Wert machte das
+     * Antippen nach Farbe zu einer Wette.
+     */
+    await folgeMasken(folge(1), {
+      guete: GUETE,
+      mitNetz: false,
+      toleranz: 77,
+      tipps: [{ x: 4, y: 4, dazu: true }],
+    });
+    expect(toleranzGesehen).toEqual([77]);
   });
 
   it('reicht die Wahl „mit Netz“ durch', async () => {

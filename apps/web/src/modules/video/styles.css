@@ -289,3 +289,16 @@
     8px -8px,
     -8px 0;
 }
+
+/* Ein Regler mit seiner Beschriftung darüber – schmal genug fürs Blatt. */
+.vg-regler {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.vg-regler > input {
+  width: 100%;
+}

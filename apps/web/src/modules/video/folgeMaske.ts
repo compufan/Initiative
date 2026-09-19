@@ -50,6 +50,14 @@ export interface FolgeAuftrag {
    */
   readonly mitNetz?: boolean;
   /**
+   * Wie weit die Farbflutung von einem Tipp aus wandert, 0 … 255.
+   *
+   * Nur ohne Netz von Bedeutung, und dort entscheidend: Auf einer glatten
+   * Fläche verschluckt schon eine kleine Toleranz das ganze Ding, auf einem
+   * körnigen Grund reicht auch eine grosse nicht über den Rand.
+   */
+  readonly toleranz?: number;
+  /**
    * Die angetippten Punkte – in Koordinaten des ERSTEN Bildes.
    *
    * Sie werden für die folgenden Schlüsselbilder mitgeschoben, damit ein Tipp
@@ -186,7 +194,13 @@ export async function folgeMasken(
         abbruch: auftrag.abbruch,
       });
       if (tipps && tipps.length > 0) {
-        maske = await tippsAnwenden(maske, bilder[i].daten, tipps, auftrag.mitNetz);
+        maske = await tippsAnwenden(
+          maske,
+          bilder[i].daten,
+          tipps,
+          auftrag.mitNetz,
+          auftrag.toleranz,
+        );
       }
       masken.push(maske);
       netzlaeufe += 1;
@@ -232,6 +246,7 @@ async function tippsAnwenden(
   bild: ImageData,
   tipps: readonly { x: number; y: number; dazu: boolean }[],
   mitNetzGewuenscht?: boolean,
+  toleranz = TOLERANZ_VORGABE,
 ): Promise<Uint8Array> {
   // Ohne verfügbares Tippnetz wird nach Farbe getippt, statt zu scheitern.
   const mitNetz = (mitNetzGewuenscht ?? true) && tippNetzVerfuegbar();
@@ -243,7 +258,7 @@ async function tippsAnwenden(
     const teil = await tippTeilRechnen(bild, punkte, {
       modus: dazu ? 'dazu' : 'weg',
       mitNetz,
-      toleranz: TOLERANZ_VORGABE,
+      toleranz,
     });
     if (!teil || teil.art !== 'tipp') continue;
     raus = dazu ? vereinigen(raus, teil.alpha) : abziehen(raus, teil.alpha);

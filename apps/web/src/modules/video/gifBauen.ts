@@ -48,6 +48,8 @@ export interface BauAuftrag {
   readonly tipps?: readonly { x: number; y: number; dazu: boolean }[];
   /** Ob die Tipps durch das Tippnetz gehen oder nach Farbe fluten. */
   readonly mitNetz?: boolean;
+  /** Wie weit die Farbflutung wandert – nur ohne Netz von Bedeutung. */
+  readonly toleranz?: number;
   /** Anteil 0…1, der Name des Abschnitts und ein Satz dazu. */
   readonly fortschritt?: (anteil: number, abschnitt: Abschnitt, text: string) => void;
   readonly abbruch?: AbortSignal;
@@ -145,6 +147,7 @@ export async function gifAusVideo(auftrag: BauAuftrag): Promise<BauErgebnis> {
         guete: auftrag.guete,
         tipps: auftrag.tipps,
         mitNetz: auftrag.mitNetz,
+        toleranz: auftrag.toleranz,
         fortschritt: (anteil, text) => melden('freistellen', anteil, text),
         abbruch: auftrag.abbruch,
       });

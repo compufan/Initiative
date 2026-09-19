@@ -14,6 +14,7 @@ import {
 } from './ausschnitt.js';
 import { masse, videoBilderLesen } from './bilderLesen.js';
 import { tippNetzVerfuegbar } from '../bild/tippMaske.js';
+import { TOLERANZ_VORGABE } from '../bild/doc.js';
 import {
   GUETE_VORGABE,
   MAX_BILDER,
@@ -107,6 +108,7 @@ export function VideoGifSheet({
    * Antippen in eine Fehlermeldung liefe.
    */
   const [tippMitNetz, setTippMitNetz] = useState(() => tippNetzVerfuegbar());
+  const [toleranz, setToleranz] = useState(TOLERANZ_VORGABE);
   /**
    * Das Bild, auf das getippt wird – genau bei `vonMs`.
    *
@@ -331,6 +333,7 @@ export function VideoGifSheet({
                 }))
               : undefined,
           mitNetz: tippMitNetz,
+          toleranz,
           fortschritt: (anteil, abschnitt, text) => setLauf({ anteil, abschnitt, text }),
           abbruch: steuer.signal,
         });
@@ -532,6 +535,8 @@ export function VideoGifSheet({
                   mitNetz={tippMitNetz}
                   netzGeht={tippNetzVerfuegbar()}
                   onMitNetz={setTippMitNetz}
+                  toleranz={toleranz}
+                  onToleranz={setToleranz}
                 />
               )}
             </>
@@ -618,6 +623,8 @@ function Antippen({
   mitNetz,
   netzGeht,
   onMitNetz,
+  toleranz,
+  onToleranz,
 }: {
   bild: string;
   /** Ob das Bild wirklich vom Anfang kommt oder nur das nächstgelegene ist. */
@@ -631,6 +638,8 @@ function Antippen({
   /** Ob das Tippnetz auf diesem Gerät überhaupt eingeschaltet ist. */
   netzGeht: boolean;
   onMitNetz: (mitNetz: boolean) => void;
+  toleranz: number;
+  onToleranz: (toleranz: number) => void;
 }) {
   return (
     <div className="vg-antippen">
@@ -697,6 +706,28 @@ function Antippen({
           </small>
         </span>
       </label>
+      {!mitNetz && (
+        /*
+         * Die Toleranz gibt es nur ohne Netz – mit Netz hat sie keine
+         * Bedeutung, und ein Regler, der nichts tut, ist schlimmer als keiner.
+         *
+         * Sie ist hier kein Feinschliff: Auf einer glatten Fläche verschluckt
+         * schon eine kleine Toleranz das ganze Ding, auf einem körnigen Grund
+         * reicht auch eine grosse nicht über den Rand. Ohne Regler wäre das
+         * Antippen nach Farbe eine Wette.
+         */
+        <label className="vg-regler">
+          <span>Toleranz {toleranz}</span>
+          <input
+            type="range"
+            min={4}
+            max={96}
+            step={4}
+            value={toleranz}
+            onChange={(ereignis) => onToleranz(Number(ereignis.target.value))}
+          />
+        </label>
+      )}
     </div>
   );
 }
