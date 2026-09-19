@@ -108,7 +108,7 @@ export function istAnfangVon(kurz: readonly Tipp[], lang: readonly Tipp[]): bool
 }
 
 /** Zwei Masken vereinigen – die hellere Stelle gewinnt. */
-function vereinigen(a: Uint8Array, b: Uint8Array): Uint8Array {
+export function vereinigen(a: Uint8Array, b: Uint8Array): Uint8Array {
   for (let i = 0; i < a.length; i += 1) if (b[i] > a[i]) a[i] = b[i];
   return a;
 }

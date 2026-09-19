@@ -13,6 +13,7 @@ import {
   zeitpunkte,
 } from './ausschnitt.js';
 import { masse, videoBilderLesen } from './bilderLesen.js';
+import { tippNetzVerfuegbar } from '../bild/tippMaske.js';
 import {
   GUETE_VORGABE,
   MAX_BILDER,
@@ -98,6 +99,14 @@ export function VideoGifSheet({
   const [freistellen, setFreistellen] = useState(false);
   const [tipps, setTipps] = useState<Tipp[]>([]);
   const [tippMinus, setTippMinus] = useState(false);
+  /**
+   * Ob die Tipps durch das TIPPNETZ gehen oder nach Farbe fluten.
+   *
+   * Dieselbe Wahl wie im Sticker-Studio. Vorbelegt mit dem, was geht: Ist das
+   * Tippnetz auf diesem Gerät abgeschaltet, stünde ein Haken da, der beim
+   * Antippen in eine Fehlermeldung liefe.
+   */
+  const [tippMitNetz, setTippMitNetz] = useState(() => tippNetzVerfuegbar());
   /**
    * Das Bild, auf das getippt wird – genau bei `vonMs`.
    *
@@ -321,6 +330,7 @@ export function VideoGifSheet({
                   dazu: tipp.dazu,
                 }))
               : undefined,
+          mitNetz: tippMitNetz,
           fortschritt: (anteil, abschnitt, text) => setLauf({ anteil, abschnitt, text }),
           abbruch: steuer.signal,
         });
@@ -519,6 +529,9 @@ export function VideoGifSheet({
                   onTipp={(tipp) => setTipps((alt) => [...alt, tipp])}
                   onZurueck={() => setTipps((alt) => alt.slice(0, -1))}
                   onMinus={setTippMinus}
+                  mitNetz={tippMitNetz}
+                  netzGeht={tippNetzVerfuegbar()}
+                  onMitNetz={setTippMitNetz}
                 />
               )}
             </>
@@ -602,6 +615,9 @@ function Antippen({
   onTipp,
   onZurueck,
   onMinus,
+  mitNetz,
+  netzGeht,
+  onMitNetz,
 }: {
   bild: string;
   /** Ob das Bild wirklich vom Anfang kommt oder nur das nächstgelegene ist. */
@@ -611,6 +627,10 @@ function Antippen({
   onTipp: (tipp: Tipp) => void;
   onZurueck: () => void;
   onMinus: (minus: boolean) => void;
+  mitNetz: boolean;
+  /** Ob das Tippnetz auf diesem Gerät überhaupt eingeschaltet ist. */
+  netzGeht: boolean;
+  onMitNetz: (mitNetz: boolean) => void;
 }) {
   return (
     <div className="vg-antippen">
@@ -661,6 +681,22 @@ function Antippen({
           ↶
         </button>
       </div>
+      <label className="vg-schalter">
+        <input
+          type="checkbox"
+          checked={mitNetz}
+          disabled={!netzGeht}
+          onChange={(ereignis) => onMitNetz(ereignis.target.checked)}
+        />
+        <span>
+          Mit Netz
+          <small>
+            {netzGeht
+              ? 'Trifft ein Ding als Ganzes. Ohne Haken wird genommen, was farblich zusammenhängt – das geht auch bei einem Schatten an der Wand.'
+              : '„Antippen mit Netz“ ist auf diesem Gerät abgeschaltet. Getippt wird deshalb nach Farbe; einschalten lässt es sich unter „Aussehen“.'}
+          </small>
+        </span>
+      </label>
     </div>
   );
 }

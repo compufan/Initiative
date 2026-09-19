@@ -46,6 +46,8 @@ export interface BauAuftrag {
   readonly freistellen: boolean;
   /** Angetippte Stellen im ERSTEN Bild – sie wandern mit. */
   readonly tipps?: readonly { x: number; y: number; dazu: boolean }[];
+  /** Ob die Tipps durch das Tippnetz gehen oder nach Farbe fluten. */
+  readonly mitNetz?: boolean;
   /** Anteil 0…1, der Name des Abschnitts und ein Satz dazu. */
   readonly fortschritt?: (anteil: number, abschnitt: Abschnitt, text: string) => void;
   readonly abbruch?: AbortSignal;
@@ -142,6 +144,7 @@ export async function gifAusVideo(auftrag: BauAuftrag): Promise<BauErgebnis> {
       const folge = await folgeMasken(gelesen.bilder, {
         guete: auftrag.guete,
         tipps: auftrag.tipps,
+        mitNetz: auftrag.mitNetz,
         fortschritt: (anteil, text) => melden('freistellen', anteil, text),
         abbruch: auftrag.abbruch,
       });

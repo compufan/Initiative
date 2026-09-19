@@ -14,10 +14,12 @@ import type { GelesenesBild } from './bilderLesen.js';
  * dass zwischen den Läufen wirklich geschoben statt wiederholt wird.
  */
 
-/** Ob das Netz je zweimal zugleich lief – und womit es gerufen wurde. */
+/** Ob das Netz je zweimal zugleich lief. */
 let gleichzeitig = 0;
 let hoechstens = 0;
-let letzteSaaten: unknown[] = [];
+/** Die Punkte, mit denen `tippTeilRechnen` gerufen wurde – je Aufruf eine Liste. */
+let letzteSaaten: { x: number; y: number }[][] = [];
+let mitNetzGesehen: boolean[] = [];
 
 vi.mock('../stickers/engines/index.js', async () => {
   const echt = await vi.importActual<typeof import('../stickers/engines/index.js')>(
@@ -25,10 +27,9 @@ vi.mock('../stickers/engines/index.js', async () => {
   );
   return {
     ...echt,
-    runEngine: async (_key: string, anfrage: { image: ImageData; seeds?: unknown }) => {
+    runEngine: async (_key: string, anfrage: { image: ImageData }) => {
       gleichzeitig += 1;
       hoechstens = Math.max(hoechstens, gleichzeitig);
-      letzteSaaten.push(anfrage.seeds);
       // Eine Umdrehung des Mikroaufgabenrades: Ohne sie liefe der Ersatz
       // synchron durch, und zwei gleichzeitige Läufe wären gar nicht möglich.
       await Promise.resolve();
@@ -44,6 +45,35 @@ vi.mock('../stickers/engines/index.js', async () => {
       }
       gleichzeitig -= 1;
       return maske;
+    },
+  };
+});
+
+vi.mock('../bild/tippMaske.js', async () => {
+  const echt = await vi.importActual<typeof import('../bild/tippMaske.js')>('../bild/tippMaske.js');
+  return {
+    ...echt,
+    tippNetzVerfuegbar: () => true,
+    tippTeilRechnen: async (
+      bild: ImageData,
+      punkte: readonly { x: number; y: number }[],
+      wahl: { mitNetz: boolean },
+    ) => {
+      letzteSaaten.push(punkte.map(({ x, y }) => ({ x, y })));
+      mitNetzGesehen.push(wahl.mitNetz);
+      return {
+        id: 't1',
+        modus: 'dazu' as const,
+        umkehren: false,
+        art: 'tipp' as const,
+        mitNetz: wahl.mitNetz,
+        punkte: [...punkte],
+        toleranz: 32,
+        breite: bild.width,
+        hoehe: bild.height,
+        alpha: new Uint8Array(bild.width * bild.height),
+        marke: 1,
+      };
     },
   };
 });
@@ -85,6 +115,7 @@ function folge(anzahl: number, schritt = 2): GelesenesBild[] {
 
 beforeEach(() => {
   letzteSaaten = [];
+  mitNetzGesehen = [];
   gleichzeitig = 0;
   hoechstens = 0;
 });
@@ -157,10 +188,52 @@ describe('folgeMasken', () => {
       guete: GUETE,
       tipps: [{ x: 20, y: 32, dazu: true }],
     });
-    const saaten = letzteSaaten as { x: number; y: number }[][];
-    expect(saaten.length).toBeGreaterThanOrEqual(3);
-    expect(saaten[0][0].x).toBe(20);
-    expect(saaten[1][0].x).toBeGreaterThan(saaten[0][0].x);
+    expect(letzteSaaten.length).toBeGreaterThanOrEqual(3);
+    expect(letzteSaaten[0][0].x).toBe(20);
+    expect(letzteSaaten[1][0].x).toBeGreaterThan(letzteSaaten[0][0].x);
+  });
+
+  it('gibt die Tipps an das TIPPVERFAHREN, nicht an das Motivnetz', async () => {
+    /*
+     * Hier stand einmal ein `seeds` am Aufruf des Motivnetzes, und das war
+     * wirkungslos: „Person", „Niedrige Qualität" und „Hohe Qualität" nehmen
+     * gar keine Saatpunkte entgegen – sie suchen das auffälligste Motiv und
+     * sonst nichts. Die Tipps verschwanden lautlos, und in der Oberfläche
+     * stand trotzdem ein Punkt.
+     */
+    await folgeMasken(folge(5), { guete: GUETE, tipps: [{ x: 8, y: 8, dazu: true }] });
+    expect(letzteSaaten.length).toBeGreaterThan(0);
+  });
+
+  it('macht je Vorzeichen EINEN Aufruf, nicht einen je Punkt', async () => {
+    /*
+     * `tippTeilRechnen` behandelt alle Saatpunkte zusammen: Beim Tippnetz
+     * teilen sie sich die Einbettung des Bildes, bei der Farbflutung einen
+     * einzigen Durchgang. Ein Aufruf je Punkt wäre dasselbe Ergebnis für das
+     * Dreifache an Arbeit.
+     */
+    await folgeMasken(folge(1), {
+      guete: GUETE,
+      tipps: [
+        { x: 4, y: 4, dazu: true },
+        { x: 8, y: 8, dazu: true },
+        { x: 12, y: 12, dazu: false },
+      ],
+    });
+    expect(letzteSaaten).toHaveLength(2);
+    expect(letzteSaaten[0]).toHaveLength(2);
+    expect(letzteSaaten[1]).toHaveLength(1);
+  });
+
+  it('reicht die Wahl „mit Netz“ durch', async () => {
+    // Ohne Netz wird nach Farbe getippt – der einzige Weg, der auch an einem
+    // Ding funktioniert, für das kein Modell je trainiert wurde.
+    await folgeMasken(folge(1), {
+      guete: GUETE,
+      mitNetz: false,
+      tipps: [{ x: 4, y: 4, dazu: true }],
+    });
+    expect(mitNetzGesehen).toEqual([false]);
   });
 
   it('bricht ab, wenn das Signal schon gesetzt ist', async () => {

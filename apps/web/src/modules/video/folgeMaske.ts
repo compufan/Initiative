@@ -1,4 +1,6 @@
 import { AbbruchError, runEngine } from '../stickers/engines/index.js';
+import { TOLERANZ_VORGABE } from '../bild/doc.js';
+import { tippNetzVerfuegbar, tippTeilRechnen, vereinigen } from '../bild/tippMaske.js';
 import type { GueteInfo } from './einstellungen.js';
 import type { Fortschritt, GelesenesBild } from './bilderLesen.js';
 import {
@@ -39,6 +41,14 @@ import {
 
 export interface FolgeAuftrag {
   readonly guete: GueteInfo;
+  /**
+   * Ob die Tipps durch das TIPPNETZ gehen oder durch die Farbflutung.
+   *
+   * Dieselbe Wahl wie im Sticker-Studio. Das Netz trifft ein Ding als Ganzes,
+   * die Flutung nimmt, was farblich zusammenhängt – und die geht immer, auch
+   * für einen Schatten auf einer Wand, für den kein Modell je trainiert wurde.
+   */
+  readonly mitNetz?: boolean;
   /**
    * Die angetippten Punkte – in Koordinaten des ERSTEN Bildes.
    *
@@ -157,12 +167,27 @@ export async function folgeMasken(
     }
 
     if (netzBei.has(i)) {
-      const maske = await runEngine(auftrag.guete.netz, {
+      /*
+       * Das Motivnetz UND die Tipps – nicht das eine statt des anderen.
+       *
+       * Hier stand einmal ein `seeds` am Aufruf des Motivnetzes, und das war
+       * wirkungslos: „Person", „Niedrige Qualität" und „Hohe Qualität" nehmen
+       * gar keine Saatpunkte entgegen (siehe `engines/index.ts`) – sie suchen
+       * das auffälligste Motiv und sonst nichts. Die Tipps verschwanden
+       * lautlos, und in der Oberfläche stand trotzdem ein Punkt.
+       *
+       * Sie gehören durch ein eigenes Verfahren: `tippTeilRechnen` nimmt
+       * entweder das Tippnetz oder die Farbflutung und liefert eine Maske, die
+       * hier dazukommt oder abgezogen wird – dieselbe Aufteilung wie im
+       * Sticker-Studio und im Fotoeditor.
+       */
+      let maske = await runEngine(auftrag.guete.netz, {
         image: bilder[i].daten,
-        seeds: tipps,
-        seed: tipps?.find((tipp) => tipp.dazu),
         abbruch: auftrag.abbruch,
       });
+      if (tipps && tipps.length > 0) {
+        maske = await tippsAnwenden(maske, bilder[i].daten, tipps, auftrag.mitNetz);
+      }
       masken.push(maske);
       netzlaeufe += 1;
     } else {
@@ -177,4 +202,51 @@ export async function folgeMasken(
    * NACH VORN, und das nächste Bild gibt es unterwegs noch nicht.
    */
   return { masken: zeitlichGlaetten(masken), netzlaeufe };
+}
+
+/**
+ * Eine Maske von einer anderen abziehen.
+ *
+ * Wortgleich zu `abziehenAlpha` in `stickers/render.ts` – und trotzdem hier
+ * noch einmal. Der Grund ist der Modulgraph: Jene Datei ist der ganze
+ * Sticker-Zeichner, und sie fünf Zeilen wegen in den Videopfad zu ziehen
+ * hiesse, jedem, der ein GIF aus einem Video macht, den Sticker-Zeichner
+ * mitzuliefern. Multipliziert und nicht abgezogen, damit ein weicher Rand
+ * weich bleibt.
+ */
+function abziehen(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const raus = new Uint8Array(a.length);
+  for (let i = 0; i < a.length; i += 1) raus[i] = Math.round((a[i] * (255 - b[i])) / 255);
+  return raus;
+}
+
+/**
+ * Die Tipps auf eine schon gerechnete Maske legen.
+ *
+ * Je Vorzeichen EIN Aufruf und nicht einer je Punkt: `tippTeilRechnen`
+ * behandelt alle Saatpunkte zusammen – beim Tippnetz teilen sie sich die
+ * Einbettung des Bildes, bei der Farbflutung einen einzigen Durchgang.
+ */
+async function tippsAnwenden(
+  maske: Uint8Array,
+  bild: ImageData,
+  tipps: readonly { x: number; y: number; dazu: boolean }[],
+  mitNetzGewuenscht?: boolean,
+): Promise<Uint8Array> {
+  // Ohne verfügbares Tippnetz wird nach Farbe getippt, statt zu scheitern.
+  const mitNetz = (mitNetzGewuenscht ?? true) && tippNetzVerfuegbar();
+  let raus = maske;
+
+  for (const dazu of [true, false]) {
+    const punkte = tipps.filter((tipp) => tipp.dazu === dazu).map(({ x, y }) => ({ x, y }));
+    if (punkte.length === 0) continue;
+    const teil = await tippTeilRechnen(bild, punkte, {
+      modus: dazu ? 'dazu' : 'weg',
+      mitNetz,
+      toleranz: TOLERANZ_VORGABE,
+    });
+    if (!teil || teil.art !== 'tipp') continue;
+    raus = dazu ? vereinigen(raus, teil.alpha) : abziehen(raus, teil.alpha);
+  }
+  return raus;
 }

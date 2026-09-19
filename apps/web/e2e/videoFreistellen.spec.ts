@@ -290,3 +290,79 @@ test('freigestellt wiegt ein GIF ein Vielfaches weniger', async ({ page }) => {
    */
   expect(ergebnis.frei).toBeLessThan(ergebnis.voll / 2);
 });
+
+test('ein Minus-Tipp nimmt der Maske wirklich etwas weg', async ({ page }) => {
+  /*
+   * Die Prüfung, an der ein stiller Fehler hing: Die Tipps gingen als `seeds`
+   * an das MOTIVNETZ – und „Person", „Niedrige Qualität" und „Hohe Qualität"
+   * nehmen gar keine Saatpunkte entgegen. Sie verschwanden lautlos, und in der
+   * Oberfläche stand trotzdem ein Punkt.
+   *
+   * Getippt wird hier nach FARBE und nicht mit dem Tippnetz: Das braucht kein
+   * Modell, läuft in Millisekunden und beantwortet dieselbe Frage – kommt der
+   * Tipp bei der Maske an? Welchen Weg er dorthin nimmt, entscheidet
+   * `tippTeilRechnen`, und das ist in `tippTeil.test.ts` geprüft.
+   */
+  test.setTimeout(240_000);
+  await page.goto('/');
+  await netzEinschalten(page);
+
+  const ergebnis = await page.evaluate(async (code) => {
+    const lesenPfad = '/src/modules/video/bilderLesen.ts';
+    const folgePfad = '/src/modules/video/folgeMaske.ts';
+    const lesen = (await import(
+      /* @vite-ignore */ lesenPfad
+    )) as typeof import('../src/modules/video/bilderLesen.js');
+    const folge = (await import(
+      /* @vite-ignore */ folgePfad
+    )) as typeof import('../src/modules/video/folgeMaske.js');
+    const aufnehmen = eval(code) as () => Promise<Blob>;
+    const datei = await aufnehmen();
+
+    const gelesen = await lesen.videoBilderLesen(datei, {
+      zeitpunkte: [100, 300, 500],
+      kante: 192,
+    });
+    const guete = {
+      key: 'genau' as const,
+      titel: 'Genau',
+      beschreibung: 'Prüfung',
+      netz: 'object' as const,
+      schluesselAbstand: 4,
+      kante: 192,
+      jeNetzlaufMs: 2200,
+      brauchtGrafik: false,
+    };
+
+    const deckung = (masken: readonly Uint8Array[]) =>
+      masken.reduce((summe, maske) => summe + maske.reduce((a, b) => a + b, 0), 0);
+
+    const ohne = await folge.folgeMasken(gelesen.bilder, { guete });
+
+    /*
+     * Der Minus-Tipp sitzt mitten auf dem hellen Quadrat. Es steht bei 20 bis
+     * 80 Punkten der Quellbreite von 240, also bei rund 40 bis 64 der
+     * Rechenbreite von 192 – die Mitte liegt bei etwa 52, die Höhe bei 90.
+     */
+    const mit = await folge.folgeMasken(gelesen.bilder, {
+      guete,
+      mitNetz: false,
+      tipps: [{ x: 52, y: 90, dazu: false }],
+    });
+
+    return {
+      breite: gelesen.breite,
+      ohne: deckung(ohne.masken),
+      mit: deckung(mit.masken),
+    };
+  }, WANDERND);
+
+  // eslint-disable-next-line no-console
+  console.log(`gemessen: Deckung ohne Tipp ${ergebnis.ohne}, mit Minus-Tipp ${ergebnis.mit}`);
+
+  expect(ergebnis.ohne, 'ohne Tipp ist die Maske schon leer').toBeGreaterThan(0);
+  expect(
+    ergebnis.mit,
+    'der Minus-Tipp hat der Maske nichts weggenommen – er kommt nicht an',
+  ).toBeLessThan(ergebnis.ohne * 0.9);
+});

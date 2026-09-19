@@ -187,7 +187,19 @@ test('aus einem Video wird ein GIF, das der eigene Leser als bewegt erkennt', as
   expect(ergebnis.kopf).toBe('GIF89a');
   expect(ergebnis.bilder).toBe(10);
   expect(ergebnis.laufzeitMs).toBe(1000);
-  expect([ergebnis.breite, ergebnis.hoehe]).toEqual([64, 48]);
+  /*
+   * 160 × 120 – also unverändert, und das ist der Punkt.
+   *
+   * Ohne Freistellen läuft kein Netz, und damit hat die Güte nichts mehr zu
+   * sagen: Gerechnet wird in `VOLLBILD_KANTE` (384), und das Video ist
+   * kleiner. Hochgerechnet wird nie – ein grösseres Bild hätte keinen Punkt
+   * mehr Inhalt, im GIF aber viermal so viele zu packen.
+   *
+   * Hier stand einmal [64, 48], weil `gifBauen` die Kante der Güte nahm.
+   * Das war die Grösse des Ergebnisses an einer Einstellung, die in der
+   * Oberfläche gar nicht mehr sichtbar ist.
+   */
+  expect([ergebnis.breite, ergebnis.hoehe]).toEqual([160, 120]);
 
   /*
    * Gelesen wird mit dem EIGENEN Leser aus `bewegt.ts`. Der wurde für

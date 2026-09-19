@@ -209,6 +209,54 @@ describe('webmSchreiben', () => {
     expect(() => webmSchreiben([], { codec: 'vp9', breite: 8, hoehe: 8, dauerMs: 0 })).toThrow();
   });
 
+  it('schreibt einen Suchindex, der VOR den Haufen steht', () => {
+    /*
+     * Ohne `Cues` findet ein Abspieler beim Springen nur ungefähr die
+     * richtige Stelle. Unter Last fiel das auf: Der Sprung auf 2,25 s
+     * lieferte das Bild vom Anfang – und zwar nur, wenn nebenher
+     * zweihundert andere Prüfungen liefen.
+     *
+     * Er muss VOR den Haufen stehen, damit er schon beim Öffnen gelesen wird
+     * und nicht erst, wenn jemand bis ans Ende geladen hat.
+     */
+    const roh = webmSchreiben(
+      [bild(0, true), bild(40, false), bild(5000, true), bild(5040, false)],
+      { codec: 'vp9', breite: 64, hoehe: 64, dauerMs: 5080 },
+    );
+    const zeilen = baum(roh, 0, roh.length);
+    const cues = zeilen.findIndex((zeile) => zeile.includes('0x1c53bb6b'));
+    const haufen = zeilen.findIndex((zeile) => zeile.includes('0x1f43b675'));
+    expect(cues, 'es gibt gar keinen Suchindex').toBeGreaterThan(-1);
+    expect(cues, 'der Suchindex steht hinter den Haufen').toBeLessThan(haufen);
+  });
+
+  it('zeigt mit jedem Indexeintrag auf den Anfang eines Haufens', () => {
+    /*
+     * Der eigentliche Prüfstein – und der Grund für die Schleife in
+     * `webmSchreiben`: Wo ein Haufen liegt, wird ab dem Anfang der Nutzdaten
+     * gezählt, und dazu gehört der Index selbst. Seine Länge hängt also von
+     * den Zahlen ab, die in ihm stehen. Ein Eintrag, der um zwei Byte
+     * danebenliegt, führt beim Springen mitten in einen Block.
+     */
+    const roh = webmSchreiben(
+      [bild(0, true), bild(40, false), bild(5000, true), bild(10_000, true)],
+      { codec: 'vp9', breite: 64, hoehe: 64, dauerMs: 10_040 },
+    );
+
+    // Wo die Nutzdaten des Segments anfangen: hinter Kennung und Längenangabe.
+    const segmentAt = suchen(roh, [0x18, 0x53, 0x80, 0x67]);
+    const datenAt = segmentAt + 4 + vintLaenge(roh[segmentAt + 4]);
+
+    const stellen = indexStellen(roh);
+    expect(stellen, 'drei Haufen, drei Einträge').toHaveLength(3);
+    for (const stelle of stellen) {
+      // Dort muss eine Haufenkennung stehen – und zwar genau dort.
+      expect(Array.from(roh.subarray(datenAt + stelle, datenAt + stelle + 4))).toEqual([
+        0x1f, 0x43, 0xb6, 0x75,
+      ]);
+    }
+  });
+
   it('gibt jedem Block seine Zeit RELATIV zum Haufen', () => {
     /*
      * Die verbreitetste Verwechslung bei Matroska – und sie fällt nicht auf,
@@ -229,3 +277,48 @@ describe('webmSchreiben', () => {
     expect(versaetze).toEqual([0, 40, 0, 40]);
   });
 });
+
+/** Die erste Stelle, an der diese Bytefolge steht. */
+function suchen(roh: Uint8Array, folge: number[]): number {
+  for (let i = 0; i + folge.length <= roh.length; i += 1) {
+    if (folge.every((byte, k) => roh[i + k] === byte)) return i;
+  }
+  throw new Error('Folge nicht gefunden');
+}
+
+/**
+ * Alle `CueClusterPosition` aus dem Suchindex.
+ *
+ * Gesucht wird NUR innerhalb des Index. `0xf1` steht ebenso gut mitten in
+ * Bilddaten, und eine Suche über die ganze Datei fände dort Zahlen, die
+ * nichts bedeuten – die erste Fassung dieser Prüfung ist genau darüber
+ * gestolpert.
+ */
+function indexStellen(roh: Uint8Array): number[] {
+  const cuesAt = suchen(roh, [0x1c, 0x53, 0xbb, 0x6b]);
+  const laengeLaenge = vintLaenge(roh[cuesAt + 4]);
+  let laenge = roh[cuesAt + 4] & (0xff >> laengeLaenge);
+  for (let k = 1; k < laengeLaenge; k += 1) laenge = laenge * 256 + roh[cuesAt + 4 + k];
+  const von = cuesAt + 4 + laengeLaenge;
+  const bis = von + laenge;
+
+  const raus: number[] = [];
+  for (let i = von; i + 2 < bis; i += 1) {
+    if (roh[i] !== 0xf1) continue;
+    /*
+     * Hinter der Kennung steht die LÄNGE, und erst dahinter der Wert. Die
+     * erste Fassung las die Längenangabe als Wert und bekam für jeden
+     * Eintrag eine Eins – was wie ein Fehler im Schreiber aussah und keiner
+     * war.
+     */
+    const laengeLaengeHier = vintLaenge(roh[i + 1]);
+    let wieViele = roh[i + 1] & (0xff >> laengeLaengeHier);
+    for (let k = 1; k < laengeLaengeHier; k += 1) wieViele = wieViele * 256 + roh[i + 1 + k];
+    const wertAt = i + 1 + laengeLaengeHier;
+    let wert = 0;
+    for (let k = 0; k < wieViele; k += 1) wert = wert * 256 + roh[wertAt + k];
+    raus.push(wert);
+    i = wertAt + wieViele - 1;
+  }
+  return raus;
+}

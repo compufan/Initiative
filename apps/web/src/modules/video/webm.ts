@@ -61,6 +61,13 @@ const CLUSTER = 0x1f43b675;
 const TIMECODE = 0xe7;
 const SIMPLE_BLOCK = 0xa3;
 
+const CUES = 0x1c53bb6b;
+const CUE_POINT = 0xbb;
+const CUE_TIME = 0xb3;
+const CUE_TRACK_POSITIONS = 0xb7;
+const CUE_TRACK = 0xf7;
+const CUE_CLUSTER_POSITION = 0xf1;
+
 /**
  * Eine Millisekunde je Zeiteinheit.
  *
@@ -219,11 +226,11 @@ export function webmSchreiben(bilder: readonly WebmBild[], auftrag: WebmAuftrag)
     ]),
   ];
 
-  const inhalt = new Bytepuffer();
-  const schreiben = (bytes: number[]) => inhalt.feld(Uint8Array.from(bytes));
-  schreiben([...knoten(INFO, info), ...knoten(TRACKS, knoten(TRACK_ENTRY, spur))]);
-
   /* ---------- Die Haufen ---------- */
+
+  const haufenBytes = new Bytepuffer();
+  /** Je Haufen sein Zeitpunkt und wo er beginnt – gemessen ab dem ersten Haufen. */
+  const marken: { zeitMs: number; versatz: number }[] = [];
 
   let at = 0;
   while (at < bilder.length) {
@@ -256,9 +263,51 @@ export function webmSchreiben(bilder: readonly WebmBild[], auftrag: WebmAuftrag)
       bilder[at].zeitMs - beginn < HAUFEN_MS
     );
 
+    marken.push({ zeitMs: beginn, versatz: haufenBytes.groesse });
     const haufen = [...zahlKnoten(TIMECODE, beginn), ...bloecke.fertig()];
-    schreiben(knoten(CLUSTER, haufen));
+    haufenBytes.feld(Uint8Array.from(knoten(CLUSTER, haufen)));
   }
+
+  /* ---------- Der Suchindex ---------- */
+
+  /*
+   * Ohne `Cues` findet ein Abspieler beim Springen nur ungefähr die richtige
+   * Stelle – er muss die Haufen von vorn durchgehen und schätzt dabei. Unter
+   * Last fiel das in `e2e/videoSchreiben.spec.ts` auf: Der Sprung auf 2,25 s
+   * lieferte das Bild vom Anfang, und zwar nur, wenn nebenher zweihundert
+   * andere Prüfungen liefen. Einzeln ging es jedes Mal gut – die
+   * unangenehmste Art von Fehler.
+   *
+   * Der Index steht VOR den Haufen, damit er schon beim Öffnen der Datei
+   * gelesen wird und nicht erst, wenn jemand bis ans Ende geladen hat.
+   *
+   * Das ist der Grund für die Schleife: Wo ein Haufen liegt, wird ab dem
+   * Anfang der Nutzdaten gezählt – und dazu gehört der Index selbst. Seine
+   * Länge hängt also von den Zahlen ab, die in ihm stehen. Zwei bis drei
+   * Durchgänge genügen, weil die Längenangaben nur wachsen und nie schrumpfen.
+   */
+  const vorlauf = knoten(INFO, info).length + knoten(TRACKS, knoten(TRACK_ENTRY, spur)).length;
+  let cues = cuesBauen(marken, vorlauf);
+  for (let runde = 0; runde < 4; runde += 1) {
+    const naechste = cuesBauen(marken, vorlauf + cues.length);
+    /*
+     * Erst übernehmen, dann abbrechen – nicht umgekehrt.
+     *
+     * Hier stand `if (gleich) break;` VOR der Zuweisung, und damit blieb
+     * immer die Fassung stehen, die noch ohne den Index selbst gerechnet
+     * hatte: Jeder Eintrag zeigte um die Länge des Index zu weit nach vorn
+     * (gemessen 46 Byte). Ein Abspieler sprang dann mitten in die Kopfdaten.
+     */
+    const stabil = naechste.length === cues.length;
+    cues = naechste;
+    if (stabil) break;
+  }
+
+  const inhalt = new Bytepuffer(haufenBytes.groesse + cues.length + 4096);
+  inhalt.feld(Uint8Array.from(knoten(INFO, info)));
+  inhalt.feld(Uint8Array.from(knoten(TRACKS, knoten(TRACK_ENTRY, spur))));
+  inhalt.feld(Uint8Array.from(cues));
+  inhalt.feld(haufenBytes.fertig());
 
   const segment = inhalt.fertig();
   const datei = new Bytepuffer(segment.length + 256);
@@ -267,4 +316,31 @@ export function webmSchreiben(bilder: readonly WebmBild[], auftrag: WebmAuftrag)
   datei.feld(Uint8Array.from(vint(segment.length)));
   datei.feld(segment);
   return datei.fertig();
+}
+
+/**
+ * Der Suchindex: zu jedem Haufen sein Zeitpunkt und seine Stelle in der Datei.
+ *
+ * `vorlauf` ist, was vor dem ersten Haufen steht – gezählt ab dem Anfang der
+ * Nutzdaten des Segments, so wie Matroska es verlangt. Der Index selbst
+ * gehört dazu, deshalb wird er in `webmSchreiben` mehrfach gebaut, bis seine
+ * Länge stillsteht.
+ */
+function cuesBauen(
+  marken: readonly { zeitMs: number; versatz: number }[],
+  vorlauf: number,
+): number[] {
+  const punkte: number[] = [];
+  for (const marke of marken) {
+    punkte.push(
+      ...knoten(CUE_POINT, [
+        ...zahlKnoten(CUE_TIME, marke.zeitMs),
+        ...knoten(CUE_TRACK_POSITIONS, [
+          ...zahlKnoten(CUE_TRACK, 1),
+          ...zahlKnoten(CUE_CLUSTER_POSITION, vorlauf + marke.versatz),
+        ]),
+      ]),
+    );
+  }
+  return knoten(CUES, punkte);
 }
