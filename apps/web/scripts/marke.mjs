@@ -1,0 +1,467 @@
+#!/usr/bin/env node
+// Macht aus EINEM Bild den ganzen Satz an App-Symbolen.
+//
+// # Warum es diese Datei gibt
+//
+// Damit das Zeichen der Gruppe an genau einer Stelle im Repository liegt.
+// Vorher lagen zwei WebP-Dateien (1x und 2x) ohne nachvollziehbare Herkunft
+// daneben, und die Symbole der App zeigten noch einen Blitz aus einer Zeit,
+// in der es kein Logo gab – zwei Zeichen für eine Gruppe.
+//
+// Jetzt gilt: `public/marke/logo.png` ist die Quelle. Wer das Logo austauschen
+// will, legt eine neue Datei an diese Stelle und ruft
+// `pnpm --filter @initiative/web marke` auf. Alles andere entsteht daraus.
+//
+// # Warum die Symbole NICHT im Repository liegen
+//
+// Weil sie sonst die zweite Quelle wären – und zwar eine, die still veraltet.
+// Wer das Logo tauscht und den Aufruf vergisst, hätte ein neues Logo im
+// Hintergrund und ein altes auf dem Startbildschirm, ohne dass irgendetwas
+// meckert. Die Symbole entstehen deshalb beim Bauen (`prebuild`) und beim
+// Entwickeln (`dev`) und stehen in `.gitignore`.
+//
+// # Warum ohne Abhängigkeiten
+//
+// Weil dieses Projekt PNG von Hand schreibt (siehe unten) und es sich damit
+// eine Bildbibliothek spart, die bei jedem Klonen mitkommt und jedes Jahr
+// eine Sicherheitslücke hat. Der Decoder hier ist dreissig Zeilen, der
+// Encoder vierzig, und beide können genau das, was gebraucht wird.
+import { deflateSync, inflateSync } from 'node:zlib';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/* ------------------------------------------------------------------ Marke */
+
+/**
+ * Der Untergrund der Kachel.
+ *
+ * Dieselbe Farbe wie `--bg` des dunklen Themas (`tokens.css`), nicht Schwarz:
+ * Das Logo wurde auf Schwarz entworfen, und eine schwarze Kachel neben den
+ * anderen Symbolen auf einem Startbildschirm sieht aus wie ein Loch. Ein sehr
+ * dunkles Blau liest sich als Fläche und lässt das Rot des Herzens leuchten.
+ */
+const KACHEL = [0x0b, 0x10, 0x20];
+
+/** Eckenrundung der Kachel, als Anteil der Kantenlänge. */
+const RUNDUNG = 0.22;
+
+/**
+ * Wie viel der Kachel das Logo einnimmt.
+ *
+ * 0,80 lässt einen Rand, der auf jedem Startbildschirm als Rand gelesen wird.
+ * Ohne ihn klebt das Logo an der Kante, und bei runden Masken schneidet die
+ * Plattform in die Schrift.
+ */
+const ANTEIL = 0.8;
+
+/**
+ * Und wie viel bei einer maskierbaren Kachel.
+ *
+ * Android darf davon alles ausserhalb des inneren Kreises (80 % der Kante)
+ * abschneiden. Das Logo muss also in diesen Kreis passen – nicht in das
+ * Quadrat.
+ */
+const ANTEIL_MASKIERBAR = 0.62;
+
+/** Wie fein die Kanten der Kachel abgetastet werden: 4 × 4 Proben je Punkt. */
+const PROBEN = 4;
+
+/* ------------------------------------------------------------ PNG: Pruefsumme */
+
+const CRC_TABELLE = (() => {
+  const tabelle = new Int32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    tabelle[n] = c;
+  }
+  return tabelle;
+})();
+
+function crc32(bytes) {
+  let crc = -1;
+  for (let i = 0; i < bytes.length; i += 1)
+    crc = CRC_TABELLE[(crc ^ bytes[i]) & 0xff] ^ (crc >>> 8);
+  return (crc ^ -1) >>> 0;
+}
+
+/* -------------------------------------------------------------- PNG: lesen */
+
+/**
+ * Liest ein PNG mit acht Bit je Kanal, ohne Verschachtelung.
+ *
+ * Absichtlich kein vollständiger Decoder: Paletten, sechzehn Bit und Adam7
+ * kommen in einer Logodatei nicht vor, und jede weitere Zeile wäre Code, den
+ * niemand je ausführt. Was nicht passt, wird mit einem Satz abgelehnt, den
+ * man lesen kann – nicht mit einem Bild, das schief aussieht.
+ */
+export function pngLesen(bytes) {
+  const kopf = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  for (let i = 0; i < kopf.length; i += 1) {
+    if (bytes[i] !== kopf[i]) throw new Error('Das ist kein PNG.');
+  }
+
+  let breite = 0;
+  let hoehe = 0;
+  let kanaele = 0;
+  const teile = [];
+
+  for (let at = 8; at + 8 <= bytes.length;) {
+    const laenge = bytes.readUInt32BE(at);
+    const art = bytes.toString('latin1', at + 4, at + 8);
+    const daten = bytes.subarray(at + 8, at + 8 + laenge);
+    if (art === 'IHDR') {
+      breite = daten.readUInt32BE(0);
+      hoehe = daten.readUInt32BE(4);
+      const bittiefe = daten[8];
+      const farbtyp = daten[9];
+      const verschachtelt = daten[12];
+      if (bittiefe !== 8 || verschachtelt !== 0) {
+        throw new Error('Nur acht Bit je Kanal und ohne Verschachtelung. Speichere das Logo so.');
+      }
+      kanaele = { 0: 1, 2: 3, 4: 2, 6: 4 }[farbtyp];
+      if (!kanaele) throw new Error(`Farbtyp ${farbtyp} wird hier nicht gelesen.`);
+    } else if (art === 'IDAT') {
+      teile.push(daten);
+    } else if (art === 'IEND') {
+      break;
+    }
+    at += 12 + laenge;
+  }
+
+  const roh = inflateSync(Buffer.concat(teile));
+  const schritt = breite * kanaele;
+  const punkte = new Uint8Array(breite * hoehe * 4);
+  const zeile = new Uint8Array(schritt);
+  const davor = new Uint8Array(schritt);
+
+  for (let y = 0; y < hoehe; y += 1) {
+    const an = y * (schritt + 1);
+    const filter = roh[an];
+    /*
+     * Die fünf Filter aus der PNG-Spezifikation.
+     *
+     * Sie rechnen mit dem Punkt LINKS und dem Punkt DARÜBER – „links" heisst
+     * dabei einen ganzen Punkt weiter, nicht ein Byte. Genau daran scheitert
+     * jeder erste Versuch: Bei RGBA sind das vier Bytes, und wer eines nimmt,
+     * bekommt ein Bild, das aussieht wie durch Wasser betrachtet.
+     */
+    for (let i = 0; i < schritt; i += 1) {
+      const x = roh[an + 1 + i];
+      const a = i >= kanaele ? zeile[i - kanaele] : 0;
+      const b = davor[i];
+      const c = i >= kanaele ? davor[i - kanaele] : 0;
+      let wert;
+      switch (filter) {
+        case 0:
+          wert = x;
+          break;
+        case 1:
+          wert = x + a;
+          break;
+        case 2:
+          wert = x + b;
+          break;
+        case 3:
+          wert = x + ((a + b) >> 1);
+          break;
+        case 4: {
+          const p = a + b - c;
+          const pa = Math.abs(p - a);
+          const pb = Math.abs(p - b);
+          const pc = Math.abs(p - c);
+          wert = x + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c);
+          break;
+        }
+        default:
+          throw new Error(`Unbekannter Zeilenfilter ${filter}.`);
+      }
+      zeile[i] = wert & 0xff;
+    }
+
+    for (let x = 0; x < breite; x += 1) {
+      const von = x * kanaele;
+      const nach = (y * breite + x) * 4;
+      if (kanaele >= 3) {
+        punkte[nach] = zeile[von];
+        punkte[nach + 1] = zeile[von + 1];
+        punkte[nach + 2] = zeile[von + 2];
+        punkte[nach + 3] = kanaele === 4 ? zeile[von + 3] : 255;
+      } else {
+        punkte[nach] = zeile[von];
+        punkte[nach + 1] = zeile[von];
+        punkte[nach + 2] = zeile[von];
+        punkte[nach + 3] = kanaele === 2 ? zeile[von + 1] : 255;
+      }
+    }
+    davor.set(zeile);
+  }
+
+  return { breite, hoehe, punkte };
+}
+
+/* ------------------------------------------------------------ PNG: schreiben */
+
+function block(art, daten) {
+  const aus = Buffer.alloc(daten.length + 12);
+  aus.writeUInt32BE(daten.length, 0);
+  aus.write(art, 4, 'latin1');
+  daten.copy(aus, 8);
+  aus.writeUInt32BE(crc32(aus.subarray(4, 8 + daten.length)), 8 + daten.length);
+  return aus;
+}
+
+/** Schreibt RGBA-Punkte als PNG. Ohne `alpha` fällt der vierte Kanal weg. */
+export function pngSchreiben(punkte, kante, { alpha = true } = {}) {
+  const kanaele = alpha ? 4 : 3;
+  const schritt = kante * kanaele;
+  const roh = Buffer.alloc((schritt + 1) * kante);
+
+  for (let y = 0; y < kante; y += 1) {
+    const an = y * (schritt + 1);
+    roh[an] = 0; // Filter 0: keiner. Die Flächen packt zlib ohnehin gut.
+    for (let x = 0; x < kante; x += 1) {
+      const von = (y * kante + x) * 4;
+      const nach = an + 1 + x * kanaele;
+      roh[nach] = punkte[von];
+      roh[nach + 1] = punkte[von + 1];
+      roh[nach + 2] = punkte[von + 2];
+      if (alpha) roh[nach + 3] = punkte[von + 3];
+    }
+  }
+
+  const kopf = Buffer.alloc(13);
+  kopf.writeUInt32BE(kante, 0);
+  kopf.writeUInt32BE(kante, 4);
+  kopf[8] = 8;
+  kopf[9] = alpha ? 6 : 2;
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    block('IHDR', kopf),
+    block('IDAT', deflateSync(roh, { level: 9 })),
+    block('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+/* ------------------------------------------------------------- Verkleinern */
+
+/**
+ * Verkleinert ein Bild durch Flächenmittelung.
+ *
+ * # Warum mit vormultipliziertem Alpha
+ *
+ * Weil sonst dunkle Fransen entstehen. An der Kante des Logos steht ein
+ * durchsichtiger Punkt, dessen Farbwerte nichts bedeuten – wer sie gleich
+ * gewichtet mitmittelt, zieht den Mittelwert dorthin. Bei einem Logo auf
+ * schwarzem Grund heisst das: ein grauer Saum um jede Kante, der bei jedem
+ * Verkleinerungsschritt breiter wird.
+ *
+ * # Warum Flächenmittelung und nicht etwas Feineres
+ *
+ * Hier wird immer VERKLEINERT, oft um den Faktor vier oder mehr. Dabei ist
+ * die Flächenmittelung nicht der Kompromiss, sondern das Richtige: Jeder
+ * Punkt der Vorlage geht genau einmal und mit seinem Flächenanteil ein. Ein
+ * Lanczos-Kern brächte hier nur Überschwinger an den harten Kanten.
+ */
+export function verkleinern(quelle, breite, hoehe, ziel) {
+  const aus = new Uint8Array(ziel * ziel * 4);
+  const xSkala = breite / ziel;
+  const ySkala = hoehe / ziel;
+
+  for (let y = 0; y < ziel; y += 1) {
+    const y0 = y * ySkala;
+    const y1 = (y + 1) * ySkala;
+    for (let x = 0; x < ziel; x += 1) {
+      const x0 = x * xSkala;
+      const x1 = (x + 1) * xSkala;
+      let r = 0;
+      let g = 0;
+      let b = 0;
+      let a = 0;
+      let gewicht = 0;
+
+      for (let sy = Math.floor(y0); sy < Math.min(hoehe, Math.ceil(y1)); sy += 1) {
+        const hy = Math.min(y1, sy + 1) - Math.max(y0, sy);
+        if (hy <= 0) continue;
+        for (let sx = Math.floor(x0); sx < Math.min(breite, Math.ceil(x1)); sx += 1) {
+          const hx = Math.min(x1, sx + 1) - Math.max(x0, sx);
+          if (hx <= 0) continue;
+          const w = hx * hy;
+          const an = (sy * breite + sx) * 4;
+          const al = quelle[an + 3] / 255;
+          r += quelle[an] * al * w;
+          g += quelle[an + 1] * al * w;
+          b += quelle[an + 2] * al * w;
+          a += quelle[an + 3] * w;
+          gewicht += w;
+        }
+      }
+
+      const nach = (y * ziel + x) * 4;
+      if (gewicht <= 0 || a <= 0) continue;
+      // Zurück in nicht vormultiplizierte Werte – so erwartet es PNG.
+      const mittelAlpha = a / gewicht;
+      const teiler = mittelAlpha / 255;
+      aus[nach] = Math.min(255, Math.round(r / gewicht / teiler));
+      aus[nach + 1] = Math.min(255, Math.round(g / gewicht / teiler));
+      aus[nach + 2] = Math.min(255, Math.round(b / gewicht / teiler));
+      aus[nach + 3] = Math.round(mittelAlpha);
+    }
+  }
+  return aus;
+}
+
+/* ------------------------------------------------------------------ Kachel */
+
+/** Abstand zum abgerundeten Quadrat, das die Fläche füllt – innen negativ. */
+function kachelAbstand(x, y, kante) {
+  const halb = kante / 2;
+  const radius = kante * RUNDUNG;
+  const qx = Math.abs(x - halb) - (halb - radius);
+  const qy = Math.abs(y - halb) - (halb - radius);
+  return Math.min(Math.max(qx, qy), 0) + Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) - radius;
+}
+
+/** Deckung einer Probe: eine Rampe von genau einer Probenbreite. */
+function deckung(abstand) {
+  return Math.min(1, Math.max(0, 0.5 - abstand * PROBEN));
+}
+
+/**
+ * Zeichnet ein Symbol.
+ *
+ * `kachel: false` heisst randlos (maskierbar und iOS – dort legt die
+ * Plattform ihre eigene Maske darüber), `nurUmriss` liefert die weisse
+ * Silhouette für die Android-Statusleiste.
+ */
+export function symbol(logo, { kante, kachel = true, anteil = ANTEIL, nurUmriss = false }) {
+  const punkte = new Uint8Array(kante * kante * 4);
+  const innen = Math.max(1, Math.round(kante * anteil));
+  const klein = verkleinern(logo.punkte, logo.breite, logo.hoehe, innen);
+  const versatz = Math.round((kante - innen) / 2);
+
+  /*
+   * Erst der Untergrund, dann das Logo darüber.
+   *
+   * Der Untergrund wird mit 4 × 4 Proben je Punkt abgetastet, weil seine
+   * Rundung sonst treppt – bei 192 Punkten Kante sieht man jede Stufe. Das
+   * Logo braucht das nicht: Es ist beim Verkleinern schon gemittelt worden.
+   */
+  if (!nurUmriss) {
+    const proben = PROBEN * PROBEN;
+    const schritt = 1 / PROBEN;
+    for (let y = 0; y < kante; y += 1) {
+      for (let x = 0; x < kante; x += 1) {
+        let deck = 1;
+        if (kachel) {
+          let summe = 0;
+          for (let sy = 0; sy < PROBEN; sy += 1) {
+            for (let sx = 0; sx < PROBEN; sx += 1) {
+              summe += deckung(
+                kachelAbstand(x + (sx + 0.5) * schritt, y + (sy + 0.5) * schritt, kante),
+              );
+            }
+          }
+          deck = summe / proben;
+        }
+        const an = (y * kante + x) * 4;
+        punkte[an] = KACHEL[0];
+        punkte[an + 1] = KACHEL[1];
+        punkte[an + 2] = KACHEL[2];
+        punkte[an + 3] = Math.round(deck * 255);
+      }
+    }
+  }
+
+  for (let y = 0; y < innen; y += 1) {
+    const zy = y + versatz;
+    if (zy < 0 || zy >= kante) continue;
+    for (let x = 0; x < innen; x += 1) {
+      const zx = x + versatz;
+      if (zx < 0 || zx >= kante) continue;
+      const von = (y * innen + x) * 4;
+      const nach = (zy * kante + zx) * 4;
+      const oben = klein[von + 3] / 255;
+      if (oben <= 0) continue;
+
+      if (nurUmriss) {
+        /*
+         * Die Statusleiste färbt dieses Bild selbst ein und wertet nur den
+         * Alphakanal aus. Was hier an Farbe steht, ist damit gleichgültig –
+         * weiss ist die Farbe, die in der Vorschau eines Entwicklers das
+         * Gleiche zeigt wie auf dem Gerät.
+         */
+        punkte[nach] = 255;
+        punkte[nach + 1] = 255;
+        punkte[nach + 2] = 255;
+        punkte[nach + 3] = klein[von + 3];
+        continue;
+      }
+
+      const unten = punkte[nach + 3] / 255;
+      const alpha = oben + unten * (1 - oben);
+      if (alpha <= 0) continue;
+      const anteilUnten = (unten * (1 - oben)) / alpha;
+      for (let k = 0; k < 3; k += 1) {
+        punkte[nach + k] = Math.round(
+          (klein[von + k] * oben) / alpha + punkte[nach + k] * anteilUnten,
+        );
+      }
+      punkte[nach + 3] = Math.round(alpha * 255);
+    }
+  }
+
+  return punkte;
+}
+
+/* -------------------------------------------------------------------- Lauf */
+
+export const AUFTRAEGE = [
+  // Die gewöhnlichen Symbole: die abgerundete Kachel IST der Rand.
+  { datei: 'icon-192.png', kante: 192 },
+  { datei: 'icon-512.png', kante: 512 },
+  // Maskierbar: randlos, das Logo klein genug für eine runde Maske.
+  { datei: 'maskable-192.png', kante: 192, kachel: false, anteil: ANTEIL_MASKIERBAR },
+  { datei: 'maskable-512.png', kante: 512, kachel: false, anteil: ANTEIL_MASKIERBAR },
+  // iOS rundet selbst und will keinen Alphakanal.
+  { datei: 'apple-touch-icon.png', kante: 180, kachel: false, alpha: false },
+  // Die Lasche im Browser. Kein SVG mehr: Das Logo ist eine Zeichnung, kein
+  // Pfad – ein SVG daraus wäre ein PNG in einer SVG-Hülle.
+  { datei: 'favicon-32.png', kante: 32 },
+  { datei: 'favicon-64.png', kante: 64 },
+  // Android-Statusleiste: weisse Silhouette auf durchsichtig, sonst nichts.
+  { datei: 'badge-96.png', kante: 96, nurUmriss: true, anteil: 0.94 },
+];
+
+export const QUELLE = fileURLToPath(new URL('../public/marke/logo.png', import.meta.url));
+const ZIELE = fileURLToPath(new URL('../public/icons/', import.meta.url));
+
+export function alleSymbole() {
+  const logo = pngLesen(readFileSync(QUELLE));
+  mkdirSync(ZIELE, { recursive: true });
+  const geschrieben = [];
+  for (const { datei, kante, kachel, anteil, nurUmriss, alpha } of AUFTRAEGE) {
+    const punkte = symbol(logo, { kante, kachel, anteil, nurUmriss });
+    const png = pngSchreiben(punkte, kante, { alpha });
+    writeFileSync(join(ZIELE, datei), png);
+    geschrieben.push([datei, `${kante}x${kante}`, png.length]);
+  }
+  return geschrieben;
+}
+
+/*
+ * Nur laufen, wenn jemand diese Datei AUFRUFT – nicht, wenn sie jemand liest.
+ *
+ * Ohne diese Zeile legte schon ein `import` aus einem Test die Symbole neu an,
+ * und der Test bestünde dann auch dann, wenn die Zeichenroutine kaputt ist: Er
+ * prüfte ja sein eigenes Ergebnis von eben.
+ */
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const geschrieben = alleSymbole();
+  for (const [datei, masse, bytes] of geschrieben) {
+    console.log(`${datei.padEnd(22)} ${masse.padEnd(9)} ${(bytes / 1024).toFixed(1)} kB`);
+  }
+  console.log(`\n${geschrieben.length} Dateien aus ${QUELLE}`);
+}

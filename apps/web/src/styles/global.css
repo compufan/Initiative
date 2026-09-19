@@ -859,39 +859,67 @@ canvas {
  */
 :root {
   /*
-   * Die doppelt so grosse Fassung, einfach immer.
+   * EINE Datei, und zwar die, die auch die Symbole hervorbringt.
    *
-   * `image-set` mit 1x/2x wäre die feinere Wahl und die brüchigere: Ältere
-   * Safari-Fassungen kennen es nur mit Präfix und zeigen sonst gar nichts.
-   * Der Unterschied sind 16 Kilobyte, einmal geladen – gegen einen
-   * Hintergrund, der auf manchen Geräten fehlt, ist das kein Handel.
+   * Hier standen einmal zwei WebP-Dateien (1x und 2x) ohne nachvollziehbare
+   * Herkunft. Jetzt zeigt alles auf `public/marke/logo.png` – der Hintergrund
+   * hier, das Wartebild des Fernsehers, der Kopf des Fernseh-Chats und
+   * `scripts/marke.mjs`, das daraus die App-Symbole rechnet. Wer das Logo
+   * austauschen will, tauscht genau diese Datei.
+   *
+   * Ein `image-set` mit zwei Auflösungen wäre die feinere Wahl und die
+   * brüchigere: Ältere Safari-Fassungen kennen es nur mit Präfix und zeigen
+   * sonst gar nichts.
    */
-  --marke-bild: url('/marke/logo@2x.webp');
+  --marke-bild: url('/marke/logo.png');
   /* Wie viel Hintergrundfarbe über dem Logo liegt. 100% heisst: unsichtbar. */
   --marke-schleier: 100%;
-}
-
-[data-marke='dezent'] {
-  --marke-schleier: 93%;
+  /*
+   * Die Scheibe hinter dem Logo.
+   *
+   * Auf dem dunklen Thema braucht es keine – das Logo ist für dunklen Grund
+   * gezeichnet. Auf hellem schon: Seine weissen Bänder verschwinden dort
+   * restlos, und übrig bliebe ein rotes Gerippe. Deshalb eine Scheibe, und
+   * zwar als dritte Hintergrundebene statt als zweite Datei.
+   */
+  --marke-scheibe: transparent;
 }
 
 /*
- * Auf hellem Grund braucht es mehr Schleier, nicht weniger.
+ * „Aus" heisst wirklich aus.
  *
- * Die Scheibe des Logos ist schwarz. Auf dem dunklen Thema verschwindet sie
- * fast von selbst und nur das Herz leuchtet; auf hellem Grund steht sie als
- * dunkler Kreis da und wiegt bei gleicher Zahl doppelt so schwer.
+ * Vorher stand dafür nur der Schleier auf 100 %: Das Bild wurde trotzdem
+ * geholt und gezeichnet, nur vollständig überdeckt. Wer es abschaltet, zahlte
+ * es weiter – ein paar hundert Kilobyte und eine Zeichenebene bei jedem
+ * Bildaufbau, für etwas, das niemand sieht.
  */
-[data-theme='light'][data-marke='dezent'] {
-  --marke-schleier: 95.5%;
+[data-marke='aus'] {
+  --marke-bild: none;
+  --marke-scheibe: transparent;
+}
+
+[data-marke='dezent'] {
+  --marke-schleier: 90%;
+}
+
+/*
+ * Auf hellem Grund braucht es die Scheibe, nicht mehr Schleier.
+ *
+ * Vorher trug das Logo seine schwarze Scheibe im Bild – dort war sie auf dem
+ * hellen Thema ein dunkler Klotz und musste weggeschleiert werden. Jetzt ist
+ * das Bild freigestellt, die Scheibe kommt aus dem CSS, und sie darf
+ * schwächer sein als der alte Klotz: Sie muss nur die weissen Bänder tragen.
+ */
+[data-theme='light'] {
+  --marke-scheibe: color-mix(in srgb, #0b1020 82%, transparent);
 }
 
 [data-marke='deutlich'] {
-  --marke-schleier: 84%;
+  --marke-schleier: 78%;
 }
 
 [data-theme='light'][data-marke='deutlich'] {
-  --marke-schleier: 90%;
+  --marke-schleier: 84%;
 }
 
 body {
@@ -901,14 +929,20 @@ body {
       color-mix(in srgb, var(--bg) var(--marke-schleier), transparent),
       color-mix(in srgb, var(--bg) var(--marke-schleier), transparent)
     ),
-    var(--marke-bild);
-  background-repeat: no-repeat, no-repeat;
-  background-position: center, center;
-  background-size: cover, min(62vmin, 440px);
+    var(--marke-bild),
+    /*
+     * Die Scheibe liegt UNTER dem Logo und ist etwas grösser als es.
+     * `closest-side` an einer Fläche von `min(62vmin, 440px)` macht daraus
+     * einen Kreis, der genau in das Quadrat des Logos passt.
+     */
+    radial-gradient(circle closest-side, var(--marke-scheibe) 92%, transparent 100%);
+  background-repeat: no-repeat, no-repeat, no-repeat;
+  background-position: center, center, center;
+  background-size: cover, min(58vmin, 400px), min(66vmin, 456px);
   /*
    * `fixed`, damit das Herz nicht durch den Chat wandert, wenn gescrollt
    * wird. Die App scrollt ohnehin in ihren eigenen Bereichen, aber der
    * Anmeldebildschirm und lange Formulare tun es am Rumpf.
    */
-  background-attachment: fixed, fixed;
+  background-attachment: fixed, fixed, fixed;
 }

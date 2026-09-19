@@ -19,6 +19,31 @@
   color-scheme: dark;
 }
 
+/*
+ * `hidden` muss stärker sein als jede Klasse in dieser Datei.
+ *
+ * # Der Fehler, den diese drei Zeilen beheben
+ *
+ * Die Vorgabe des Browsers lautet `[hidden] { display: none }` – aber sie
+ * steht in dessen EIGENEM Stilblatt, und jede Regel hier schlägt sie. `.mitte`
+ * und `.verlauf` setzen `display: flex`, und damit blieben beide sichtbar,
+ * obwohl `tv.ts` sie ausdrücklich versteckt hat.
+ *
+ * Bei `.verlauf` fiel es sofort auf: Der Kopf des Gesprächs stand über dem
+ * Wartebild. Bei `.mitte` fiel es NIE auf, und das ist der unangenehmere Teil
+ * – dort hat der Anmeldeschirm samt Code über jeder laufenden Diashow
+ * gestanden, seit es sie gibt. Der Browsertest sah es nicht: Er misst, ob das
+ * Foto geladen ist (`naturalWidth`), und das ist es auch unter einer
+ * durchsichtigen Schicht mit Text darauf.
+ *
+ * `!important` ist hier kein Notnagel, sondern die Aussage selbst: Was
+ * versteckt ist, ist versteckt – und keine spätere Regel soll das aus Versehen
+ * wieder aufheben können.
+ */
+[hidden] {
+  display: none !important;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -167,12 +192,15 @@ body {
   height: auto;
   margin-bottom: 2.4vh;
   /*
-   * Die Scheibe des Logos ist schwarz, der Untergrund hier auch. Ein leiser
-   * Schein hebt sie ab, ohne einen Rahmen zu zeichnen – in einem abgedunkelten
-   * Zimmer ist das der Unterschied zwischen „schwebt" und „liegt in einem
-   * Kasten".
+   * Ein leiser Schein hinter dem freigestellten Zeichen.
+   *
+   * Hier stand einmal, das Logo trage eine schwarze Scheibe, die sich vom
+   * ebenso schwarzen Untergrund abheben müsse. Die Scheibe ist fort – das
+   * Zeichen ist freigestellt, und was bleibt, ist das Herz auf Schwarz. Der
+   * Schein ist trotzdem richtig: In einem abgedunkelten Zimmer ist er der
+   * Unterschied zwischen „schwebt" und „klebt".
    */
-  filter: drop-shadow(0 0 3vh rgba(255, 255, 255, 0.09));
+  filter: drop-shadow(0 0 3vh rgba(255, 255, 255, 0.12));
 }
 
 /*

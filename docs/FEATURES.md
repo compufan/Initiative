@@ -583,6 +583,40 @@ Die App ist dafür gebaut, dass Funklöcher, U-Bahn und Flugmodus nicht stören.
 - Der Offline-Speicher lässt sich in den Einstellungen leeren, ohne sich
   abzumelden.
 
+## Das Zeichen der Gruppe
+
+Das Logo liegt **genau einmal** im Repository: `apps/web/public/marke/logo.png`.
+Alles andere zeigt darauf oder entsteht daraus.
+
+- **Hintergrund der App** – hinter Chats, Kalender, Dateien und jedem anderen
+  Bildschirm, in drei Stufen (_Aus_, _Dezent_, _Deutlich_) unter
+  _Profil → Darstellung_. Die Wahl gehört zum **Konto**, nicht zum Gerät: Wer
+  sie auf dem Telefon trifft, findet sie auf dem Tablet wieder.
+- **Wartebild am Fernseher**, bevor die Diashow startet, und klein im Kopf des
+  Fernseh-Chats.
+- **App-Symbol** auf dem Startbildschirm, in der Browserlasche und in der
+  Android-Statusleiste – alle sieben Grössen rechnet
+  `apps/web/scripts/marke.mjs` aus derselben Datei.
+
+### Ein anderes Logo einsetzen
+
+Neue Datei nach `apps/web/public/marke/logo.png` legen, dann
+`pnpm --filter @initiative/web marke`. Mehr ist es nicht — und weil das Skript
+auch bei `dev` und `prebuild` läuft, reicht in der Praxis das Austauschen.
+
+Zwei Dinge sollte die Datei mitbringen:
+
+- **Freigestellt**, also mit durchsichtigem Hintergrund. Ein Logo mit
+  eingebackener schwarzer Fläche wird zu einem dunklen Klotz im Hintergrund der
+  App – genau das war hier einmal der Fall.
+- **PNG mit acht Bit je Kanal, nicht verschachtelt.** Was nicht passt, sagt das
+  Skript in einem Satz, statt ein schiefes Bild zu erzeugen.
+
+Die erzeugten Symbole stehen **nicht** im Repository. Das ist Absicht: Sie
+wären sonst eine zweite Quelle, und zwar eine, die still veraltet — wer das
+Logo tauscht und den Aufruf vergisst, hätte ein neues Logo im Hintergrund und
+ein altes auf dem Startbildschirm.
+
 ## Auf dem Gerät installieren
 
 - **iPhone/iPad**: Safari → Teilen → „Zum Home-Bildschirm". Danach startet

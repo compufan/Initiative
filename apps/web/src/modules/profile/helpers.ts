@@ -26,6 +26,8 @@ export const REPO_URL: string =
 
 /** Same key the UI store uses – read here to detect a device without a choice. */
 const THEME_KEY = 'initiative.theme';
+/* Derselbe Schluessel wie in `state/ui.ts` – hier wird nur GEFRAGT, ob er steht. */
+const MARKE_KEY = 'initiative.marke';
 
 export function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message) return error.message;
@@ -118,15 +120,36 @@ export async function copyText(value: string): Promise<boolean> {
 /**
  * A device that has never picked a look adopts the one stored with the account,
  * so a freshly installed PWA starts out exactly like the phone next to it.
+ *
+ * Gilt fuer das Farbschema UND fuer das Zeichen der Gruppe. Letzteres fehlte
+ * hier: Es wurde nur lokal gemerkt, und auf dem zweiten Geraet fing es wieder
+ * bei „dezent" an – waehrend das Thema daneben mitwanderte. Zwei Schalter
+ * nebeneinander, von denen einer dem Konto folgt und der andere nicht, sind
+ * kein Entwurf, sondern ein Versaeumnis.
  */
 export function adoptAccountTheme(): void {
-  let stored: string | null = null;
+  let themaGemerkt: string | null = null;
+  let markeGemerkt: string | null = null;
   try {
-    stored = localStorage.getItem(THEME_KEY);
+    themaGemerkt = localStorage.getItem(THEME_KEY);
+    markeGemerkt = localStorage.getItem(MARKE_KEY);
   } catch {
     return;
   }
-  if (stored) return;
-  const theme: ThemePreference | undefined = useSession.getState().user?.settings?.theme;
-  if (theme && theme !== useUi.getState().theme) useUi.getState().setTheme(theme);
+  const einstellungen = useSession.getState().user?.settings;
+
+  if (!themaGemerkt) {
+    const theme: ThemePreference | undefined = einstellungen?.theme;
+    if (theme && theme !== useUi.getState().theme) useUi.getState().setTheme(theme);
+  }
+
+  if (!markeGemerkt) {
+    const marke = einstellungen?.marke;
+    if (
+      (marke === 'aus' || marke === 'dezent' || marke === 'deutlich') &&
+      marke !== useUi.getState().marke
+    ) {
+      useUi.getState().setMarke(marke);
+    }
+  }
 }

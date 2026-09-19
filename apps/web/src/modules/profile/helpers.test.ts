@@ -15,6 +15,7 @@ function user(overrides: Partial<SelfUserDto> = {}): SelfUserDto {
     calendarToken: 'token',
     settings: {
       theme: 'system',
+      marke: 'dezent',
       locale: 'de',
       notifications: { push: true, sound: true, previews: true },
       modules: {},
@@ -59,6 +60,7 @@ describe('notificationSettings', () => {
       user({
         settings: {
           theme: 'dark',
+          marke: 'dezent',
           locale: 'de',
           notifications: { push: false, sound: true, previews: false },
           modules: {},

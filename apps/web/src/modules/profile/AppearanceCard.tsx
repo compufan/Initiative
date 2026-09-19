@@ -35,6 +35,19 @@ export function AppearanceCard() {
     void patchMe({ settings: { theme: next } }).catch(() => {});
   }
 
+  /**
+   * Dasselbe für das Zeichen der Gruppe.
+   *
+   * Es wurde vorher NUR lokal gemerkt – auf dem zweiten Gerät fing es wieder
+   * bei „dezent" an, während das Farbschema direkt daneben mitwanderte. Zwei
+   * Schalter nebeneinander, von denen einer dem Konto folgt und der andere
+   * nicht, sind kein Entwurf.
+   */
+  function waehleMarke(next: MarkePraesenz) {
+    setMarke(next);
+    void patchMe({ settings: { marke: next } }).catch(() => {});
+  }
+
   return (
     <section className="card stack" aria-labelledby="prf-appearance-title">
       <h2 className="prf-block-title" id="prf-appearance-title">
@@ -74,7 +87,7 @@ export function AppearanceCard() {
             type="button"
             className={`prf-segment-btn${marke === option.value ? ' is-active' : ''}`}
             aria-pressed={marke === option.value}
-            onClick={() => setMarke(option.value)}
+            onClick={() => waehleMarke(option.value)}
           >
             <span className="prf-segment-icon" aria-hidden="true">
               {option.icon}

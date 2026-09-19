@@ -217,6 +217,23 @@ test('eine Sammlung läuft als Diashow auf einem Fernseher', async ({ browser, b
   );
 
   /*
+   * Und der Anmeldeschirm ist WIRKLICH weg.
+   *
+   * Diese Zeile fehlte, und der Fehler dahinter hat lange gelebt: `tv.ts`
+   * setzt `anmeldung.hidden = true`, aber `.mitte { display: flex }` schlug
+   * die Vorgabe des Browsers (`[hidden] { display: none }`) – die steht in
+   * dessen eigenem Stilblatt und verliert gegen jede Regel der Seite. Der
+   * Code stand also über jeder laufenden Diashow.
+   *
+   * Warum die vorhandene Prüfung das nicht sah: Sie misst `naturalWidth` des
+   * Fotos, und das ist auch unter einer durchsichtigen Schicht mit Text
+   * darauf gesetzt. Ein geladenes Bild und ein SICHTBARES Bild sind zwei
+   * verschiedene Aussagen.
+   */
+  await expect(tv.locator('#anmeldung')).toBeHidden();
+  await expect(codeFeld).toBeHidden();
+
+  /*
    * ---- Die Fernbedienung ------------------------------------------------
    *
    * Erst PAUSE, und zwar nicht aus Höflichkeit: Ohne sie läuft die Diashow

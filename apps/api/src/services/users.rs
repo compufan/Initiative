@@ -26,6 +26,10 @@ pub fn to_user_dto(row: &UserRow, config: &Config) -> UserDto {
 pub fn merge_settings(stored: &Value) -> Value {
     let defaults = json!({
         "theme": "system",
+        // Wie deutlich das Zeichen der Gruppe im Hintergrund steht. Gehoert
+        // zum Konto, damit ein zweites Geraet nicht wieder bei „dezent"
+        // anfaengt – genau wie `theme` daneben.
+        "marke": "dezent",
         "locale": "de",
         "notifications": { "push": true, "sound": true, "previews": true },
         "modules": {}

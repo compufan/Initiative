@@ -21,6 +21,14 @@ export interface SelfUserDto extends UserDto {
 
 export interface UserSettings {
   theme: 'system' | 'light' | 'dark';
+  /**
+   * Wie deutlich das Zeichen der Gruppe im Hintergrund steht.
+   *
+   * Gehört zum Konto und nicht nur zum Gerät – aus demselben Grund wie
+   * `theme`: Wer auf dem Telefon „aus" gewählt hat, will es auf dem Tablet
+   * nicht wieder anschalten müssen.
+   */
+  marke: 'aus' | 'dezent' | 'deutlich';
   locale: string;
   notifications: {
     push: boolean;
@@ -33,6 +41,7 @@ export interface UserSettings {
 
 export const userSettingsSchema = z.object({
   theme: z.enum(['system', 'light', 'dark']).optional(),
+  marke: z.enum(['aus', 'dezent', 'deutlich']).optional(),
   locale: z.string().min(2).max(16).optional(),
   notifications: z
     .object({ push: z.boolean(), sound: z.boolean(), previews: z.boolean() })
@@ -56,6 +65,7 @@ export const userSearchSchema = z.object({
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
   theme: 'system',
+  marke: 'dezent',
   locale: 'de',
   notifications: { push: true, sound: true, previews: true },
   modules: {},

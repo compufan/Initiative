@@ -30,3 +30,12 @@ apps/api/target/
 apps/web/test-results/
 apps/web/playwright-report/
 apps/web/blob-report/
+
+# Die App-Symbole entstehen aus apps/web/public/marke/logo.png
+# (apps/web/scripts/marke.mjs, laeuft in `dev` und `prebuild`).
+#
+# Sie liegen NICHT im Repository, damit es das Zeichen der Gruppe genau einmal
+# gibt. Waeren sie eingecheckt, waeren sie eine zweite Quelle – und zwar eine,
+# die still veraltet: Wer das Logo tauscht und den Aufruf vergisst, haette ein
+# neues Logo im Hintergrund und ein altes auf dem Startbildschirm.
+apps/web/public/icons/

@@ -7,7 +7,10 @@
       content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5"
     />
     <title>Initiative</title>
-    <meta name="description" content="Messenger, Kalender, Umfragen und Mini-Spiele – als PWA auf jedem Gerät." />
+    <meta
+      name="description"
+      content="Messenger, Kalender, Umfragen und Mini-Spiele – als PWA auf jedem Gerät."
+    />
     <meta name="theme-color" content="#0b1020" />
     <meta name="color-scheme" content="dark light" />
 
@@ -17,7 +20,16 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Initiative" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
-    <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml" />
+    <!--
+      Kein SVG mehr für die Lasche.
+
+      Das Zeichen der Gruppe ist eine Zeichnung und kein Pfad; ein SVG daraus
+      wäre ein PNG in einer SVG-Hülle – grösser, ohne einen einzigen Vorteil.
+      Zwei Grössen, damit ein Bildschirm mit doppelter Auflösung nicht das
+      32er hochrechnet.
+    -->
+    <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="icon" href="/icons/favicon-64.png" sizes="64x64" type="image/png" />
     <link rel="icon" href="/icons/icon-192.png" sizes="192x192" />
     <link rel="manifest" href="/manifest.webmanifest" />
 
