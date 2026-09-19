@@ -281,22 +281,30 @@ export function VideoEditorSheet({
 
   const dateiname = `${(name ?? 'video').replace(/\.[^.]+$/, '')}-bearbeitet.webm`;
 
-  /* ---------- Der Fotoeditor, solange er offen ist ---------- */
-
-  if (editorAuf && standbild) {
-    return (
+  /*
+   * Der Fotoeditor liegt ÜBER dem Blatt, nicht anstelle davon.
+   *
+   * `beiseite` blendet das Blatt aus und lässt es stehen (`.is-beiseite` in
+   * `global.css`) – dieselbe Lösung wie beim Blatt „Foto oder Video". Der
+   * Grund sind die Ebenen: Der Editor liegt auf 75, ein Blatt auf 77. Wäre
+   * das Blatt noch sichtbar, läge es über dem Editor, und jeder Fingertipp
+   * ginge an das falsche von beiden.
+   *
+   * Das Blatt zu VERWERFEN wäre die andere Möglichkeit und die schlechtere:
+   * Die Rollposition und jedes offene Aufklappfeld wären nach dem Zurückkommen
+   * weg.
+   */
+  const editor =
+    editorAuf && standbild ? (
       <BildEditor
         quelle={standbild}
         name={name ?? null}
         startDoc={doc}
         onClose={() => setEditorAuf(false)}
         dokumentName="Auf den Film anwenden"
-        onDokument={(fertig) => {
-          setDoc(fertig);
-        }}
+        onDokument={(fertig) => setDoc(fertig)}
       />
-    );
-  }
+    ) : null;
 
   /* ---------- Das Ergebnis ---------- */
 
@@ -346,45 +354,47 @@ export function VideoEditorSheet({
   const nichtsGetan = !doc || (rechenmass && docUnberuehrt(doc, rechenmass.b, rechenmass.h));
 
   return (
-    <Sheet open onClose={onClose} title="Video bearbeiten">
-      <div className="stack">
-        {absage && <p className="vg-absage">{absage}</p>}
+    <>
+      {editor}
+      <Sheet open onClose={onClose} title="Video bearbeiten" beiseite={editorAuf}>
+        <div className="stack">
+          {absage && <p className="vg-absage">{absage}</p>}
 
-        {streifen.length === 0 ? (
-          <p className="vg-hinweis">
-            <span className="spinner" aria-hidden="true" /> Das Video wird durchgesehen …
-          </p>
-        ) : (
-          <>
-            <Streifen
-              bilder={streifen}
-              dauerMs={dauerMs}
-              vonMs={vonMs}
-              bisMs={bisMs}
-              gesperrt={lauf !== null}
-              onBereich={(von, bis) => {
-                setVonMs(von);
-                setBisMs(bis);
-              }}
-            />
+          {streifen.length === 0 ? (
             <p className="vg-hinweis">
-              {anzahl} {anzahl === 1 ? 'Bild' : 'Bilder'}
-              {rechenmass && ` · ${rechenmass.b} × ${rechenmass.h}`} ·{' '}
-              {((anzahl * dauerJeBildMs(bildrate)) / 1000) | 0 || '<1'} s Film
-              {plan.gekuerztMs > 0 && (
-                <>
-                  {' '}
-                  <strong>
-                    Hinten fallen {(plan.gekuerztMs / 1000).toFixed(1).replace('.', ',')} s weg –
-                    bei dieser Grösse passen höchstens {maxBilder} Bilder in den Speicher.
-                  </strong>
-                </>
-              )}
+              <span className="spinner" aria-hidden="true" /> Das Video wird durchgesehen …
             </p>
-          </>
-        )}
+          ) : (
+            <>
+              <Streifen
+                bilder={streifen}
+                dauerMs={dauerMs}
+                vonMs={vonMs}
+                bisMs={bisMs}
+                gesperrt={lauf !== null}
+                onBereich={(von, bis) => {
+                  setVonMs(von);
+                  setBisMs(bis);
+                }}
+              />
+              <p className="vg-hinweis">
+                {anzahl} {anzahl === 1 ? 'Bild' : 'Bilder'}
+                {rechenmass && ` · ${rechenmass.b} × ${rechenmass.h}`} ·{' '}
+                {((anzahl * dauerJeBildMs(bildrate)) / 1000) | 0 || '<1'} s Film
+                {plan.gekuerztMs > 0 && (
+                  <>
+                    {' '}
+                    <strong>
+                      Hinten fallen {(plan.gekuerztMs / 1000).toFixed(1).replace('.', ',')} s weg –
+                      bei dieser Grösse passen höchstens {maxBilder} Bilder in den Speicher.
+                    </strong>
+                  </>
+                )}
+              </p>
+            </>
+          )}
 
-        {/*
+          {/*
           Die Grösse steht FEST, sobald etwas eingestellt ist – und das ist
           keine Bequemlichkeit.
 
@@ -395,133 +405,134 @@ export function VideoEditorSheet({
           gewählt hat – ohne Fehlermeldung und ohne dass irgendwo stünde,
           woran es liegt.
         */}
-        <fieldset className="vg-gruppe" disabled={lauf !== null || doc !== null}>
-          <legend>Grösse</legend>
-          <div className="vg-kacheln">
-            {KANTEN.map((wahl) => (
-              <button
-                key={wahl.kante}
-                type="button"
-                className={`vg-kachel${wahl.kante === kante ? ' ist-aktiv' : ''}`}
-                onClick={() => setKante(wahl.kante)}
-                title={wahl.beschreibung}
-              >
-                {wahl.titel}
-              </button>
-            ))}
-          </div>
-          {doc && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              disabled={lauf !== null}
-              onClick={() => {
-                setDoc(null);
-                setStandbild(null);
-              }}
-            >
-              Grösse ändern – verwirft die Bearbeitung
-            </button>
-          )}
-        </fieldset>
-
-        <fieldset className="vg-gruppe" disabled={lauf !== null}>
-          <legend>Bilder je Sekunde</legend>
-          <div className="vg-kacheln">
-            {BILDRATEN.map((rate) => (
-              <button
-                key={rate.rate}
-                type="button"
-                className={`vg-kachel${rate.rate === bildrate ? ' ist-aktiv' : ''}`}
-                onClick={() => setBildrate(rate.rate)}
-                title={rate.beschreibung}
-              >
-                {rate.titel}
-              </button>
-            ))}
-          </div>
-        </fieldset>
-
-        <button
-          type="button"
-          className="btn"
-          onClick={() => void editorOeffnen()}
-          disabled={streifen.length === 0 || holt || lauf !== null}
-        >
-          {holt ? '…' : doc ? '✏️ Bearbeitung ändern' : '✏️ Bearbeiten'}
-        </button>
-
-        {doc && (
-          <p className="vg-hinweis">
-            {nichtsGetan
-              ? 'Noch nichts eingestellt – der Film käme so heraus, wie er hineingeht.'
-              : teile.length === 0
-                ? 'Die Bearbeitung gilt für jedes Bild gleich. Das geht schnell.'
-                : `${teile.length === 1 ? 'Ein Bereich hängt' : `${teile.length} Bereiche hängen`} am Bildinhalt – Netz, Tiefe oder Antippen. Die werden auf jedem ${schluesselAbstand === 1 ? 'Bild' : `${schluesselAbstand}. Bild`} neu gerechnet und dazwischen mitgeschoben. Das dauert.`}
-          </p>
-        )}
-
-        {lauf && (
-          <div className="stk-lauf">
-            <strong>{ABSCHNITT_TITEL[lauf.abschnitt]}</strong>
-            <div
-              className="stk-balken"
-              role="progressbar"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={Math.round(lauf.anteil * 100)}
-            >
-              <span style={{ width: `${Math.round(lauf.anteil * 100)}%` }} />
+          <fieldset className="vg-gruppe" disabled={lauf !== null || doc !== null}>
+            <legend>Grösse</legend>
+            <div className="vg-kacheln">
+              {KANTEN.map((wahl) => (
+                <button
+                  key={wahl.kante}
+                  type="button"
+                  className={`vg-kachel${wahl.kante === kante ? ' ist-aktiv' : ''}`}
+                  onClick={() => setKante(wahl.kante)}
+                  title={wahl.beschreibung}
+                >
+                  {wahl.titel}
+                </button>
+              ))}
             </div>
-            <span className="vg-hinweis">{lauf.text}</span>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={() => steuerung.current?.abort()}
-            >
-              Abbrechen
-            </button>
-          </div>
-        )}
-
-        {nachAbbruch !== null && !lauf && (
-          <div className="vg-nachfrage">
-            <p>
-              Abgebrochen – {nachAbbruch} Bilder waren schon fertig. Daraus trotzdem einen Film
-              machen?
-            </p>
-            <div className="row" style={{ gap: 'var(--space-2)' }}>
-              <button type="button" className="btn" onClick={() => setNachAbbruch(null)}>
-                Nein
-              </button>
+            {doc && (
               <button
                 type="button"
-                className="btn btn-primary"
-                onClick={() => void starten(nachAbbruch)}
+                className="btn btn-ghost btn-sm"
+                disabled={lauf !== null}
+                onClick={() => {
+                  setDoc(null);
+                  setStandbild(null);
+                }}
               >
-                Ja, aus {nachAbbruch} Bildern
+                Grösse ändern – verwirft die Bearbeitung
               </button>
-            </div>
-          </div>
-        )}
+            )}
+          </fieldset>
 
-        {!lauf && (
+          <fieldset className="vg-gruppe" disabled={lauf !== null}>
+            <legend>Bilder je Sekunde</legend>
+            <div className="vg-kacheln">
+              {BILDRATEN.map((rate) => (
+                <button
+                  key={rate.rate}
+                  type="button"
+                  className={`vg-kachel${rate.rate === bildrate ? ' ist-aktiv' : ''}`}
+                  onClick={() => setBildrate(rate.rate)}
+                  title={rate.beschreibung}
+                >
+                  {rate.titel}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
           <button
             type="button"
-            className="btn btn-primary"
-            disabled={!doc || absage !== null || anzahl === 0}
-            onClick={() => void starten()}
+            className="btn"
+            onClick={() => void editorOeffnen()}
+            disabled={streifen.length === 0 || holt || lauf !== null}
           >
-            Film bauen
+            {holt ? '…' : doc ? '✏️ Bearbeitung ändern' : '✏️ Bearbeiten'}
           </button>
-        )}
-        {!doc && !absage && (
-          <p className="vg-hinweis">
-            Tipp zuerst auf „Bearbeiten“. Was du dort am ersten Bild einstellst, gilt danach für den
-            ganzen Ausschnitt – auch Freistellen und Tiefenschärfe.
-          </p>
-        )}
-      </div>
-    </Sheet>
+
+          {doc && (
+            <p className="vg-hinweis">
+              {nichtsGetan
+                ? 'Noch nichts eingestellt – der Film käme so heraus, wie er hineingeht.'
+                : teile.length === 0
+                  ? 'Die Bearbeitung gilt für jedes Bild gleich. Das geht schnell.'
+                  : `${teile.length === 1 ? 'Ein Bereich hängt' : `${teile.length} Bereiche hängen`} am Bildinhalt – Netz, Tiefe oder Antippen. Die werden auf jedem ${schluesselAbstand === 1 ? 'Bild' : `${schluesselAbstand}. Bild`} neu gerechnet und dazwischen mitgeschoben. Das dauert.`}
+            </p>
+          )}
+
+          {lauf && (
+            <div className="stk-lauf">
+              <strong>{ABSCHNITT_TITEL[lauf.abschnitt]}</strong>
+              <div
+                className="stk-balken"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(lauf.anteil * 100)}
+              >
+                <span style={{ width: `${Math.round(lauf.anteil * 100)}%` }} />
+              </div>
+              <span className="vg-hinweis">{lauf.text}</span>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => steuerung.current?.abort()}
+              >
+                Abbrechen
+              </button>
+            </div>
+          )}
+
+          {nachAbbruch !== null && !lauf && (
+            <div className="vg-nachfrage">
+              <p>
+                Abgebrochen – {nachAbbruch} Bilder waren schon fertig. Daraus trotzdem einen Film
+                machen?
+              </p>
+              <div className="row" style={{ gap: 'var(--space-2)' }}>
+                <button type="button" className="btn" onClick={() => setNachAbbruch(null)}>
+                  Nein
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => void starten(nachAbbruch)}
+                >
+                  Ja, aus {nachAbbruch} Bildern
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!lauf && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!doc || absage !== null || anzahl === 0}
+              onClick={() => void starten()}
+            >
+              Film bauen
+            </button>
+          )}
+          {!doc && !absage && (
+            <p className="vg-hinweis">
+              Tipp zuerst auf „Bearbeiten“. Was du dort am ersten Bild einstellst, gilt danach für
+              den ganzen Ausschnitt – auch Freistellen und Tiefenschärfe.
+            </p>
+          )}
+        </div>
+      </Sheet>
+    </>
   );
 }
