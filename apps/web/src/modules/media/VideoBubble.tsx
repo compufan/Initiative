@@ -46,11 +46,11 @@ export function VideoBubble({ message, isMine }: MessageRendererProps) {
         />
         <FernsehKnopf video={video} attachmentId={attachment.id} />
         {/*
-          „GIF daraus machen" sitzt neben dem Fernsehknopf und nicht im
-          Nachrichtenmenü: Wer ein Video sieht und daraus ein GIF will, sucht
-          nicht erst unter „Weiterleiten" und „Löschen" danach.
+          Bearbeiten und „GIF daraus machen" sitzen neben dem Fernsehknopf und
+          nicht im Nachrichtenmenü: Wer ein Video sieht und etwas damit
+          vorhat, sucht nicht erst unter „Weiterleiten" und „Löschen" danach.
         */}
-        <VideoWerkstatt video={attachment} className="media-gif-btn" />
+        <VideoWerkstatt video={attachment} className="media-edit-btn" className2="media-gif-btn" />
         {attachment.durationMs != null && attachment.durationMs > 0 && (
           <span className="media-badge">{formatDuration(attachment.durationMs)}</span>
         )}

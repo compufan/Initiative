@@ -1124,3 +1124,32 @@
 .media-gif-btn[disabled] {
   opacity: 0.5;
 }
+
+/*
+ * „Bearbeiten" auf einem Video im Chat – der dritte Knopf in der Reihe.
+ *
+ * Die Reihe läuft von rechts: Fernsehen (8), GIF (52), Bearbeiten (96). Drei
+ * feste Abstände und keine Flex-Zeile, weil die Knöpfe ÜBER dem Video liegen
+ * und nicht daneben – eine Zeile bräuchte einen eigenen Kasten, und der läge
+ * dann über dem Bild, auch wo gar kein Knopf ist.
+ */
+.media-edit-btn {
+  position: absolute;
+  top: 8px;
+  right: 96px;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--radius-full);
+  background: rgba(4, 8, 20, 0.62);
+  color: #fff;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.media-edit-btn[disabled] {
+  opacity: 0.5;
+}

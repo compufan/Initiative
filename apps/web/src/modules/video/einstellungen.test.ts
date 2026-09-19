@@ -9,6 +9,8 @@ import {
   gueteFinden,
   gueteMoeglich,
   gueteWaehlen,
+  maxBilderFuer,
+  PUNKTE_DECKEL,
   readVideoGuete,
   writeVideoGuete,
 } from './einstellungen.js';
@@ -228,6 +230,40 @@ describe('dauerText', () => {
   it('beugt „Minute“ richtig', () => {
     expect(dauerText(95_000)).toBe('rund 2 Minuten');
     expect(dauerText(91_000)).toContain('Minut');
+  });
+});
+
+describe('maxBilderFuer', () => {
+  it('lässt bei kleinen Bildern die volle Zahl zu', () => {
+    expect(maxBilderFuer(640, 360)).toBe(MAX_BILDER);
+  });
+
+  it('senkt die Zahl mit der FLÄCHE', () => {
+    /*
+     * `videoBilderLesen` hält alle Bilder unkomprimiert im Speicher.
+     * Hundertfünfzig Bilder bei 1280 × 720 wären 553 MB – auf einem Telefon
+     * wirft der Browser dafür den Reiter weg, und zwar ohne Fehlermeldung,
+     * die irgendwo ankäme.
+     */
+    expect(maxBilderFuer(1280, 720)).toBeLessThan(MAX_BILDER);
+    expect(maxBilderFuer(1920, 1080)).toBeLessThan(maxBilderFuer(1280, 720));
+  });
+
+  it('bleibt unter dem Deckel', () => {
+    for (const [b, h] of [
+      [640, 360],
+      [1280, 720],
+      [1920, 1080],
+      [3840, 2160],
+    ]) {
+      expect(maxBilderFuer(b, h) * b * h, `${b}×${h}`).toBeLessThanOrEqual(PUNKTE_DECKEL);
+    }
+  });
+
+  it('gibt niemals null zurück', () => {
+    // Auch ein unsinnig grosses Bild muss EIN Bild zulassen – sonst stünde
+    // dort „0 Bilder" und ein Knopf, der nichts tun kann.
+    expect(maxBilderFuer(20_000, 20_000)).toBe(1);
   });
 });
 

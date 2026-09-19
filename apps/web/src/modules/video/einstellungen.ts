@@ -115,6 +115,25 @@ export const GUETE_VORGABE: VideoGuete = 'schnell';
  */
 export const MAX_BILDER = 150;
 
+/**
+ * Wie viele Bildpunkte gleichzeitig im Speicher liegen dürfen.
+ *
+ * Neunzig Millionen Punkte sind als RGBA rund 360 MB – und das ist kein
+ * vorsichtiger Wert, sondern ein grosszügiger: `videoBilderLesen` hält alle
+ * Bilder unkomprimiert, und daneben liegt noch die Leinwand, auf der
+ * gezeichnet wird.
+ *
+ * Bei 640 × 360 reicht das für weit mehr als die 150 Bilder, die ohnehin die
+ * Grenze sind. Bei 1280 × 720 für 97, bei 1920 × 1080 für 43 – und genau das
+ * soll in der Oberfläche stehen, statt dass der Browser den Reiter wegwirft.
+ */
+export const PUNKTE_DECKEL = 90_000_000;
+
+export function maxBilderFuer(breite: number, hoehe: number): number {
+  const punkte = Math.max(1, breite * hoehe);
+  return Math.max(1, Math.min(MAX_BILDER, Math.floor(PUNKTE_DECKEL / punkte)));
+}
+
 const KEY = 'initiative.video-qualitaet';
 
 export function gueteFinden(key: string): GueteInfo {

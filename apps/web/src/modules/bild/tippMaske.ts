@@ -72,7 +72,17 @@ export function tippNetzVerfuegbar(): boolean {
  */
 const vorlagen = new WeakMap<HTMLImageElement, ReturnType<typeof vorlageAus>>();
 
-export function tippVorlage(bild: HTMLImageElement) {
+export function tippVorlage(bild: HTMLImageElement | ImageData) {
+  /*
+   * Fertige Bildpunkte kommen unverändert zurück.
+   *
+   * Das ist der Weg der Videobearbeitung: Dort liegt jedes Bild ohnehin schon
+   * als `ImageData` in Rechengrösse vor. Es durch eine Leinwand zu schicken,
+   * um es dort wieder herauszulesen, wäre bei hundertfünfzig Bildern
+   * hundertfünfzig Mal Arbeit ohne jede Wirkung – und ein
+   * `WeakMap`-Eintrag je Bild obendrein.
+   */
+  if ('data' in bild) return { image: bild, faktor: 1 };
   const da = vorlagen.get(bild);
   if (da) return da;
   const neu = vorlageAus(bild, bild.naturalWidth, bild.naturalHeight);
@@ -116,7 +126,7 @@ function vereinigen(a: Uint8Array, b: Uint8Array): Uint8Array {
  * letzte zurückgenommene Tipp.
  */
 export async function tippTeilRechnen(
-  bild: HTMLImageElement,
+  bild: HTMLImageElement | ImageData,
   punkte: readonly Tipp[],
   wahl: {
     modus: Maskenmodus;

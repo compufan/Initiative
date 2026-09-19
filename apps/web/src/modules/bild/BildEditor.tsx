@@ -336,6 +336,20 @@ interface BildEditorProps {
   stapelAnzahl?: number;
   /** Überträgt Licht und Farbe auf die anderen Bilder der Auswahl. */
   onStapel?: (anpassung: Anpassung) => Promise<void> | void;
+  /**
+   * Gibt die BEARBEITUNG heraus statt eines Bildes.
+   *
+   * Dafür gibt es genau einen Anwender: die Videobearbeitung. Dort wird an
+   * einem einzelnen Bild eingestellt, und dasselbe Dokument läuft danach über
+   * alle Bilder des Films. Ein gerechnetes Einzelbild nützte dort gar nichts.
+   *
+   * Steht es, verschwinden die drei üblichen Knöpfe. „Aufs Handy" und
+   * „Rezept" wären an einem Standbild aus einem Film eine Sackgasse: Sie
+   * lieferten ein Foto, und geholt war ein Film.
+   */
+  onDokument?: (doc: BildDoc, breite: number, hoehe: number) => Promise<void> | void;
+  /** Was auf dem Knopf für `onDokument` steht. */
+  dokumentName?: string;
 }
 
 /** `foto.jpg` → `foto-bearbeitet.webp`. Das Original behält seinen Namen. */
@@ -357,6 +371,8 @@ export function BildEditor({
   name,
   onClose,
   onFertig,
+  onDokument,
+  dokumentName = 'Übernehmen',
   zielName,
   startVerhaeltnis,
   startDoc,
@@ -2693,6 +2709,19 @@ export function BildEditor({
     }
   }
 
+  async function dokumentAbgeben() {
+    if (!onDokument || !doc || !bild) return;
+    setSpeichert(true);
+    try {
+      await onDokument(doc, bild.naturalWidth, bild.naturalHeight);
+      onClose();
+    } catch (error) {
+      toast(errorMessage(error, 'Das Übernehmen ist fehlgeschlagen'), 'error');
+    } finally {
+      setSpeichert(false);
+    }
+  }
+
   async function inDieApp() {
     if (!onFertig) return;
     setSpeichert(true);
@@ -4089,15 +4118,30 @@ export function BildEditor({
             zweite Wahl, sondern die einzige – dann steht sie auch dort, wo man
             sie sucht, statt neben einem gesperrten Knopf. */}
         <div className="bild-reihe">
-          <button
-            type="button"
-            className={onFertig ? 'btn btn-sm' : 'btn btn-primary'}
-            onClick={() => void aufsHandy()}
-            disabled={laedt || speichert}
-          >
-            ⬇ Aufs Handy {onFertig ? '' : 'speichern'}
-          </button>
-          {onFertig && (
+          {/*
+            Geht die BEARBEITUNG heraus und nicht ein Bild, bleibt genau ein
+            Knopf. Die anderen lieferten ein Foto – und geholt wurde ein Film.
+          */}
+          {onDokument ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => void dokumentAbgeben()}
+              disabled={laedt || speichert || !doc}
+            >
+              {speichert ? '…' : dokumentName}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={onFertig ? 'btn btn-sm' : 'btn btn-primary'}
+              onClick={() => void aufsHandy()}
+              disabled={laedt || speichert}
+            >
+              ⬇ Aufs Handy {onFertig ? '' : 'speichern'}
+            </button>
+          )}
+          {onFertig && !onDokument && (
             <button
               type="button"
               className="btn btn-primary"
@@ -4107,7 +4151,7 @@ export function BildEditor({
               {speichert ? '…' : (zielName ?? 'Als neue Datei sichern')}
             </button>
           )}
-          {onStapel && stapelAnzahl > 0 && (
+          {onStapel && stapelAnzahl > 0 && !onDokument && (
             <button
               type="button"
               className="btn btn-sm"
@@ -4118,7 +4162,7 @@ export function BildEditor({
               ✨ Auf alle {stapelAnzahl + 1}
             </button>
           )}
-          {onRezept && (
+          {onRezept && !onDokument && (
             /*
              * IMMER da, nur manchmal gesperrt – und der Grund steht im Tipp.
              *

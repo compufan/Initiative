@@ -126,19 +126,27 @@ function vorbereiten(
 }
 
 /**
- * Rechnet die Tiefenkarte und macht daraus ein Maskenteil.
+ * Eine offene Sitzung samt der Rechnung, die darauf läuft.
  *
- * Wirft `EngineError` mit einem Satz, den man dem Anwender zeigen kann.
+ * # Warum es das gibt
+ *
+ * Wegen des Films. Eine Tiefenkarte für ein Foto ist ein Knopfdruck: Sitzung
+ * auf, rechnen, Sitzung zu – und dass das Aufmachen 0,8 s kostet, fällt neben
+ * den 2,5 s Rechnung nicht auf. Über fünfzig Bilder wären es fünfzig Mal
+ * 0,8 s obendrauf, also vierzig Sekunden für nichts, und fünfzig Mal 230 MB,
+ * die der Einsammler hinterherräumen muss.
+ *
+ * Wer sie aufmacht, MUSS sie schliessen. Deshalb gibt es sie nur so: mit
+ * einem `schliessen`, das danebensteht, und einem `finally` beim Aufrufer.
  */
-export async function tiefenTeilRechnen(
-  bild: HTMLImageElement,
-  melden?: Fortschritt,
-): Promise<Maskenteil> {
-  if (!tiefeVerfuegbar()) throw new EngineError(tiefeGrund(), 'tiefe');
+export interface Tiefensitzung {
+  /** Rechnet die Karte für ein Bild – beliebig oft. */
+  karteFuer(bild: ImageData): Promise<{ breite: number; hoehe: number; feld: Uint8Array }>;
+  schliessen(): Promise<void>;
+}
 
-  melden?.('Bild wird vorbereitet …');
-  const vorlage = vorlageHolen(bild);
-  const { w, h } = netzGroesse(vorlage.image.width, vorlage.image.height);
+export async function tiefensitzungOeffnen(melden?: Fortschritt): Promise<Tiefensitzung> {
+  if (!tiefeVerfuegbar()) throw new EngineError(tiefeGrund(), 'tiefe');
 
   // Vor dem Import melden, nicht danach: Die Laufzeit selbst sind rund 14 MB.
   // Wer bis hierher nichts hört, sieht einen Knopf, der nichts tut.
@@ -161,12 +169,45 @@ export async function tiefenTeilRechnen(
       executionProviders: ['wasm'],
       graphOptimizationLevel: 'all',
     });
+  } catch (fehler) {
+    await sitzung?.release().catch(() => undefined);
+    const grund = fehler instanceof Error ? fehler.message : 'Unbekannter Fehler';
+    throw new EngineError(grund, 'tiefe');
+  }
 
+  const offen = sitzung;
+  return {
+    async karteFuer(bild: ImageData) {
+      const { w, h } = netzGroesse(bild.width, bild.height);
+      const eingabe = new ort.Tensor('float32', vorbereiten(bild, w, h), [1, 3, h, w]);
+      const ergebnis = await offen.run({ [offen.inputNames[0]]: eingabe });
+      const roh = ergebnis[offen.outputNames[0]].data as Float32Array;
+      return tiefeNormalisieren(roh, w, h);
+    },
+    async schliessen() {
+      await offen.release().catch(() => undefined);
+    },
+  };
+}
+
+/**
+ * Rechnet die Tiefenkarte und macht daraus ein Maskenteil.
+ *
+ * Wirft `EngineError` mit einem Satz, den man dem Anwender zeigen kann.
+ */
+export async function tiefenTeilRechnen(
+  bild: HTMLImageElement,
+  melden?: Fortschritt,
+): Promise<Maskenteil> {
+  if (!tiefeVerfuegbar()) throw new EngineError(tiefeGrund(), 'tiefe');
+
+  melden?.('Bild wird vorbereitet …');
+  const vorlage = vorlageHolen(bild);
+
+  const sitzung = await tiefensitzungOeffnen(melden);
+  try {
     melden?.('Tiefe wird geschätzt …');
-    const eingabe = new ort.Tensor('float32', vorbereiten(vorlage.image, w, h), [1, 3, h, w]);
-    const ergebnis = await sitzung.run({ [sitzung.inputNames[0]]: eingabe });
-    const roh = ergebnis[sitzung.outputNames[0]].data as Float32Array;
-    const karte = tiefeNormalisieren(roh, w, h);
+    const karte = await sitzung.karteFuer(vorlage.image);
 
     const teil: TiefenTeil & { id: string; modus: 'dazu'; umkehren: boolean } = {
       id: `d${naechsteMarke()}`,
@@ -201,6 +242,6 @@ export async function tiefenTeilRechnen(
   } finally {
     // Immer freigeben – auch nach einem Fehler. Siehe der Abschnitt über den
     // Speicher ganz oben.
-    await sitzung?.release().catch(() => undefined);
+    await sitzung.schliessen();
   }
 }

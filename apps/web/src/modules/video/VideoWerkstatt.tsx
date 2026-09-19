@@ -3,6 +3,7 @@ import type { AttachmentDto } from '@initiative/shared';
 
 import { toast } from '../../state/ui.js';
 import { errorMessage, mediaBytes } from '../media/helpers.js';
+import { VideoEditorSheet } from './VideoEditorSheet.js';
 import { VideoGifSheet } from './VideoGifSheet.js';
 
 /**
@@ -27,6 +28,7 @@ export function VideoWerkstatt({
   zielName,
   onOffen,
   className,
+  className2,
 }: {
   video: AttachmentDto;
   /** Wohin das fertige GIF gehört. Fehlt es, bleibt das Speichern aufs Gerät. */
@@ -42,18 +44,22 @@ export function VideoWerkstatt({
    * Unterscheidung, die der Fernsehknopf schon trifft.
    */
   className?: string;
+  /** Die Form des zweiten Knopfes – siehe `className`. */
+  className2?: string;
 }) {
   const [daten, setDaten] = useState<{ id: string; blob: Blob } | null>(null);
-  const [offen, setOffen] = useState(false);
+  const [offen, setOffen] = useState<'aus' | 'gif' | 'bearbeiten'>('aus');
   const [laedt, setLaedt] = useState(false);
 
-  async function oeffnen() {
+  async function oeffnen(ziel: 'gif' | 'bearbeiten') {
     if (laedt) return;
     setLaedt(true);
     try {
+      // Einmal holen reicht: Wer erst ein GIF macht und danach bearbeitet,
+      // lädt DASSELBE Video nicht zweimal herunter.
       const blob = daten?.id === video.id ? daten.blob : await mediaBytes(video);
       setDaten({ id: video.id, blob });
-      setOffen(true);
+      setOffen(ziel);
       onOffen?.(true);
     } catch (ausfall) {
       toast(errorMessage(ausfall, 'Das Video konnte nicht geladen werden'), 'error');
@@ -63,7 +69,7 @@ export function VideoWerkstatt({
   }
 
   function schliessen() {
-    setOffen(false);
+    setOffen('aus');
     onOffen?.(false);
   }
 
@@ -72,16 +78,35 @@ export function VideoWerkstatt({
       <button
         type="button"
         className={className ?? 'media-round-btn'}
-        onClick={() => void oeffnen()}
+        onClick={() => void oeffnen('bearbeiten')}
+        disabled={laedt}
+        aria-label="Video bearbeiten"
+        title="Zuschneiden, Licht, Farbe, Freistellen, Tiefenschärfe"
+      >
+        {laedt ? '…' : '✏️'}
+      </button>
+      <button
+        type="button"
+        className={className2 ?? 'media-round-btn'}
+        onClick={() => void oeffnen('gif')}
         disabled={laedt}
         aria-label="GIF aus dem Video machen"
         title="Ausschnitt wählen, freistellen, als GIF speichern"
       >
-        {laedt ? '…' : '🎞️'}
+        🎞️
       </button>
 
-      {offen && daten && (
+      {offen === 'gif' && daten && (
         <VideoGifSheet
+          video={daten.blob}
+          name={video.fileName ?? undefined}
+          onFertig={ablegen}
+          zielName={zielName}
+          onClose={schliessen}
+        />
+      )}
+      {offen === 'bearbeiten' && daten && (
+        <VideoEditorSheet
           video={daten.blob}
           name={video.fileName ?? undefined}
           onFertig={ablegen}
