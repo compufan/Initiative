@@ -448,7 +448,7 @@ export function VideoEditorSheet({
                       Hinten fallen {(plan.gekuerztMs / 1000).toFixed(1).replace('.', ',')} s weg –{' '}
                       {brauchtAlle
                         ? `bei dieser Grösse passen höchstens ${maxBilder} Bilder in den Speicher, weil die Bereiche am Bildinhalt hängen.`
-                        : `mehr als ${maxBilder} Bilder dauern länger, als vor einem Balken zu sitzen erträglich ist. Bei ${halbeRate(bildrate)} Bildern je Sekunde wäre es doppelt so viel Film.`}
+                        : `mehr als ${maxBilder} Bilder dauern länger, als vor einem Balken zu sitzen erträglich ist – das sind ${sekundenText(maxBilder / bildrate)} s Film. Bei ${naechstKleiner(bildrate)} Bildern je Sekunde wären es ${sekundenText(maxBilder / naechstKleiner(bildrate))} s.`}
                     </strong>
                   </>
                 )}
@@ -484,7 +484,7 @@ export function VideoEditorSheet({
                     setAktiv(stuecke.length);
                   }}
                 >
-                  ✂ Stück hinzufügen
+                  ＋ Stück hinzufügen
                 </button>
                 {stuecke.length > 1 && (
                   <button
@@ -496,7 +496,7 @@ export function VideoEditorSheet({
                       setAktiv((alt) => Math.max(0, alt - 1));
                     }}
                   >
-                    ␥ Stück {aktiv + 1} entfernen
+                    ✕ Stück {aktiv + 1} entfernen
                   </button>
                 )}
                 {stuecke.length > 1 &&
@@ -705,7 +705,7 @@ function sekundenText(sekunden: number): string {
  * geht: Flüssigkeit gegen Länge. Eine Zahl allein („höchstens 600 Bilder")
  * rechnet niemand in Sekunden um.
  */
-function halbeRate(bildrate: number): number {
+function naechstKleiner(bildrate: number): number {
   const kleiner = FILM_BILDRATEN.filter((eintrag) => eintrag.rate < bildrate);
   return kleiner.length > 0 ? kleiner[kleiner.length - 1].rate : bildrate;
 }

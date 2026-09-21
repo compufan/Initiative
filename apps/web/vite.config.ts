@@ -42,7 +42,7 @@ const SYMBOL_ROLLEN = [
 
 type SymbolRolle = (typeof SYMBOL_ROLLEN)[number];
 
-function symbolAdressen(): Record<SymbolRolle, string> {
+function symbolAdressen(): { adressen: Record<SymbolRolle, string>; mitKarte: boolean } {
   const schlicht = Object.fromEntries(
     SYMBOL_ROLLEN.map((rolle) => [rolle, `/icons/${rolle}`]),
   ) as Record<SymbolRolle, string>;
@@ -52,12 +52,15 @@ function symbolAdressen(): Record<SymbolRolle, string> {
       '[marke] .marke/symbole.json fehlt – die Symbole laufen ohne Inhaltskennung. ' +
         'Einmal `pnpm --filter @initiative/web marke` aufrufen.',
     );
-    return schlicht;
+    return { adressen: schlicht, mitKarte: false };
   }
   const gelesen = JSON.parse(readFileSync(karte, 'utf8')) as Record<string, string>;
-  return Object.fromEntries(
-    SYMBOL_ROLLEN.map((rolle) => [rolle, gelesen[rolle] ?? schlicht[rolle]]),
-  ) as Record<SymbolRolle, string>;
+  return {
+    adressen: Object.fromEntries(
+      SYMBOL_ROLLEN.map((rolle) => [rolle, gelesen[rolle] ?? schlicht[rolle]]),
+    ) as Record<SymbolRolle, string>,
+    mitKarte: true,
+  };
 }
 
 /**
@@ -68,7 +71,7 @@ function symbolAdressen(): Record<SymbolRolle, string> {
  * Anwender gar keines. Geprüft wird deshalb am fertigen Bündel und nicht in
  * einem Test: `vitest` läuft ohne Bau und schliesst `dist` ausdrücklich aus.
  */
-function markeAdressen(adressen: Record<SymbolRolle, string>): Plugin {
+function markeAdressen(adressen: Record<SymbolRolle, string>, mitKarte: boolean): Plugin {
   return {
     name: 'initiative-marke-adressen',
     transformIndexHtml(html) {
@@ -85,7 +88,12 @@ function markeAdressen(adressen: Record<SymbolRolle, string>): Plugin {
       );
       if (fehlend.length > 0) {
         throw new Error(
-          `[marke] Diese Symboladressen stehen im Manifest, liegen aber nicht in dist: ${fehlend.join(', ')}`,
+          `[marke] Diese Symboladressen stehen im Manifest, liegen aber nicht in dist: ${fehlend.join(', ')}. ` +
+            (mitKarte
+              ? 'Die Symbole sind offenbar nach dem Lesen der Karte neu gebaut worden.'
+              : 'Es gibt keine .marke/symbole.json – der Bausatz ist nie gelaufen. ' +
+                'Einmal `pnpm --filter @initiative/web marke` aufrufen, oder gleich `pnpm build`, ' +
+                'das ruft ihn als `prebuild` selbst auf.'),
         );
       }
     },
@@ -99,7 +107,7 @@ export default defineConfig(({ mode }) => {
   // Welcher Stand ist das hier? Vercel und GitHub legen den Commit als
   // Umgebungsvariable bereit; lokal steht schlicht "dev".
   const commit = (env.VERCEL_GIT_COMMIT_SHA || env.GITHUB_SHA || 'dev').slice(0, 7);
-  const symbole = symbolAdressen();
+  const { adressen: symbole, mitKarte } = symbolAdressen();
 
   return {
     define: {
@@ -200,7 +208,7 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [
       react(),
-      markeAdressen(symbole),
+      markeAdressen(symbole, mitKarte),
       VitePWA({
         // A custom service worker so we can handle Web Push and notification
         // clicks ourselves; Workbox still injects the precache manifest.
