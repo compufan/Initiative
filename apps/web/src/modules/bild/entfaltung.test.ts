@@ -48,7 +48,8 @@ describe('punktbildBauen', () => {
 
   it('dreht die Linie mit dem Winkel', () => {
     const quer = punktbildBauen({ art: 'linie', laenge: 8, winkel: 90 });
-    const wert = (dx: number, dy: number) => quer.werte[(quer.my + dy) * quer.breite + (quer.mx + dx)];
+    const wert = (dx: number, dy: number) =>
+      quer.werte[(quer.my + dy) * quer.breite + (quer.mx + dx)];
     expect(wert(0, 3)).toBeGreaterThan(0);
     expect(wert(3, 0)).toBe(0);
   });
@@ -80,7 +81,13 @@ function pruefbild(breite: number, hoehe: number): Float32Array {
 }
 
 /** Der mittlere Abstand zweier Bilder – ohne den Rand, wo gespiegelt wird. */
-function abstand(a: Float32Array, b: Float32Array, breite: number, hoehe: number, rand = 6): number {
+function abstand(
+  a: Float32Array,
+  b: Float32Array,
+  breite: number,
+  hoehe: number,
+  rand = 6,
+): number {
   let summe = 0;
   let n = 0;
   for (let y = rand; y < hoehe - rand; y += 1) {
@@ -127,10 +134,9 @@ describe('falten', () => {
     expect(raus[1 * B + 8], 'in der Mitte stimmt die Faltung nicht').toBeCloseTo(8, 5);
     expect(raus[1 * B + 0], 'am linken Rand wurde geklemmt statt gespiegelt').toBeGreaterThan(1.5);
     // Und am rechten genauso: gespiegelt 13,00 – geklemmt 14,00.
-    expect(
-      raus[1 * B + (B - 1)],
-      'am rechten Rand wurde geklemmt statt gespiegelt',
-    ).toBeLessThan(13.5);
+    expect(raus[1 * B + (B - 1)], 'am rechten Rand wurde geklemmt statt gespiegelt').toBeLessThan(
+      13.5,
+    );
 
     /*
      * Und dasselbe senkrecht. Zwei Zeilen im Code, zwei Ränder – und sie
@@ -145,10 +151,9 @@ describe('falten', () => {
     falten(hoch, quer, hB, hH, punktbildBauen({ art: 'linie', laenge: 8, winkel: 90 }));
     expect(quer[8 * hB + 1], 'in der Mitte stimmt die Faltung senkrecht nicht').toBeCloseTo(8, 5);
     expect(quer[0 * hB + 1], 'am oberen Rand wurde geklemmt statt gespiegelt').toBeGreaterThan(1.5);
-    expect(
-      quer[(hH - 1) * hB + 1],
-      'am unteren Rand wurde geklemmt statt gespiegelt',
-    ).toBeLessThan(13.5);
+    expect(quer[(hH - 1) * hB + 1], 'am unteren Rand wurde geklemmt statt gespiegelt').toBeLessThan(
+      13.5,
+    );
   });
 
   it('erhält eine gleichmässige Fläche genau', () => {

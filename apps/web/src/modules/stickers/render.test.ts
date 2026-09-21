@@ -1017,12 +1017,7 @@ describe('dilateAlpha', () => {
    * Vorzeichenfehler im Blockrand nicht bemerken – und der sähe im Bild aus
    * wie ein Saum, der an einer Stelle einen Punkt zu schmal ist.
    */
-  function langsam(
-    alpha: Uint8Array,
-    width: number,
-    height: number,
-    radius: number,
-  ): Uint8Array {
+  function langsam(alpha: Uint8Array, width: number, height: number, radius: number): Uint8Array {
     const horizontal = new Uint8Array(alpha.length);
     for (let y = 0; y < height; y += 1) {
       const row = y * width;
@@ -1200,7 +1195,11 @@ describe('texteMitbewegen', () => {
   });
 
   it('dreht den Schriftzug um die Motivmitte und um sich selbst', () => {
-    const [raus] = texteMitbewegen([text({ x: 0.75, y: 0.5, drehung: 10 })], lage(1), lage(1, 0, 0, 90));
+    const [raus] = texteMitbewegen(
+      [text({ x: 0.75, y: 0.5, drehung: 10 })],
+      lage(1),
+      lage(1, 0, 0, 90),
+    );
     // Eine Vierteldrehung um die Mitte: rechts wird unten.
     expect(raus.x).toBeCloseTo(0.5, 6);
     expect(raus.y).toBeCloseTo(0.75, 6);

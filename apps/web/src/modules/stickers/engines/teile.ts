@@ -127,12 +127,7 @@ export function teileFinden(alpha: Uint8Array, width: number, height: number): T
  * Das Antippen gewinnt dasselbe: Ein Druck auf eine Haarspitze trifft jetzt
  * das Teil, zu dem sie gehört, statt ins Leere.
  */
-function randZuordnen(
-  labels: Int32Array,
-  alpha: Uint8Array,
-  width: number,
-  height: number,
-): void {
+function randZuordnen(labels: Int32Array, alpha: Uint8Array, width: number, height: number): void {
   // Die Schlange als typisiertes Feld: Bei einem grossen Foto stehen hier
   // Hunderttausende Einträge, und ein gewöhnliches Array wächst daran spürbar.
   const schlange = new Int32Array(labels.length);

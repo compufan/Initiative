@@ -746,8 +746,5 @@ test('die Unschärfemaske sieht auf beiden Wegen gleich aus', async ({ page }) =
    * gemessen über vierzig Stufen; wäre der Regler nicht angeschlossen, wären
    * es null.
    */
-  expect(
-    ergebnis.radiusWirkung,
-    'der Radius kommt im Schattierer nicht an',
-  ).toBeGreaterThan(10);
+  expect(ergebnis.radiusWirkung, 'der Radius kommt im Schattierer nicht an').toBeGreaterThan(10);
 });

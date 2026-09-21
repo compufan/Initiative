@@ -19,8 +19,7 @@
 
 /** Was eine Datei laut ihrem Kopf ist. */
 export type Bildlage =
-  | { bewegt: true; format: 'gif' | 'webp'; bilder: number | null }
-  | { bewegt: false };
+  { bewegt: true; format: 'gif' | 'webp'; bilder: number | null } | { bewegt: false };
 
 /**
  * GIF: Jedes Teilbild wird von einem Image Descriptor (`0x2C`) eingeleitet.

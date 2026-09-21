@@ -175,11 +175,7 @@ export const NEUTRAL: Anpassung = {
  * Wirkung auf den Merkzettel.
  */
 export type Zahlfeld =
-  | keyof Farbanpassung
-  | 'schaerfe'
-  | 'schaerfeRadius'
-  | 'schaerfeSchwelle'
-  | 'vignette';
+  keyof Farbanpassung | 'schaerfe' | 'schaerfeRadius' | 'schaerfeSchwelle' | 'vignette';
 
 export const ZAHLFELDER = [
   ...(Object.keys(FARB_NEUTRAL) as (keyof Farbanpassung)[]),

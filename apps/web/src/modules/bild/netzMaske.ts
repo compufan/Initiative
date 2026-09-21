@@ -125,9 +125,7 @@ export async function netzTeilRechnen(
    */
   const radius = weichzeichnerFuer(netz);
   const weich =
-    radius > 0
-      ? kanteWeichzeichnen(roh, vorlage.image.width, vorlage.image.height, radius)
-      : roh;
+    radius > 0 ? kanteWeichzeichnen(roh, vorlage.image.width, vorlage.image.height, radius) : roh;
 
   if (!maskeTraegt(weich)) {
     throw new EngineError(

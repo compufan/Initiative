@@ -66,9 +66,7 @@ test('der Verlauf vor dem Beitritt wird beantragt und einstimmig freigegeben', a
    * angeboten werden. Genau diese Verwechslung – gesetztes Feld statt Inhalt –
    * war der erste Fehler in dieser Anzeige.
    */
-  await expect(
-    annaPage.getByRole('button', { name: 'Älteren Verlauf beantragen' }),
-  ).toHaveCount(0);
+  await expect(annaPage.getByRole('button', { name: 'Älteren Verlauf beantragen' })).toHaveCount(0);
 
   // Cleo kommt dazu.
   await annaPage
@@ -76,9 +74,15 @@ test('der Verlauf vor dem Beitritt wird beantragt und einstimmig freigegeben', a
     .first()
     .click();
   await annaPage.getByRole('button', { name: /Mitglieder hinzufügen/ }).click();
-  await annaPage.getByPlaceholder(/suchen/i).last().fill(cleo.username);
+  await annaPage
+    .getByPlaceholder(/suchen/i)
+    .last()
+    .fill(cleo.username);
   await annaPage.getByText(cleo.displayName).first().click();
-  await annaPage.getByRole('button', { name: /hinzufügen$|Hinzufügen/ }).last().click();
+  await annaPage
+    .getByRole('button', { name: /hinzufügen$|Hinzufügen/ })
+    .last()
+    .click();
   // Das Blatt liegt sonst über dem Band und fängt den Klick ab.
   await annaPage.keyboard.press('Escape');
   await expect(annaPage.getByRole('dialog')).toHaveCount(0, { timeout: 15_000 });
@@ -116,9 +120,7 @@ test('der Verlauf vor dem Beitritt wird beantragt und einstimmig freigegeben', a
 
   // Jetzt sind alle dafür – und der Verlauf steht bei Cleo im Chat, ohne Reload.
   await expect(cleoPage.getByText(geheim)).toBeVisible({ timeout: 20_000 });
-  await expect(
-    cleoPage.getByRole('button', { name: 'Älteren Verlauf beantragen' }),
-  ).toHaveCount(0);
+  await expect(cleoPage.getByRole('button', { name: 'Älteren Verlauf beantragen' })).toHaveCount(0);
   // Und das Band ist bei allen fort.
   await expect(annaBand).toHaveCount(0);
 
@@ -154,9 +156,15 @@ test('ein Nein schliesst den Verlauf – und hält', async ({ browser }) => {
     .first()
     .click();
   await annaPage.getByRole('button', { name: /Mitglieder hinzufügen/ }).click();
-  await annaPage.getByPlaceholder(/suchen/i).last().fill(cleo.username);
+  await annaPage
+    .getByPlaceholder(/suchen/i)
+    .last()
+    .fill(cleo.username);
   await annaPage.getByText(cleo.displayName).first().click();
-  await annaPage.getByRole('button', { name: /hinzufügen$|Hinzufügen/ }).last().click();
+  await annaPage
+    .getByRole('button', { name: /hinzufügen$|Hinzufügen/ })
+    .last()
+    .click();
   await annaPage.keyboard.press('Escape');
 
   await expect(cleoPage.getByText('Verschlossen').first()).toBeVisible({ timeout: 20_000 });

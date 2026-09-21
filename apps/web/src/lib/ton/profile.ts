@@ -74,15 +74,7 @@ export function reglerNeutral(regler: Regler): boolean {
  * keinen Sonderfall.
  */
 export type ProfilName =
-  | 'ohne'
-  | 'telefon'
-  | 'radio'
-  | 'megafon'
-  | 'roboter'
-  | 'tief'
-  | 'hoch'
-  | 'halle'
-  | 'unterwasser';
+  'ohne' | 'telefon' | 'radio' | 'megafon' | 'roboter' | 'tief' | 'hoch' | 'halle' | 'unterwasser';
 
 /**
  * Was ein Profil ausserdem am Abspieltempo dreht.
@@ -106,7 +98,13 @@ export interface Profil extends ProfilTempo {
 }
 
 export const KLANGPROFILE: Profil[] = [
-  { name: 'ohne', titel: 'Ohne', zeichen: '○', beschreibung: 'So, wie es aufgenommen wurde.', tempo: 1 },
+  {
+    name: 'ohne',
+    titel: 'Ohne',
+    zeichen: '○',
+    beschreibung: 'So, wie es aufgenommen wurde.',
+    tempo: 1,
+  },
   {
     name: 'telefon',
     titel: 'Telefon',
@@ -135,9 +133,21 @@ export const KLANGPROFILE: Profil[] = [
     beschreibung: 'Metallisch, ohne menschliche Tonhöhe.',
     tempo: 1,
   },
-  { name: 'tief', titel: 'Tief', zeichen: '🐻', beschreibung: 'Tiefer und langsamer.', tempo: 0.72 },
+  {
+    name: 'tief',
+    titel: 'Tief',
+    zeichen: '🐻',
+    beschreibung: 'Tiefer und langsamer.',
+    tempo: 0.72,
+  },
   { name: 'hoch', titel: 'Hoch', zeichen: '🐿', beschreibung: 'Höher und schneller.', tempo: 1.48 },
-  { name: 'halle', titel: 'Halle', zeichen: '⛪', beschreibung: 'Weiter Raum mit Nachhall.', tempo: 1 },
+  {
+    name: 'halle',
+    titel: 'Halle',
+    zeichen: '⛪',
+    beschreibung: 'Weiter Raum mit Nachhall.',
+    tempo: 1,
+  },
   {
     name: 'unterwasser',
     titel: 'Unterwasser',
@@ -356,10 +366,7 @@ export function profilKette(
       verzoegerung.delayTime.value = 0.035;
       const rueckfuehrung = ctx.createGain();
       rueckfuehrung.gain.value = 0.22;
-      const band = reihe(eingang, [
-        filter(ctx, 'bandpass', 1200, 0.9),
-        former(ctx, 18),
-      ]);
+      const band = reihe(eingang, [filter(ctx, 'bandpass', 1200, 0.9), former(ctx, 18)]);
       const summe = ctx.createGain();
       band.connect(summe);
       /*
@@ -444,11 +451,7 @@ export function profilKette(
  *
  * Die Tonhöhe fehlt hier – sie gehört an die Quelle, siehe `Regler.tonhoehe`.
  */
-export function reglerKette(
-  ctx: BaseAudioContext,
-  eingang: AudioNode,
-  regler: Regler,
-): AudioNode {
+export function reglerKette(ctx: BaseAudioContext, eingang: AudioNode, regler: Regler): AudioNode {
   let ende = eingang;
   if (regler.verzerrung > 0) ende = reihe(ende, [former(ctx, regler.verzerrung)]);
   if (regler.tiefen !== 0) {

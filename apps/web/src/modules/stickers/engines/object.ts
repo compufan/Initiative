@@ -53,10 +53,7 @@ export type Fortschritt = (anteil: number, text: string) => void;
  * wenigen Sekunden ist das der richtige Aufwand – bei 78 MB wäre es zu wenig,
  * und dort ist es auch anders gebaut.
  */
-async function loadSession(
-  melden?: Fortschritt,
-  abbruch?: AbortSignal,
-): Promise<InferenceSession> {
+async function loadSession(melden?: Fortschritt, abbruch?: AbortSignal): Promise<InferenceSession> {
   if (abbruch?.aborted) throw new DOMException('Abgebrochen', 'AbortError');
   if (session) return session;
   if (!ladend) {

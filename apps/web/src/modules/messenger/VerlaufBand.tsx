@@ -118,7 +118,12 @@ export function VerlaufsAntraege({ conversation, myId }: Props) {
         const mitglied = conversation.members.find((m) => m.userId === antrag.antragsteller);
         const name = mitglied ? memberName(mitglied) : 'Jemand';
         return (
-          <div key={antrag.id} className="verlauf-antrag" role="group" aria-label={`Antrag von ${name}`}>
+          <div
+            key={antrag.id}
+            className="verlauf-antrag"
+            role="group"
+            aria-label={`Antrag von ${name}`}
+          >
             <p className="verlauf-antrag-text">
               <strong>{name}</strong> möchte auch lesen, was vor dem Beitritt geschrieben wurde.
               {meineStimme === null
@@ -128,12 +133,12 @@ export function VerlaufsAntraege({ conversation, myId }: Props) {
                   : ' Du hast abgelehnt.'}
             </p>
             {/*
-              * Solange ich nicht abgestimmt habe, wiegen beide Knöpfe gleich
-              * schwer. Bei einer Abstimmung, die Einstimmigkeit verlangt,
-              * wäre ein hervorgehobenes „Zustimmen" ein Schubs – und wer
-              * nicht will, dass ein Neuer mitliest, soll das nicht gegen das
-              * Layout durchsetzen müssen.
-              */}
+             * Solange ich nicht abgestimmt habe, wiegen beide Knöpfe gleich
+             * schwer. Bei einer Abstimmung, die Einstimmigkeit verlangt,
+             * wäre ein hervorgehobenes „Zustimmen" ein Schubs – und wer
+             * nicht will, dass ein Neuer mitliest, soll das nicht gegen das
+             * Layout durchsetzen müssen.
+             */}
             <div className="verlauf-antrag-knoepfe">
               <button
                 type="button"

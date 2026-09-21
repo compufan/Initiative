@@ -120,7 +120,7 @@ export function stilleGrenzen(werte: Float32Array<ArrayBufferLike>, rate: number
   if (erstes < 0) return ganz;
 
   const beginn = Math.max(0, (erstes * sprung) / rate - VORLAUF_S);
-  const ende = Math.min(ganz.ende, ((letztes * sprung + fenster) / rate) + NACHLAUF_S);
+  const ende = Math.min(ganz.ende, (letztes * sprung + fenster) / rate + NACHLAUF_S);
   if (ende - beginn < MINDESTENS_S) return ganz;
   /*
    * Weniger als zwei Hundertstel Gewinn sind kein Schnitt, sondern ein Knopf,

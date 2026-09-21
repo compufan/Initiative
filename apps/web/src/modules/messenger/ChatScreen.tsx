@@ -419,11 +419,11 @@ export function ChatScreen() {
             )}
 
             {/*
-              * Unter dem Nachlader: Erst wenn nichts Älteres mehr kommt, steht
-              * hier wirklich der Anfang dessen, was ich sehen darf. Darüber
-              * wäre der Satz „hier beginnt, was du sehen kannst" schlicht
-              * falsch, solange noch eine Seite unterwegs ist.
-              */}
+             * Unter dem Nachlader: Erst wenn nichts Älteres mehr kommt, steht
+             * hier wirklich der Anfang dessen, was ich sehen darf. Darüber
+             * wäre der Satz „hier beginnt, was du sehen kannst" schlicht
+             * falsch, solange noch eine Seite unterwegs ist.
+             */}
             {!hasMore && <VerlaufsGrenze conversation={conversation} myId={myId} />}
 
             {messages.length === 0 && loading && (
@@ -433,11 +433,11 @@ export function ChatScreen() {
             )}
 
             {/*
-              * Zwei leere Verläufe, zwei Wahrheiten. Wer gerade erst
-              * dazugekommen ist, sieht womöglich nur deshalb nichts, weil
-              * alles vor seinem Beitritt liegt – „schreib die erste
-              * Nachricht" wäre dort schlicht falsch.
-              */}
+             * Zwei leere Verläufe, zwei Wahrheiten. Wer gerade erst
+             * dazugekommen ist, sieht womöglich nur deshalb nichts, weil
+             * alles vor seinem Beitritt liegt – „schreib die erste
+             * Nachricht" wäre dort schlicht falsch.
+             */}
             {messages.length === 0 &&
               !loading &&
               (hatGrenze ? (

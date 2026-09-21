@@ -91,12 +91,11 @@ export function fremdeAntraege(antraege: VerlaufsantragDto[], myId: string): Fre
      * dennoch in keiner der drei Listen steht, ist kein Wähler; ihm einen
      * Zustimmen-Knopf zu zeigen, der mit 403 endet, wäre eine Lüge.
      */
-    .filter(
-      ({ antrag, meineStimme }) => meineStimme !== null || antrag.offenBei.includes(myId),
-    );
+    .filter(({ antrag, meineStimme }) => meineStimme !== null || antrag.offenBei.includes(myId));
 
   return meine.sort((a, b) => {
-    if ((a.meineStimme === null) !== (b.meineStimme === null)) return a.meineStimme === null ? -1 : 1;
+    if ((a.meineStimme === null) !== (b.meineStimme === null))
+      return a.meineStimme === null ? -1 : 1;
     return a.antrag.id < b.antrag.id ? -1 : 1;
   });
 }

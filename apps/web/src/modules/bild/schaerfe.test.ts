@@ -72,7 +72,12 @@ describe('schaerfenFeld', () => {
     for (let y = 0; y < hoehe; y += 1) {
       for (let x = 0; x < breite; x += 1) {
         const mitte = breite / 2;
-        const t = weich > 0 ? Math.min(1, Math.max(0, (x - mitte + weich) / (2 * weich))) : x < mitte ? 0 : 1;
+        const t =
+          weich > 0
+            ? Math.min(1, Math.max(0, (x - mitte + weich) / (2 * weich)))
+            : x < mitte
+              ? 0
+              : 1;
         const wert = Math.round(60 + t * 140);
         const at = (y * breite + x) * 4;
         d[at] = wert;
@@ -195,10 +200,7 @@ describe('schaerfenFeld', () => {
     for (let x = 2; x < breite - 2; x += 1) {
       const a = zuLinear(ganzRaus[(zeile + x) * 4] / 255);
       const b = zuLinear(halbRaus[(zeile + x) * 4] / 255);
-      etwasPassiert = Math.max(
-        etwasPassiert,
-        Math.abs(a - zuLinear(ganz[(zeile + x) * 4] / 255)),
-      );
+      etwasPassiert = Math.max(etwasPassiert, Math.abs(a - zuLinear(ganz[(zeile + x) * 4] / 255)));
       // Der Fehler im Verhältnis zum Wert – acht Bit sind in den dunklen
       // Stufen grob, ein absoluter Vergleich wäre dort unfair.
       groessterFehler = Math.max(groessterFehler, Math.abs(b - a / 2) / Math.max(0.01, a / 2));

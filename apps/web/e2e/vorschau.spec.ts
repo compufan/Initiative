@@ -106,8 +106,7 @@ test('die eingebettete Vorschau ist scharf genug und bleibt weit unter der Grenz
    * Mit deutlichem Abstand, nicht knapp: Ein Foto mit viel Rauschen packt
    * schlechter als dieses hier. Ein Viertel der Grenze lässt dafür Luft.
    */
-  expect(
-    ergebnis.zeichen,
-    'die Vorschau frisst zu viel von der Nachrichtenliste',
-  ).toBeLessThan(LIMITS.previewDataUrlMax / 4);
+  expect(ergebnis.zeichen, 'die Vorschau frisst zu viel von der Nachrichtenliste').toBeLessThan(
+    LIMITS.previewDataUrlMax / 4,
+  );
 });

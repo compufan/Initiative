@@ -298,7 +298,6 @@ export async function birefnetMask(
 }
 
 async function nachbereiten(roh: Float32Array, image: ImageData): Promise<Uint8Array> {
-
   // Erst die Kurve über die Modellwerte, dann daraus abtasten. Vorher lief
   // `Math.exp` je AUSGABEpunkt statt je Modellpunkt – dasselbe Ergebnis, nur
   // ein Vielfaches der Arbeit.
