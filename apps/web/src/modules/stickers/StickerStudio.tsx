@@ -16,7 +16,7 @@ import { VideoGifSheet } from '../video/VideoGifSheet.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 import { dialogAnmelden } from '../../lib/dialogVerlauf.js';
 import { bildlage } from './bewegt.js';
-import { lesenMoeglich, teilbilderLesen } from './bewegtLesen.js';
+import { TEILBILDER_MAX, lesenMoeglich, teilbilderLesen } from './bewegtLesen.js';
 import { gifSchreiben, type Teilbild } from './gif.js';
 import {
   MAX_SCALE,
@@ -252,7 +252,20 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   /** Der Vor-Stapel: was ein „Zurück" weggenommen hat. */
   const vorStapel = useRef<StickerDoc[]>([]);
   const [canRedo, setCanRedo] = useState(false);
-  const [result, setResult] = useState<{ blob: Blob; mime: string } | null>(null);
+  /**
+   * Das fertige Bild – und seine Masse, falls sie nicht 512 × 512 sind.
+   *
+   * Gerechnet wird im Studio immer quadratisch. Nur der Durchreichfall macht
+   * eine Ausnahme: Dort geht die Originaldatei unverändert weiter, und ein
+   * GIF aus einem Video ist 16:9. Die Zahlen landen unverändert in
+   * `stickers.width`/`stickers.height` – ohne sie stünde dort eine Lüge.
+   */
+  const [result, setResult] = useState<{
+    blob: Blob;
+    mime: string;
+    breite?: number;
+    hoehe?: number;
+  } | null>(null);
   /*
    * Die Originaldatei, wenn sie sich bewegt.
    *
@@ -1976,9 +1989,14 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
        * kann es von sich aus nicht.
        */
       if (bewegteQuelle && bewegtUnveraendert(docRef.current)) {
+        const quelleJetzt = sourceRef.current;
         const durchgereicht = {
           blob: bewegteQuelle.datei,
           mime: bewegteQuelle.format === 'gif' ? 'image/gif' : 'image/webp',
+          // Die Masse der QUELLE, nicht die der Leinwand: Die Datei geht
+          // ungezeichnet weiter, also gilt, was in ihr steht.
+          breite: quelleJetzt?.kind === 'image' ? quelleJetzt.width : undefined,
+          hoehe: quelleJetzt?.kind === 'image' ? quelleJetzt.height : undefined,
         };
         if (durchgereicht.blob.size > LIMITS.maxUploadBytes.sticker) {
           toast(
@@ -2284,8 +2302,23 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                    * weiter – und dort steht er auch. Eine Zusage, die auf dem
                    * eigenen Gerät nicht gilt, wäre schlimmer als die Warnung.
                    */
+                  /*
+                   * Die Obergrenze gehört in DIESEN Satz und nicht in eine
+                   * Fussnote.
+                   *
+                   * `teilbilderLesen` liest höchstens `TEILBILDER_MAX`
+                   * Teilbilder; die Zahl davor kommt dagegen aus dem
+                   * Dateikopf und zählt alle. Solange nur Dateien aus der
+                   * Galerie hereinkamen, war das selten – seit ein Video die
+                   * Quelle sein darf, ist es der Normalfall: Sechs Sekunden
+                   * mit zehn Bildern je Sekunde sind sechzig Teilbilder.
+                   */
+                  const gekappt =
+                    (bewegteQuelle.bilder ?? 0) > TEILBILDER_MAX
+                      ? ` Von ${bewegteQuelle.bilder} Teilbildern bleiben dabei die ersten ${TEILBILDER_MAX} – der Rest fällt weg. Unverändert übernommen wäre es vollständig.`
+                      : '';
                   return kannBewegtBleiben
-                    ? `Dieses Bild bewegt sich${zahl} und bleibt bewegt: Jedes Teilbild bekommt deine Bearbeitung. Als GIF hat es 255 Farben und harte Ränder – mehr gibt das Format nicht her.`
+                    ? `Dieses Bild bewegt sich${zahl} und bleibt bewegt: Jedes Teilbild bekommt deine Bearbeitung. Als GIF hat es 255 Farben und harte Ränder – mehr gibt das Format nicht her.${gekappt}`
                     : `Dieses Bild bewegt sich${zahl}, aber du hast es bearbeitet – auf diesem Gerät wird daraus ein Standbild. Nimm die Änderungen zurück, wenn die Bewegung bleiben soll.`;
                 })()}
               </p>
@@ -3410,6 +3443,8 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
         <SavePackSheet
           blob={result.blob}
           mime={result.mime}
+          breite={result.breite}
+          hoehe={result.hoehe}
           onClose={() => setResult(null)}
           vorgabePaket={zuletztPaket}
           onSaved={(pack) => {

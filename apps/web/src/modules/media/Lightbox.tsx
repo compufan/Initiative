@@ -110,17 +110,20 @@ export function Lightbox({ items, index, onClose, ablegen, alsRezept, zielName }
   }, []);
 
   useEffect(() => {
-    // Auch das Aktionsblatt nimmt die Tasten an sich: Sonst schlösse Escape
-    // beides auf einmal und die Pfeiltasten blätterten dahinter weiter.
+    /*
+     * Nur die PFEILE. Esc liegt bei `dialogVerlauf.ts`, wo die Buchführung
+     * darüber steht, welcher Dialog oben liegt – die Lightbox meldet sich
+     * dort an. Ein eigener Esc-Hörer hier hätte bei einem offenen Blatt
+     * darüber beide auf einmal geschlossen.
+     */
     if (werkstattOffen || aktionenOffen) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
       if (event.key === 'ArrowRight') go(1);
       if (event.key === 'ArrowLeft') go(-1);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [go, onClose, werkstattOffen, aktionenOffen]);
+  }, [go, werkstattOffen, aktionenOffen]);
 
   const toggleZoom = useCallback(() => {
     setScale((value) => (value > 1 ? 1 : DOUBLE_TAP_SCALE));

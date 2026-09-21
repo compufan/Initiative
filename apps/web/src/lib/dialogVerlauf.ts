@@ -1,5 +1,6 @@
 /**
- * Die Zurück-Taste des Handys schliesst den obersten offenen Dialog.
+ * Die Zurück-Taste des Handys – und die Esc-Taste – schliessen den OBERSTEN
+ * offenen Dialog.
  *
  * Auf einem Handy ist Zurück die Geste für „einen Schritt zurück“, und ein
  * offener Dialog IST ein Schritt. Ohne das ist die Taste eine Falle: Man tippt
@@ -50,6 +51,23 @@ if (typeof window !== 'undefined') {
     // Abgleich gleich einen frischen Eintrag nach.
     if (oben) oben();
   });
+
+  /*
+   * Esc gehört hierher, aus genau demselben Grund wie die Zurück-Taste.
+   *
+   * Jedes Blatt hatte seinen eigenen `keydown` am Fenster. Liegen zwei
+   * übereinander – das Speicherblatt über dem fertigen GIF etwa –, hören
+   * beide zu, und ein Esc schliesst BEIDE. Wer nur die Paketwahl abbrechen
+   * wollte, verlor damit ein GIF, das je nach Güte Minuten gerechnet hat.
+   *
+   * Ein Dialog kann nicht wissen, ob über ihm noch einer liegt. Also führt
+   * dieselbe Stelle Buch, die es für die Zurück-Taste ohnehin tut.
+   */
+  window.addEventListener('keydown', (ereignis) => {
+    if (ereignis.key !== 'Escape' || ereignis.defaultPrevented) return;
+    const oben = stapel[stapel.length - 1];
+    if (oben) oben();
+  });
 }
 
 /**
@@ -96,6 +114,18 @@ function abgleichen(): void {
       if (stand?.[KENNUNG]) window.history.back();
     }
   }, 0);
+}
+
+/**
+ * Wie viele Dialoge gerade offen sind.
+ *
+ * Für die wenigen Ansichten, die sich NICHT über `dialogAnmelden` führen –
+ * ein Vollbildbetrachter etwa, der keinen eigenen Verlaufseintrag anlegen
+ * soll, aber trotzdem auf Esc hört. Der fragt hier nach, ob über ihm noch
+ * etwas liegt, und hält still, wenn ja.
+ */
+export function dialogeOffen(): number {
+  return stapel.length;
 }
 
 /** Nur für Tests: den Buchführungsstand zurücksetzen. */

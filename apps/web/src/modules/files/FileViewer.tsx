@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { formatBytes, formatDuration, type AttachmentDto } from '@initiative/shared';
 import { FotoWerkstatt } from '../media/FotoWerkstatt.js';
 import { VideoWerkstatt } from '../video/VideoWerkstatt.js';
+import { dialogeOffen } from '../../lib/dialogVerlauf.js';
 import { mediaSrc, standbildHolen } from '../media/helpers.js';
 import { FernsehKnopf } from '../fernseher/FernsehKnopf.js';
 import { CastKnopf } from '../fernseher/CastKnopf.js';
@@ -68,7 +69,15 @@ export function FileViewer({
   useEffect(() => {
     if (werkstattOffen || aktionenOffen) return undefined;
     const beiTaste = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
+      /*
+       * Esc nur, wenn über dem Betrachter WIRKLICH nichts liegt.
+       *
+       * Der Betrachter meldet sich nicht bei `dialogVerlauf` an – er ist
+       * eine Ansicht und soll keinen eigenen Verlaufseintrag anlegen. Damit
+       * kennt er den Stapel aber auch nicht, und ein Blatt darüber würde bei
+       * einem Esc mit ihm zusammen geschlossen.
+       */
+      if (event.key === 'Escape' && dialogeOffen() === 0) onClose();
       if (event.key === 'ArrowRight') setAktuell((wert) => (wert + 1) % items.length);
       if (event.key === 'ArrowLeft') setAktuell((wert) => (wert - 1 + items.length) % items.length);
     };

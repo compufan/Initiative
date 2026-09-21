@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::config::Config;
+use crate::constants::{allowed_mime, max_upload_bytes};
 use crate::db::{AttachmentRow, MessageRow, StickerPackRow, StickerRow};
 use crate::dto::{StickerDto, StickerPackDto};
 use crate::error::{AppError, AppResult};
@@ -154,16 +155,40 @@ pub async fn claim_ton_attachment(
 }
 
 /// Attachments backing a sticker must never be reused as chat attachments.
+///
+/// # Warum Format und Groesse HIER noch einmal geprueft werden
+///
+/// Weil `create_upload` sie gegen die Art prueft, die der Client angemeldet
+/// hat, und diese Funktion die Art danach auf `sticker` umschreibt. Wer einen
+/// Anhang als `video` anmeldet, darf dort 200 MB und `video/mp4` – und haette
+/// damit einen 200-MB-Sticker im Paket, den jeder Installierende zu sehen
+/// bekommt. Die Pruefung beim Hochladen ist also keine Zusage ueber das, was
+/// hinterher ein Sticker werden darf.
+///
+/// Geprueft wird in SQL und nicht danach in Rust: So kann zwischen Pruefung
+/// und Umschreiben nichts dazwischenkommen, und ein abgelehnter Anhang
+/// behaelt seine bisherige Art, statt als halber Sticker liegenzubleiben.
 pub async fn claim_attachment(state: &AppState, attachment_id: Uuid) -> AppResult<AttachmentRow> {
+    let erlaubt = allowed_mime("sticker");
+    let hoechstens = max_upload_bytes("sticker");
     sqlx::query_as::<_, AttachmentRow>(
         "update attachments set status = 'ready', kind = 'sticker'
          where id = $1 and message_id is null
+           and mime = any($2) and size <= $3
          returning *",
     )
     .bind(attachment_id)
+    .bind(erlaubt)
+    .bind(hoechstens)
     .fetch_optional(&state.pool)
     .await?
-    .ok_or_else(|| AppError::not_found("Sticker-Datei nicht gefunden"))
+    .ok_or_else(|| {
+        AppError::bad_request(format!(
+            "Diese Datei taugt nicht als Sticker. Erlaubt sind {} und hoechstens {} MB.",
+            erlaubt.join(", "),
+            hoechstens / (1024 * 1024)
+        ))
+    })
 }
 
 /// Embeds the referenced sticker into every `sticker` message.

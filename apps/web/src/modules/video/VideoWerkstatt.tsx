@@ -64,6 +64,14 @@ export function VideoWerkstatt({
     breite: number;
     hoehe: number;
   } | null>(null);
+  /**
+   * Wohin der vorige Sticker ging.
+   *
+   * Dieselbe Überlegung wie im Studio: Wer eine Reihe GIFs aus Videos macht,
+   * macht sie fast immer für dasselbe Paket. Ohne diese Vorgabe fängt die
+   * Auswahl bei jedem von vorn an.
+   */
+  const [zuletztPaket, setZuletztPaket] = useState<string | null>(null);
 
   async function oeffnen(ziel: 'gif' | 'bearbeiten') {
     if (laedt) return;
@@ -128,8 +136,10 @@ export function VideoWerkstatt({
           mime="image/gif"
           breite={stickerGif.breite}
           hoehe={stickerGif.hoehe}
+          vorgabePaket={zuletztPaket}
           onClose={() => setStickerGif(null)}
-          onSaved={() => {
+          onSaved={(paket) => {
+            setZuletztPaket(paket.id);
             // Gespeichert heisst fertig: Das GIF liegt im Paket, und das
             // Ergebnisblatt hätte nichts mehr anzubieten.
             setStickerGif(null);
