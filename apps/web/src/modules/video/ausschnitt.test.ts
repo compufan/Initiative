@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BILDRATEN,
+  FILM_BILDRATEN,
+  abtasten,
   dauerJeBildMs,
+  filmSchrittMs,
+  filmZeitpunkte,
   groesseSchaetzenB,
   groesseText,
   zeitpunkte,
@@ -57,7 +61,7 @@ describe('dauerJeBildMs', () => {
 
 describe('zeitpunkte', () => {
   it('legt die Bilder im Abstand der Standzeit ab', () => {
-    const { zeitpunkte: liste, dauerJeBildMs: schritt } = zeitpunkte(0, 500, 10, 100);
+    const { zeitpunkte: liste, schrittMs: schritt } = zeitpunkte(0, 500, 10, 100);
     expect(schritt).toBe(100);
     expect(liste).toEqual([0, 100, 200, 300, 400]);
   });
@@ -144,5 +148,141 @@ describe('groesseText', () => {
 
   it('sagt nie „rund 0 kB"', () => {
     expect(groesseText(120)).toBe('rund 1 kB');
+  });
+});
+
+describe('Die Bildraten für den Film', () => {
+  it('reichen bis 60 und sind aufsteigend', () => {
+    // Die Bitte lautete wörtlich „bis zu 60 Bilder pro sekunde beim Video
+    // bearbeiten". Eine Liste, die bei 25 endet, erfüllt sie nicht.
+    expect(FILM_BILDRATEN.at(-1)?.rate).toBe(60);
+    for (let i = 1; i < FILM_BILDRATEN.length; i += 1) {
+      expect(FILM_BILDRATEN[i].rate).toBeGreaterThan(FILM_BILDRATEN[i - 1].rate);
+    }
+  });
+
+  it('bleibt von der GIF-Liste getrennt', () => {
+    /*
+     * Der Grund, warum es zwei Listen gibt: GIF zählt die Standzeit in
+     * Hundertsteln. Stünde 60 in `BILDRATEN`, böte das GIF-Blatt eine Rate
+     * an, die es nicht schreiben kann.
+     */
+    for (const { rate } of BILDRATEN) {
+      expect(100 / rate, `${rate}/s im GIF`).toBe(Math.round(100 / rate));
+    }
+    expect(BILDRATEN.some((eintrag) => eintrag.rate > 25)).toBe(false);
+  });
+
+  it('gibt jeder Rate einen Titel und einen Satz', () => {
+    for (const rate of FILM_BILDRATEN) {
+      expect(rate.titel.length, String(rate.rate)).toBeGreaterThan(1);
+      expect(rate.beschreibung.length, String(rate.rate)).toBeGreaterThan(8);
+    }
+  });
+});
+
+describe('filmSchrittMs', () => {
+  it('rastert NICHT auf zehn Millisekunden', () => {
+    /*
+     * Das ist der ganze Punkt. `dauerJeBildMs(60)` ist 20 ms, also 50 Bilder
+     * je Sekunde – während `videoSchreiben` die Zeitstempel mit 1000/60
+     * schreibt. Der Film liefe um den Faktor 1,2 zu schnell, und zwar
+     * lautlos.
+     */
+    expect(filmSchrittMs(60)).toBeCloseTo(16.666, 2);
+    expect(dauerJeBildMs(60)).toBe(20);
+    expect(filmSchrittMs(30)).toBeCloseTo(33.333, 2);
+    expect(dauerJeBildMs(30)).toBe(30);
+  });
+
+  it('trifft die runden Raten genau', () => {
+    expect(filmSchrittMs(25)).toBe(40);
+    expect(filmSchrittMs(50)).toBe(20);
+    expect(filmSchrittMs(10)).toBe(100);
+  });
+});
+
+describe('filmZeitpunkte', () => {
+  it('tastet in die BILDMITTE ab', () => {
+    /*
+     * Gemessen gegen eine echte Quelle mit 60 Bildern je Sekunde: 140
+     * Sprünge exakt auf die Bildgrenze lieferten nur 93 verschiedene Bilder,
+     * in die Mitte gesprungen 140 von 140.
+     */
+    const plan = filmZeitpunkte([{ vonMs: 0, bisMs: 120 }], 25, 100);
+    expect(plan.zeitpunkte).toEqual([20, 60, 100]);
+  });
+
+  it('lässt den GIF-Weg auf der Bildgrenze', () => {
+    expect(zeitpunkte(0, 120, 25, 100).zeitpunkte).toEqual([0, 40, 80]);
+  });
+
+  it('reiht mehrere Stücke hintereinander und meldet die Schnitte', () => {
+    const plan = filmZeitpunkte(
+      [
+        { vonMs: 0, bisMs: 200 },
+        { vonMs: 1000, bisMs: 1200 },
+      ],
+      10,
+      100,
+    );
+    expect(plan.zeitpunkte).toEqual([50, 150, 1050, 1150]);
+    expect(plan.schnitte).toEqual([2]);
+  });
+
+  it('nimmt die Reihenfolge der Stücke ernst', () => {
+    // Das ist der Sinn der Pfeile in der Oberfläche: Wer das hintere Stück
+    // nach vorn holt, will den Film in dieser Reihenfolge sehen.
+    const plan = filmZeitpunkte(
+      [
+        { vonMs: 1000, bisMs: 1100 },
+        { vonMs: 0, bisMs: 100 },
+      ],
+      10,
+      100,
+    );
+    expect(plan.zeitpunkte).toEqual([1050, 50]);
+  });
+});
+
+describe('abtasten', () => {
+  it('kürzt über die Stücke hinweg und nicht in jedem einzeln', () => {
+    /*
+     * Wer die Grenze reisst, verliert das ENDE – nicht aus jedem Stück ein
+     * Stückchen. Sonst wäre jedes Stück kürzer als gewählt, und zwar ohne
+     * dass irgendwo stünde, warum.
+     */
+    const plan = abtasten({
+      stuecke: [
+        { vonMs: 0, bisMs: 500 },
+        { vonMs: 2000, bisMs: 2500 },
+      ],
+      schrittMs: 100,
+      maxBilder: 7,
+    });
+    expect(plan.zeitpunkte).toEqual([0, 100, 200, 300, 400, 2000, 2100]);
+    expect(plan.gekuerztMs).toBe(300);
+    expect(plan.schnitte).toEqual([5]);
+  });
+
+  it('lässt ein Stück ganz weg, wenn die Grenze schon erreicht ist', () => {
+    const plan = abtasten({
+      stuecke: [
+        { vonMs: 0, bisMs: 500 },
+        { vonMs: 2000, bisMs: 2500 },
+      ],
+      schrittMs: 100,
+      maxBilder: 5,
+    });
+    expect(plan.zeitpunkte).toHaveLength(5);
+    // Kein Schnitt, weil es das zweite Stück gar nicht in den Film schafft –
+    // ein Schlüsselbild an einer Kante, die es nicht gibt, wäre verschenkt.
+    expect(plan.schnitte).toEqual([]);
+  });
+
+  it('gibt auch ohne jedes Stück ein Bild zurück', () => {
+    // `videoSchreiben` wirft bei null Bildern. Ein leerer Plan darf keine
+    // Ausnahme auslösen, sondern muss ein Standbild ergeben.
+    expect(abtasten({ stuecke: [], schrittMs: 40, maxBilder: 10 }).zeitpunkte).toHaveLength(1);
   });
 });

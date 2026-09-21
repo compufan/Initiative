@@ -152,6 +152,15 @@ export interface SchreibAuftrag {
    * Sekunden ist der übliche Kompromiss.
    */
   readonly schluesselAbstand?: number;
+  /**
+   * Bildnummern, die zusätzlich ein Schlüsselbild werden müssen.
+   *
+   * Für die Schnittkanten: Dort wechselt die Szene vollständig, und ein
+   * Bild, das sich auf das vorige bezieht, wäre grösser als eines für sich
+   * allein. Vor allem aber erwartet jeder Abspieler an der Sprungstelle ein
+   * Schlüsselbild – sonst zeigt er beim Vorspulen Reste der vorigen Szene.
+   */
+  readonly schluesselBei?: ReadonlySet<number>;
   readonly fortschritt?: (anteil: number, text: string) => void;
   readonly abbruch?: AbortSignal;
 }
@@ -221,7 +230,9 @@ export async function videoSchreiben(
         duration: Math.round(abstandMs * 1000),
       });
       try {
-        kodierer.encode(bild, { keyFrame: i % schluesselAbstand === 0 });
+        kodierer.encode(bild, {
+          keyFrame: i % schluesselAbstand === 0 || (auftrag.schluesselBei?.has(i) ?? false),
+        });
       } finally {
         /*
          * `close()` ist Pflicht und kein Aufräumen aus Ordnungsliebe: Ein

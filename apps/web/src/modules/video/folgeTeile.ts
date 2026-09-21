@@ -53,6 +53,16 @@ export interface TeileAuftrag {
   readonly teile: readonly InhaltsTeil[];
   /** Jedes wievielte Bild wirklich gerechnet wird. */
   readonly schluesselAbstand: number;
+  /**
+   * An welchen Stellen ein neues Stück anfängt – aus `abtasten`.
+   *
+   * Ohne diese Zahlen schätzt die Bewegungssuche an einer Schnittkante eine
+   * Bewegung zwischen zwei völlig verschiedenen Szenen. Das wäre für sich
+   * schon falsch; schlimmer ist, dass `lageVerketten` die Lage jedes Bildes
+   * bis zum ersten durchsummiert – der Unfug von einer Kante wanderte also
+   * durch den ganzen Rest des Films.
+   */
+  readonly schnitte?: readonly number[];
   readonly fortschritt?: Fortschritt;
   readonly abbruch?: AbortSignal;
 }
@@ -113,8 +123,21 @@ export async function folgeTeile(
   const breite = bilder[0].daten.width;
   const hoehe = bilder[0].daten.height;
   const abstand = Math.max(1, auftrag.schluesselAbstand);
+  const schnitte = new Set(auftrag.schnitte ?? []);
   const schluessel = new Set<number>();
   for (let i = 0; i < bilder.length; i += abstand) schluessel.add(i);
+  /*
+   * An jeder Schnittkante zwei Schlüsselbilder: das letzte des alten Stücks
+   * und das erste des neuen.
+   *
+   * Eine geschobene Maske über die Kante hinweg zeigte den Ausschnitt der
+   * vorigen Szene – und das letzte Bild eines Stücks ist die Stelle, an der
+   * man beim Ansehen hängenbleibt.
+   */
+  for (const stelle of schnitte) {
+    schluessel.add(stelle);
+    if (stelle > 0) schluessel.add(stelle - 1);
+  }
   // Das letzte Bild immer – siehe `folgeMaske.ts`: Ein Film wird am Ende
   // angehalten und angesehen, und dort sässe die geschobene Maske am
   // schlechtesten.
@@ -129,7 +152,9 @@ export async function folgeTeile(
    * Bilder. Gemessen sind das je 3 ms – bei 150 Bildern und vier Teilen also
    * knapp zwei Sekunden, die niemand braucht.
    */
-  const felder = bilder.map((_, i) => (i === 0 ? null : bewegung(grau[i - 1], grau[i], breite)));
+  const felder = bilder.map((_, i) =>
+    i === 0 || schnitte.has(i) ? null : bewegung(grau[i - 1], grau[i], breite),
+  );
   const faktor = felder.find(Boolean)?.faktor ?? 1;
 
   /*
@@ -143,6 +168,12 @@ export async function folgeTeile(
    */
   const lagen: Lage[] = [LAGE_RUHE];
   for (let i = 1; i < bilder.length; i += 1) {
+    // An einer Schnittkante fängt die Rechnung von vorn an, statt die Lage
+    // des vorigen Stücks weiterzutragen.
+    if (schnitte.has(i)) {
+      lagen.push(LAGE_RUHE);
+      continue;
+    }
     const feld = felder[i];
     const schritt = feld ? lageSchaetzen(feld) : LAGE_RUHE;
     lagen.push(lageVerketten(lagen[i - 1], schritt));
@@ -213,7 +244,10 @@ export async function folgeTeile(
          * Gegen das halten, was aus dem vorigen Schlüsselbild zu erwarten
          * war – die Begründung samt Messung steht bei `maskePasst`.
          */
-        const anker = i > 0 ? schluesselVor(schluessel, i - 1) : -1;
+        // An einer Schnittkante gibt es nichts zu erwarten: Die Maske davor
+        // gehört zu einer anderen Szene, und `maskePasst` würde die frische
+        // zugunsten einer fremden verwerfen.
+        const anker = i > 0 && !schnitte.has(i) ? schluesselVor(schluessel, i - 1) : -1;
         const vorlage = anker >= 0 ? sammlung[anker] : null;
         const erwartet = vorlage
           ? maskeZiehen(
@@ -254,7 +288,7 @@ export async function folgeTeile(
      * bewegte Kante zu einem Verlauf auseinander, und die Unschärfe bekäme
      * an jeder Silhouette einen Hof.
      */
-    geglaettet.set(id, eintrag?.art === 'tiefe' ? folge : zeitlichGlaetten(folge));
+    geglaettet.set(id, eintrag?.art === 'tiefe' ? folge : zeitlichGlaetten(folge, 3, schnitte));
   }
 
   const jeBild = bilder.map((_, i) => {

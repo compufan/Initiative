@@ -6,10 +6,21 @@ import { errorMessage } from '../media/helpers.js';
 import { BildEditor } from '../bild/BildEditor.js';
 import { docUnberuehrt, type BildDoc } from '../bild/doc.js';
 import { AbbruchError } from '../stickers/engines/index.js';
-import { BILDRATEN, BILDRATE_VORGABE, dauerJeBildMs, zeitpunkte } from './ausschnitt.js';
+import {
+  FILM_BILDRATEN,
+  FILM_BILDRATE_VORGABE,
+  filmSchrittMs,
+  filmZeitpunkte,
+  type Stueck,
+} from './ausschnitt.js';
 import { masse, videoBilderLesen } from './bilderLesen.js';
-import { inhaltsTeile } from './bildweise.js';
-import { maxBilderFuer } from './einstellungen.js';
+import { hatFormTeile, inhaltsTeile } from './bildweise.js';
+import {
+  MAX_BILDER_FILM,
+  dauerText,
+  filmDauerSchaetzenMs,
+  maxBilderFuer,
+} from './einstellungen.js';
 import { Streifen } from './Streifen.js';
 import { videoTauglich } from './schreiben.js';
 import { ABSCHNITT_TITEL, VideoBauAbbruch, videoAusVideo, type Abschnitt } from './videoBauen.js';
@@ -72,9 +83,19 @@ export function VideoEditorSheet({
   const [dauerMs, setDauerMs] = useState(0);
   const [streifen, setStreifen] = useState<{ zeitMs: number; bild: string }[]>([]);
   const [quelle, setQuelle] = useState<{ b: number; h: number } | null>(null);
-  const [vonMs, setVonMs] = useState(0);
-  const [bisMs, setBisMs] = useState(0);
-  const [bildrate, setBildrate] = useState<number>(BILDRATE_VORGABE);
+  /**
+   * Die Stücke, aus denen der Film wird – in dieser Reihenfolge.
+   *
+   * Eine Liste und kein Von-Bis, weil „Schnittoptionen" genau das heisst: ein
+   * Stück in der Mitte herausnehmen, zwei Ausschnitte hintereinanderhängen,
+   * die Reihenfolge tauschen. Solange es EIN Stück gibt, sieht und bedient
+   * sich das Blatt wie vorher – der zweite Satz Bedienelemente entsteht erst,
+   * wenn jemand selbst ein zweites Stück angelegt hat.
+   */
+  const [stuecke, setStuecke] = useState<Stueck[]>([{ vonMs: 0, bisMs: 0 }]);
+  /** Welches Stück die Griffe im Streifen bedienen. */
+  const [aktiv, setAktiv] = useState(0);
+  const [bildrate, setBildrate] = useState<number>(FILM_BILDRATE_VORGABE);
   const [kante, setKante] = useState<number>(960);
   const [doc, setDoc] = useState<BildDoc | null>(null);
   const [standbild, setStandbild] = useState<Blob | null>(null);
@@ -115,7 +136,7 @@ export function VideoEditorSheet({
         if (!gilt) return;
         setDauerMs(erst.dauerMs);
         setQuelle({ b: erst.quellBreite, h: erst.quellHoehe });
-        setBisMs(Math.min(erst.dauerMs, 5000));
+        setStuecke([{ vonMs: 0, bisMs: Math.min(erst.dauerMs, 5000) }]);
 
         const marken = Array.from({ length: STREIFEN }, (_, i) =>
           Math.round((erst.dauerMs * i) / STREIFEN),
@@ -152,13 +173,37 @@ export function VideoEditorSheet({
   /* ---------- Was daraus wird ---------- */
 
   const rechenmass = quelle ? masse(quelle.b, quelle.h, kante) : null;
-  const maxBilder = rechenmass ? maxBilderFuer(rechenmass.b, rechenmass.h) : 1;
+  const teile = doc ? inhaltsTeile(doc) : [];
+  /*
+   * Dieselbe Weiche wie in `videoBauen`, und das ist kein Zufall, sondern
+   * Pflicht.
+   *
+   * Dort entscheidet `teile.length > 0 || hatFormTeile(doc)`, ob alle Bilder
+   * gesammelt werden müssen. Eine Oberfläche, die ihre Grenze nur an
+   * `teile.length` festmacht, verspricht bei einem Verlauf oder einem
+   * Pinselstrich sechshundert Bilder – und der Maskenweg hält sie dann doch
+   * alle, bis das Telefon den Reiter wegwirft.
+   */
+  const brauchtAlle = doc ? teile.length > 0 || hatFormTeile(doc) : false;
+  /*
+   * Ohne Masken zählt nur die Wartezeit, mit Masken der Speicher.
+   *
+   * Solange noch nichts eingestellt ist (`doc` ist null), gilt die
+   * Strom-Grenze – denn genau so liefe der Film dann auch. Sie springt
+   * später nur, wenn jemand wirklich einen inhaltsabhängigen Bereich anlegt,
+   * und dann steht der Grund daneben.
+   */
+  const maxBilder = brauchtAlle
+    ? rechenmass
+      ? maxBilderFuer(rechenmass.b, rechenmass.h)
+      : 1
+    : MAX_BILDER_FILM;
   const plan = useMemo(
-    () => zeitpunkte(vonMs, bisMs, bildrate, maxBilder),
-    [vonMs, bisMs, bildrate, maxBilder],
+    () => filmZeitpunkte(stuecke, bildrate, maxBilder),
+    [stuecke, bildrate, maxBilder],
   );
   const anzahl = plan.zeitpunkte.length;
-  const teile = doc ? inhaltsTeile(doc) : [];
+  const schrittMs = filmSchrittMs(bildrate);
 
   /*
    * Der Schlüsselbildabstand hängt an der Bildrate, nicht an einer festen
@@ -167,6 +212,9 @@ export function VideoEditorSheet({
    * Sekundenabstand ist die Regel, mindestens aber jedes vierte.
    */
   const schluesselAbstand = Math.max(1, Math.min(4, Math.round(bildrate / 2)));
+  const dauerSchaetzung = filmDauerSchaetzenMs(anzahl, brauchtAlle, schluesselAbstand);
+  /** Der Anfang des ERSTEN Stücks – dort wird eingestellt. */
+  const anfangMs = stuecke[0]?.vonMs ?? 0;
 
   /* ---------- Das Standbild für den Editor ---------- */
 
@@ -175,7 +223,7 @@ export function VideoEditorSheet({
     setHolt(true);
     try {
       const gelesen = await videoBilderLesen(video, {
-        zeitpunkte: [vonMs],
+        zeitpunkte: [anfangMs],
         kante,
       });
       const flaeche = document.createElement('canvas');
@@ -195,7 +243,7 @@ export function VideoEditorSheet({
     } finally {
       setHolt(false);
     }
-  }, [holt, kante, quelle, video, vonMs]);
+  }, [anfangMs, holt, kante, quelle, video]);
 
   /* ---------- Rechnen ---------- */
 
@@ -229,16 +277,23 @@ export function VideoEditorSheet({
       setLauf({ anteil: 0, abschnitt: 'lesen', text: 'Bilder holen …' });
       await wachePruefen(true);
       try {
-        const ende = nurBilder === undefined ? bisMs : vonMs + nurBilder * dauerJeBildMs(bildrate);
         const fertig = await videoAusVideo({
           datei: video,
           doc,
-          vonMs,
-          bisMs: ende,
+          stuecke,
           bildrate,
           kante,
           schluesselAbstand,
-          maxBilder,
+          /*
+           * Nach einem Abbruch wird die GRENZE gesenkt, nicht das Ende
+           * verschoben.
+           *
+           * Das Ende auszurechnen ginge bei einem Stück noch; bei dreien
+           * läge es im falschen. Eine kleinere Obergrenze schneidet dagegen
+           * genau dort ab, wo der Abbruch kam – quer über alle Stücke, in
+           * derselben Reihenfolge.
+           */
+          maxBilder: nurBilder === undefined ? maxBilder : Math.min(maxBilder, nurBilder),
           fortschritt: (anteil, abschnitt, text) => setLauf({ anteil, abschnitt, text }),
           abbruch: steuer.signal,
         });
@@ -263,7 +318,7 @@ export function VideoEditorSheet({
         setLauf(null);
       }
     },
-    [bildrate, bisMs, doc, kante, lauf, maxBilder, schluesselAbstand, video, vonMs, wachePruefen],
+    [bildrate, doc, kante, lauf, maxBilder, schluesselAbstand, stuecke, video, wachePruefen],
   );
 
   useEffect(
@@ -369,28 +424,119 @@ export function VideoEditorSheet({
               <Streifen
                 bilder={streifen}
                 dauerMs={dauerMs}
-                vonMs={vonMs}
-                bisMs={bisMs}
+                stuecke={stuecke}
+                aktiv={aktiv}
                 gesperrt={lauf !== null}
-                onBereich={(von, bis) => {
-                  setVonMs(von);
-                  setBisMs(bis);
-                }}
+                schrittMs={schrittMs}
+                onAktiv={setAktiv}
+                onBereich={(von, bis) =>
+                  setStuecke((alt) =>
+                    alt.map((eintrag, i) => (i === aktiv ? { vonMs: von, bisMs: bis } : eintrag)),
+                  )
+                }
               />
               <p className="vg-hinweis">
+                {stuecke.length > 1 && `Stück ${aktiv + 1}: `}
+                {zeitText(stuecke[aktiv]?.vonMs ?? 0)} – {zeitText(stuecke[aktiv]?.bisMs ?? 0)} ·{' '}
                 {anzahl} {anzahl === 1 ? 'Bild' : 'Bilder'}
                 {rechenmass && ` · ${rechenmass.b} × ${rechenmass.h}`} ·{' '}
-                {((anzahl * dauerJeBildMs(bildrate)) / 1000) | 0 || '<1'} s Film
+                {sekundenText((anzahl * schrittMs) / 1000)} s Film · {dauerText(dauerSchaetzung)}
                 {plan.gekuerztMs > 0 && (
                   <>
                     {' '}
                     <strong>
-                      Hinten fallen {(plan.gekuerztMs / 1000).toFixed(1).replace('.', ',')} s weg –
-                      bei dieser Grösse passen höchstens {maxBilder} Bilder in den Speicher.
+                      Hinten fallen {(plan.gekuerztMs / 1000).toFixed(1).replace('.', ',')} s weg –{' '}
+                      {brauchtAlle
+                        ? `bei dieser Grösse passen höchstens ${maxBilder} Bilder in den Speicher, weil die Bereiche am Bildinhalt hängen.`
+                        : `mehr als ${maxBilder} Bilder dauern länger, als vor einem Balken zu sitzen erträglich ist. Bei ${halbeRate(bildrate)} Bildern je Sekunde wäre es doppelt so viel Film.`}
                     </strong>
                   </>
                 )}
               </p>
+
+              {/*
+                  Die Schnittoptionen entstehen ERST, wenn jemand ein zweites
+                  Stück angelegt hat.
+
+                  Ein Film aus einem Stück ist der Normalfall, und für den
+                  sieht das Blatt aus wie vorher: ein Streifen, zwei Griffe.
+                  Wer die Liste nie braucht, bekommt sie auch nie zu sehen.
+              */}
+              <div className="row" style={{ gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={lauf !== null || dauerMs <= 0}
+                  onClick={() => {
+                    /*
+                     * Das neue Stück fängt dort an, wo das aktive aufhört.
+                     *
+                     * Nicht bei null: Wer ein zweites Stück anlegt, will fast
+                     * immer die Stelle DANACH – und ein Stück, das auf dem
+                     * vorigen liegt, sähe aus wie ein Fehler.
+                     */
+                    const letzte = stuecke[aktiv] ?? { vonMs: 0, bisMs: 0 };
+                    const von = Math.min(letzte.bisMs, Math.max(0, dauerMs - 1000));
+                    setStuecke((alt) => [
+                      ...alt,
+                      { vonMs: von, bisMs: Math.min(dauerMs, von + 2000) },
+                    ]);
+                    setAktiv(stuecke.length);
+                  }}
+                >
+                  ✂ Stück hinzufügen
+                </button>
+                {stuecke.length > 1 && (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={lauf !== null}
+                    onClick={() => {
+                      setStuecke((alt) => alt.filter((_, i) => i !== aktiv));
+                      setAktiv((alt) => Math.max(0, alt - 1));
+                    }}
+                  >
+                    ␥ Stück {aktiv + 1} entfernen
+                  </button>
+                )}
+                {stuecke.length > 1 &&
+                  (['vor', 'zurueck'] as const).map((richtung) => (
+                    <button
+                      key={richtung}
+                      type="button"
+                      className="btn btn-sm"
+                      disabled={
+                        lauf !== null ||
+                        (richtung === 'vor' ? aktiv === 0 : aktiv === stuecke.length - 1)
+                      }
+                      aria-label={
+                        richtung === 'vor'
+                          ? `Stück ${aktiv + 1} nach vorn`
+                          : `Stück ${aktiv + 1} nach hinten`
+                      }
+                      onClick={() => {
+                        const ziel = richtung === 'vor' ? aktiv - 1 : aktiv + 1;
+                        setStuecke((alt) => {
+                          const neu = alt.slice();
+                          [neu[aktiv], neu[ziel]] = [neu[ziel], neu[aktiv]];
+                          return neu;
+                        });
+                        setAktiv(ziel);
+                      }}
+                    >
+                      {richtung === 'vor' ? '↑ nach vorn' : '↓ nach hinten'}
+                    </button>
+                  ))}
+              </div>
+
+              {stuecke.length > 1 && (
+                <p className="vg-hinweis">
+                  Der Film läuft in dieser Reihenfolge:{' '}
+                  {stuecke
+                    .map((eintrag) => `${zeitText(eintrag.vonMs)}–${zeitText(eintrag.bisMs)}`)
+                    .join(' · ')}
+                </p>
+              )}
             </>
           )}
 
@@ -438,7 +584,7 @@ export function VideoEditorSheet({
           <fieldset className="vg-gruppe" disabled={lauf !== null}>
             <legend>Bilder je Sekunde</legend>
             <div className="vg-kacheln">
-              {BILDRATEN.map((rate) => (
+              {FILM_BILDRATEN.map((rate) => (
                 <button
                   key={rate.rate}
                   type="button"
@@ -535,4 +681,31 @@ export function VideoEditorSheet({
       </Sheet>
     </>
   );
+}
+
+/** „0:02,45" – eine Zeit, die man ablesen und vergleichen kann. */
+function zeitText(ms: number): string {
+  const gesamt = Math.max(0, ms);
+  const minuten = Math.floor(gesamt / 60_000);
+  const sekunden = Math.floor((gesamt % 60_000) / 1000);
+  const hundertstel = Math.floor((gesamt % 1000) / 10);
+  return `${minuten}:${String(sekunden).padStart(2, '0')},${String(hundertstel).padStart(2, '0')}`;
+}
+
+/** Sekunden mit einer Nachkommastelle, deutsch – und nie „0". */
+function sekundenText(sekunden: number): string {
+  if (sekunden < 0.05) return '<0,1';
+  return sekunden.toFixed(1).replace('.', ',');
+}
+
+/**
+ * Die nächstkleinere angebotene Rate.
+ *
+ * Für den Satz, der den Handel sichtbar macht, um den es bei der Grenze
+ * geht: Flüssigkeit gegen Länge. Eine Zahl allein („höchstens 600 Bilder")
+ * rechnet niemand in Sekunden um.
+ */
+function halbeRate(bildrate: number): number {
+  const kleiner = FILM_BILDRATEN.filter((eintrag) => eintrag.rate < bildrate);
+  return kleiner.length > 0 ? kleiner[kleiner.length - 1].rate : bildrate;
 }

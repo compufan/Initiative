@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   GUETE_VORGABE,
   MAX_BILDER,
+  MAX_BILDER_FILM,
+  filmDauerSchaetzenMs,
   VIDEO_GUETEN,
   dauerSchaetzenMs,
   dauerText,
@@ -271,5 +273,53 @@ describe('MAX_BILDER', () => {
   it('bleibt bei „Genau“ unter zwei Minuten Warten', () => {
     // Darüber hinaus wird aus einer Spielerei eine Sitzung.
     expect(dauerSchaetzenMs(MAX_BILDER, gueteFinden('genau'), true)).toBeLessThan(120_000);
+  });
+});
+
+describe('Die Filmgrenze', () => {
+  it('liegt deutlich über der GIF-Grenze', () => {
+    /*
+     * Beim GIF hält `MAX_BILDER` den Speicher frei, weil alle Bilder
+     * unkomprimiert nebeneinanderliegen. Beim Film ohne inhaltsabhängige
+     * Bereiche liegt genau EINES im Speicher – dort ist die Wartezeit die
+     * Grenze, und die erlaubt viel mehr. Bei 60 Bildern je Sekunde wären
+     * 150 Bilder zweieinhalb Sekunden Film gewesen.
+     */
+    expect(MAX_BILDER_FILM).toBeGreaterThan(MAX_BILDER);
+    expect(MAX_BILDER_FILM / 60).toBeGreaterThanOrEqual(10);
+  });
+
+  it('bleibt unter zwei Minuten Wartezeit', () => {
+    // Die einzige Begründung für die Zahl. Wäre sie gerissen, wäre die Zahl
+    // falsch – nicht der Test.
+    expect(filmDauerSchaetzenMs(MAX_BILDER_FILM, false, 4)).toBeLessThan(120_000);
+  });
+});
+
+describe('filmDauerSchaetzenMs', () => {
+  it('rechnet ohne Masken nur Lesen und Schreiben', () => {
+    // 75 ms holen plus 15 ms zeichnen und kodieren – beides gemessen, siehe
+    // `videoBauen.ts`.
+    expect(filmDauerSchaetzenMs(100, false, 4)).toBe(9000);
+  });
+
+  it('wird mit Masken deutlich teurer', () => {
+    const ohne = filmDauerSchaetzenMs(100, false, 4);
+    const mit = filmDauerSchaetzenMs(100, true, 4);
+    expect(mit).toBeGreaterThan(ohne * 5);
+  });
+
+  it('wird billiger, je seltener ein Modell läuft', () => {
+    expect(filmDauerSchaetzenMs(100, true, 8)).toBeLessThan(filmDauerSchaetzenMs(100, true, 2));
+  });
+
+  it('hängt NICHT an der Fläche', () => {
+    /*
+     * Anders als beim GIF: `zeichneAusgabe` rechnet auf der Grafikeinheit,
+     * und dort kostet ein grösseres Bild kaum mehr – gemessen 13,5 ms bei
+     * 192 × 144 gegen 14,1 ms bei 960 × 540. Eine Schätzung, die mit der
+     * Fläche skaliert, wäre beim Film schlicht erfunden.
+     */
+    expect(filmDauerSchaetzenMs.length).toBe(3);
   });
 });

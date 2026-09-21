@@ -184,7 +184,48 @@ export interface VideoBilder {
   readonly dauerMs: number;
 }
 
-export async function videoBilderLesen(datei: Blob, auftrag: LeseAuftrag): Promise<VideoBilder> {
+/**
+ * Ein offener Leser: einmal aufmachen, beliebig oft springen, wieder zumachen.
+ *
+ * # Warum es das neben `videoBilderLesen` gibt
+ *
+ * Weil `videoBilderLesen` ALLE Bilder sammelt und unkomprimiert herausgibt.
+ * Für ein GIF ist das richtig – die Masken brauchen die Bilder ohnehin alle
+ * gleichzeitig. Für einen Film, an dem nichts vom Bildinhalt abhängt, ist es
+ * der Grund, warum bei 60 Bildern je Sekunde nach zweieinhalb Sekunden
+ * Schluss ist: Hundertfünfzig Bilder in 960 × 540 sind 311 MB, und mehr
+ * verträgt ein Telefon nicht.
+ *
+ * Mit einem offenen Leser liegt genau EIN Bild im Speicher, und die Grenze
+ * ist nur noch die Wartezeit – eine Grenze, die man dem Anwender wenigstens
+ * ehrlich hinschreiben kann.
+ *
+ * # Warum das Schliessen dem Aufrufer gehört
+ *
+ * Weil niemand sonst weiss, wann er fertig ist. Ein vergessenes `schliessen`
+ * hält ein dekodiertes Video am Leben – auf einem Telefon der teuerste
+ * denkbare Fehler. Deshalb steht bei jedem Aufrufer ein `finally`.
+ */
+export interface VideoLeser {
+  readonly breite: number;
+  readonly hoehe: number;
+  readonly quellBreite: number;
+  readonly quellHoehe: number;
+  readonly dauerMs: number;
+  /**
+   * Das Bild an dieser Stelle.
+   *
+   * Gibt eine eigene Kopie heraus (`getImageData`), keine Sicht auf die
+   * Leseleinwand: Der nächste Sprung überschreibt sie.
+   */
+  bildAn(zeitMs: number, abbruch?: AbortSignal): Promise<ImageData>;
+  schliessen(): void;
+}
+
+export async function videoLeserOeffnen(
+  datei: Blob,
+  auftrag: { readonly kante: number; readonly abbruch?: AbortSignal },
+): Promise<VideoLeser> {
   if (auftrag.abbruch?.aborted) throw new AbbruchError();
   const adresse = URL.createObjectURL(datei);
   const video = document.createElement('video');
@@ -200,6 +241,17 @@ export async function videoBilderLesen(datei: Blob, auftrag: LeseAuftrag): Promi
   video.crossOrigin = 'anonymous';
   video.src = adresse;
 
+  const schliessen = () => {
+    /*
+     * Erst die Quelle leeren, dann die Adresse freigeben. Andersherum lädt
+     * das Element noch an einer Adresse, die es nicht mehr gibt, und
+     * hinterlässt in Firefox einen Fehler in der Konsole.
+     */
+    video.removeAttribute('src');
+    video.load();
+    URL.revokeObjectURL(adresse);
+  };
+
   try {
     await warten(video, ['loadedmetadata'], auftrag.abbruch);
     const dauerS = brauchtDauerSuche(video.duration)
@@ -213,42 +265,59 @@ export async function videoBilderLesen(datei: Blob, auftrag: LeseAuftrag): Promi
     const stift = flaeche.getContext('2d', { willReadFrequently: true });
     if (!stift) throw new VideoLeseError('Diese Ansicht kann keine Bilder zeichnen');
 
-    const bilder: GelesenesBild[] = [];
-    const gesamt = auftrag.zeitpunkte.length;
-    for (let i = 0; i < gesamt; i += 1) {
-      // Der Abbruch nimmt mit, was bis hierher gelesen ist – siehe `LeseAbbruch`.
-      if (auftrag.abbruch?.aborted) throw new LeseAbbruch(bilder);
-      /*
-       * Das letzte Bild eines Videos ist NICHT bei `duration`.
-       *
-       * Dorthin zu springen heisst „hinter das letzte Bild", und je nach
-       * Browser kommt dann das letzte Bild, ein schwarzes, oder `seeked`
-       * bleibt aus. Ein Zehntel Abstand ist mehr als jedes Einzelbild lang.
-       */
-      const ziel = Math.min(auftrag.zeitpunkte[i] / 1000, Math.max(0, dauerS - 0.1));
-      await springen(video, ziel, auftrag.abbruch);
-      stift.clearRect(0, 0, b, h);
-      stift.drawImage(video, 0, 0, b, h);
-      bilder.push({ zeitMs: auftrag.zeitpunkte[i], daten: stift.getImageData(0, 0, b, h) });
-      auftrag.fortschritt?.((i + 1) / gesamt, `Bild ${i + 1} von ${gesamt}`);
-    }
-
     return {
-      bilder,
       breite: b,
       hoehe: h,
       quellBreite: video.videoWidth,
       quellHoehe: video.videoHeight,
       dauerMs: Math.round(dauerS * 1000),
+      async bildAn(zeitMs, abbruch) {
+        /*
+         * Das letzte Bild eines Videos ist NICHT bei `duration`.
+         *
+         * Dorthin zu springen heisst „hinter das letzte Bild", und je nach
+         * Browser kommt dann das letzte Bild, ein schwarzes, oder `seeked`
+         * bleibt aus. Ein Zehntel Abstand ist mehr als jedes Einzelbild lang.
+         */
+        const ziel = Math.min(zeitMs / 1000, Math.max(0, dauerS - 0.1));
+        await springen(video, ziel, abbruch);
+        stift.clearRect(0, 0, b, h);
+        stift.drawImage(video, 0, 0, b, h);
+        return stift.getImageData(0, 0, b, h);
+      },
+      schliessen,
+    };
+  } catch (ausfall) {
+    schliessen();
+    throw ausfall;
+  }
+}
+
+export async function videoBilderLesen(datei: Blob, auftrag: LeseAuftrag): Promise<VideoBilder> {
+  const leser = await videoLeserOeffnen(datei, {
+    kante: auftrag.kante,
+    abbruch: auftrag.abbruch,
+  });
+  try {
+    const bilder: GelesenesBild[] = [];
+    const gesamt = auftrag.zeitpunkte.length;
+    for (let i = 0; i < gesamt; i += 1) {
+      // Der Abbruch nimmt mit, was bis hierher gelesen ist – siehe `LeseAbbruch`.
+      if (auftrag.abbruch?.aborted) throw new LeseAbbruch(bilder);
+      const zeitMs = auftrag.zeitpunkte[i];
+      bilder.push({ zeitMs, daten: await leser.bildAn(zeitMs, auftrag.abbruch) });
+      auftrag.fortschritt?.((i + 1) / gesamt, `Bild ${i + 1} von ${gesamt}`);
+    }
+
+    return {
+      bilder,
+      breite: leser.breite,
+      hoehe: leser.hoehe,
+      quellBreite: leser.quellBreite,
+      quellHoehe: leser.quellHoehe,
+      dauerMs: leser.dauerMs,
     };
   } finally {
-    /*
-     * Erst die Quelle leeren, dann die Adresse freigeben. Andersherum lädt
-     * das Element noch an einer Adresse, die es nicht mehr gibt, und
-     * hinterlässt in Firefox einen Fehler in der Konsole.
-     */
-    video.removeAttribute('src');
-    video.load();
-    URL.revokeObjectURL(adresse);
+    leser.schliessen();
   }
 }

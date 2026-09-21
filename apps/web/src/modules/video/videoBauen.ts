@@ -1,8 +1,13 @@
 import { AbbruchError } from '../stickers/engines/index.js';
 import type { BildDoc } from '../bild/doc.js';
 import { zeichneAusgabe } from '../bild/zeichnen.js';
-import { LeseAbbruch, videoBilderLesen, type GelesenesBild } from './bilderLesen.js';
-import { dauerJeBildMs, zeitpunkte } from './ausschnitt.js';
+import {
+  LeseAbbruch,
+  videoBilderLesen,
+  videoLeserOeffnen,
+  type GelesenesBild,
+} from './bilderLesen.js';
+import { filmSchrittMs, filmZeitpunkte, type Stueck } from './ausschnitt.js';
 import { docFuerBild, docMitLage, hatFormTeile, inhaltsTeile } from './bildweise.js';
 import { TeileAbbruch, folgeTeile } from './folgeTeile.js';
 import { LAGE_RUHE, type Lage } from './verfolgung.js';
@@ -33,19 +38,31 @@ import { videoSchreiben, videoTauglich } from './schreiben.js';
  * 4K-Video zurück, und das steht in der Oberfläche auch so da.
  */
 
-export type Abschnitt = 'lesen' | 'masken' | 'rechnen';
+export type Abschnitt = 'lesen' | 'masken' | 'rechnen' | 'strom';
 
 export const ABSCHNITT_TITEL: Record<Abschnitt, string> = {
   lesen: 'Bilder holen',
   masken: 'Masken rechnen',
   rechnen: 'Video schreiben',
+  // Ein eigener Name, weil dort beides zugleich passiert – ein Balken, der
+  // zwischen „Bilder holen" und „Video schreiben" hin und her springt, sieht
+  // aus wie ein Fehler.
+  strom: 'Bilder holen und schreiben',
 };
 
 export interface VideoBauAuftrag {
   readonly datei: Blob;
   readonly doc: BildDoc;
-  readonly vonMs: number;
-  readonly bisMs: number;
+  /**
+   * Die Stücke, aus denen der Film wird – in dieser Reihenfolge.
+   *
+   * Eine Liste und kein Bereich, weil „Schnittoptionen" genau das heisst:
+   * ein Stück in der Mitte herausnehmen, die Reihenfolge tauschen, zwei
+   * Ausschnitte hintereinanderhängen. Am Ende kommt trotzdem EINE Liste von
+   * Zeitpunkten heraus, und die verarbeiten `bilderLesen` und
+   * `videoSchreiben` schon heute.
+   */
+  readonly stuecke: readonly Stueck[];
   readonly bildrate: number;
   /** Die längere Kante, in der gerechnet und geschrieben wird. */
   readonly kante: number;
@@ -98,13 +115,21 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
   if (!tauglich.moeglich)
     throw new Error(tauglich.grund ?? 'Dieser Browser kann keine Videos schreiben');
 
-  const plan = zeitpunkte(auftrag.vonMs, auftrag.bisMs, auftrag.bildrate, auftrag.maxBilder);
+  const plan = filmZeitpunkte(auftrag.stuecke, auftrag.bildrate, auftrag.maxBilder);
+  const schnitte = new Set(plan.schnitte);
   const teile = inhaltsTeile(auftrag.doc);
-  const gewicht = gewichte(
-    plan.zeitpunkte.length,
-    teile.length > 0 || hatFormTeile(auftrag.doc),
-    auftrag.schluesselAbstand,
-  );
+  /*
+   * Auch OHNE Inhaltsteile wird die Bewegung geschätzt, sobald ein Bereich
+   * eine Form beschreibt.
+   *
+   * Ein Verlauf oder ein Pinselstrich kommt nicht aus dem Bild, er steht
+   * darin – und blieb bisher stehen, während die Szene darunter wegwanderte.
+   * Genau das war die Beschwerde: „der markierte Bereich bleibt im Verlauf
+   * des Videos nicht dort wo er soll."
+   */
+  const formen = hatFormTeile(auftrag.doc);
+  const brauchtAlle = teile.length > 0 || formen;
+  const gewicht = gewichte(plan.zeitpunkte.length, brauchtAlle, auftrag.schluesselAbstand);
   const melden = (abschnitt: Abschnitt, anteil: number, text: string) => {
     const vorher =
       abschnitt === 'lesen'
@@ -120,6 +145,12 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
           : gewicht.rechnen;
     auftrag.fortschritt?.(Math.min(1, vorher + anteil * breite), abschnitt, text);
   };
+
+  /* ---------- Der Weg ohne Masken: Bild für Bild, nichts wird gesammelt ---------- */
+
+  if (!brauchtAlle) {
+    return await stroemend(auftrag, plan.zeitpunkte, schnitte);
+  }
 
   let gelesen: { bilder: readonly GelesenesBild[]; breite: number; hoehe: number };
   try {
@@ -139,21 +170,12 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
   let lagen: readonly Lage[] = gelesen.bilder.map(() => LAGE_RUHE);
   let grauFaktor = 1;
   let laeufe = 0;
-  /*
-   * Auch OHNE Inhaltsteile wird die Bewegung geschätzt, sobald ein Bereich
-   * eine Form beschreibt.
-   *
-   * Ein Verlauf oder ein Pinselstrich kommt nicht aus dem Bild, er steht
-   * darin – und blieb bisher stehen, während die Szene darunter wegwanderte.
-   * Genau das war die Beschwerde: „der markierte Bereich bleibt im Verlauf
-   * des Videos nicht dort wo er soll."
-   */
-  const formen = hatFormTeile(auftrag.doc);
-  if (teile.length > 0 || formen) {
+  {
     try {
       const gerechnet = await folgeTeile(gelesen.bilder, {
         teile,
         schluesselAbstand: auftrag.schluesselAbstand,
+        schnitte: plan.schnitte,
         fortschritt: (anteil, text) => melden('masken', anteil, text),
         abbruch: auftrag.abbruch,
       });
@@ -230,6 +252,7 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
         breite,
         hoehe,
         bildrate: auftrag.bildrate,
+        schluesselBei: schnitte,
         fortschritt: (anteil, text) => melden('rechnen', anteil, text),
         abbruch: auftrag.abbruch,
       },
@@ -244,9 +267,106 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
     bilder: anzahl,
     breite,
     hoehe,
-    laufzeitMs: Math.round(anzahl * dauerJeBildMs(auftrag.bildrate)),
+    laufzeitMs: Math.round(anzahl * filmSchrittMs(auftrag.bildrate)),
     laeufe,
   };
+}
+
+/* ---------- Der strömende Weg ---------- */
+
+/**
+ * Lesen, zeichnen, kodieren – Bild für Bild, ohne etwas aufzuheben.
+ *
+ * # Warum das überhaupt geht
+ *
+ * Weil `videoSchreiben` seine Bilder über eine FUNKTION holt und sie streng
+ * aufsteigend abruft, und weil `videoLeserOeffnen` in derselben Richtung
+ * springt. Ohne Inhalts- und Formteile hängt kein Bild von einem anderen ab:
+ * Die Bearbeitung ist für alle dieselbe, es gibt keine Maske zu schieben und
+ * keine Lage zu schätzen.
+ *
+ * # Was es bringt
+ *
+ * Die Speichergrenze fällt weg. Hundertfünfzig Bilder in 960 × 540 sind
+ * unkomprimiert 311 MB – deshalb steht `PUNKTE_DECKEL` dort, wo er steht,
+ * und deshalb waren bei 60 Bildern je Sekunde zweieinhalb Sekunden Schluss.
+ * Hier liegt immer genau ein Bild im Speicher, und die Grenze ist die
+ * Wartezeit: gemessen rund 90 ms je Bild.
+ */
+async function stroemend(
+  auftrag: VideoBauAuftrag,
+  punkte: readonly number[],
+  schnitte: ReadonlySet<number>,
+): Promise<VideoBauErgebnis> {
+  const anzahl = punkte.length;
+  const leser = await videoLeserOeffnen(auftrag.datei, {
+    kante: auftrag.kante,
+    abbruch: auftrag.abbruch,
+  });
+  let fertige = 0;
+  try {
+    const quelle = document.createElement('canvas');
+    quelle.width = leser.breite;
+    quelle.height = leser.hoehe;
+    const stift = quelle.getContext('2d');
+    if (!stift) throw new Error('Diese Ansicht kann keine Bilder zeichnen');
+
+    // Derselbe Riegel wie im Maskenweg – die Begründung steht dort.
+    const z = auftrag.doc.zuschnitt;
+    if (z.x + z.w > leser.breite + 1 || z.y + z.h > leser.hoehe + 1) {
+      throw new Error(
+        `Diese Bearbeitung gehört zu einem Bild von mindestens ${z.x + z.w} × ${z.y + z.h}, ` +
+          `gerechnet wird aber in ${leser.breite} × ${leser.hoehe}.`,
+      );
+    }
+
+    /*
+     * Das erste Bild wird EINMAL gelesen und zweimal gebraucht: für die
+     * Probe, die die Ausgabegrösse bestimmt, und als Bild Null des Films.
+     * Zweimal zu lesen kostete gemessen 75 ms für nichts.
+     */
+    const erstes = await leser.bildAn(punkte[0], auftrag.abbruch);
+    stift.putImageData(erstes, 0, 0);
+    const probe = zeichneAusgabe(quelle, leser.breite, leser.hoehe, auftrag.doc);
+    const breite = probe.width;
+    const hoehe = probe.height;
+
+    let blob: Blob;
+    try {
+      blob = await videoSchreiben(
+        anzahl,
+        async (nummer) => {
+          if (auftrag.abbruch?.aborted) throw new AbbruchError();
+          const daten = nummer === 0 ? erstes : await leser.bildAn(punkte[nummer], auftrag.abbruch);
+          stift.putImageData(daten, 0, 0);
+          fertige = nummer;
+          auftrag.fortschritt?.((nummer + 1) / anzahl, 'strom', `Bild ${nummer + 1} von ${anzahl}`);
+          return zeichneAusgabe(quelle, leser.breite, leser.hoehe, auftrag.doc);
+        },
+        {
+          breite,
+          hoehe,
+          bildrate: auftrag.bildrate,
+          schluesselBei: schnitte,
+          abbruch: auftrag.abbruch,
+        },
+      );
+    } catch (ausfall) {
+      if (ausfall instanceof AbbruchError) throw new VideoBauAbbruch('strom', fertige);
+      throw ausfall;
+    }
+
+    return {
+      blob,
+      bilder: anzahl,
+      breite,
+      hoehe,
+      laufzeitMs: Math.round(anzahl * filmSchrittMs(auftrag.bildrate)),
+      laeufe: 0,
+    };
+  } finally {
+    leser.schliessen();
+  }
 }
 
 /*

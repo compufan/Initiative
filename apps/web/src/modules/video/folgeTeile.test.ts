@@ -288,3 +288,43 @@ describe('folgeTeile', () => {
     expect(sitzungenAuf).toBe(0);
   });
 });
+
+describe('folgeTeile an einer Schnittkante', () => {
+  it('rechnet die Maske an der Kante frisch, statt sie über den Schnitt zu ziehen', async () => {
+    /*
+     * Ohne die Schnittstellen wäre Bild 4 ein gewöhnliches Zwischenbild: Es
+     * bekäme die Maske des letzten Schlüsselbildes, geschoben um eine
+     * Bewegung, die zwischen zwei völlig verschiedenen Szenen geschätzt
+     * wurde. Mit dem Schnitt ist es selbst ein Schlüsselbild.
+     */
+    const { laeufe } = await folgeTeile(folge(8), {
+      teile: [NETZ],
+      schluesselAbstand: 4,
+      schnitte: [4],
+    });
+    const ohne = netzlaeufe;
+    netzlaeufe = 0;
+    const gleich = await folgeTeile(folge(8), { teile: [NETZ], schluesselAbstand: 4 });
+    expect(laeufe).toBeGreaterThanOrEqual(gleich.laeufe);
+    // An der Kante kommt ein Schlüsselbild dazu: das letzte des alten Stücks.
+    expect(ohne).toBeGreaterThan(netzlaeufe);
+  });
+
+  it('trägt die Lage nicht über den Schnitt hinweg', async () => {
+    // Die Lage jedes Bildes ist auf das ERSTE bezogen und summiert sich auf.
+    // An einer Kante muss sie neu bei der Ruhe anfangen, sonst wandert der
+    // Unfug von dort durch den ganzen Rest.
+    const { lagen } = await folgeTeile(folge(8), {
+      teile: [NETZ],
+      schluesselAbstand: 4,
+      schnitte: [4],
+    });
+    expect(lagen).toHaveLength(8);
+    expect(lagen[4]).toEqual({ s: 1, w: 0, tx: 0, ty: 0, sicher: 0 });
+  });
+
+  it('kommt ohne Schnittangabe genauso durch wie bisher', async () => {
+    const { jeBild } = await folgeTeile(folge(6), { teile: [NETZ], schluesselAbstand: 4 });
+    expect(jeBild).toHaveLength(6);
+  });
+});

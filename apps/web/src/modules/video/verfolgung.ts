@@ -772,15 +772,33 @@ export function maskeZiehen(
  * lässt den Rand deshalb weiter springen, nur eben seltener. Das Mittel
  * verschmiert ihn – und genau das soll es.
  */
-export function zeitlichGlaetten(masken: readonly Uint8Array[], fenster = 3): Uint8Array[] {
+export function zeitlichGlaetten(
+  masken: readonly Uint8Array[],
+  fenster = 3,
+  /**
+   * An welchen Stellen ein neues Stück anfängt.
+   *
+   * Über eine Schnittkante hinweg zu mitteln hiesse, die Maske der einen
+   * Szene in die andere hineinzurechnen – am Schnitt stünde dann für ein
+   * Bild eine Maske, die zu keinem der beiden Bilder gehört.
+   */
+  schnitte: ReadonlySet<number> = new Set(),
+): Uint8Array[] {
   if (masken.length === 0) return [];
   const halb = Math.floor(fenster / 2);
   if (halb < 1) return masken.map((maske) => Uint8Array.from(maske));
   const laenge = masken[0].length;
 
   return masken.map((_, i) => {
-    const von = Math.max(0, i - halb);
-    const bis = Math.min(masken.length - 1, i + halb);
+    let von = Math.max(0, i - halb);
+    let bis = Math.min(masken.length - 1, i + halb);
+    for (let k = i; k > von; k -= 1) if (schnitte.has(k)) von = k;
+    for (let k = i + 1; k <= bis; k += 1) {
+      if (schnitte.has(k)) {
+        bis = k - 1;
+        break;
+      }
+    }
     const raus = new Uint8Array(laenge);
     for (let p = 0; p < laenge; p += 1) {
       let summe = 0;

@@ -93,8 +93,7 @@ test('eine Bearbeitung am ersten Bild gilt für den ganzen Film', async ({ page 
     const fertig = await bauen.videoAusVideo({
       datei,
       doc,
-      vonMs: 0,
-      bisMs: 1000,
+      stuecke: [{ vonMs: 0, bisMs: 1000 }],
       bildrate: 10,
       kante: 320,
       schluesselAbstand: 4,
@@ -179,8 +178,15 @@ test('eine Bearbeitung am ersten Bild gilt für den ganzen Film', async ({ page 
     expect(spanne, `Bild bei Probe ${i} ist nicht grau: ${farbe.join(',')}`).toBeLessThan(40);
   }
 
-  // Ohne inhaltsabhängige Teile bleibt der mittlere Abschnitt aus.
-  expect(ergebnis.abschnitte).toEqual(['lesen', 'rechnen']);
+  /*
+   * Ohne inhaltsabhängige Teile läuft der STRÖMENDE Weg: lesen, zeichnen und
+   * kodieren passieren in derselben Schleife, und kein einziges Bild wird
+   * aufgehoben. Deshalb steht hier ein Abschnitt und nicht zwei – vorher
+   * waren es „lesen" und „rechnen", und zwischen beiden lagen alle Bilder
+   * des Films im Speicher. Genau das war die Grenze, an der bei 60 Bildern
+   * je Sekunde nach zweieinhalb Sekunden Schluss war.
+   */
+  expect(ergebnis.abschnitte).toEqual(['strom']);
   expect(ergebnis.laeufe).toBe(0);
   expect(ergebnis.steigend, 'der Balken springt zurück').toBe(true);
   expect(ergebnis.zuletzt).toBeCloseTo(1, 5);
@@ -250,8 +256,7 @@ test('ein Bereich mit Netz wird über die Bilder hinweg neu gerechnet', async ({
     const fertig = await bauen.videoAusVideo({
       datei,
       doc,
-      vonMs: 0,
-      bisMs: 600,
+      stuecke: [{ vonMs: 0, bisMs: 600 }],
       bildrate: 10,
       kante: 192,
       schluesselAbstand: 4,
@@ -379,8 +384,7 @@ test('die Tiefenkarte läuft über den Film – mit EINER Sitzung', async ({ pag
     const fertig = await bauen.videoAusVideo({
       datei,
       doc,
-      vonMs: 0,
-      bisMs: 500,
+      stuecke: [{ vonMs: 0, bisMs: 500 }],
       bildrate: 10,
       kante: 192,
       schluesselAbstand: 4,
@@ -423,4 +427,211 @@ test('die Tiefenkarte läuft über den Film – mit EINER Sitzung', async ({ pag
   expect(ergebnis.laeufe).toBe(2);
   expect(ergebnis.geladen, 'der Film mit Tiefenschärfe lässt sich nicht laden').toBe(true);
   expect([ergebnis.videoBreite, ergebnis.videoHoehe]).toEqual([192, 144]);
+});
+
+/** Eine Aufnahme, die erst rot und dann grün ist – damit sich Stücke unterscheiden lassen. */
+const AUFNEHMEN_ZWEI = `
+  async () => {
+    const leinwand = document.createElement('canvas');
+    leinwand.width = 320;
+    leinwand.height = 240;
+    const ctx = leinwand.getContext('2d');
+    const malen = (farbe, ms) =>
+      new Promise((auf) => {
+        const ende = performance.now() + ms;
+        const schritt = () => {
+          ctx.fillStyle = farbe;
+          ctx.fillRect(0, 0, leinwand.width, leinwand.height);
+          if (performance.now() < ende) requestAnimationFrame(schritt);
+          else auf();
+        };
+        schritt();
+      });
+    ctx.fillStyle = '#d02020';
+    ctx.fillRect(0, 0, leinwand.width, leinwand.height);
+    const strom = leinwand.captureStream(30);
+    const art = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find((t) =>
+      MediaRecorder.isTypeSupported(t),
+    );
+    const rekorder = new MediaRecorder(strom, art ? { mimeType: art } : undefined);
+    const teile = [];
+    rekorder.ondataavailable = (e) => { if (e.data.size > 0) teile.push(e.data); };
+    const gestoppt = new Promise((auf) => { rekorder.onstop = () => auf(); });
+    rekorder.start();
+    await malen('#d02020', 600);
+    await malen('#20a020', 700);
+    rekorder.stop();
+    await gestoppt;
+    strom.getTracks().forEach((spur) => spur.stop());
+    return new Blob(teile, { type: art || 'video/webm' });
+  }
+`;
+
+test('sechzig Bilder je Sekunde sind wirklich sechzig – und nicht fünfzig', async ({ page }) => {
+  /*
+   * Die Bitte lautete „bis zu 60 Bilder pro sekunde beim Video bearbeiten".
+   * 60 einfach in die Liste einzutragen hätte sie NICHT erfüllt, und zwar
+   * lautlos: `dauerJeBildMs` ist die GIF-Regel und rastert auf ganze
+   * Zehntelhundertstel, mit einem Riegel bei 20 ms. Abgetastet worden wären
+   * also 50 Bilder je Sekunde, beschriftet als 60 – eine Sekunde Original
+   * wäre zu 0,83 Sekunden Film geworden, 20 Prozent zu schnell.
+   *
+   * Der Test misst deshalb beides: die Zahl der Bilder UND die Länge der
+   * fertigen Datei. Nur eines von beiden wäre grün geblieben.
+   */
+  test.setTimeout(180_000);
+  await page.goto('/');
+
+  const ergebnis = await page.evaluate(async (code) => {
+    const bauenPfad = '/src/modules/video/videoBauen.ts';
+    const docPfad = '/src/modules/bild/doc.ts';
+    const schreibenPfad = '/src/modules/video/schreiben.ts';
+    const bauen = (await import(
+      /* @vite-ignore */ bauenPfad
+    )) as typeof import('../src/modules/video/videoBauen.js');
+    const docModul = (await import(
+      /* @vite-ignore */ docPfad
+    )) as typeof import('../src/modules/bild/doc.js');
+    const schreiben = (await import(
+      /* @vite-ignore */ schreibenPfad
+    )) as typeof import('../src/modules/video/schreiben.js');
+    if (!(await schreiben.videoTauglich(320, 240)).moeglich) return { uebersprungen: true };
+
+    const datei = await (eval(code) as () => Promise<Blob>)();
+    const fertig = await bauen.videoAusVideo({
+      datei,
+      doc: docModul.neuesDoc(320, 240),
+      stuecke: [{ vonMs: 0, bisMs: 1000 }],
+      bildrate: 60,
+      kante: 320,
+      schluesselAbstand: 4,
+      maxBilder: 600,
+    });
+
+    const video = document.createElement('video');
+    video.muted = true;
+    video.src = URL.createObjectURL(fertig.blob);
+    const geladen = await new Promise<boolean>((auf) => {
+      video.onloadedmetadata = () => auf(true);
+      video.onerror = () => auf(false);
+      setTimeout(() => auf(false), 8000);
+    });
+    return {
+      uebersprungen: false,
+      geladen,
+      bilder: fertig.bilder,
+      laufzeitMs: fertig.laufzeitMs,
+      dauer: video.duration,
+    };
+  }, AUFNEHMEN);
+
+  if (ergebnis.uebersprungen) {
+    test.skip(true, 'Kein Videokodierer in diesem Browser');
+    return;
+  }
+  expect(ergebnis.geladen, 'die geschriebene Datei lässt sich nicht laden').toBe(true);
+  // Eine Sekunde bei 60 Bildern je Sekunde sind 60 Bilder. Mit dem GIF-Raster
+  // wären es 50 gewesen.
+  expect(ergebnis.bilder).toBe(60);
+  expect(ergebnis.laufzeitMs).toBe(1000);
+  expect(ergebnis.dauer, `gemeldete Länge ${ergebnis.dauer} s`).toBeGreaterThan(0.93);
+  expect(ergebnis.dauer).toBeLessThan(1.07);
+});
+
+test('zwei Stücke laufen in der gewählten Reihenfolge', async ({ page }) => {
+  /*
+   * Die zweite Hälfte der Bitte: „Gib mir Schnittoptionen". Der Film besteht
+   * hier aus zwei Stücken, und das SPÄTERE steht vorn. Gemessen wird die
+   * Farbe – die Aufnahme ist erst rot, dann grün, also muss der fertige Film
+   * erst grün und dann rot sein. Eine Prüfung auf die blosse Bilderzahl wäre
+   * auch dann grün geblieben, wenn die Reihenfolge stillschweigend wieder
+   * nach der Zeit sortiert würde.
+   */
+  test.setTimeout(180_000);
+  await page.goto('/');
+
+  const ergebnis = await page.evaluate(async (code) => {
+    const bauenPfad = '/src/modules/video/videoBauen.ts';
+    const docPfad = '/src/modules/bild/doc.ts';
+    const schreibenPfad = '/src/modules/video/schreiben.ts';
+    const bauen = (await import(
+      /* @vite-ignore */ bauenPfad
+    )) as typeof import('../src/modules/video/videoBauen.js');
+    const docModul = (await import(
+      /* @vite-ignore */ docPfad
+    )) as typeof import('../src/modules/bild/doc.js');
+    const schreiben = (await import(
+      /* @vite-ignore */ schreibenPfad
+    )) as typeof import('../src/modules/video/schreiben.js');
+    if (!(await schreiben.videoTauglich(320, 240)).moeglich) return { uebersprungen: true };
+
+    const datei = await (eval(code) as () => Promise<Blob>)();
+    const fertig = await bauen.videoAusVideo({
+      datei,
+      doc: docModul.neuesDoc(320, 240),
+      // Das spätere Stück zuerst – genau das kann man in der Oberfläche mit
+      // den beiden Pfeilen einstellen.
+      stuecke: [
+        { vonMs: 800, bisMs: 1100 },
+        { vonMs: 0, bisMs: 300 },
+      ],
+      bildrate: 10,
+      kante: 320,
+      schluesselAbstand: 4,
+      maxBilder: 600,
+    });
+
+    const video = document.createElement('video');
+    video.muted = true;
+    video.src = URL.createObjectURL(fertig.blob);
+    const geladen = await new Promise<boolean>((auf) => {
+      video.onloadedmetadata = () => auf(true);
+      video.onerror = () => auf(false);
+      setTimeout(() => auf(false), 8000);
+    });
+    if (!geladen) return { uebersprungen: false, geladen: false };
+
+    const probe = document.createElement('canvas');
+    probe.width = video.videoWidth;
+    probe.height = video.videoHeight;
+    const pctx = probe.getContext('2d', { willReadFrequently: true })!;
+    const farbeBei = async (sekunden: number) => {
+      await new Promise<void>((auf) => {
+        video.onseeked = () => auf();
+        video.currentTime = sekunden;
+      });
+      pctx.drawImage(video, 0, 0);
+      const d = pctx.getImageData(probe.width >> 1, probe.height >> 1, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    };
+
+    return {
+      uebersprungen: false,
+      geladen: true,
+      bilder: fertig.bilder,
+      laufzeitMs: fertig.laufzeitMs,
+      vorn: await farbeBei(0.05),
+      hinten: await farbeBei(0.45),
+    };
+  }, AUFNEHMEN_ZWEI);
+
+  if (ergebnis.uebersprungen) {
+    test.skip(true, 'Kein Videokodierer in diesem Browser');
+    return;
+  }
+  expect(ergebnis.geladen, 'die geschriebene Datei lässt sich nicht laden').toBe(true);
+  // Dreihundert Millisekunden je Stück bei zehn Bildern je Sekunde: drei und
+  // drei.
+  expect(ergebnis.bilder).toBe(6);
+  expect(ergebnis.laufzeitMs).toBe(600);
+
+  const [vr, vg] = ergebnis.vorn ?? [0, 0, 0];
+  const [hr, hg] = ergebnis.hinten ?? [0, 0, 0];
+  expect(vg, `vorn müsste grün sein, ist aber ${(ergebnis.vorn ?? []).join(',')}`).toBeGreaterThan(
+    vr,
+  );
+  expect(
+    hr,
+    `hinten müsste rot sein, ist aber ${(ergebnis.hinten ?? []).join(',')}`,
+  ).toBeGreaterThan(hg);
 });

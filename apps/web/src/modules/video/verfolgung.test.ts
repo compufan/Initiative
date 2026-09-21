@@ -538,3 +538,35 @@ describe('zeitlichGlaetten', () => {
     expect(zeitlichGlaetten([])).toEqual([]);
   });
 });
+
+describe('zeitlichGlaetten an einer Schnittkante', () => {
+  const voll = (wert: number) => new Uint8Array(4).fill(wert);
+
+  it('mittelt ohne Schnitt über die Nachbarn', () => {
+    const folge = [voll(0), voll(0), voll(255), voll(255)];
+    const raus = zeitlichGlaetten(folge);
+    // Bild 1 sieht 0, 0, 255 – also 85.
+    expect(raus[1][0]).toBe(85);
+  });
+
+  it('mittelt NICHT über eine Schnittkante hinweg', () => {
+    /*
+     * Über einen Schnitt zu mitteln hiesse, die Maske der einen Szene in die
+     * andere hineinzurechnen: Am Schnitt stünde für ein Bild eine Maske, die
+     * zu keinem der beiden Bilder gehört – ein Geist der vorigen Einstellung.
+     */
+    const folge = [voll(0), voll(0), voll(255), voll(255)];
+    const raus = zeitlichGlaetten(folge, 3, new Set([2]));
+    expect(raus[1][0]).toBe(0);
+    expect(raus[2][0]).toBe(255);
+  });
+
+  it('glättet innerhalb eines Stücks weiter', () => {
+    const folge = [voll(0), voll(255), voll(0), voll(90), voll(120), voll(150)];
+    const raus = zeitlichGlaetten(folge, 3, new Set([3]));
+    // Bild 1 liegt im ersten Stück und sieht 0, 255, 0 – also 85.
+    expect(raus[1][0]).toBe(85);
+    // Bild 4 liegt im zweiten Stück und sieht 90, 120, 150 – also 120.
+    expect(raus[4][0]).toBe(120);
+  });
+});

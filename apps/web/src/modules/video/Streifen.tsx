@@ -1,7 +1,9 @@
 import { useRef } from 'react';
 
+import type { Stueck } from './ausschnitt.js';
+
 /**
- * Ein Filmstreifen mit zwei Griffen.
+ * Ein Filmstreifen mit Griffen.
  *
  * # Warum ein Streifen und keine Zeitleiste
  *
@@ -14,24 +16,48 @@ import { useRef } from 'react';
  * Video" und die Videobearbeitung. Beide stellen dieselbe Frage – welcher
  * Ausschnitt? – und eine zweite Fassung davon wäre eine zweite Stelle, an der
  * die Tastaturbedienung fehlt.
+ *
+ * # Warum mehrere Stücke, aber immer nur EIN Paar Griffe
+ *
+ * Weil der Film aus mehreren Stücken bestehen darf – das ist der Kern der
+ * Schnittoptionen. Alle Stücke zugleich mit Griffen auszustatten wäre
+ * trotzdem falsch: Zwei Stücke, die sich berühren, hätten dort vier Griffe
+ * übereinander, und eine Fingerkuppe trifft keinen davon sicher. Sichtbar
+ * sind deshalb alle Stücke, fassbar ist das ausgewählte; ein Tipp auf ein
+ * anderes wählt es aus.
  */
 export function Streifen({
   bilder,
   dauerMs,
-  vonMs,
-  bisMs,
+  stuecke,
+  aktiv,
   gesperrt,
+  schrittMs = 100,
   onBereich,
+  onAktiv,
 }: {
   bilder: { zeitMs: number; bild: string }[];
   dauerMs: number;
-  vonMs: number;
-  bisMs: number;
+  stuecke: readonly Stueck[];
+  /** Welches Stück die Griffe bedienen. */
+  aktiv: number;
   gesperrt: boolean;
+  /**
+   * Wie weit ein Tastendruck schiebt – ein Bild weit.
+   *
+   * Feste hundert Millisekunden wären bei 60 Bildern je Sekunde sechs Bilder
+   * auf einmal; bildgenau zu schneiden ginge damit gar nicht.
+   */
+  schrittMs?: number;
   onBereich: (vonMs: number, bisMs: number) => void;
+  onAktiv?: (nummer: number) => void;
 }) {
   const bahn = useRef<HTMLDivElement | null>(null);
   const zieht = useRef<'von' | 'bis' | null>(null);
+
+  const stueck = stuecke[aktiv] ?? { vonMs: 0, bisMs: dauerMs };
+  /* Mindestens ein Bild lang – ein Stück ohne Länge liefert trotzdem eines. */
+  const mindest = Math.max(1, Math.round(schrittMs));
 
   const zeitAus = (klientX: number): number => {
     const kasten = bahn.current?.getBoundingClientRect();
@@ -42,12 +68,14 @@ export function Streifen({
 
   const schieben = (klientX: number) => {
     const zeit = zeitAus(klientX);
-    if (zieht.current === 'von') onBereich(Math.min(zeit, bisMs - 100), bisMs);
-    else if (zieht.current === 'bis') onBereich(vonMs, Math.max(zeit, vonMs + 100));
+    if (zieht.current === 'von') onBereich(Math.min(zeit, stueck.bisMs - mindest), stueck.bisMs);
+    else if (zieht.current === 'bis')
+      onBereich(stueck.vonMs, Math.max(zeit, stueck.vonMs + mindest));
   };
 
-  const anteilVon = dauerMs > 0 ? vonMs / dauerMs : 0;
-  const anteilBis = dauerMs > 0 ? bisMs / dauerMs : 1;
+  const anteil = (ms: number) => (dauerMs > 0 ? Math.min(1, Math.max(0, ms / dauerMs)) : 0);
+  const anteilVon = anteil(stueck.vonMs);
+  const anteilBis = anteil(stueck.bisMs);
 
   return (
     <div
@@ -66,8 +94,40 @@ export function Streifen({
       {bilder.map((bild) => (
         <img key={bild.zeitMs} src={bild.bild} alt="" aria-hidden="true" />
       ))}
-      <div className="vg-schatten" style={{ left: 0, width: `${anteilVon * 100}%` }} />
-      <div className="vg-schatten" style={{ left: `${anteilBis * 100}%`, right: 0 }} />
+
+      {/* Alles, was in keinem Stück liegt, wird abgedunkelt – nicht
+          ausgeblendet: Man muss sehen, was man gerade NICHT nimmt, um den
+          Griff dorthin zu ziehen. */}
+      {luecken(stuecke, dauerMs).map((luecke) => (
+        <div
+          key={`${luecke.vonMs}-${luecke.bisMs}`}
+          className="vg-schatten"
+          style={{
+            left: `${anteil(luecke.vonMs) * 100}%`,
+            width: `${(anteil(luecke.bisMs) - anteil(luecke.vonMs)) * 100}%`,
+          }}
+        />
+      ))}
+
+      {stuecke.length > 1 &&
+        stuecke.map((eintrag, nummer) => (
+          <button
+            key={`${nummer}-${eintrag.vonMs}`}
+            type="button"
+            className={`vg-stueck${nummer === aktiv ? ' ist-aktiv' : ''}`}
+            style={{
+              left: `${anteil(eintrag.vonMs) * 100}%`,
+              width: `${Math.max(0, anteil(eintrag.bisMs) - anteil(eintrag.vonMs)) * 100}%`,
+            }}
+            disabled={gesperrt}
+            aria-label={`Stück ${nummer + 1} auswählen`}
+            aria-pressed={nummer === aktiv}
+            onPointerDown={() => onAktiv?.(nummer)}
+          >
+            <span aria-hidden="true">{nummer + 1}</span>
+          </button>
+        ))}
+
       {(['von', 'bis'] as const).map((welcher) => (
         <button
           key={welcher}
@@ -89,14 +149,20 @@ export function Streifen({
           onKeyDown={(ereignis) => {
             // Mit der Tastatur bedienbar: Ein Griff, den man nur ziehen kann,
             // ist für jeden ohne Maus oder Finger gar kein Griff.
-            const schritt = ereignis.shiftKey ? 1000 : 100;
+            const schritt = ereignis.shiftKey ? mindest * 10 : mindest;
             if (ereignis.key === 'ArrowLeft' || ereignis.key === 'ArrowRight') {
               ereignis.preventDefault();
               const richtung = ereignis.key === 'ArrowLeft' ? -schritt : schritt;
               if (welcher === 'von') {
-                onBereich(Math.max(0, Math.min(vonMs + richtung, bisMs - 100)), bisMs);
+                onBereich(
+                  Math.max(0, Math.min(stueck.vonMs + richtung, stueck.bisMs - mindest)),
+                  stueck.bisMs,
+                );
               } else {
-                onBereich(vonMs, Math.min(dauerMs, Math.max(bisMs + richtung, vonMs + 100)));
+                onBereich(
+                  stueck.vonMs,
+                  Math.min(dauerMs, Math.max(stueck.bisMs + richtung, stueck.vonMs + mindest)),
+                );
               }
             }
           }}
@@ -104,4 +170,32 @@ export function Streifen({
       ))}
     </div>
   );
+}
+
+/**
+ * Was der Streifen abdunkelt: alles, was in keinem Stück liegt.
+ *
+ * Steht als eigene Funktion da, weil sie mehr ist als eine Subtraktion –
+ * Stücke dürfen sich überlappen (denselben Ausschnitt zweimal zu zeigen ist
+ * eine erlaubte Absicht) und stehen nicht zwingend in zeitlicher Reihenfolge,
+ * denn die Reihenfolge im FILM ist eine andere Frage als die Lage im Video.
+ */
+export function luecken(stuecke: readonly Stueck[], dauerMs: number): Stueck[] {
+  if (dauerMs <= 0) return [];
+  const belegt = stuecke
+    .map((stueck) => ({
+      vonMs: Math.max(0, Math.min(dauerMs, stueck.vonMs)),
+      bisMs: Math.max(0, Math.min(dauerMs, Math.max(stueck.vonMs, stueck.bisMs))),
+    }))
+    .filter((stueck) => stueck.bisMs > stueck.vonMs)
+    .sort((a, b) => a.vonMs - b.vonMs);
+
+  const raus: Stueck[] = [];
+  let stand = 0;
+  for (const stueck of belegt) {
+    if (stueck.vonMs > stand) raus.push({ vonMs: stand, bisMs: stueck.vonMs });
+    stand = Math.max(stand, stueck.bisMs);
+  }
+  if (stand < dauerMs) raus.push({ vonMs: stand, bisMs: dauerMs });
+  return raus;
 }

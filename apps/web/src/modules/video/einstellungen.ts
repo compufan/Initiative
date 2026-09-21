@@ -116,6 +116,58 @@ export const GUETE_VORGABE: VideoGuete = 'schnell';
 export const MAX_BILDER = 150;
 
 /**
+ * Die Obergrenze für einen FILM, an dem nichts vom Bildinhalt hängt.
+ *
+ * Dort wird nicht gesammelt: `videoBauen` liest, zeichnet und kodiert Bild
+ * für Bild und wirft jedes gleich wieder weg (siehe `stroemend`). Der
+ * Speicher ist damit kein Argument mehr, und `maxBilderFuer` gilt für diesen
+ * Fall nicht.
+ *
+ * Was bleibt, ist die Wartezeit, und die ist gemessen: 75 ms Lesen plus
+ * rund 15 ms Zeichnen und Kodieren je Bild. Sechshundert Bilder sind also
+ * knapp eine Minute Warten – bei 60 Bildern je Sekunde zehn Sekunden Film,
+ * bei 25 Bildern vierundzwanzig, bei 10 eine volle Minute.
+ *
+ * Höher zu gehen wäre kein Gewinn: Zwei Minuten vor einem Balken zu sitzen
+ * hält niemand aus, und wer einen längeren Film will, schneidet ihn ohnehin.
+ */
+export const MAX_BILDER_FILM = 600;
+
+/*
+ * Was ein Bild im FILM kostet – gemessen, nicht geschätzt.
+ *
+ * Die Zahlen stehen ausführlich begründet in `videoBauen.ts`: 75 ms, um ein
+ * Bild aus dem Video zu holen; rund 15 ms zum Zeichnen und Kodieren, und
+ * zwar UNABHÄNGIG von der Fläche, weil `zeichneAusgabe` auf der
+ * Grafikeinheit rechnet; 2000 ms je Modellauf; 10 ms je geschobener Maske.
+ */
+const FILM_LESEN_MS = 75;
+const FILM_RECHNEN_MS = 15;
+const FILM_LAUF_MS = 2000;
+const FILM_SCHIEBEN_MS = 10;
+
+/**
+ * Wie lange ein Film voraussichtlich braucht.
+ *
+ * Eigene Funktion neben `dauerSchaetzenMs`, weil dort ein GIF gerechnet wird:
+ * Dessen Schreibkosten wachsen mit der Fläche (LZW auf dem Prozessor), die
+ * des Films nicht (Kodierer auf der Grafikeinheit). Eine gemeinsame Formel
+ * müsste eine der beiden Messungen verleugnen.
+ */
+export function filmDauerSchaetzenMs(
+  bilder: number,
+  mitMasken: boolean,
+  schluesselAbstand: number,
+): number {
+  let summe = bilder * (FILM_LESEN_MS + FILM_RECHNEN_MS);
+  if (mitMasken) {
+    const laeufe = Math.ceil(bilder / Math.max(1, schluesselAbstand));
+    summe += laeufe * FILM_LAUF_MS + (bilder - laeufe) * FILM_SCHIEBEN_MS;
+  }
+  return Math.round(summe);
+}
+
+/**
  * Wie viele Bildpunkte gleichzeitig im Speicher liegen dürfen.
  *
  * Neunzig Millionen Punkte sind als RGBA rund 360 MB – und das ist kein

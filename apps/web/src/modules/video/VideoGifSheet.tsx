@@ -357,7 +357,7 @@ export function VideoGifSheet({
       setLauf({ anteil: 0, abschnitt: 'lesen', text: 'Bilder holen …' });
       await wachePruefen(true);
       try {
-        const ende = bisJetzt === undefined ? bisMs : vonMs + bisJetzt * plan.dauerJeBildMs;
+        const ende = bisJetzt === undefined ? bisMs : vonMs + bisJetzt * plan.schrittMs;
         const fertig = await gifAusVideo({
           datei: video,
           vonMs,
@@ -407,7 +407,7 @@ export function VideoGifSheet({
       info,
       lauf,
       masseBild,
-      plan.dauerJeBildMs,
+      plan.schrittMs,
       tipps,
       video,
       vonMs,
@@ -513,8 +513,8 @@ export function VideoGifSheet({
             <Streifen
               bilder={streifen}
               dauerMs={dauerMs}
-              vonMs={vonMs}
-              bisMs={bisMs}
+              stuecke={[{ vonMs, bisMs }]}
+              aktiv={0}
               gesperrt={lauf !== null}
               onBereich={(von, bis) => {
                 setVonMs(von);

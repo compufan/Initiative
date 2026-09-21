@@ -68,6 +68,49 @@
 }
 
 /*
+ * Ein Stück im Streifen.
+ *
+ * Nur sichtbar, sobald es mehr als eines gibt – bei einem Stück sagen die
+ * beiden Griffe und der Schatten schon alles, und ein zusätzlicher Rahmen
+ * darum wäre Lärm. Die Fläche ist anklickbar, damit ein Tipp das Stück
+ * auswählt, und liegt UNTER den Griffen (die kommen später im Baum), sonst
+ * finge sie deren Druck ab.
+ */
+.vg-stueck {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+  cursor: pointer;
+}
+
+.vg-stueck > span {
+  margin: 2px;
+  padding: 1px 5px;
+  border-radius: var(--radius-full);
+  background: rgba(4, 8, 20, 0.7);
+}
+
+.vg-stueck.ist-aktiv {
+  border-color: var(--accent);
+}
+
+.vg-stueck.ist-aktiv > span {
+  background: var(--accent);
+  color: #fff;
+}
+
+/*
  * Der Griff ist 28 Punkte breit, obwohl der Strich darin zwei ist.
  *
  * Eine Fingerkuppe trifft keine zwei Punkte. Die Fläche ist durchsichtig, der
