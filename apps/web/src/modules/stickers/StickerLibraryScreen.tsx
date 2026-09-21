@@ -7,8 +7,12 @@ import { api } from '../../lib/api.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 import { herunterladen } from '../../lib/herunterladen.js';
+import { uploadBlob } from '../../lib/upload.js';
 import { errorMessage, stickerBytes, stickerFileName, stickerSrc } from './helpers.js';
 import { StickerStudio } from './StickerStudio.js';
+import { TonWaehlen } from '../media/TonWaehlen.js';
+import type { TonErgebnis } from '../media/TonWerkstatt.js';
+import { formatClock, timestampName } from '../media/helpers.js';
 
 type Tab = 'mine' | 'discover';
 
@@ -104,10 +108,22 @@ export function StickerLibraryScreen() {
    * Knopfdruck zu laden und danach zu teilen verbraucht sie unterwegs.
    */
   const [stickerDaten, setStickerDaten] = useState<Blob | null>(null);
+  /**
+   * Ob im Sticker-Blatt gerade ein Ton ausgesucht wird.
+   *
+   * Der Ton laesst sich seit jeher beim Anlegen anhaengen, und der Server
+   * kennt auch beide Wege zum Nachruesten (`PUT`/`DELETE .../ton`). Gerufen
+   * hat sie bisher niemand: Wer den Ton beim Speichern uebersehen hatte,
+   * musste den Sticker loeschen und neu bauen.
+   */
+  const [tonOffen, setTonOffen] = useState(false);
 
   const offenerSticker = stickerAction?.sticker.url;
   useEffect(() => {
     setStickerDaten(null);
+    // Ein anderer Sticker ist ein anderer Ton: Bliebe die Auswahl offen,
+    // landete die naechste Aufnahme am falschen Bild.
+    setTonOffen(false);
     if (!offenerSticker) return undefined;
     let weg = false;
     stickerBytes(offenerSticker)
@@ -265,6 +281,50 @@ export function StickerLibraryScreen() {
       replacePack(await api.stickers.updatePack(pack.id, { coverStickerId: sticker.id }));
       toast('Cover gesetzt', 'success');
     }, 'Cover konnte nicht gesetzt werden');
+  }
+
+  /*
+   * Ton nachruesten – erst hochladen, dann anhaengen.
+   *
+   * Dieselbe Reihenfolge wie beim Anlegen in `SavePackSheet`: Bricht der
+   * Upload ab, liegt ein Anhang ohne Sticker herum, und das ist der harmlose
+   * Fall. Andersherum stuende am Sticker ein Ton, der nie ankam.
+   */
+  function tonSetzen(pack: StickerPackDto, sticker: StickerDto, ergebnis: TonErgebnis) {
+    setTonOffen(false);
+    void run(async () => {
+      const anhang = await uploadBlob({
+        kind: 'audio',
+        mime: ergebnis.mime,
+        fileName: timestampName('stickerton', ergebnis.mime),
+        blob: ergebnis.blob,
+        durationMs: ergebnis.dauerMs,
+      });
+      const neu = await api.stickers.setzeTon(pack.id, sticker.id, {
+        attachmentId: anhang.id,
+        dauerMs: ergebnis.dauerMs,
+      });
+      replacePack(neu);
+      // Das offene Blatt haelt eine Kopie des Stickers. Ohne diese Zeile
+      // stuende dort weiter „Ton hinzufuegen“, obwohl gerade einer dran ist.
+      setStickerAction({
+        pack: neu,
+        sticker: neu.stickers.find((eintrag) => eintrag.id === sticker.id) ?? sticker,
+      });
+      toast('Ton gespeichert', 'success');
+    }, 'Der Ton konnte nicht gespeichert werden');
+  }
+
+  function tonEntfernen(pack: StickerPackDto, sticker: StickerDto) {
+    void run(async () => {
+      const neu = await api.stickers.entferneTon(pack.id, sticker.id);
+      replacePack(neu);
+      setStickerAction({
+        pack: neu,
+        sticker: neu.stickers.find((eintrag) => eintrag.id === sticker.id) ?? sticker,
+      });
+      toast('Ton entfernt', 'info');
+    }, 'Der Ton konnte nicht entfernt werden');
   }
 
   function deleteSticker(pack: StickerPackDto, sticker: StickerDto) {
@@ -509,6 +569,51 @@ export function StickerLibraryScreen() {
           </button>
           {stickerAction.pack.ownerId === myId && (
             <>
+              {/* Der Ton steht vor Cover und Loeschen, weil er das einzige
+                  hier ist, das den Sticker selbst veraendert – die beiden
+                  anderen ordnen nur das Paket. */}
+              {tonOffen ? (
+                <TonWaehlen
+                  maxSekunden={Math.round(LIMITS.stickerTonMaxMs / 1000)}
+                  onAbbruch={() => setTonOffen(false)}
+                  onFertig={(ergebnis) =>
+                    tonSetzen(stickerAction.pack, stickerAction.sticker, ergebnis)
+                  }
+                />
+              ) : stickerAction.sticker.tonUrl ? (
+                <div className="row row-between">
+                  <span className="muted">
+                    🔊 {formatClock(stickerAction.sticker.tonDauerMs ?? 0)}
+                  </span>
+                  <div className="row" style={{ gap: 'var(--space-2)' }}>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      disabled={busy}
+                      onClick={() => setTonOffen(true)}
+                    >
+                      Ton ändern
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      disabled={busy}
+                      onClick={() => tonEntfernen(stickerAction.pack, stickerAction.sticker)}
+                    >
+                      Ton entfernen
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-block"
+                  disabled={busy}
+                  onClick={() => setTonOffen(true)}
+                >
+                  🔊 Ton hinzufügen
+                </button>
+              )}
               <button
                 type="button"
                 className="btn btn-block"

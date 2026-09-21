@@ -1462,3 +1462,142 @@ test('ein bewegter Sticker übersteht das Hin und Her: schreiben, lesen, wieder 
    */
   expect(ergebnis.gelesen.map((g) => Math.round(g.dauerMs))).toEqual([80, 120, 200]);
 });
+
+test('der Ton steht im Speicherblatt sichtbar, auch bei vielen Paketen', async ({ browser }) => {
+  /*
+   * Der Anwender meldete: „Hierauf habe ich noch kein Zugriff bei der Sticker
+   * Erstellung: Sticker mit Ton — aufnehmen oder hochladen, zuschneiden,
+   * Stille automatisch weg, neun Klangprofile, fünf Regler."
+   *
+   * Verdrahtet war das alles. Der Knopf dazu stand nur UNTER der Paketliste,
+   * und die wächst mit der Zahl der eigenen Pakete: Ab etwa sechs Paketen
+   * sass er ausserhalb des sichtbaren Teils des Blattes. Wer nicht ahnte,
+   * dass es ihn gibt, rollte auch nicht dorthin.
+   *
+   * Deshalb legt der Test erst acht Pakete an – bei einem frischen Konto
+   * hätte die Liste genau eine Zeile, und dann wäre alles sichtbar, egal in
+   * welcher Reihenfolge es steht. Gemessen wird in EINEM Durchgang im
+   * Browser: `boundingBox()` rollt sein Ziel in den Blick, und zwei solche
+   * Aufrufe nacheinander vergleichen zwei verschiedene Rollstände.
+   */
+  const alice = credentials('tonauf');
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto('/');
+  await page.getByRole('button', { name: /Noch kein Konto/ }).click();
+  await page.getByLabel('Benutzername').fill(alice.username);
+  await page.getByLabel('Anzeigename').fill(alice.displayName);
+  await page.getByLabel('Passwort', { exact: true }).fill(alice.password);
+  await page.getByRole('button', { name: 'Konto erstellen' }).click();
+  await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
+
+  const angelegt = await page.evaluate(async () => {
+    const roh = localStorage.getItem('initiative.tokens');
+    if (!roh) return 0;
+    const { accessToken } = JSON.parse(roh) as { accessToken: string };
+    let zahl = 0;
+    for (let i = 1; i <= 8; i += 1) {
+      const antwort = await fetch('/api/v1/stickers/packs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ name: `Paket ${i}`, isPublic: false }),
+      });
+      if (antwort.ok) zahl += 1;
+    }
+    return zahl;
+  });
+  expect(angelegt, 'die Vorbereitung hat keine Pakete angelegt').toBe(8);
+
+  await page.goto('/sticker');
+  await page
+    .getByRole('button', { name: /Sticker erstellen/ })
+    .first()
+    .click();
+  await page.getByRole('button', { name: 'Emoji-Sticker 😀' }).click();
+  await expect(page.locator('.stk-canvas')).toBeVisible();
+  await page.getByRole('button', { name: 'Weiter' }).click();
+
+  const blatt = page.locator('.sheet').last();
+  await expect(blatt.getByRole('heading', { name: 'Sticker speichern' })).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(blatt.getByText('Paket 8')).toBeVisible();
+
+  const mass = await blatt.evaluate((el) => {
+    const koerper = el.querySelector('.sheet-body') as HTMLElement;
+    const knoepfe = Array.from(koerper.querySelectorAll('button'));
+    const ton = knoepfe.find((knopf) => (knopf.textContent ?? '').includes('Ton hinzufügen'));
+    const liste = koerper.querySelector('.stk-radio-list') as HTMLElement | null;
+    if (!ton || !liste) return null;
+    return {
+      gerollt: koerper.scrollTop,
+      tonOben: ton.getBoundingClientRect().top - koerper.getBoundingClientRect().top,
+      tonUnten: ton.getBoundingClientRect().bottom - koerper.getBoundingClientRect().top,
+      listeOben: liste.getBoundingClientRect().top - koerper.getBoundingClientRect().top,
+      sichtbar: koerper.clientHeight,
+    };
+  });
+
+  expect(mass, 'Tonknopf oder Paketliste fehlen im Blatt').not.toBeNull();
+  expect(mass!.gerollt, 'das Blatt war schon gerollt – dann misst der Test nichts').toBe(0);
+  expect(
+    mass!.tonOben,
+    `Ton bei ${Math.round(mass!.tonOben)}, Paketliste bei ${Math.round(mass!.listeOben)} – der Ton gehört darüber`,
+  ).toBeLessThan(mass!.listeOben);
+  expect(
+    mass!.tonUnten,
+    `der Tonknopf endet bei ${Math.round(mass!.tonUnten)}, sichtbar sind ${mass!.sichtbar}`,
+  ).toBeLessThanOrEqual(mass!.sichtbar);
+
+  // Dahinter hängt die ganze Werkstatt: aufnehmen oder eine Datei nehmen.
+  await blatt.getByRole('button', { name: /Ton hinzufügen/ }).click();
+  await expect(blatt.getByRole('button', { name: /Aufnehmen/ })).toBeVisible();
+  await expect(blatt.getByRole('button', { name: /Datei/ })).toBeVisible();
+
+  await context.close();
+});
+
+test('ein gespeicherter Sticker laesst sich nachtraeglich vertonen', async ({ browser }) => {
+  /*
+   * `api.stickers.setzeTon` und `entferneTon` gab es seit der Migration 0022,
+   * und der Server beantwortete beide Wege – gerufen hat sie in der ganzen
+   * App niemand. Wer den Ton beim Speichern übersah, musste den Sticker
+   * löschen und von vorn anfangen.
+   */
+  const alice = credentials('nachton');
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto('/');
+  await page.getByRole('button', { name: /Noch kein Konto/ }).click();
+  await page.getByLabel('Benutzername').fill(alice.username);
+  await page.getByLabel('Anzeigename').fill(alice.displayName);
+  await page.getByLabel('Passwort', { exact: true }).fill(alice.password);
+  await page.getByRole('button', { name: 'Konto erstellen' }).click();
+  await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
+
+  await page.goto('/sticker');
+  await page
+    .getByRole('button', { name: /Sticker erstellen/ })
+    .first()
+    .click();
+  await page.getByRole('button', { name: 'Emoji-Sticker 😀' }).click();
+  await expect(page.locator('.stk-canvas')).toBeVisible();
+  await page.getByRole('button', { name: 'Weiter' }).click();
+
+  const blatt = page.locator('.sheet').last();
+  await expect(blatt.getByRole('heading', { name: 'Sticker speichern' })).toBeVisible({
+    timeout: 15_000,
+  });
+  await blatt.getByPlaceholder('z. B. Familie').fill('Nachvertont');
+  await blatt.getByRole('button', { name: 'Speichern', exact: true }).click();
+
+  await expect(page.locator('.stk-studio')).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.getByText('Nachvertont').first()).toBeVisible({ timeout: 15_000 });
+
+  await page.getByRole('button', { name: 'Sticker öffnen' }).first().click();
+  const aktionen = page.locator('.sheet').last();
+  await expect(aktionen.getByRole('heading', { name: 'Sticker' })).toBeVisible();
+  await expect(aktionen.getByRole('button', { name: /Ton hinzufügen/ })).toBeVisible();
+
+  await context.close();
+});

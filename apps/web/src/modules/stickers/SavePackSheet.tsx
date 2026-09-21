@@ -175,67 +175,20 @@ export function SavePackSheet({ blob, mime, onClose, onSaved, vorgabePaket }: Sa
         )}
       </div>
 
-      {loading ? (
-        <Spinner label="Pakete werden geladen …" />
-      ) : (
-        <div className="stk-radio-list">
-          {packs.map((pack) => {
-            const full = pack.stickerCount >= LIMITS.stickersPerPackMax;
-            return (
-              <button
-                key={pack.id}
-                type="button"
-                className={`stk-radio ${target === pack.id ? 'is-active' : ''}`}
-                onClick={() => setTarget(pack.id)}
-                disabled={full}
-              >
-                <span className="stk-radio-dot" aria-hidden="true" />
-                <span className="stk-radio-text">
-                  <strong className="truncate">{pack.name}</strong>
-                  <span className="muted">
-                    {full
-                      ? 'Paket ist voll'
-                      : `${pack.stickerCount} von ${LIMITS.stickersPerPackMax} Stickern`}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
-
-          <button
-            type="button"
-            className={`stk-radio ${target === 'new' ? 'is-active' : ''}`}
-            onClick={() => setTarget('new')}
-          >
-            <span className="stk-radio-dot" aria-hidden="true" />
-            <span className="stk-radio-text">
-              <strong>Neues Paket</strong>
-              <span className="muted">Legt ein eigenes Paket an</span>
-            </span>
-          </button>
-        </div>
-      )}
-
-      {target === 'new' && (
-        <div className="field">
-          <label htmlFor="stk-new-pack">Name des Pakets</label>
-          <input
-            id="stk-new-pack"
-            className="input"
-            value={name}
-            maxLength={LIMITS.stickerPackNameMax}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="z. B. Familie"
-          />
-        </div>
-      )}
-
       {/*
-          Ton – optional, und zwar sichtbar optional.
+          Ton und Emoji stehen VOR der Paketliste – und das ist kein
+          Geschmack, sondern eine gemessene Sache.
 
-          Der Abschnitt steht VOR dem Emoji, weil er der grössere Eingriff
-          ist, und er zeigt im Ruhezustand genau einen Knopf. Ein Sticker
-          ohne Ton bleibt damit so einfach zu speichern wie vorher.
+          Beides beschreibt den Sticker selbst; das Paket ist die Frage, wohin
+          er abgelegt wird. Vorher stand der Ton unter der Liste, und die ist
+          so lang wie die Zahl der eigenen Pakete: Ab sechs Paketen sass der
+          Knopf „Ton hinzufügen“ unterhalb der Blattkante. Wer nicht ahnte,
+          dass es ihn gibt, rollte auch nicht dorthin – genau das war die
+          Beschwerde („Hierauf habe ich noch kein Zugriff bei der Sticker
+          Erstellung“).
+
+          Im Ruhezustand ist es trotzdem genau ein Knopf. Ein Sticker ohne Ton
+          bleibt so einfach zu speichern wie vorher.
       */}
       <div className="field">
         <label>Ton (optional)</label>
@@ -297,6 +250,61 @@ export function SavePackSheet({ blob, mime, onClose, onSaved, vorgabePaket }: Sa
           ))}
         </div>
       </div>
+
+      {loading ? (
+        <Spinner label="Pakete werden geladen …" />
+      ) : (
+        <div className="stk-radio-list">
+          {packs.map((pack) => {
+            const full = pack.stickerCount >= LIMITS.stickersPerPackMax;
+            return (
+              <button
+                key={pack.id}
+                type="button"
+                className={`stk-radio ${target === pack.id ? 'is-active' : ''}`}
+                onClick={() => setTarget(pack.id)}
+                disabled={full}
+              >
+                <span className="stk-radio-dot" aria-hidden="true" />
+                <span className="stk-radio-text">
+                  <strong className="truncate">{pack.name}</strong>
+                  <span className="muted">
+                    {full
+                      ? 'Paket ist voll'
+                      : `${pack.stickerCount} von ${LIMITS.stickersPerPackMax} Stickern`}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+
+          <button
+            type="button"
+            className={`stk-radio ${target === 'new' ? 'is-active' : ''}`}
+            onClick={() => setTarget('new')}
+          >
+            <span className="stk-radio-dot" aria-hidden="true" />
+            <span className="stk-radio-text">
+              <strong>Neues Paket</strong>
+              <span className="muted">Legt ein eigenes Paket an</span>
+            </span>
+          </button>
+        </div>
+      )}
+
+      {target === 'new' && (
+        <div className="field">
+          <label htmlFor="stk-new-pack">Name des Pakets</label>
+          <input
+            id="stk-new-pack"
+            className="input"
+            value={name}
+            maxLength={LIMITS.stickerPackNameMax}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="z. B. Familie"
+          />
+        </div>
+      )}
 
       <button
         type="button"
