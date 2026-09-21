@@ -88,6 +88,38 @@ test.describe('PWA', () => {
     expect(parsed.display).toBe('standalone');
     expect(parsed.icons.length).toBeGreaterThanOrEqual(2);
 
+    /*
+     * Jede Symboladresse muss wirklich etwas liefern – und eine
+     * Inhaltskennung tragen.
+     *
+     * Der Anwender meldete zweimal „Das Logo ist immer noch nicht das App
+     * Icon". Gebaut waren die Symbole richtig; sie lagen nur unter einer
+     * FESTEN Adresse, und darum sah weder der Cache noch Chrome einen Grund,
+     * etwas zu erneuern. Die Kennung im Namen ist die Abhilfe, und ein
+     * Manifest, das auf eine Adresse ohne Datei zeigt, wäre die schlimmere
+     * Fassung desselben Fehlers: dann hätte der Anwender gar kein Symbol.
+     *
+     * Geprüft wird beides zusammen, weil beides zusammen kaputtgeht: Wer die
+     * Kennung ändert und eine der Stellen vergisst, bekommt genau hier ein
+     * 404.
+     */
+    const adressen: string[] = parsed.icons.map((eintrag: { src: string }) => eintrag.src);
+    const seite = await page.content();
+    for (const treffer of seite.matchAll(/["']\/icons\/[^"']+["']/g)) {
+      adressen.push(treffer[0].slice(1, -1));
+    }
+    expect(
+      adressen.length,
+      'im Manifest und im Dokument steht kein einziges Symbol',
+    ).toBeGreaterThan(4);
+    for (const adresse of new Set(adressen)) {
+      const antwort = await page.request.get(adresse);
+      expect(antwort.ok(), `${adresse} liefert ${antwort.status()}`).toBeTruthy();
+      expect(adresse, `${adresse} trägt keine Inhaltskennung`).toMatch(
+        /^\/icons\/[a-z0-9-]+\.[0-9a-f]{8}\.png$/,
+      );
+    }
+
     // Der Service Worker wird beim Start registriert (im Dev-Modus als Modul).
     const registered = await page.evaluate(async () => {
       if (!('serviceWorker' in navigator)) return false;

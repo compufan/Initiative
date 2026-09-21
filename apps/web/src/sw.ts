@@ -272,8 +272,8 @@ self.addEventListener('push', (event) => {
 
       await self.registration.showNotification(payload.title, {
         body: payload.body,
-        icon: payload.icon ?? '/icons/icon-192.png',
-        badge: payload.badge ?? '/icons/badge-96.png',
+        icon: payload.icon ?? __SYMBOL_ICON__,
+        badge: payload.badge ?? __SYMBOL_BADGE__,
         tag: payload.tag ?? payload.kind,
         renotify: Boolean(payload.tag),
         data: { url: payload.url ?? '/' },

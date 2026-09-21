@@ -27,7 +27,8 @@
 // eine Sicherheitslücke hat. Der Decoder hier ist dreissig Zeilen, der
 // Encoder vierzig, und beide können genau das, was gebraucht wird.
 import { deflateSync, inflateSync } from 'node:zlib';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -550,16 +551,68 @@ export const HINTERGRUND = fileURLToPath(
   new URL('../public/marke/hintergrund.png', import.meta.url),
 );
 
+/**
+ * Wohin die Zuordnung „Rolle → fertige Adresse" geschrieben wird.
+ *
+ * NICHT nach `public/`. Alles dort wird ausgeliefert, und `/icons/*` bekommt
+ * nach dem Umbau ein Jahr Unveränderlichkeit – ausgerechnet die einzige
+ * Datei mit festem Namen hätte dann genau den Fehler, den die Kennungen
+ * abschaffen sollen, nur eine Ebene höher. Sie ist eine reine Baueingabe und
+ * gehört neben den Bausatz.
+ */
+export const KARTE = fileURLToPath(new URL('../.marke/symbole.json', import.meta.url));
+
+/**
+ * Die Inhaltskennung im Dateinamen.
+ *
+ * # Warum es sie gibt
+ *
+ * Weil ein neues Logo sonst neue Bytes unter derselben Adresse ergibt, und
+ * daran scheitert der Austausch: Caddy gibt `/icons/*` mit Cache-Dauer
+ * heraus, Chrome prüft das Manifest höchstens einmal am Tag und holt die
+ * WebAPK nur dann neu, wenn sich darin etwas GEÄNDERT hat. Da alle Adressen
+ * gleich bleiben, sieht Chrome keinen Grund. Mit einer Kennung im Namen ist
+ * die Änderung im Manifest unübersehbar.
+ *
+ * Gehasht wird die fertige PNG-Datei und nicht die Quelle samt Parametern:
+ * So wechselt die Adresse GENAU dann, wenn sich der Inhalt wirklich
+ * unterscheidet – auch bei einer Änderung an der Zeichenroutine, und eben
+ * nicht bei einer umformulierten Zeile darüber.
+ */
+export function kennung(bytes) {
+  return createHash('sha256').update(bytes).digest('hex').slice(0, 8);
+}
+
+/** `icon-192.png` + `3f2a1b9c` → `icon-192.3f2a1b9c.png`. */
+export function mitKennung(datei, marke) {
+  const punkt = datei.lastIndexOf('.');
+  return `${datei.slice(0, punkt)}.${marke}${datei.slice(punkt)}`;
+}
+
 export function alleSymbole() {
   const logo = pngLesen(readFileSync(QUELLE));
+  /*
+   * Das Verzeichnis wird geleert, nicht ergänzt.
+   *
+   * Jede Kennung legt eine neue Datei an; ohne diese Zeile sammelte sich
+   * nach dem dritten Logowechsel ein Friedhof alter Symbole an, die niemand
+   * mehr anfordert und die trotzdem mit ausgeliefert werden.
+   */
+  rmSync(ZIELE, { recursive: true, force: true });
   mkdirSync(ZIELE, { recursive: true });
   const geschrieben = [];
+  const karte = {};
   for (const { datei, kante, kachel, anteil, nurUmriss, alpha } of AUFTRAEGE) {
     const punkte = symbol(logo, { kante, kachel, anteil, nurUmriss });
     const png = pngSchreiben(punkte, kante, { alpha });
-    writeFileSync(join(ZIELE, datei), png);
-    geschrieben.push([datei, `${kante}x${kante}`, png.length]);
+    const name = mitKennung(datei, kennung(png));
+    writeFileSync(join(ZIELE, name), png);
+    karte[datei] = `/icons/${name}`;
+    geschrieben.push([name, `${kante}x${kante}`, png.length]);
   }
+
+  mkdirSync(fileURLToPath(new URL('../.marke/', import.meta.url)), { recursive: true });
+  writeFileSync(KARTE, `${JSON.stringify(karte, null, 2)}\n`);
 
   const hintergrund = pngSchreiben(hintergrundfassung(logo), logo.breite, {
     hoehe: logo.hoehe,

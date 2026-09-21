@@ -39,13 +39,40 @@ export function InstallCard() {
       </h2>
 
       {standalone ? (
-        <div className="prf-note is-ok">
-          <strong>✅ Initiative ist installiert</strong>
+        <>
+          <div className="prf-note is-ok">
+            <strong>✅ Initiative ist installiert</strong>
+            <p className="prf-hint">
+              Du hast die App vom Startbildschirm geöffnet – Vollbild, eigenes Symbol und
+              Benachrichtigungen sind damit möglich.
+            </p>
+          </div>
+          {/*
+              Was das Betriebssystem selbst entscheidet, steht hier als Satz
+              und nicht als Versprechen.
+
+              Das Symbol trägt seit dem Umbau eine Inhaltskennung im Namen
+              (`scripts/marke.mjs`), damit ein neues Logo überhaupt eine
+              Änderung im Manifest ergibt – vorher blieben die Adressen
+              gleich, und Chrome sah keinen Grund, die WebAPK zu erneuern.
+              Erzwingen lässt sich der Austausch trotzdem nicht: Android holt
+              die neue Kachel erst, wenn alle Fenster der App zu sind, das
+              Gerät am Strom hängt und im WLAN ist, und iOS erneuert das
+              Symbol einer abgelegten Web-App überhaupt nie.
+
+              Ein Anwender, der das weiss, wartet drei Tage. Einer, der es
+              nicht weiss, meldet zum dritten Mal denselben Fehler – und
+              genau das ist passiert.
+          */}
           <p className="prf-hint">
-            Du hast die App vom Startbildschirm geöffnet – Vollbild, eigenes Symbol und
-            Benachrichtigungen sind damit möglich.
+            Das Symbol auf dem Startbildschirm erneuert nicht die App, sondern das Gerät. Auf
+            Android kann das bis zu einem Tag dauern und passiert erst, wenn die App geschlossen
+            ist, das Gerät lädt und im WLAN hängt; wer nicht warten will, öffnet in Chrome{' '}
+            <code>about:webapks</code> und tippt dort auf „Update“. Auf dem iPhone wird das Symbol
+            einer abgelegten Web-App nie erneuert – dort hilft nur: vom Home-Bildschirm entfernen
+            und neu ablegen.
           </p>
-        </div>
+        </>
       ) : (
         <>
           <p className="prf-hint">

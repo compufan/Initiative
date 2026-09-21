@@ -16,8 +16,11 @@
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 
+# Unveraenderlich, seit die Symbole eine Inhaltskennung im Namen tragen -
+# siehe apps/web/Caddyfile fuer die Begruendung. Die drei Regeln (hier,
+# Caddyfile, vercel.json) muessen im Gleichschritt bleiben.
 /icons/*
-  Cache-Control: public, max-age=604800
+  Cache-Control: public, max-age=31536000, immutable
 
 /models/*
   Cache-Control: public, max-age=31536000, immutable

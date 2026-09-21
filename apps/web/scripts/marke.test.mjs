@@ -1,10 +1,13 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 
 import {
   AUFTRAEGE,
   HEBUNG,
+  KARTE,
+  kennung,
+  mitKennung,
   NEUTRAL_ANTEIL,
   QUELLE,
   SATT_AB,
@@ -465,5 +468,65 @@ describe('pngSchreiben mit eigener Höhe', () => {
     expect(gelesen.breite).toBe(breite);
     expect(gelesen.hoehe).toBe(hoehe);
     expect([...gelesen.punkte]).toEqual([...punkte]);
+  });
+});
+
+describe('Die Inhaltskennung der Symbole', () => {
+  it('haengt die Kennung VOR die Endung', () => {
+    // Sonst hiesse die Datei `icon-192.png.3f2a1b9c`, und kein Server der
+    // Welt schickt sie noch als Bild aus.
+    expect(mitKennung('icon-192.png', '3f2a1b9c')).toBe('icon-192.3f2a1b9c.png');
+  });
+
+  it('gibt für denselben Inhalt dieselbe Kennung', () => {
+    // Sonst wechselte die Adresse bei jedem Bau, und jede Installation
+    // holte die Symbole neu – der Cache wäre dann nicht nutzlos, sondern
+    // schädlich.
+    const bytes = Buffer.from('dasselbe');
+    expect(kennung(bytes)).toBe(kennung(Buffer.from('dasselbe')));
+  });
+
+  it('gibt für anderen Inhalt eine andere Kennung', () => {
+    /*
+     * Der ganze Zweck. Ein neues Logo ergab bisher neue Bytes unter
+     * DERSELBEN Adresse – und damit sah weder der Cache noch Chrome einen
+     * Grund, irgendetwas zu erneuern.
+     */
+    expect(kennung(Buffer.from('a'))).not.toBe(kennung(Buffer.from('b')));
+  });
+
+  it('ist kurz genug für einen Dateinamen und lang genug gegen Zufall', () => {
+    const marke = kennung(Buffer.from('irgendwas'));
+    expect(marke).toHaveLength(8);
+    expect(marke).toMatch(/^[0-9a-f]{8}$/);
+  });
+
+  it('lässt die Auftragsliste bei den schlichten Namen', () => {
+    /*
+     * `datei` bleibt der LOGISCHE Name; die Kennung kommt erst beim
+     * Schreiben dazu. Sonst stünde in der Liste ein Name, den niemand mehr
+     * lesen kann – und die Prüfung auf das iOS-Symbol weiter oben fände ihn
+     * nicht mehr.
+     */
+    for (const auftrag of AUFTRAEGE) {
+      expect(auftrag.datei, auftrag.datei).toMatch(/^[a-z0-9-]+\.png$/);
+    }
+  });
+
+  it('führt für jeden Auftrag eine Adresse, wenn der Bausatz gelaufen ist', () => {
+    /*
+     * Diese Prüfung überspringt sich selbst, wenn die Karte fehlt – sie
+     * entsteht erst beim Aufruf des Bausatzes, und `vitest` läuft ohne Bau.
+     * Was sie prüft, ist die Zusage, auf die sich `vite.config.ts` verlässt:
+     * Jede Rolle hat eine Adresse, und jede Adresse trägt eine Kennung.
+     */
+    if (!existsSync(KARTE)) return;
+    const karte = JSON.parse(readFileSync(KARTE, 'utf8'));
+    for (const auftrag of AUFTRAEGE) {
+      const adresse = karte[auftrag.datei];
+      expect(adresse, `${auftrag.datei} fehlt in der Karte`).toBeTruthy();
+      expect(adresse).toMatch(/^\/icons\/[a-z0-9-]+\.[0-9a-f]{8}\.png$/);
+    }
+    expect(Object.keys(karte)).toHaveLength(AUFTRAEGE.length);
   });
 });

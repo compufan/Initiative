@@ -45,8 +45,14 @@
 		@assets path /assets/*
 		header @assets Cache-Control "public, max-age=31536000, immutable"
 
+		# Ein Jahr und unveraenderlich, wie die Bausteine daneben - und zwar
+		# erst, seit die Symbole eine Inhaltskennung im Namen tragen
+		# (apps/web/scripts/marke.mjs). Vorher war die Adresse fest, und eine
+		# lange Cache-Dauer hiesse dort: ein neues Logo kommt eine Woche lang
+		# nicht an. Jetzt gibt es die alte Adresse nach einem Wechsel gar
+		# nicht mehr, also darf die alte Antwort beliebig lange liegen.
 		@icons path /icons/*
-		header @icons Cache-Control "public, max-age=604800"
+		header @icons Cache-Control "public, max-age=31536000, immutable"
 
 		# Die Freistell-Bausteine sind zusammen über 120 MB und ändern sich
 		# nie. Der Service Worker legt sie ohnehin dauerhaft ab – aber beim

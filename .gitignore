@@ -42,3 +42,5 @@ apps/web/public/icons/
 # Aus derselben Quelle und aus demselben Grund: die vorgerechnete Fassung des
 # Logos fuer den App-Hintergrund (farbige Punkte lauter, unbunte leiser).
 apps/web/public/marke/hintergrund.png
+# Die Zuordnung "Rolle -> Adresse mit Inhaltskennung", die vite.config.ts liest.
+apps/web/.marke/
