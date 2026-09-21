@@ -1601,3 +1601,120 @@ test('ein gespeicherter Sticker laesst sich nachtraeglich vertonen', async ({ br
 
   await context.close();
 });
+
+test('aus einem Video wird ein Sticker – ohne die App zu verlassen', async ({ browser }) => {
+  /*
+   * Der Anwender bat: „Lass mich Gifs wie Sticker in Sticker Paketen
+   * speichern und sie wie einen Sticker in Chats posten."
+   *
+   * Ein GIF als DATEI ging schon – `bewegt.ts` erkennt es, und das Studio
+   * lässt es bewegt. Ein VIDEO war dagegen keine Bildquelle: Wer zwei
+   * Sekunden Film zum Sticker machen wollte, musste die App verlassen und
+   * anderswo ein GIF bauen. Das GIF-Blatt konnte das längst, es stand nur
+   * nirgends im Sticker-Weg.
+   *
+   * Der Test geht die ganze Kette: Video wählen, Ausschnitt, GIF bauen,
+   * damit weiterarbeiten, speichern.
+   */
+  test.setTimeout(180_000);
+
+  const alice = credentials('vidstk');
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto('/');
+  await page.getByRole('button', { name: /Noch kein Konto/ }).click();
+  await page.getByLabel('Benutzername').fill(alice.username);
+  await page.getByLabel('Anzeigename').fill(alice.displayName);
+  await page.getByLabel('Passwort', { exact: true }).fill(alice.password);
+  await page.getByRole('button', { name: 'Konto erstellen' }).click();
+  await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
+
+  /*
+   * Das Video entsteht im Browser – eine mitgelieferte Datei müsste in einem
+   * Format vorliegen, das Chromium ohne Lizenz dekodiert, und H.264 gehört
+   * nicht dazu. Dieselbe Überlegung wie in `videoGif.spec.ts`.
+   */
+  const bytes = await page.evaluate(async () => {
+    const leinwand = document.createElement('canvas');
+    leinwand.width = 160;
+    leinwand.height = 120;
+    const ctx = leinwand.getContext('2d')!;
+    const malen = (farbe: string, ms: number) =>
+      new Promise<void>((auf) => {
+        const ende = performance.now() + ms;
+        const schritt = () => {
+          ctx.fillStyle = farbe;
+          ctx.fillRect(0, 0, leinwand.width, leinwand.height);
+          if (performance.now() < ende) requestAnimationFrame(schritt);
+          else auf();
+        };
+        schritt();
+      });
+    ctx.fillStyle = '#c00';
+    ctx.fillRect(0, 0, leinwand.width, leinwand.height);
+    const strom = leinwand.captureStream(25);
+    const art = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find((typ) =>
+      MediaRecorder.isTypeSupported(typ),
+    );
+    const rekorder = new MediaRecorder(strom, art ? { mimeType: art } : undefined);
+    const teile: Blob[] = [];
+    rekorder.ondataavailable = (ereignis) => {
+      if (ereignis.data.size > 0) teile.push(ereignis.data);
+    };
+    const gestoppt = new Promise<void>((auf) => {
+      rekorder.onstop = () => auf();
+    });
+    rekorder.start();
+    await malen('#c00', 500);
+    await malen('#0c0', 500);
+    rekorder.stop();
+    await gestoppt;
+    strom.getTracks().forEach((spur) => spur.stop());
+    const roh = await new Blob(teile, { type: art || 'video/webm' }).arrayBuffer();
+    return Array.from(new Uint8Array(roh));
+  });
+
+  await page.goto('/sticker');
+  await page
+    .getByRole('button', { name: /Sticker erstellen/ })
+    .first()
+    .click();
+
+  // Der Knopf, der vorher fehlte.
+  const videoFeld = page.locator('.stk-file[accept="video/*"]').first();
+  await expect(videoFeld).toHaveCount(1);
+  await videoFeld.setInputFiles({
+    name: 'probe.webm',
+    mimeType: 'video/webm',
+    buffer: Buffer.from(bytes),
+  });
+
+  const gifBlatt = page.locator('.sheet').last();
+  await expect(gifBlatt.getByRole('heading', { name: 'GIF aus Video' })).toBeVisible({
+    timeout: 30_000,
+  });
+  await gifBlatt.getByRole('button', { name: 'GIF bauen' }).click();
+
+  // Und der Rückweg ins Studio – nicht „speichern“, denn gespeichert wird
+  // erst danach.
+  const weiter = page.getByRole('button', { name: /Damit weiterarbeiten/ });
+  await expect(weiter).toBeVisible({ timeout: 90_000 });
+  await weiter.click();
+
+  // Das Studio weiss jetzt, dass seine Quelle sich bewegt.
+  await expect(page.locator('.stk-canvas')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/bewegt/i).first()).toBeVisible({ timeout: 15_000 });
+
+  await page.getByRole('button', { name: 'Weiter' }).click();
+  const speichern = page.locator('.sheet').last();
+  await expect(speichern.getByRole('heading', { name: 'Sticker speichern' })).toBeVisible({
+    timeout: 30_000,
+  });
+  await speichern.getByPlaceholder('z. B. Familie').fill('Aus Video');
+  await speichern.getByRole('button', { name: 'Speichern', exact: true }).click();
+
+  await expect(page.locator('.stk-studio')).toHaveCount(0, { timeout: 60_000 });
+  await expect(page.getByText('Aus Video').first()).toBeVisible({ timeout: 30_000 });
+
+  await context.close();
+});

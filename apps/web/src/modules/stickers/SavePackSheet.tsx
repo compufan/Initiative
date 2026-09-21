@@ -28,10 +28,29 @@ interface SavePackSheetProps {
    * an – und beim zehnten hat man neunmal dieselbe Kachel angetippt.
    */
   vorgabePaket?: string | null;
+  /**
+   * Die echten Masse des Bildes – für alles, was nicht quadratisch ist.
+   *
+   * Ohne Angabe 512 × 512, denn das liefert das Sticker-Studio immer. Ein GIF
+   * aus einem Video ist dagegen 16:9, und die Zahlen landen unverändert in
+   * `stickers.width` und `stickers.height` (`apps/api/src/modules/stickers.rs`).
+   * Dort 512 × 512 einzutragen wäre schlicht gelogen – und jede Ansicht, die
+   * daraus das Seitenverhältnis rechnet, zöge den Sticker in die Breite.
+   */
+  breite?: number;
+  hoehe?: number;
 }
 
 /** Second half of the studio: pick a pack (or create one) and upload. */
-export function SavePackSheet({ blob, mime, onClose, onSaved, vorgabePaket }: SavePackSheetProps) {
+export function SavePackSheet({
+  blob,
+  mime,
+  onClose,
+  onSaved,
+  vorgabePaket,
+  breite = STICKER_SIZE,
+  hoehe = STICKER_SIZE,
+}: SavePackSheetProps) {
   const myId = useMyId();
   const [packs, setPacks] = useState<StickerPackDto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -115,6 +134,27 @@ export function SavePackSheet({ blob, mime, onClose, onSaved, vorgabePaket }: Sa
   async function save() {
     if (!canSave) return;
     setSaving(true);
+    /*
+     * Die Grenze VOR dem Hochladen prüfen, nicht danach.
+     *
+     * Der Server lehnt ohnehin ab (`allowed_mime` und `max_upload_bytes` in
+     * `apps/api/src/modules/media.rs`), aber erst nachdem die Datei über die
+     * Leitung ging. Bei einem GIF aus einem Video sind das schnell mehrere
+     * Megabyte über Mobilfunk – und die Fehlermeldung von dort sagt nicht,
+     * was zu tun wäre.
+     */
+    if (blob.size > LIMITS.maxUploadBytes.sticker) {
+      toast(
+        `Der Sticker ist ${(blob.size / 1_000_000).toFixed(1).replace('.', ',')} MB gross; ` +
+          `erlaubt sind ${Math.round(LIMITS.maxUploadBytes.sticker / 1_000_000)} MB. ` +
+          'Nimm einen kürzeren Ausschnitt, weniger Bilder je Sekunde – oder stell das Motiv frei, ' +
+          'das macht ein GIF gemessen um ein Vielfaches leichter.',
+        'error',
+      );
+      setSaving(false);
+      return;
+    }
+
     try {
       let packId = target;
       if (target === 'new') {
@@ -129,8 +169,8 @@ export function SavePackSheet({ blob, mime, onClose, onSaved, vorgabePaket }: Sa
         mime,
         fileName: stickerFileName(mime),
         blob,
-        width: STICKER_SIZE,
-        height: STICKER_SIZE,
+        width: breite,
+        height: hoehe,
       });
 
       /*

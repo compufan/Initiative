@@ -12,6 +12,7 @@ import { LIMITS, formatBytes, type StickerPackDto } from '@initiative/shared';
 import { toast, useHideNav } from '../../state/ui.js';
 import { clamp, errorMessage, firstEmoji, loadImageFromBlob, supportsWebp } from './helpers.js';
 import { SavePackSheet } from './SavePackSheet.js';
+import { VideoGifSheet } from '../video/VideoGifSheet.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 import { dialogAnmelden } from '../../lib/dialogVerlauf.js';
 import { bildlage } from './bewegt.js';
@@ -278,6 +279,20 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     format: 'gif' | 'webp';
     bilder: number | null;
   } | null>(null);
+
+  /**
+   * Das Video, aus dem gerade ein GIF gewählt wird.
+   *
+   * Der Weg hierher fehlte ganz: Ein bewegtes GIF liess sich als DATEI
+   * einladen und blieb bewegt, aber ein Video war keine Bildquelle – wer
+   * einen Sticker aus zwei Sekunden Film wollte, musste die App verlassen
+   * und mit einem fremden Werkzeug ein GIF bauen.
+   *
+   * Das GIF-Blatt kann das längst, samt Ausschnitt und Freistellen. Es wird
+   * hier nur aufgerufen und gibt sein Ergebnis zurück wie eine Datei aus der
+   * Galerie.
+   */
+  const [videoQuelle, setVideoQuelle] = useState<Blob | null>(null);
 
   const docRef = useRef(doc);
   const sourceRef = useRef(source);
@@ -1163,6 +1178,42 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
       );
     } catch (error) {
       toast(errorMessage(error, 'Das Bild konnte nicht geladen werden'), 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function videoWaehlen(event: ChangeEvent<HTMLInputElement>) {
+    const datei = event.target.files?.[0];
+    // Leeren, damit DIESELBE Datei ein zweites Mal gewählt werden kann – ohne
+    // das feuert `change` beim zweiten Anlauf nicht.
+    event.target.value = '';
+    if (datei) setVideoQuelle(datei);
+  }
+
+  /**
+   * Ein GIF aus dem Video-Blatt als Quelle nehmen.
+   *
+   * Von hier an ist es dieselbe Sache wie ein GIF aus der Galerie: `bildlage`
+   * liest am Dateikopf, dass es sich bewegt, und `bewegteQuelle` sorgt dafür,
+   * dass es das am Ende auch bleibt. Gelandet wird im Reiter „Quelle“ und
+   * nicht in „Bewegen“, weil dort der Satz steht, was mit bewegten Bildern
+   * geht und was nicht.
+   */
+  async function videoGifUebernehmen(blob: Blob) {
+    setVideoQuelle(null);
+    setBusy(true);
+    try {
+      const datei = new File([blob], 'aus-video.gif', { type: 'image/gif' });
+      const image = await loadImageFromBlob(datei);
+      const lage = await bildlage(datei);
+      quelleWechseln(
+        { kind: 'image', image, width: image.naturalWidth, height: image.naturalHeight },
+        'source',
+        lage.bewegt ? { datei, format: lage.format, bilder: lage.bilder } : null,
+      );
+    } catch (error) {
+      toast(errorMessage(error, 'Das GIF konnte nicht übernommen werden'), 'error');
     } finally {
       setBusy(false);
     }
@@ -2122,6 +2173,15 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                     onChange={(event) => void pickImage(event)}
                   />
                 </label>
+                <label className="btn btn-sm">
+                  🎞️ Video
+                  <input
+                    type="file"
+                    accept="video/*"
+                    className="stk-file"
+                    onChange={(event) => videoWaehlen(event)}
+                  />
+                </label>
                 <button
                   type="button"
                   className="btn btn-sm"
@@ -2177,6 +2237,15 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                   multiple
                   className="stk-file"
                   onChange={(event) => void pickImage(event)}
+                />
+              </label>
+              <label className="btn btn-sm">
+                🎞️ Video
+                <input
+                  type="file"
+                  accept="video/*"
+                  className="stk-file"
+                  onChange={(event) => videoWaehlen(event)}
                 />
               </label>
               <button
@@ -3326,6 +3395,15 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
         <div className="stk-busy" role="status" aria-live="polite">
           <span className="spinner" aria-hidden="true" />
         </div>
+      )}
+
+      {videoQuelle && (
+        <VideoGifSheet
+          video={videoQuelle}
+          alsSticker={(blob) => void videoGifUebernehmen(blob)}
+          stickerText="😀 Damit weiterarbeiten"
+          onClose={() => setVideoQuelle(null)}
+        />
       )}
 
       {result && (

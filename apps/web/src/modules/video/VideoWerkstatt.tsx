@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import type { AttachmentDto } from '@initiative/shared';
+import { LIMITS, type AttachmentDto } from '@initiative/shared';
 
 import { toast } from '../../state/ui.js';
 import { errorMessage, mediaBytes } from '../media/helpers.js';
 import { VideoEditorSheet } from './VideoEditorSheet.js';
 import { VideoGifSheet } from './VideoGifSheet.js';
+import { SavePackSheet } from '../stickers/SavePackSheet.js';
 
 /**
  * Der Weg aus einem Video heraus – so, wie `FotoWerkstatt` ihn für ein Foto
@@ -50,6 +51,19 @@ export function VideoWerkstatt({
   const [daten, setDaten] = useState<{ id: string; blob: Blob } | null>(null);
   const [offen, setOffen] = useState<'aus' | 'gif' | 'bearbeiten'>('aus');
   const [laedt, setLaedt] = useState(false);
+  /**
+   * Das fertige GIF, das gerade in ein Sticker-Paket wandert.
+   *
+   * Steht HIER und nicht im GIF-Blatt, damit jener Weg die Sticker-Welt nicht
+   * mitschleppt. Das Blatt darüber bleibt offen: Wer die Paketwahl abbricht,
+   * kommt zum Ergebnis zurück und muss das GIF nicht noch einmal rechnen –
+   * das sind je nach Güte Minuten.
+   */
+  const [stickerGif, setStickerGif] = useState<{
+    blob: Blob;
+    breite: number;
+    hoehe: number;
+  } | null>(null);
 
   async function oeffnen(ziel: 'gif' | 'bearbeiten') {
     if (laedt) return;
@@ -70,6 +84,7 @@ export function VideoWerkstatt({
 
   function schliessen() {
     setOffen('aus');
+    setStickerGif(null);
     onOffen?.(false);
   }
 
@@ -101,8 +116,25 @@ export function VideoWerkstatt({
           video={daten.blob}
           name={video.fileName ?? undefined}
           onFertig={ablegen}
+          alsSticker={(blob, breite, hoehe) => setStickerGif({ blob, breite, hoehe })}
+          stickerGrenzeBytes={LIMITS.maxUploadBytes.sticker}
           zielName={zielName}
           onClose={schliessen}
+        />
+      )}
+      {stickerGif && (
+        <SavePackSheet
+          blob={stickerGif.blob}
+          mime="image/gif"
+          breite={stickerGif.breite}
+          hoehe={stickerGif.hoehe}
+          onClose={() => setStickerGif(null)}
+          onSaved={() => {
+            // Gespeichert heisst fertig: Das GIF liegt im Paket, und das
+            // Ergebnisblatt hätte nichts mehr anzubieten.
+            setStickerGif(null);
+            schliessen();
+          }}
         />
       )}
       {offen === 'bearbeiten' && daten && (

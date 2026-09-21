@@ -79,6 +79,9 @@ export function VideoGifSheet({
   video,
   name,
   onFertig,
+  alsSticker,
+  stickerText = '😀 Als Sticker speichern',
+  stickerGrenzeBytes,
   onClose,
   zielName = 'In den Chat',
 }: {
@@ -86,6 +89,38 @@ export function VideoGifSheet({
   name?: string;
   /** Wohin das fertige GIF gehört. Fehlt es, bleibt nur das Speichern aufs Gerät. */
   onFertig?: (blob: Blob, dateiname: string) => Promise<void> | void;
+  /**
+   * Der zweite Ausgang: in ein Sticker-Paket.
+   *
+   * Die Masse gehen mit, und das ist kein Beiwerk. Ein Sticker aus dem Studio
+   * ist immer 512 × 512; ein GIF aus einem Video hat das Seitenverhältnis des
+   * Films. Die Zahlen landen unverändert in `stickers.width`/`stickers.height`
+   * – wer dort 512 × 512 einträgt, lügt die Datenbank an.
+   *
+   * Als Rückweg und nicht als eingebautes Blatt, weil dieses Modul sonst die
+   * halbe Sticker-Welt mitzöge: Sitzung, Paketliste, Hochladen. Der Aufrufer
+   * hat die ohnehin.
+   */
+  alsSticker?: (blob: Blob, breite: number, hoehe: number) => void;
+  /**
+   * Was auf dem Sticker-Knopf steht.
+   *
+   * Das GIF geht je nach Aufrufer woandershin: aus der Werkstatt heraus
+   * gleich in ein Paket, aus dem Studio heraus zurück auf die Leinwand. „Als
+   * Sticker speichern“ wäre im zweiten Fall schlicht falsch – gespeichert
+   * wird dort erst später.
+   */
+  stickerText?: string;
+  /**
+   * Ab wann der Sticker-Weg gar nicht erst angeboten wird.
+   *
+   * Nur für Aufrufer, bei denen das GIF UNVERÄNDERT hochgeladen wird – dort
+   * zieht `maxUploadBytes.sticker` die Grenze, und ein Knopf, der sicher in
+   * eine Absage führt, ist schlimmer als keiner. Wer das GIF danach noch
+   * einmal anfasst (das Studio rechnet es auf 512 × 512 herunter), lässt das
+   * hier weg: Dort wäre die Grenze eine Erfindung.
+   */
+  stickerGrenzeBytes?: number;
   onClose: () => void;
   zielName?: string;
 }) {
@@ -120,7 +155,13 @@ export function VideoGifSheet({
   const [anfangsbild, setAnfangsbild] = useState<string | null>(null);
   const [grafikTauglich, setGrafikTauglich] = useState(false);
   const [lauf, setLauf] = useState<Lauf | null>(null);
-  const [ergebnis, setErgebnis] = useState<{ url: string; blob: Blob; text: string } | null>(null);
+  const [ergebnis, setErgebnis] = useState<{
+    url: string;
+    blob: Blob;
+    text: string;
+    breite: number;
+    hoehe: number;
+  } | null>(null);
   const [nachAbbruch, setNachAbbruch] = useState<number | null>(null);
   const [speichert, setSpeichert] = useState(false);
   const steuerung = useRef<AbortController | null>(null);
@@ -340,6 +381,8 @@ export function VideoGifSheet({
         setErgebnis({
           url: URL.createObjectURL(fertig.blob),
           blob: fertig.blob,
+          breite: fertig.breite,
+          hoehe: fertig.hoehe,
           text: `${fertig.bilder} Bilder · ${fertig.breite} × ${fertig.hoehe} · ${groesseText(
             fertig.blob.size,
           )}`,
@@ -424,6 +467,32 @@ export function VideoGifSheet({
               </button>
             )}
           </div>
+          {alsSticker &&
+            (stickerGrenzeBytes === undefined || ergebnis.blob.size <= stickerGrenzeBytes ? (
+              <button
+                type="button"
+                className="btn btn-block"
+                onClick={() => alsSticker(ergebnis.blob, ergebnis.breite, ergebnis.hoehe)}
+              >
+                {stickerText}
+              </button>
+            ) : (
+              /*
+               * Statt eines Knopfes, der in eine Fehlermeldung führt.
+               *
+               * Ein Sticker darf höchstens so viel wiegen wie
+               * `maxUploadBytes.sticker`; ein GIF in voller Breite reisst das
+               * bei ein paar Sekunden mühelos. Den Weg trotzdem anzubieten
+               * hiesse, jemanden durch Paketwahl und Emoji zu schicken, damit
+               * der Server am Ende ablehnt – und die Meldung von dort sagt
+               * nicht, was zu ändern wäre.
+               */
+              <p className="vg-hinweis">
+                Für ein Sticker-Paket ist dieses GIF zu schwer – {groesseText(ergebnis.blob.size)}{' '}
+                gegen erlaubte {groesseText(stickerGrenzeBytes)}. Nimm einen kürzeren Ausschnitt
+                oder weniger Bilder je Sekunde; am meisten bringt „Freistellen“.
+              </p>
+            ))}
           <a className="btn btn-ghost" href={ergebnis.url} download={dateiname}>
             Auf das Gerät speichern
           </a>
