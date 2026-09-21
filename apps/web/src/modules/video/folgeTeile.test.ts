@@ -32,7 +32,8 @@ vi.mock('../stickers/engines/index.js', async () => {
       const maske = new Uint8Array(anfrage.image.width * anfrage.image.height);
       // Ein Block links – etwas, das sich schieben lässt.
       for (let y = 0; y < anfrage.image.height; y += 1) {
-        for (let x = 0; x < 8; x += 1) maske[y * anfrage.image.width + x] = 255;
+        for (let x = 0; x < anfrage.image.width / 4; x += 1)
+          maske[y * anfrage.image.width + x] = 255;
       }
       return maske;
     },
@@ -86,12 +87,20 @@ vi.mock('../bild/tiefeNetz.js', () => ({
   },
 }));
 
-function bild(nummer: number, kante = 32): GelesenesBild {
+/*
+ * 128 und nicht mehr 32.
+ *
+ * `lageSchaetzen` verlangt mindestens fünf sichere Blöcke, sonst gibt es die
+ * Ruhe zurück – aus vier Punkten lässt sich zwar rechnen, aber nichts
+ * glauben. Bei 32 Punkten Kante und Blöcken von 24 gibt es nur vier Blöcke
+ * überhaupt, und die Prüfung prüfte damit nur noch, dass nichts geschieht.
+ */
+function bild(nummer: number, kante = 128): GelesenesBild {
   const daten = new Uint8ClampedArray(kante * kante * 4);
   for (let y = 0; y < kante; y += 1) {
     for (let x = 0; x < kante; x += 1) {
       const at = (y * kante + x) * 4;
-      const wert = 128 + 90 * Math.sin((x - nummer * 2) / 3.7) * Math.cos(y / 5.3);
+      const wert = 128 + 90 * Math.sin((x - nummer * 3) / 3.7) * Math.cos(y / 5.3);
       daten[at] = wert;
       daten[at + 1] = wert;
       daten[at + 2] = wert;
@@ -113,9 +122,9 @@ const NETZ: InhaltsTeil = {
     umkehren: false,
     art: 'netz',
     netz: 'person',
-    breite: 32,
-    hoehe: 32,
-    alpha: new Uint8Array(1024),
+    breite: 128,
+    hoehe: 128,
+    alpha: new Uint8Array(128 * 128),
     marke: 1,
   },
 };
@@ -128,9 +137,9 @@ const TIEFE: InhaltsTeil = {
     modus: 'dazu',
     umkehren: false,
     art: 'tiefe',
-    breite: 32,
-    hoehe: 32,
-    karte: new Uint8Array(1024),
+    breite: 128,
+    hoehe: 128,
+    karte: new Uint8Array(128 * 128),
     fokus: 1,
     spanne: 0.5,
     marke: 1,
@@ -148,9 +157,9 @@ const TIPP: InhaltsTeil = {
     mitNetz: false,
     punkte: [{ x: 4, y: 4 }],
     toleranz: 32,
-    breite: 32,
-    hoehe: 32,
-    alpha: new Uint8Array(1024),
+    breite: 128,
+    hoehe: 128,
+    alpha: new Uint8Array(128 * 128),
     marke: 1,
   },
 };
@@ -169,7 +178,7 @@ describe('folgeTeile', () => {
   it('gibt für jedes Bild eine Zuordnung zurück', async () => {
     const { jeBild } = await folgeTeile(folge(6), { teile: [NETZ], schluesselAbstand: 4 });
     expect(jeBild).toHaveLength(6);
-    for (const karte of jeBild) expect(karte.get('n1')?.werte.length).toBe(1024);
+    for (const karte of jeBild) expect(karte.get('n1')?.werte.length).toBe(128 * 128);
   });
 
   it('lässt die Modelle nur auf den Schlüsselbildern laufen', async () => {
@@ -238,7 +247,7 @@ describe('folgeTeile', () => {
       teile: [TIEFE],
       schluesselAbstand: 1,
     });
-    const erwartet = Array.from({ length: 1024 }, (_, i) => (i * 7) % 256);
+    const erwartet = Array.from({ length: 128 * 128 }, (_, i) => (i * 7) % 256);
     expect(Array.from(jeBild[2].get('d1')?.werte ?? [])).toEqual(erwartet);
   });
 
@@ -254,7 +263,7 @@ describe('folgeTeile', () => {
       let sx = 0;
       let summe = 0;
       for (let i = 0; i < werte.length; i += 1) {
-        sx += (i % 32) * werte[i];
+        sx += (i % 128) * werte[i];
         summe += werte[i];
       }
       return summe === 0 ? -1 : sx / summe;

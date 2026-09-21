@@ -4,12 +4,17 @@ import { tippNetzVerfuegbar, tippTeilRechnen, vereinigen } from '../bild/tippMas
 import type { GueteInfo } from './einstellungen.js';
 import type { Fortschritt, GelesenesBild } from './bilderLesen.js';
 import {
-  BLOCK,
+  LAGE_RUHE,
   bewegung,
   graustufen,
-  maskeSchieben,
+  lageSchaetzen,
+  lageVerketten,
+  maskePasst,
+  maskeZiehen,
+  punktVor,
   zeitlichGlaetten,
   type Grau,
+  type Lage,
 } from './verfolgung.js';
 
 /**
@@ -29,14 +34,15 @@ import {
  * ist der Speicher; zwei Modelle nebeneinander sind der sicherste Weg, auf
  * einem Telefon den Arbeiter zu verlieren.
  *
- * # Warum die Bewegung zwischen NACHBARN gemessen wird und nicht zum
- * Schlüsselbild
+ * # Warum die Bewegung zwischen NACHBARN gemessen, aber AUFSUMMIERT angewandt
+ * wird
  *
- * Weil die Blocksuche nur acht Graupunkte weit schaut. Über drei Bilder
- * hinweg ist eine gehende Person weiter als das – die Suche fände dann nichts
- * und bliebe auf null stehen. Von Nachbar zu Nachbar bleibt sie im Bereich,
- * und die Versätze summieren sich von selbst, weil jeweils die schon
- * geschobene Maske weitergeschoben wird.
+ * Gemessen zwischen Nachbarn, weil die Blocksuche nur eine begrenzte Weite
+ * hat: Über drei Bilder hinweg ist eine gehende Person weiter als das, und
+ * die Suche fände nichts. Angewandt wird die Summe, weil jede Abtastung die
+ * Maske aufweicht – nachgemessen verliert eine Maske, die 33-mal nacheinander
+ * gezogen wird, 58 % ihrer Fläche. Gezogen wird deshalb immer aus dem letzten
+ * NETZLAUF, mit einer einzigen Abbildung.
  */
 
 export interface FolgeAuftrag {
@@ -92,48 +98,15 @@ export interface FolgeErgebnis {
   readonly masken: readonly Uint8Array[];
   /** Wie viele Bilder wirklich durch das Netz gegangen sind. */
   readonly netzlaeufe: number;
-}
-
-/**
- * Die Tipps mitschieben.
- *
- * Ein Punkt wandert mit dem, was unter ihm liegt – also entgegen dem
- * Rückwärtsvektor. `maskeSchieben` fragt „wo stand das?", hier wird gefragt
- * „wo ist das hin?", und das ist dasselbe mit umgekehrtem Vorzeichen.
- */
-function tippsSchieben(
-  tipps: readonly { x: number; y: number; dazu: boolean }[],
-  vorher: Grau,
-  nachher: Grau,
-  breite: number,
-  hoehe: number,
-): { x: number; y: number; dazu: boolean }[] {
-  const feld = bewegung(vorher, nachher, breite);
-  const skala = breite / feld.grauBreite;
-  return tipps.map((tipp) => {
-    const gx = Math.min(feld.grauBreite - 1, Math.max(0, tipp.x / skala));
-    const gy = Math.min(feld.grauHoehe - 1, Math.max(0, tipp.y / skala));
-    const bs = Math.min(feld.spalten - 1, Math.floor(gx / BLOCK));
-    const bz = Math.min(feld.zeilen - 1, Math.floor(gy / BLOCK));
-    return {
-      x: Math.min(
-        breite - 1,
-        Math.max(0, Math.round(tipp.x - feld.dx[bz * feld.spalten + bs] * skala)),
-      ),
-      y: Math.min(
-        hoehe - 1,
-        Math.max(0, Math.round(tipp.y - feld.dy[bz * feld.spalten + bs] * skala)),
-      ),
-      dazu: tipp.dazu,
-    };
-  });
+  /** Wie oft ein Netzlauf verworfen wurde, weil sein Ergebnis nicht passte. */
+  readonly verworfen: number;
 }
 
 export async function folgeMasken(
   bilder: readonly GelesenesBild[],
   auftrag: FolgeAuftrag,
 ): Promise<FolgeErgebnis> {
-  if (bilder.length === 0) return { masken: [], netzlaeufe: 0 };
+  if (bilder.length === 0) return { masken: [], netzlaeufe: 0, verworfen: 0 };
   if (auftrag.abbruch?.aborted) throw new AbbruchError();
 
   const breite = bilder[0].daten.width;
@@ -161,18 +134,44 @@ export async function folgeMasken(
    */
   const grau: Grau[] = bilder.map((bild) => graustufen(bild.daten));
 
+  /*
+   * Die Lage jedes Bildes gegenüber dem ERSTEN.
+   *
+   * Aufsummiert aus den Nachbarschritten und danach in einem Zug angewandt –
+   * die Begründung steht im Kopf von `verfolgung.ts`: Wer eine Maske Schritt
+   * für Schritt weiterzieht, legt Abtastung auf Abtastung, und sie verliert
+   * gemessen 58 % ihrer Fläche über 33 Schritte.
+   */
+  const faktor = bilder.length > 1 ? breite / grau[0].breite : 1;
+  const lagen: Lage[] = [LAGE_RUHE];
+  for (let i = 1; i < bilder.length; i += 1) {
+    lagen.push(lageVerketten(lagen[i - 1], lageSchaetzen(bewegung(grau[i - 1], grau[i], breite))));
+  }
+
   const masken: Uint8Array[] = [];
-  let tipps = auftrag.tipps ? [...auftrag.tipps] : undefined;
   let netzlaeufe = 0;
+  let verworfen = 0;
+  let letzterNetzlauf = 0;
   const schritte = bilder.length;
 
   for (let i = 0; i < bilder.length; i += 1) {
     // Der Abbruch nimmt mit, was bis hierher fertig ist – siehe `FolgeAbbruch`.
     if (auftrag.abbruch?.aborted) throw new FolgeAbbruch(zeitlichGlaetten(masken));
 
-    if (i > 0 && tipps) {
-      tipps = tippsSchieben(tipps, grau[i - 1], grau[i], breite, hoehe);
-    }
+    /*
+     * Die angetippten Punkte wandern mit – gerechnet aus der Lage gegenüber
+     * dem ERSTEN Bild, nicht von Nachbar zu Nachbar aufsummiert. Beides
+     * beschreibt denselben Weg; über die Lage bleibt der Fehler der eines
+     * einzigen Schrittes statt der Summe aller.
+     */
+    const tipps = auftrag.tipps?.map((tipp) => {
+      const gezogen = punktVor(lagen[i], faktor, tipp.x, tipp.y);
+      return {
+        x: Math.min(breite - 1, Math.max(0, Math.round(gezogen.x))),
+        y: Math.min(hoehe - 1, Math.max(0, Math.round(gezogen.y))),
+        dazu: tipp.dazu,
+      };
+    });
 
     if (netzBei.has(i)) {
       /*
@@ -202,11 +201,36 @@ export async function folgeMasken(
           auftrag.toleranz,
         );
       }
-      masken.push(maske);
+      /*
+       * Gegen das halten, was aus dem vorigen Netzlauf zu erwarten war.
+       *
+       * Am Film eines Anwenders gemessen sprang die Fläche auf jedem vierten
+       * Bild um den Faktor dreizehn – die Maske wanderte nicht weg, sie
+       * platzte auf. Die Begründung steht bei `maskePasst`.
+       */
+      const erwartet =
+        i > 0
+          ? maskeZiehen(
+              masken[letzterNetzlauf],
+              breite,
+              hoehe,
+              lageVerketten(lageKehren(lagen[letzterNetzlauf]), lagen[i]),
+              faktor,
+            )
+          : null;
+      const befund = maskePasst(maske, erwartet);
+      if (!befund.haelt && erwartet) {
+        verworfen += 1;
+        masken.push(erwartet);
+      } else {
+        masken.push(maske);
+      }
       netzlaeufe += 1;
+      letzterNetzlauf = i;
     } else {
-      const feld = bewegung(grau[i - 1], grau[i], breite);
-      masken.push(maskeSchieben(masken[i - 1], breite, hoehe, feld));
+      // Aus dem letzten Netzlauf ziehen, nicht aus dem Vorgänger.
+      const seitDort = lageVerketten(lageKehren(lagen[letzterNetzlauf]), lagen[i]);
+      masken.push(maskeZiehen(masken[letzterNetzlauf], breite, hoehe, seitDort, faktor));
     }
     auftrag.fortschritt?.((i + 1) / schritte, `Freistellen: Bild ${i + 1} von ${schritte}`);
   }
@@ -215,7 +239,7 @@ export async function folgeMasken(
    * Geglättet wird ganz am Ende und nicht unterwegs: Das Fenster reicht auch
    * NACH VORN, und das nächste Bild gibt es unterwegs noch nicht.
    */
-  return { masken: zeitlichGlaetten(masken), netzlaeufe };
+  return { masken: zeitlichGlaetten(masken), netzlaeufe, verworfen };
 }
 
 /**
@@ -264,4 +288,23 @@ async function tippsAnwenden(
     raus = dazu ? vereinigen(raus, teil.alpha) : abziehen(raus, teil.alpha);
   }
   return raus;
+}
+
+/**
+ * Eine Lage umkehren – erst zurück, dann vorwärts.
+ *
+ * Damit wird aus „Bild 0 nach a" und „Bild 0 nach b" die Lage „a nach b".
+ */
+function lageKehren(lage: Lage): Lage {
+  const nenner = lage.s * lage.s + lage.w * lage.w;
+  if (nenner === 0) return LAGE_RUHE;
+  const s = lage.s / nenner;
+  const w = -lage.w / nenner;
+  return {
+    s,
+    w,
+    tx: -(s * lage.tx - w * lage.ty),
+    ty: -(w * lage.tx + s * lage.ty),
+    sicher: lage.sicher,
+  };
 }

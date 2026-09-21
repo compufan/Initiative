@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest';
 
-import { BLOCK, bewegung, graustufen, maskeSchieben, zeitlichGlaetten } from './verfolgung.js';
+import {
+  BLOCK,
+  LAGE_RUHE,
+  bewegung,
+  graustufen,
+  lageRuht,
+  lageSchaetzen,
+  lageVerketten,
+  maskePasst,
+  maskeZiehen,
+  punktVor,
+  punktZurueck,
+  zeitlichGlaetten,
+} from './verfolgung.js';
 
 /**
  * Die Bewegungsschätzung.
@@ -40,6 +53,31 @@ function muster(kante: number, vx = 0, vy = 0): ImageData {
     }
   }
   return { data: daten, width: kante, height: kante, colorSpace: 'srgb' } as ImageData;
+}
+
+/** Dasselbe Muster, um `grad` Grad um die Mitte gedreht. */
+function drehen(bild: ImageData, grad: number): ImageData {
+  const { width: b, height: h } = bild;
+  const raus = new Uint8ClampedArray(b * h * 4);
+  const bogen = (grad * Math.PI) / 180;
+  const co = Math.cos(bogen);
+  const si = Math.sin(bogen);
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < b; x += 1) {
+      const px = x - b / 2;
+      const py = y - h / 2;
+      const qx = Math.round(co * px + si * py + b / 2);
+      const qy = Math.round(-si * px + co * py + h / 2);
+      const at = (y * b + x) * 4;
+      raus[at + 3] = 255;
+      if (qx < 0 || qy < 0 || qx >= b || qy >= h) continue;
+      const von = (qy * b + qx) * 4;
+      raus[at] = bild.data[von];
+      raus[at + 1] = bild.data[von + 1];
+      raus[at + 2] = bild.data[von + 2];
+    }
+  }
+  return { data: raus, width: b, height: h, colorSpace: 'srgb' } as ImageData;
 }
 
 describe('graustufen', () => {
@@ -109,16 +147,25 @@ describe('bewegung', () => {
 
     // Am Rand ragt der gesuchte Block aus dem Bild; geprüft wird die Mitte.
     const mitte = Math.floor(feld.zeilen / 2) * feld.spalten + Math.floor(feld.spalten / 2);
-    expect(feld.dx[mitte]).toBe(-5);
-    expect(feld.dy[mitte]).toBe(3);
+    /*
+     * Auf ein Hundertstel genau und nicht auf die ganze Zahl: Seit der
+     * Verfeinerung zwischen den Punkten liefert ein Block auch Bruchteile.
+     * Das ist der Sinn der Sache – eine Drehung bewegt die Blöcke in der
+     * Bildmitte um weniger als einen Punkt, und auf ganze Zahlen gerundet
+     * verschwindet sie.
+     */
+    expect(feld.dx[mitte]).toBeCloseTo(-5, 1);
+    expect(feld.dy[mitte]).toBeCloseTo(3, 1);
   });
 
   it('bleibt bei Stillstand bei null', () => {
     const gleich = graustufen(muster(128));
     const feld = bewegung(gleich, graustufen(muster(128)), 128);
+    // Nicht auf null genau: Die Verfeinerung zwischen den Punkten rechnet mit
+    // Gleitkomma, und ein hundertstel Punkt ist kein Wandern.
     for (let i = 0; i < feld.dx.length; i += 1) {
-      expect(feld.dx[i], `Block ${i}`).toBe(0);
-      expect(feld.dy[i], `Block ${i}`).toBe(0);
+      expect(feld.dx[i], `Block ${i}`).toBeCloseTo(0, 1);
+      expect(feld.dy[i], `Block ${i}`).toBeCloseTo(0, 1);
     }
   });
 
@@ -152,7 +199,149 @@ describe('bewegung', () => {
   });
 });
 
-describe('maskeSchieben', () => {
+describe('lageSchaetzen', () => {
+  it('findet eine reine Verschiebung', () => {
+    /*
+     * Der einfachste Fall, und trotzdem der, an dem die erste Fassung
+     * scheiterte: Sie nahm den Median ÜBER ALLE Blöcke, und weil in einem
+     * echten Bild mehr als die Hälfte der Blöcke auf glatten Flächen liegt,
+     * kam dort null heraus. Hier zählen nur die sicheren.
+     */
+    const lage = lageSchaetzen(
+      bewegung(graustufen(muster(256)), graustufen(muster(256, 6, -4)), 256),
+    );
+    expect(lage.sicher).toBeGreaterThanOrEqual(5);
+    expect(lage.tx).toBeCloseTo(-6, 0);
+    expect(lage.ty).toBeCloseTo(4, 0);
+    // Keine Drehung, kein Massstab.
+    expect(Math.atan2(lage.w, lage.s) * (180 / Math.PI)).toBeCloseTo(0, 0);
+    expect(Math.hypot(lage.s, lage.w)).toBeCloseTo(1, 1);
+  });
+
+  it('gibt bei Stillstand die Ruhe zurück', () => {
+    const gleich = graustufen(muster(128));
+    expect(lageRuht(lageSchaetzen(bewegung(gleich, gleich, 128)))).toBe(true);
+  });
+
+  it('erfindet auf einer glatten Fläche nichts', () => {
+    /*
+     * Der Grund für die Sicherheit je Block. Auf einer einfarbigen Fläche ist
+     * die Abweichung für jeden Versatz gleich; früher hielt ein Aufschlag je
+     * Punkt Bewegung dagegen – und erstickte damit auch die echte Bewegung.
+     * Jetzt entscheidet, ob ein Block überhaupt etwas GEWINNT.
+     */
+    const kante = 128;
+    const daten = new Uint8ClampedArray(kante * kante * 4).fill(200);
+    const flach = { data: daten, width: kante, height: kante, colorSpace: 'srgb' } as ImageData;
+    const feld = bewegung(graustufen(flach), graustufen(flach), kante);
+    expect(lageSchaetzen(feld)).toEqual(LAGE_RUHE);
+  });
+
+  it('meldet, wie viele Blöcke dahinterstehen', () => {
+    // Daran hängt die Ehrlichkeit: Weniger als fünf sichere Blöcke heissen
+    // „nichts gefunden" und nicht „zufällig irgendwohin".
+    const lage = lageSchaetzen(
+      bewegung(graustufen(muster(256)), graustufen(muster(256, 3, 0)), 256),
+    );
+    expect(lage.sicher).toBeGreaterThan(4);
+  });
+
+  it('findet eine DREHUNG – daran scheiterte die reine Verschiebung', () => {
+    /*
+     * Am Film des Anwenders gemessen: Eine Ganzbildsuche über ±40 Punkte fand
+     * in 31 von 33 Übergängen (0, 0) bei null Gewinn, obwohl sich die Szene
+     * deutlich bewegte. Wer ein Telefon in der Hand hält, verkantet es – und
+     * dagegen ist jede Verschiebung machtlos.
+     */
+    const kante = 256;
+    const gedreht = drehen(muster(kante), 4);
+    const lage = lageSchaetzen(bewegung(graustufen(muster(kante)), graustufen(gedreht), kante));
+    expect(lage.sicher).toBeGreaterThanOrEqual(5);
+    const winkel = Math.atan2(lage.w, lage.s) * (180 / Math.PI);
+    /*
+     * Die Rückrichtung: Das neue Bild ist um +4 Grad gedreht, der Weg zurück
+     * also um −4. Gemessen kommen −3,3 heraus, und das ist kein Fehler,
+     * sondern die Auflösung des Verfahrens: Ein Block findet seinen Versatz
+     * nur in GANZEN Graupunkten, und bei 16 Blöcken über 256 Punkte ist ein
+     * Grad Drehung am Rand keine zwei Punkte. Was zählt, ist die Richtung und
+     * die Grössenordnung – und die stimmen; eine reine Verschiebung fände
+     * hier gar nichts.
+     */
+    /*
+     * Geprüft wird die RICHTUNG und die Grössenordnung, nicht der genaue
+     * Wert. Ein Block findet seinen Versatz über eine Parabel zwischen ganzen
+     * Punkten; bei vier Grad auf 256 Punkten bewegen sich die inneren Blöcke
+     * um weniger als einen Punkt, und was dort an Genauigkeit fehlt, zieht
+     * den Mittelwert nach unten. Gemessen kommen rund −1,9 Grad heraus.
+     *
+     * Entscheidend ist: Eine reine Verschiebung fände hier GAR NICHTS – und
+     * genau das war der Zustand, über den sich der Anwender beschwert hat.
+     */
+    expect(winkel).toBeLessThan(-0.8);
+    expect(winkel).toBeGreaterThan(-6);
+  });
+});
+
+describe('lageVerketten', () => {
+  it('summiert zwei Verschiebungen', () => {
+    const a = { s: 1, w: 0, tx: 3, ty: 1, sicher: 9 };
+    const b = { s: 1, w: 0, tx: 2, ty: -4, sicher: 7 };
+    const zusammen = lageVerketten(a, b);
+    expect(zusammen.tx).toBeCloseTo(5, 6);
+    expect(zusammen.ty).toBeCloseTo(-3, 6);
+    // Die Kette ist nur so sicher wie ihr schwächstes Glied.
+    expect(zusammen.sicher).toBe(7);
+  });
+
+  it('lässt die Ruhe neutral', () => {
+    const a = { s: 0.9, w: 0.2, tx: 3, ty: 1, sicher: 9 };
+    expect(lageVerketten(LAGE_RUHE, a)).toEqual(a);
+    expect(lageVerketten(a, LAGE_RUHE)).toEqual(a);
+  });
+
+  it('dreht zweimal um denselben Winkel', () => {
+    const grad = (g: number) => ({
+      s: Math.cos((g * Math.PI) / 180),
+      w: Math.sin((g * Math.PI) / 180),
+      tx: 0,
+      ty: 0,
+      sicher: 9,
+    });
+    const zusammen = lageVerketten(grad(10), grad(10));
+    expect(Math.atan2(zusammen.w, zusammen.s) * (180 / Math.PI)).toBeCloseTo(20, 6);
+  });
+});
+
+describe('punktZurueck und punktVor', () => {
+  it('sind Umkehrungen voneinander', () => {
+    /*
+     * Beide Richtungen werden gebraucht: die Maske wird RÜCKWÄRTS abgetastet,
+     * ein angetippter Punkt und die Enden eines Verlaufs wandern VORWÄRTS
+     * mit. Passen sie nicht zusammen, sitzt eines von beidem spiegelverkehrt.
+     */
+    const lage = { s: 0.97, w: 0.21, tx: 4.5, ty: -2.25, sicher: 12 };
+    for (const [x, y] of [
+      [0, 0],
+      [100, 40],
+      [333, 777],
+    ]) {
+      const hin = punktVor(lage, 3, x, y);
+      const zurueck = punktZurueck(lage, 3, hin.x, hin.y);
+      expect(zurueck.x).toBeCloseTo(x, 4);
+      expect(zurueck.y).toBeCloseTo(y, 4);
+    }
+  });
+
+  it('rechnet den Massstab zwischen Grau und Bild mit', () => {
+    // Die Lage rechnet in Graupunkten. Wer den Faktor vergisst, verschiebt
+    // um ein Achtel der nötigen Strecke – und das sieht aus wie „fast richtig".
+    const lage = { s: 1, w: 0, tx: -2, ty: 0, sicher: 9 };
+    expect(punktZurueck(lage, 4, 100, 0).x).toBeCloseTo(92, 6);
+    expect(punktVor(lage, 4, 92, 0).x).toBeCloseTo(100, 6);
+  });
+});
+
+describe('maskeZiehen', () => {
   /** Eine Maske mit einem weissen Rechteck. */
   function maske(breite: number, hoehe: number, x0: number, y0: number, w: number, h: number) {
     const raus = new Uint8Array(breite * hoehe);
@@ -162,7 +351,6 @@ describe('maskeSchieben', () => {
     return raus;
   }
 
-  /** Der Schwerpunkt der gesetzten Punkte – so wird die Verschiebung messbar. */
   function schwerpunkt(alpha: Uint8Array, breite: number) {
     let sx = 0;
     let sy = 0;
@@ -174,95 +362,137 @@ describe('maskeSchieben', () => {
       sy += Math.floor(i / breite) * wert;
       summe += wert;
     }
-    return { x: sx / summe, y: sy / summe, summe };
+    return { x: sx / summe, y: sy / summe, flaeche: summe / 255 };
   }
 
-  it('schiebt die Maske dorthin, wo sich das Motiv hinbewegt hat', () => {
-    /*
-     * Das Bild wandert um (5, −3), die Maske muss mitwandern. Der Schwerpunkt
-     * ist das ehrliche Mass: Er bewegt sich genau dann mit, wenn die ganze
-     * Fläche mitgeht, nicht nur ein Rand.
-     */
-    const kante = 128;
-    const alt = graustufen(muster(kante));
-    const neu = graustufen(muster(kante, 5, -3));
-    const feld = bewegung(alt, neu, kante);
-
-    const vorher = maske(kante, kante, 40, 40, 48, 48);
-    const nachher = maskeSchieben(vorher, kante, kante, feld);
+  it('zieht die Maske dorthin, wo das Motiv hingewandert ist', () => {
+    const kante = 256;
+    const feld = bewegung(graustufen(muster(kante)), graustufen(muster(kante, 6, -4)), kante);
+    const lage = lageSchaetzen(feld);
+    const vorher = maske(kante, kante, 80, 80, 96, 96);
+    const nachher = maskeZiehen(vorher, kante, kante, lage, feld.faktor);
     const a = schwerpunkt(vorher, kante);
     const b = schwerpunkt(nachher, kante);
-    expect(b.x - a.x).toBeCloseTo(5, 0);
-    expect(b.y - a.y).toBeCloseTo(-3, 0);
+    expect(b.x - a.x).toBeCloseTo(6, 0);
+    expect(b.y - a.y).toBeCloseTo(-4, 0);
   });
 
-  it('lässt die Maske bei Stillstand, wo sie ist', () => {
-    const kante = 64;
-    const stand = graustufen(muster(kante));
-    const feld = bewegung(stand, stand, kante);
-    const vorher = maske(kante, kante, 20, 20, 24, 24);
-    expect(Array.from(maskeSchieben(vorher, kante, kante, feld))).toEqual(Array.from(vorher));
+  it('gibt bei Ruhe DASSELBE Feld zurück', () => {
+    /*
+     * Und zwar wirklich dasselbe, nicht eine gleiche Kopie: Bei einer Kamera,
+     * die steht, soll kein einziger Punkt neu abgetastet werden. Jede
+     * Abtastung weicht die Kante auf.
+     */
+    const voll = new Uint8Array(64 * 64).fill(255);
+    expect(maskeZiehen(voll, 64, 64, LAGE_RUHE, 1)).toBe(voll);
+  });
+
+  it('verliert beim wiederholten Ziehen AUS DEM URBILD keine Fläche', () => {
+    /*
+     * Der Grund für die aufsummierte Lage. Gemessen an einer Maske, die 33-mal
+     * nacheinander mit dem rohen Blockfeld geschoben wurde: 58 % Flächenverlust.
+     * Aus dem Urbild gezogen bleibt sie ganz – hier über dreissig Schritte
+     * geprüft.
+     */
+    const kante = 128;
+    const urbild = maske(kante, kante, 30, 30, 48, 48);
+    const schritt = { s: 1, w: 0, tx: -0.5, ty: 0, sicher: 9 };
+    let kette = LAGE_RUHE;
+    for (let i = 0; i < 30; i += 1) kette = lageVerketten(kette, schritt);
+    const gezogen = maskeZiehen(urbild, kante, kante, kette, 1);
+    const a = schwerpunkt(urbild, kante);
+    const b = schwerpunkt(gezogen, kante);
+    expect(b.x - a.x).toBeCloseTo(15, 0);
+    expect(b.flaeche / a.flaeche).toBeGreaterThan(0.97);
   });
 
   it('zieht am Bildrand keinen Streifen hinter sich her', () => {
-    /*
-     * Was von ausserhalb käme, war nie freigestellt. Den Randwert
-     * fortzuschreiben wäre bequemer und ergäbe bei einem Schwenk einen
-     * Streifen, der über das halbe Bild wächst.
-     */
     const kante = 64;
-    const feld = {
-      spalten: 1,
-      zeilen: 1,
-      dx: Float32Array.from([-8]),
-      dy: Float32Array.from([0]),
-      faktor: 1,
-      grauBreite: kante,
-      grauHoehe: kante,
-    };
     const voll = new Uint8Array(kante * kante).fill(255);
-    const geschoben = maskeSchieben(voll, kante, kante, feld);
-    /*
-     * Der Vektor zeigt zurück: −8 heisst „was hier steht, stand vorher acht
-     * Punkte weiter links". Der Inhalt ist also nach RECHTS gewandert, und am
-     * linken Rand kam nichts nach.
-     */
+    const gezogen = maskeZiehen(voll, kante, kante, { s: 1, w: 0, tx: -8, ty: 0, sicher: 9 }, 1);
     for (let y = 0; y < kante; y += 1) {
-      expect(geschoben[y * kante], `Zeile ${y} links`).toBe(0);
-      expect(geschoben[y * kante + (kante - 1)], `Zeile ${y} rechts`).toBe(255);
+      expect(gezogen[y * kante], `Zeile ${y} links`).toBe(0);
+      expect(gezogen[y * kante + (kante - 1)], `Zeile ${y} rechts`).toBe(255);
     }
   });
 
   it('mischt die Nachbarn, statt den nächsten zu nehmen', () => {
-    /*
-     * Bei einem halben Punkt Versatz muss aus 0 und 255 etwas dazwischen
-     * werden. Der nächste Nachbar machte aus jedem weichen Rand nach drei
-     * Bildern eine Treppe.
-     */
     const kante = 32;
-    const feld = {
-      spalten: 1,
-      zeilen: 1,
-      dx: Float32Array.from([0.5]),
-      dy: Float32Array.from([0]),
-      faktor: 1,
-      grauBreite: kante,
-      grauHoehe: kante,
-    };
-    const kante_ = new Uint8Array(kante * kante);
+    const feld = new Uint8Array(kante * kante);
     for (let y = 0; y < kante; y += 1) {
-      for (let x = 16; x < kante; x += 1) kante_[y * kante + x] = 255;
+      for (let x = 16; x < kante; x += 1) feld[y * kante + x] = 255;
     }
-    const geschoben = maskeSchieben(kante_, kante, kante, feld);
-    const zwischenwerte = Array.from(geschoben).filter((wert) => wert > 0 && wert < 255);
-    expect(zwischenwerte.length).toBeGreaterThan(0);
+    const gezogen = maskeZiehen(feld, kante, kante, { s: 1, w: 0, tx: 0.5, ty: 0, sicher: 9 }, 1);
+    expect(Array.from(gezogen).filter((wert) => wert > 0 && wert < 255).length).toBeGreaterThan(0);
   });
 
   it('bleibt ein Block gross, auch wenn das Bild kein Vielfaches davon ist', () => {
-    // 100 ist kein Vielfaches von 16. Ohne Aufrunden bliebe rechts ein
-    // Streifen ohne Vektor, und die Maske risse dort ab.
+    // Ohne Aufrunden bliebe rechts ein Streifen ohne Vektor.
     const feld = bewegung(graustufen(muster(100)), graustufen(muster(100)), 100);
-    expect(feld.spalten).toBe(Math.ceil(100 / BLOCK));
+    expect(feld.spalten).toBe(Math.ceil(feld.grauBreite / BLOCK));
+  });
+});
+
+describe('maskePasst', () => {
+  /** Eine Maske mit einem Rechteck der gegebenen Grösse. */
+  function fleck(kante: number, w: number, h: number): Uint8Array {
+    const raus = new Uint8Array(kante * kante);
+    for (let y = 0; y < h; y += 1) {
+      for (let x = 0; x < w; x += 1) raus[y * kante + x] = 255;
+    }
+    return raus;
+  }
+
+  it('lässt eine Maske durch, die zur Erwartung passt', () => {
+    const a = fleck(64, 30, 30);
+    const b = fleck(64, 32, 31);
+    expect(maskePasst(b, a).haelt).toBe(true);
+  });
+
+  it('verwirft eine Maske, die aufplatzt', () => {
+    /*
+     * Genau der gemessene Fall: Am Film eines Anwenders sprang die
+     * abgedunkelte Fläche auf jedem vierten Bild von 4 % auf 56 % – um den
+     * Faktor dreizehn. Der Nutzer sah das als „der markierte Bereich bleibt
+     * nicht dort, wo er soll".
+     */
+    const klein = fleck(64, 16, 16);
+    const riesig = fleck(64, 60, 60);
+    const befund = maskePasst(riesig, klein);
+    expect(befund.haelt).toBe(false);
+    expect(befund.verhaeltnis).toBeGreaterThan(3);
+  });
+
+  it('verwirft eine Maske, die auf einmal leer ist', () => {
+    // Genauso verdächtig wie eine, die platzt – nur fällt sie weniger auf.
+    expect(maskePasst(new Uint8Array(64 * 64), fleck(64, 30, 30)).haelt).toBe(false);
+  });
+
+  it('verwirft eine Maske, die woanders sitzt', () => {
+    /*
+     * Gleiche Fläche, kein gemeinsamer Punkt. Ein Flächenvergleich allein
+     * liesse das durch – und genau so wandert eine Maske vom Motiv auf den
+     * Hintergrund, ohne dass eine Zahl sich ändert.
+     */
+    const links = fleck(64, 20, 20);
+    const rechts = new Uint8Array(64 * 64);
+    for (let y = 40; y < 60; y += 1) for (let x = 40; x < 60; x += 1) rechts[y * 64 + x] = 255;
+    const befund = maskePasst(rechts, links);
+    expect(befund.haelt).toBe(false);
+    expect(befund.deckung).toBe(0);
+  });
+
+  it('lässt beim ERSTEN Schlüsselbild alles durch', () => {
+    // Dort gibt es nichts zu vergleichen. Eine Maske abzulehnen, weil noch
+    // keine da war, wäre der sicherste Weg, gar keine zu bekommen.
+    expect(maskePasst(fleck(64, 60, 60), null).haelt).toBe(true);
+  });
+
+  it('zählt ab halber Deckung, nicht ab jedem Hauch', () => {
+    // Beide Masken haben weiche Ränder; ein Rand zählte sonst als halbe
+    // Fläche mit, und das Verhältnis wäre von der Kantenlänge bestimmt.
+    const hauch = new Uint8Array(64 * 64).fill(40);
+    expect(maskePasst(hauch, new Uint8Array(64 * 64)).haelt).toBe(true);
   });
 });
 

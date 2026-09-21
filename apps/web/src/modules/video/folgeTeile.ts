@@ -4,7 +4,19 @@ import { tippTeilRechnen } from '../bild/tippMaske.js';
 import type { GelesenesBild, Fortschritt } from './bilderLesen.js';
 import type { InhaltsTeil } from './bildweise.js';
 import type { NeueDaten } from './bildweise.js';
-import { bewegung, graustufen, maskeSchieben, zeitlichGlaetten, type Grau } from './verfolgung.js';
+import {
+  LAGE_RUHE,
+  bewegung,
+  graustufen,
+  lageSchaetzen,
+  lageVerketten,
+  maskePasst,
+  maskeZiehen,
+  punktVor,
+  zeitlichGlaetten,
+  type Grau,
+  type Lage,
+} from './verfolgung.js';
 
 /**
  * Die inhaltsabhängigen Maskenteile eines Bilddokumentes für JEDES Bild eines
@@ -50,6 +62,26 @@ export interface TeileErgebnis {
   readonly jeBild: readonly ReadonlyMap<string, NeueDaten>[];
   /** Wie oft wirklich gerechnet wurde – für die Anzeige und die Schätzung. */
   readonly laeufe: number;
+  /**
+   * Wie oft eine frisch gerechnete Maske verworfen wurde, weil sie nicht zu
+   * dem passte, was zu erwarten war.
+   *
+   * Gehört in die Oberfläche: Wer sieht, dass von neun Schlüsselbildern fünf
+   * verworfen wurden, weiss, dass an dieser Stelle etwas nicht stimmt – und
+   * probiert eine andere Maske, statt das Ergebnis für das Beste zu halten,
+   * was die App kann.
+   */
+  readonly verworfen: number;
+  /**
+   * Je Bild die Lage gegenüber dem ersten.
+   *
+   * Sie wird hier ohnehin gerechnet, und der Aufrufer braucht sie für die
+   * Bereiche, die eine FORM beschreiben – Verlauf, Ellipse, Pinselstrich.
+   * Zweimal zu rechnen hiesse, die Blocksuche über alle Bilder zu wiederholen.
+   */
+  readonly lagen: readonly Lage[];
+  /** Wie viele Bildpunkte ein Graupunkt war. */
+  readonly faktor: number;
 }
 
 /** Ein Abbruch, der mitbringt, wie viele Bilder schon fertig waren. */
@@ -75,7 +107,7 @@ export async function folgeTeile(
   auftrag: TeileAuftrag,
 ): Promise<TeileErgebnis> {
   const leer = bilder.map(() => new Map<string, NeueDaten>());
-  if (bilder.length === 0 || auftrag.teile.length === 0) return { jeBild: leer, laeufe: 0 };
+  if (bilder.length === 0) return { jeBild: leer, laeufe: 0, verworfen: 0, lagen: [], faktor: 1 };
   if (auftrag.abbruch?.aborted) throw new AbbruchError();
 
   const breite = bilder[0].daten.width;
@@ -98,6 +130,23 @@ export async function folgeTeile(
    * knapp zwei Sekunden, die niemand braucht.
    */
   const felder = bilder.map((_, i) => (i === 0 ? null : bewegung(grau[i - 1], grau[i], breite)));
+  const faktor = felder.find(Boolean)?.faktor ?? 1;
+
+  /*
+   * Die Lage JEDES Bildes gegenüber dem ERSTEN – aufsummiert, nicht Schritt
+   * für Schritt angewandt.
+   *
+   * Das ist der Unterschied zwischen einer Maske, die mitgeht, und einer, die
+   * zerfranst: Gezogen wird immer aus dem Urbild mit einer einzigen
+   * Abbildung. Nachgemessen verliert eine Maske, die 33-mal nacheinander
+   * gezogen wird, 58 % ihrer Fläche; in einem Zug gezogen behält sie sie.
+   */
+  const lagen: Lage[] = [LAGE_RUHE];
+  for (let i = 1; i < bilder.length; i += 1) {
+    const feld = felder[i];
+    const schritt = feld ? lageSchaetzen(feld) : LAGE_RUHE;
+    lagen.push(lageVerketten(lagen[i - 1], schritt));
+  }
 
   /* ---------- Die Tiefensitzung, falls eine gebraucht wird ---------- */
 
@@ -109,6 +158,7 @@ export async function folgeTeile(
   for (const eintrag of auftrag.teile) roh.set(eintrag.teil.id, []);
 
   let laeufe = 0;
+  let verworfen = 0;
   const schritte = bilder.length;
 
   try {
@@ -125,20 +175,62 @@ export async function folgeTeile(
     for (let i = 0; i < bilder.length; i += 1) {
       if (auftrag.abbruch?.aborted) throw new TeileAbbruch(i);
       const istSchluessel = schluessel.has(i);
-      if (istSchluessel) laeufe += 1;
+      // Nur zählen, wenn wirklich etwas zu rechnen war – sonst meldete ein
+      // Dokument ohne Inhaltsteile Modelläufe, die nie stattfanden.
+      if (istSchluessel && auftrag.teile.length > 0) laeufe += 1;
 
       for (const eintrag of auftrag.teile) {
         const sammlung = roh.get(eintrag.teil.id);
         if (!sammlung) continue;
 
         if (!istSchluessel) {
-          const feld = felder[i];
-          const vorher = sammlung[i - 1];
-          sammlung.push(feld && vorher ? maskeSchieben(vorher, breite, hoehe, feld) : vorher);
+          /*
+           * Aus dem letzten SCHLÜSSELBILD ziehen, nicht aus dem Vorgänger –
+           * und mit der Lage, die von dort bis hierher gilt.
+           */
+          const anker = schluesselVor(schluessel, i);
+          const vorlage = sammlung[anker];
+          if (!vorlage) {
+            sammlung.push(sammlung[i - 1]);
+            continue;
+          }
+          const seitAnker = lageVerketten(kehren(lagen[anker]), lagen[i]);
+          sammlung.push(maskeZiehen(vorlage, breite, hoehe, seitAnker, faktor));
           continue;
         }
 
-        sammlung.push(await teilRechnen(eintrag, bilder[i], breite, hoehe, tiefe, auftrag.abbruch));
+        const frisch = await teilRechnen(
+          eintrag,
+          bilder[i],
+          breite,
+          hoehe,
+          tiefe,
+          auftrag.abbruch,
+          lagen[i],
+          faktor,
+        );
+        /*
+         * Gegen das halten, was aus dem vorigen Schlüsselbild zu erwarten
+         * war – die Begründung samt Messung steht bei `maskePasst`.
+         */
+        const anker = i > 0 ? schluesselVor(schluessel, i - 1) : -1;
+        const vorlage = anker >= 0 ? sammlung[anker] : null;
+        const erwartet = vorlage
+          ? maskeZiehen(
+              vorlage,
+              breite,
+              hoehe,
+              lageVerketten(kehren(lagen[anker]), lagen[i]),
+              faktor,
+            )
+          : null;
+        const befund = maskePasst(frisch, erwartet);
+        if (!befund.haelt && erwartet) {
+          verworfen += 1;
+          sammlung.push(erwartet);
+        } else {
+          sammlung.push(frisch);
+        }
       }
 
       auftrag.fortschritt?.((i + 1) / schritte, `Masken: Bild ${i + 1} von ${schritte}`);
@@ -174,7 +266,7 @@ export async function folgeTeile(
     return karte;
   });
 
-  return { jeBild, laeufe };
+  return { jeBild, laeufe, verworfen, lagen, faktor };
 }
 
 /** Ein einzelnes Teil für ein einzelnes Bild rechnen. */
@@ -184,7 +276,9 @@ async function teilRechnen(
   breite: number,
   hoehe: number,
   tiefe: { karteFuer(bild: ImageData): Promise<{ feld: Uint8Array }> } | null,
-  abbruch?: AbortSignal,
+  abbruch: AbortSignal | undefined,
+  lage: Lage,
+  faktor: number,
 ): Promise<Uint8Array> {
   const teil = eintrag.teil;
 
@@ -203,11 +297,20 @@ async function teilRechnen(
     /*
      * Die angetippten PUNKTE wandern mit, nicht die Maske.
      *
-     * Das ist der ganze Vorteil dieses Weges: Aus den Punkten lässt sich die
-     * Maske auf jedem Bild neu rechnen, und sie sitzt dann auf dem, was dort
-     * wirklich steht – nicht auf dem, was auf Bild 1 dort stand.
+     * Hier stand `teil.punkte` – also die Koordinaten vom ersten Bild, auf
+     * jedem Schlüsselbild aufs Neue. Bei einer Kamera, die sich bewegt, zeigt
+     * ein solcher Punkt nach zwei Sekunden auf etwas ganz anderes, und die
+     * Maske sprang an jedem Schlüsselbild dorthin zurück. `folgeMaske.ts`
+     * (der GIF-Weg) hat die Punkte von Anfang an mitgeführt; hier fehlte es.
      */
-    const gerechnet = await tippTeilRechnen(bild.daten, teil.punkte, {
+    const punkte = teil.punkte.map((punkt) => {
+      const gezogen = punktVor(lage, faktor, punkt.x, punkt.y);
+      return {
+        x: Math.min(breite - 1, Math.max(0, Math.round(gezogen.x))),
+        y: Math.min(hoehe - 1, Math.max(0, Math.round(gezogen.y))),
+      };
+    });
+    const gerechnet = await tippTeilRechnen(bild.daten, punkte, {
       modus: teil.modus,
       mitNetz: teil.mitNetz,
       toleranz: teil.toleranz,
@@ -218,4 +321,30 @@ async function teilRechnen(
   }
 
   throw new Error(`Diese Maskenart wird je Bild nicht gerechnet: ${teil.art}`);
+}
+
+/** Das letzte Schlüsselbild bis einschliesslich `bis`. */
+function schluesselVor(schluessel: ReadonlySet<number>, bis: number): number {
+  for (let i = bis; i >= 0; i -= 1) if (schluessel.has(i)) return i;
+  return 0;
+}
+
+/**
+ * Eine Lage umkehren.
+ *
+ * Gebraucht, um aus „Bild 0 nach Bild a" und „Bild 0 nach Bild b" die Lage
+ * „Bild a nach Bild b" zu machen: erst zurück, dann vorwärts.
+ */
+function kehren(lage: Lage): Lage {
+  const nenner = lage.s * lage.s + lage.w * lage.w;
+  if (nenner === 0) return LAGE_RUHE;
+  const s = lage.s / nenner;
+  const w = -lage.w / nenner;
+  return {
+    s,
+    w,
+    tx: -(s * lage.tx - w * lage.ty),
+    ty: -(w * lage.tx + s * lage.ty),
+    sicher: lage.sicher,
+  };
 }

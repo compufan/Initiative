@@ -1,4 +1,5 @@
 import type { BildDoc, Maskenteil } from '../bild/doc.js';
+import { lageRuht, punktVor, type Lage } from './verfolgung.js';
 
 /**
  * Ein Bilddokument über einen ganzen Film hinweg.
@@ -65,6 +66,105 @@ export function inhaltsTeile(doc: BildDoc): InhaltsTeil[] {
 /** Braucht dieses Dokument überhaupt Arbeit je Bild? */
 export function brauchtBildweise(doc: BildDoc): boolean {
   return inhaltsTeile(doc).length > 0;
+}
+
+/* ---------- Was an Bildkoordinaten klebt ---------- */
+
+/**
+ * Die Arten, die eine FORM beschreiben statt eines Bildinhalts.
+ *
+ * Ein Verlauf, eine Ellipse, ein Pinselstrich – sie kommen nicht aus dem
+ * Bild, sie stehen darin. Genau das war das Problem: Sie standen darin und
+ * blieben stehen, während die Szene darunter wegwanderte. Am Film eines
+ * Anwenders nachvollzogen – die Abdunklung sass nach zwei Sekunden auf einer
+ * ganz anderen Stelle des Regals als am Anfang.
+ *
+ * Verschoben wird nicht die gerasterte Maske, sondern ihre STÜTZPUNKTE. Der
+ * Unterschied ist nicht klein: Eine Maske, die man Bild für Bild neu abtastet,
+ * franst aus; ein Verlauf, dessen beide Enden mitwandern, wird auf jedem Bild
+ * frisch und scharf gerechnet. Nebenbei greift dadurch auch der
+ * Maskenzwischenspeicher richtig, denn `teilSchluessel` in `bild/maske.ts`
+ * führt genau diese Koordinaten mit.
+ */
+export function istFormTeil(teil: Maskenteil): boolean {
+  return teil.art === 'verlauf' || teil.art === 'radial' || teil.art === 'pinsel';
+}
+
+/** Hat das Dokument Bereiche, die an Bildkoordinaten kleben? */
+export function hatFormTeile(doc: BildDoc): boolean {
+  return doc.bereiche.some((bereich) => bereich.aktiv && bereich.teile.some(istFormTeil));
+}
+
+/**
+ * Ein Formteil an die Lage eines späteren Bildes anpassen.
+ *
+ * `lage` beschreibt den Weg vom ersten Bild zu diesem; `punktVor` rechnet
+ * einen Punkt in dieselbe Richtung.
+ */
+function formTeilZiehen(teil: Maskenteil, lage: Lage, faktor: number): Maskenteil {
+  const zieh = (x: number, y: number) => punktVor(lage, faktor, x, y);
+  if (teil.art === 'verlauf') {
+    const von = zieh(teil.von.x, teil.von.y);
+    const bis = zieh(teil.bis.x, teil.bis.y);
+    return { ...teil, von, bis };
+  }
+  if (teil.art === 'radial') {
+    const mitte = zieh(teil.mitte.x, teil.mitte.y);
+    /*
+     * Die Halbachsen wachsen mit dem Massstab, der Winkel dreht mit.
+     *
+     * Ohne das bliebe eine Ellipse gleich gross, während das Motiv näher
+     * kommt – und gleich ausgerichtet, während die Kamera verkantet. Der
+     * Massstab steckt in `s` und `w` als deren Betrag.
+     */
+    const massstab = Math.hypot(lage.s, lage.w) || 1;
+    return {
+      ...teil,
+      mitte,
+      rx: teil.rx / massstab,
+      ry: teil.ry / massstab,
+      winkel: teil.winkel - Math.atan2(lage.w, lage.s),
+    };
+  }
+  if (teil.art === 'pinsel') {
+    const massstab = Math.hypot(lage.s, lage.w) || 1;
+    return {
+      ...teil,
+      striche: teil.striche.map((strich) => {
+        const punkte = new Array<number>(strich.punkte.length);
+        for (let i = 0; i + 1 < strich.punkte.length; i += 2) {
+          const gezogen = zieh(strich.punkte[i], strich.punkte[i + 1]);
+          punkte[i] = gezogen.x;
+          punkte[i + 1] = gezogen.y;
+        }
+        return { ...strich, punkte, breite: strich.breite / massstab };
+      }),
+    };
+  }
+  return teil;
+}
+
+/**
+ * Dasselbe Dokument, aber mit den Formen dort, wo das Motiv inzwischen ist.
+ *
+ * Getrennt von `docFuerBild`, weil es etwas anderes tut: Dort werden fertig
+ * gerechnete Masken EINGESETZT, hier werden Stützpunkte VERSCHOBEN. Beides
+ * hintereinander ergibt das Dokument für ein Bild.
+ */
+export function docMitLage(doc: BildDoc, lage: Lage, faktor: number): BildDoc {
+  if (lageRuht(lage)) return doc;
+  let getauscht = false;
+  const bereiche = doc.bereiche.map((bereich) => {
+    if (!bereich.aktiv || !bereich.teile.some(istFormTeil)) return bereich;
+    getauscht = true;
+    return {
+      ...bereich,
+      teile: bereich.teile.map((teil) =>
+        istFormTeil(teil) ? formTeilZiehen(teil, lage, faktor) : teil,
+      ),
+    };
+  });
+  return getauscht ? { ...doc, bereiche } : doc;
 }
 
 /**

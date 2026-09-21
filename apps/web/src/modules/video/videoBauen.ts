@@ -3,8 +3,9 @@ import type { BildDoc } from '../bild/doc.js';
 import { zeichneAusgabe } from '../bild/zeichnen.js';
 import { LeseAbbruch, videoBilderLesen, type GelesenesBild } from './bilderLesen.js';
 import { dauerJeBildMs, zeitpunkte } from './ausschnitt.js';
-import { docFuerBild, inhaltsTeile } from './bildweise.js';
+import { docFuerBild, docMitLage, hatFormTeile, inhaltsTeile } from './bildweise.js';
 import { TeileAbbruch, folgeTeile } from './folgeTeile.js';
+import { LAGE_RUHE, type Lage } from './verfolgung.js';
 import { videoSchreiben, videoTauglich } from './schreiben.js';
 
 /**
@@ -99,7 +100,11 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
 
   const plan = zeitpunkte(auftrag.vonMs, auftrag.bisMs, auftrag.bildrate, auftrag.maxBilder);
   const teile = inhaltsTeile(auftrag.doc);
-  const gewicht = gewichte(plan.zeitpunkte.length, teile.length > 0, auftrag.schluesselAbstand);
+  const gewicht = gewichte(
+    plan.zeitpunkte.length,
+    teile.length > 0 || hatFormTeile(auftrag.doc),
+    auftrag.schluesselAbstand,
+  );
   const melden = (abschnitt: Abschnitt, anteil: number, text: string) => {
     const vorher =
       abschnitt === 'lesen'
@@ -131,8 +136,20 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
 
   let jeBild: readonly ReadonlyMap<string, { breite: number; hoehe: number; werte: Uint8Array }>[] =
     gelesen.bilder.map(() => new Map());
+  let lagen: readonly Lage[] = gelesen.bilder.map(() => LAGE_RUHE);
+  let grauFaktor = 1;
   let laeufe = 0;
-  if (teile.length > 0) {
+  /*
+   * Auch OHNE Inhaltsteile wird die Bewegung geschätzt, sobald ein Bereich
+   * eine Form beschreibt.
+   *
+   * Ein Verlauf oder ein Pinselstrich kommt nicht aus dem Bild, er steht
+   * darin – und blieb bisher stehen, während die Szene darunter wegwanderte.
+   * Genau das war die Beschwerde: „der markierte Bereich bleibt im Verlauf
+   * des Videos nicht dort wo er soll."
+   */
+  const formen = hatFormTeile(auftrag.doc);
+  if (teile.length > 0 || formen) {
     try {
       const gerechnet = await folgeTeile(gelesen.bilder, {
         teile,
@@ -142,6 +159,8 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
       });
       jeBild = gerechnet.jeBild;
       laeufe = gerechnet.laeufe;
+      if (gerechnet.lagen.length === gelesen.bilder.length) lagen = gerechnet.lagen;
+      grauFaktor = gerechnet.faktor;
     } catch (ausfall) {
       if (ausfall instanceof TeileAbbruch) throw new VideoBauAbbruch('masken', ausfall.fertig);
       throw ausfall;
@@ -204,7 +223,7 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
           quelle,
           gelesen.breite,
           gelesen.hoehe,
-          docFuerBild(auftrag.doc, jeBild[nummer]),
+          docFuerBild(docMitLage(auftrag.doc, lagen[nummer], grauFaktor), jeBild[nummer]),
         );
       },
       {
