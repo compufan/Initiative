@@ -67,6 +67,101 @@ const ANTEIL_MASKIERBAR = 0.62;
 /** Wie fein die Kanten der Kachel abgetastet werden: 4 × 4 Proben je Punkt. */
 const PROBEN = 4;
 
+/* ------------------------------------------------------- Hintergrundfassung */
+
+/*
+ * Warum das Logo für den Hintergrund umgerechnet wird, statt es nur zu
+ * schleiern.
+ *
+ * Der Anwender schrieb: „Lasse das Schwarz des Logos mit dem Schwarz des
+ * Hintergrunds matchen und sich die farbigen elemente abheben."
+ *
+ * Der erste Teil ist schon erfüllt und war es immer: Gemessen an
+ * `logo.png` sind 65,3 % aller Punkte VOLLSTÄNDIG durchsichtig, und von der
+ * sichtbaren Fläche sind 0,08 % dunkler als der Grund `#0b1020`. Die
+ * schwarzen Bänder im Herzen sind Löcher, keine Farbe – dort steht der
+ * Hintergrund selbst, punktgenau.
+ *
+ * Der zweite Teil war dagegen nicht erfüllt, und der Grund ist der Schleier:
+ * eine volle Lage Hintergrundfarbe ÜBER dem Bild, die jeden Punkt
+ * gleichmässig zum Grund zieht. Gemessen auf „dezent" (90 %) landete das
+ * kräftigste Rot bei rgb(35,15,29) – Abstand 15 vom Grund im Median –, das
+ * Weiss dagegen bei Abstand 39. Das Weiss war also zweieinhalbmal so laut wie
+ * das Rot; genau umgekehrt zur Bitte. Und das Rot wurde dabei nicht blass,
+ * sondern braungrau: Sein Blaukanal SINKT von 32 auf 30.
+ *
+ * Den Schleier einfach zu senken hilft nicht, weil er beide gleich behandelt:
+ * Das Weiss zöge mit und würde zur lautesten Fläche der App. Die Trennung
+ * muss deshalb nach SÄTTIGUNG erfolgen, nicht nach Helligkeit – und das kann
+ * CSS nicht je Bildpunkt. Also wird es hier vorgerechnet.
+ *
+ * Gemessen mit dieser Fassung bei Schleier 60 %: Rot im Median auf Abstand
+ * 81, Neutrales auf 47. Das Rot führt jetzt, und der Kontrast von `--text`
+ * über der hellsten Stelle liegt bei 10,7 – AAA verlangt 7.
+ */
+
+/**
+ * Wie viel Deckung ein völlig UNBUNTER Punkt behält.
+ *
+ * Nicht null: Die weissen Bänder und der Schriftzug sind Teil der Zeichnung,
+ * sie sollen nur nicht mehr lauter sein als das Herz. Dreissig Prozent sind
+ * gemessen der Wert, bei dem sie als Struktur lesbar bleiben und das Rot
+ * trotzdem klar führt.
+ */
+export const NEUTRAL_ANTEIL = 0.3;
+
+/** Ab welcher Sättigung ein Punkt als „farbig" gilt und aufgehellt wird. */
+export const SATT_AB = 0.35;
+
+/**
+ * Wie stark ein farbiger Punkt aufgehellt wird.
+ *
+ * Gemessen an der Medianentfernung der farbigen Punkte vom Grund (Schleier
+ * 60 %): ohne Hebung 57, bei 1,2 dann 69, bei 1,4 dann 81, bei 1,6 dann 88,
+ * bei 1,8 dann 90. Der Gewinn läuft also aus, und jede weitere Stufe kostet
+ * Zeichnung: Unter den farbigen Punkten reicht die Helligkeit von 48 bis 255
+ * – das Herz ist von dunklem Weinrot bis hellem Rot schattiert. Wer sie auf
+ * volle Helligkeit zieht, presst diese ganze Spanne auf einen Wert und
+ * bekommt ein flaches Plakatrot statt einer Zeichnung.
+ */
+export const HEBUNG = 1.4;
+
+/** Sättigung nach HSV: wie weit ein Punkt von Grau entfernt ist. */
+function saettigung(r, g, b) {
+  const max = Math.max(r, g, b);
+  if (max === 0) return 0;
+  return (max - Math.min(r, g, b)) / max;
+}
+
+/**
+ * Das Logo als Hintergrundbild: Farbiges lauter, Unbuntes leiser.
+ *
+ * Nimmt und liefert RGBA. Ein durchsichtiger Punkt bleibt durchsichtig – die
+ * Löcher im Herzen sind der Grund, warum das Schwarz schon heute passt, und
+ * sie dürfen nicht zufällig zu Farbe werden.
+ */
+export function hintergrundfassung(logo) {
+  const punkte = new Uint8Array(logo.punkte.length);
+  for (let i = 0; i < punkte.length; i += 4) {
+    const alpha = logo.punkte[i + 3];
+    if (alpha === 0) continue;
+    const r = logo.punkte[i];
+    const g = logo.punkte[i + 1];
+    const b = logo.punkte[i + 2];
+    const satt = saettigung(r, g, b);
+    const max = Math.max(r, g, b);
+    // Die Hebung gilt NUR für farbige Punkte. Ein neutraler soll leiser
+    // werden, nicht heller – sonst hebt sie genau das an, was zurücktreten
+    // soll.
+    const faktor = satt >= SATT_AB && max > 0 ? Math.min(255, max * HEBUNG) / max : 1;
+    punkte[i] = Math.min(255, Math.round(r * faktor));
+    punkte[i + 1] = Math.min(255, Math.round(g * faktor));
+    punkte[i + 2] = Math.min(255, Math.round(b * faktor));
+    punkte[i + 3] = Math.round(alpha * (NEUTRAL_ANTEIL + (1 - NEUTRAL_ANTEIL) * satt));
+  }
+  return punkte;
+}
+
 /* ------------------------------------------------------------ PNG: Pruefsumme */
 
 const CRC_TABELLE = (() => {
@@ -212,13 +307,20 @@ function block(art, daten) {
   return aus;
 }
 
-/** Schreibt RGBA-Punkte als PNG. Ohne `alpha` fällt der vierte Kanal weg. */
-export function pngSchreiben(punkte, kante, { alpha = true } = {}) {
+/**
+ * Schreibt RGBA-Punkte als PNG. Ohne `alpha` fällt der vierte Kanal weg.
+ *
+ * `hoehe` nur für Bilder, die nicht quadratisch sind. Die Symbole sind es
+ * immer; die Hintergrundfassung hat dagegen die Masse des Logos, und wer
+ * eines mit anderem Seitenverhältnis einlegt, bekäme sonst ein PNG, dessen
+ * Kopf etwas anderes behauptet als seine Daten.
+ */
+export function pngSchreiben(punkte, kante, { alpha = true, hoehe = kante } = {}) {
   const kanaele = alpha ? 4 : 3;
   const schritt = kante * kanaele;
-  const roh = Buffer.alloc((schritt + 1) * kante);
+  const roh = Buffer.alloc((schritt + 1) * hoehe);
 
-  for (let y = 0; y < kante; y += 1) {
+  for (let y = 0; y < hoehe; y += 1) {
     const an = y * (schritt + 1);
     roh[an] = 0; // Filter 0: keiner. Die Flächen packt zlib ohnehin gut.
     for (let x = 0; x < kante; x += 1) {
@@ -233,7 +335,7 @@ export function pngSchreiben(punkte, kante, { alpha = true } = {}) {
 
   const kopf = Buffer.alloc(13);
   kopf.writeUInt32BE(kante, 0);
-  kopf.writeUInt32BE(kante, 4);
+  kopf.writeUInt32BE(hoehe, 4);
   kopf[8] = 8;
   kopf[9] = alpha ? 6 : 2;
 
@@ -437,6 +539,16 @@ export const AUFTRAEGE = [
 
 export const QUELLE = fileURLToPath(new URL('../public/marke/logo.png', import.meta.url));
 const ZIELE = fileURLToPath(new URL('../public/icons/', import.meta.url));
+/**
+ * Die vorgerechnete Hintergrundfassung.
+ *
+ * Liegt neben der Quelle und NICHT im Repository – sie ist ein Bauergebnis
+ * wie die Symbole. Die eine Quelle bleibt `logo.png`; wer das Logo tauscht,
+ * tauscht diese eine Datei und ruft `marke` auf.
+ */
+export const HINTERGRUND = fileURLToPath(
+  new URL('../public/marke/hintergrund.png', import.meta.url),
+);
 
 export function alleSymbole() {
   const logo = pngLesen(readFileSync(QUELLE));
@@ -448,6 +560,12 @@ export function alleSymbole() {
     writeFileSync(join(ZIELE, datei), png);
     geschrieben.push([datei, `${kante}x${kante}`, png.length]);
   }
+
+  const hintergrund = pngSchreiben(hintergrundfassung(logo), logo.breite, {
+    hoehe: logo.hoehe,
+  });
+  writeFileSync(HINTERGRUND, hintergrund);
+  geschrieben.push(['marke/hintergrund.png', `${logo.breite}x${logo.hoehe}`, hintergrund.length]);
   return geschrieben;
 }
 

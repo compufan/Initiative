@@ -44,7 +44,17 @@ function escDruecken() {
 
 beforeEach(fensterStellen);
 
-afterEach(() => {
+afterEach(async () => {
+  /*
+   * Erst den aufgeschobenen Abgleich ablaufen lassen, dann das Fenster
+   * wegnehmen.
+   *
+   * `dialogAnmelden` plant die Buchführung über `window.setTimeout` – siehe
+   * die Begründung im Modul. Wer die Attrappe vorher entfernt, bekommt den
+   * Fehler ERST NACH dem letzten Test und an einer Stelle, die nichts mehr
+   * mit ihm zu tun hat.
+   */
+  await new Promise((weiter) => setTimeout(weiter, 1));
   Reflect.deleteProperty(globalThis, 'window');
 });
 

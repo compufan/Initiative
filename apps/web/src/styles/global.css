@@ -859,19 +859,30 @@ canvas {
  */
 :root {
   /*
-   * EINE Datei, und zwar die, die auch die Symbole hervorbringt.
+   * EINE Quelle – und zwei Bauergebnisse daraus.
    *
    * Hier standen einmal zwei WebP-Dateien (1x und 2x) ohne nachvollziehbare
-   * Herkunft. Jetzt zeigt alles auf `public/marke/logo.png` – der Hintergrund
-   * hier, das Wartebild des Fernsehers, der Kopf des Fernseh-Chats und
-   * `scripts/marke.mjs`, das daraus die App-Symbole rechnet. Wer das Logo
-   * austauschen will, tauscht genau diese Datei.
+   * Herkunft. Jetzt gibt es genau eine Quelle: `public/marke/logo.png`. Wer
+   * das Logo austauschen will, tauscht diese eine Datei und ruft
+   * `pnpm --filter @initiative/web marke` auf.
+   *
+   * `scripts/marke.mjs` rechnet daraus die App-Symbole UND diese
+   * Hintergrundfassung, in der farbige Punkte aufgehellt und unbunte auf
+   * dreissig Prozent Deckung gesetzt sind. Warum das nötig ist, steht
+   * ausführlich dort: Ein Schleier zieht jeden Punkt gleichmässig zum Grund,
+   * und damit war das Weiss des Logos lauter als sein Rot – genau umgekehrt
+   * zu dem, was gewollt war. CSS kennt keine Deckung je Bildpunkt, also
+   * entsteht sie beim Bauen.
+   *
+   * Das Wartebild des Fernsehers und der Kopf des Fernseh-Chats (`tv.html`)
+   * zeigen weiterhin `logo.png`: Dort steht das Zeichen für sich und nicht
+   * hinter etwas, und es soll dort genau so aussehen, wie es gezeichnet ist.
    *
    * Ein `image-set` mit zwei Auflösungen wäre die feinere Wahl und die
    * brüchigere: Ältere Safari-Fassungen kennen es nur mit Präfix und zeigen
    * sonst gar nichts.
    */
-  --marke-bild: url('/marke/logo.png');
+  --marke-bild: url('/marke/hintergrund.png');
   /* Wie viel Hintergrundfarbe über dem Logo liegt. 100% heisst: unsichtbar. */
   --marke-schleier: 100%;
   /*
@@ -898,8 +909,28 @@ canvas {
   --marke-scheibe: transparent;
 }
 
+/*
+ * Die Schleierwerte stehen JE THEMA, nicht gemeinsam – und das ist kein
+ * Versehen aus Bequemlichkeit.
+ *
+ * Auf dunklem Grund liegt das Bild unter einer Lage `--bg`, auf hellem unter
+ * einer Lage `--bg` UND über einer dunklen Scheibe. Dieselbe Zahl bedeutet
+ * dort also etwas anderes. Gemeinsame Werte hiessen: Wer den dunklen senkt,
+ * senkt den hellen mit – und dort trägt die Scheibe den Fliesstext.
+ */
 [data-marke='dezent'] {
-  --marke-schleier: 90%;
+  /*
+   * 60 statt 90 Prozent. Möglich geworden, weil `hintergrund.png` das Laute
+   * schon im Bild dämpft (siehe `scripts/marke.mjs`): Unbunte Punkte tragen
+   * dort nur noch 30 Prozent ihrer Deckung.
+   *
+   * Gemessen am fertigen Schirm, Median der Entfernung vom Grund: farbige
+   * Punkte 81 statt 15, unbunte 47 statt 39. Vorher war das Weiss
+   * zweieinhalbmal so laut wie das Rot, jetzt führt das Rot – genau darum
+   * ging die Bitte. Der Kontrast von `--text` über der hellsten Stelle
+   * liegt bei 10,7; AAA verlangt 7.
+   */
+  --marke-schleier: 60%;
 }
 
 /*
@@ -911,15 +942,30 @@ canvas {
  * schwächer sein als der alte Klotz: Sie muss nur die weissen Bänder tragen.
  */
 [data-theme='light'] {
-  --marke-scheibe: color-mix(in srgb, #0b1020 82%, transparent);
+  --marke-scheibe: color-mix(in srgb, #0b1020 90%, transparent);
 }
 
 [data-marke='deutlich'] {
-  --marke-schleier: 78%;
+  /* Gemessen: farbige Punkte auf Abstand 101 im Median, unbunte auf 59,
+     Kontrast von `--text` über der hellsten Stelle 8,9. */
+  --marke-schleier: 50%;
+}
+
+/*
+ * Das helle Thema bekommt eigene Werte, weil dort die Scheibe dazwischenliegt.
+ *
+ * Gemessen mit Scheibe 90 %: dezent (80 %) bringt die farbigen Punkte auf
+ * Abstand 68 im Median statt bisher 34, deutlich (75 %) auf 85 statt 55 –
+ * also ungefähr eine Verdopplung, bei einem Kontrast von 10,3 bzw. 9,2 über
+ * der dunkelsten Stelle. Die dunklen Werte des Themas oben wären hier zu
+ * wenig: Bei 60 Prozent fiele der Kontrast auf 6,1.
+ */
+[data-theme='light'][data-marke='dezent'] {
+  --marke-schleier: 80%;
 }
 
 [data-theme='light'][data-marke='deutlich'] {
-  --marke-schleier: 84%;
+  --marke-schleier: 75%;
 }
 
 body {

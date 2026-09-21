@@ -126,6 +126,18 @@ export default defineConfig(({ mode }) => {
             // Der Klebe-Code der Modelle – zusammen ueber 200 KB, die nur
             // braucht, wer wirklich einen Sticker freistellt.
             'assets/cutout/**/*',
+            /*
+             * Das Logo liegt nicht mehr im Vorrat der installierten App.
+             *
+             * Ihr Hintergrund zeigt seit der Umrechnung `hintergrund.png` –
+             * in beiden Themen, siehe `global.css`. `logo.png` braucht nur
+             * noch `tv.html`, und das Fernsehblatt läuft ohnehin nie ohne
+             * Netz: Es wird auf einem Fernseher geöffnet, der gerade eine
+             * Verbindung zu dieser App hat. Beide Dateien vorzuhalten hiesse,
+             * jeder Installation gut hundert Kilobyte aufzuladen, die sie nie
+             * anfordert.
+             */
+            'marke/logo.png',
           ],
           maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         },

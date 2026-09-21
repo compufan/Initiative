@@ -2,7 +2,18 @@ import { readFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 
-import { AUFTRAEGE, QUELLE, pngLesen, pngSchreiben, symbol, verkleinern } from './marke.mjs';
+import {
+  AUFTRAEGE,
+  HEBUNG,
+  NEUTRAL_ANTEIL,
+  QUELLE,
+  SATT_AB,
+  hintergrundfassung,
+  pngLesen,
+  pngSchreiben,
+  symbol,
+  verkleinern,
+} from './marke.mjs';
 
 /**
  * Die Prüfungen für den Bausatz der App-Symbole.
@@ -319,5 +330,140 @@ describe('Der Satz an Symbolen', () => {
     const ios = AUFTRAEGE.find((auftrag) => auftrag.datei === 'apple-touch-icon.png');
     expect(ios?.alpha).toBe(false);
     expect(ios?.kachel).toBe(false);
+  });
+});
+
+describe('hintergrundfassung', () => {
+  /** Ein Bild aus vier Punkten, damit sich jeder einzeln prüfen lässt. */
+  function vier(punkte) {
+    const daten = new Uint8Array(punkte.length * 4);
+    punkte.forEach(([r, g, b, a], i) => {
+      daten[i * 4] = r;
+      daten[i * 4 + 1] = g;
+      daten[i * 4 + 2] = b;
+      daten[i * 4 + 3] = a;
+    });
+    return { breite: punkte.length, hoehe: 1, punkte: daten };
+  }
+
+  it('lässt einen durchsichtigen Punkt durchsichtig', () => {
+    /*
+     * Die wichtigste Zusage. Die schwarzen Bänder im Herzen sind LÖCHER, und
+     * dass dort der Hintergrund selbst steht, ist der Grund, warum das
+     * Schwarz schon heute punktgenau passt. Würden sie zu Farbe, hätte die
+     * Umrechnung genau das kaputtgemacht, was sie erhalten soll.
+     */
+    const raus = hintergrundfassung(vier([[200, 30, 30, 0]]));
+    expect([...raus.slice(0, 4)]).toEqual([0, 0, 0, 0]);
+  });
+
+  it('senkt die Deckung eines unbunten Punktes auf den Neutralanteil', () => {
+    const raus = hintergrundfassung(vier([[240, 240, 240, 255]]));
+    expect(raus[3]).toBe(Math.round(255 * NEUTRAL_ANTEIL));
+  });
+
+  it('lässt die Farbe eines unbunten Punktes in Ruhe', () => {
+    // Die Hebung soll das Bunte herausholen, nicht das Weiss lauter machen –
+    // das Weiss war ja das Problem.
+    const raus = hintergrundfassung(vier([[240, 240, 240, 255]]));
+    expect([...raus.slice(0, 3)]).toEqual([240, 240, 240]);
+  });
+
+  it('behält die volle Deckung eines gesättigten Punktes', () => {
+    const raus = hintergrundfassung(vier([[255, 0, 0, 255]]));
+    expect(raus[3]).toBe(255);
+  });
+
+  it('hebt einen dunklen gesättigten Punkt an, ohne seinen Farbton zu drehen', () => {
+    /*
+     * Das Herz ist von dunklem Weinrot bis hellem Rot schattiert – gemessen
+     * reicht die Helligkeit der gesättigten Punkte von 48 bis 255. Die
+     * Hebung muss diese Spanne erhalten; auf volle Helligkeit gezogen wäre
+     * daraus ein flaches Plakatrot.
+     */
+    const raus = hintergrundfassung(vier([[100, 20, 20, 255]]));
+    expect(raus[0]).toBe(Math.round(100 * HEBUNG));
+    // Das Verhältnis der Kanäle bleibt – also auch der Farbton.
+    expect(raus[1] / raus[0]).toBeCloseTo(20 / 100, 2);
+  });
+
+  it('läuft nicht über, wenn ein Punkt schon hell ist', () => {
+    const raus = hintergrundfassung(vier([[250, 10, 10, 255]]));
+    expect(raus[0]).toBe(255);
+    expect(raus[1]).toBeLessThanOrEqual(255);
+  });
+
+  it('lässt Farbiges lauter werden als Unbuntes – darum ging es', () => {
+    /*
+     * Der Kern der Beschwerde: „Lasse das Schwarz des Logos mit dem Schwarz
+     * des Hintergrunds matchen und sich die farbigen elemente abheben."
+     * Vorher war es umgekehrt – das Weiss stand gemessen auf Abstand 39 vom
+     * Grund, das Rot auf 15.
+     */
+    const raus = hintergrundfassung(
+      vier([
+        [208, 16, 16, 255],
+        [240, 240, 240, 255],
+      ]),
+    );
+    expect(raus[3]).toBeGreaterThan(raus[7]);
+  });
+
+  it('bleibt unterhalb der Schwelle ohne Hebung', () => {
+    // Ein leicht getönter Punkt ist kein farbiges Element. Ihn mitzuheben
+    // hiesse, den Grauschleier des Bildes aufzuhellen.
+    const kaum = Math.round(200 * (1 - SATT_AB / 2));
+    const raus = hintergrundfassung(vier([[200, kaum, kaum, 255]]));
+    expect(raus[0]).toBe(200);
+  });
+
+  it('rechnet das echte Logo durch, ohne es zu zerstören', () => {
+    /*
+     * Vom echten Logo wird nur verlangt, dass es eines ist – siehe oben. Was
+     * hier geprüft wird, gilt für jedes: Es bleibt gleich gross, es bleibt
+     * teilweise durchsichtig, und das Farbige führt am Ende vor dem Unbunten.
+     */
+    const logo = pngLesen(readFileSync(QUELLE));
+    const raus = hintergrundfassung(logo);
+    expect(raus.length).toBe(logo.punkte.length);
+
+    let farbig = 0;
+    let unbunt = 0;
+    for (let i = 0; i < raus.length; i += 4) {
+      if (logo.punkte[i + 3] === 0) {
+        expect(raus[i + 3]).toBe(0);
+        continue;
+      }
+      const max = Math.max(logo.punkte[i], logo.punkte[i + 1], logo.punkte[i + 2]);
+      const min = Math.min(logo.punkte[i], logo.punkte[i + 1], logo.punkte[i + 2]);
+      if (max > 0 && (max - min) / max >= SATT_AB) farbig += raus[i + 3];
+      else unbunt += raus[i + 3];
+    }
+    expect(farbig).toBeGreaterThan(0);
+    expect(unbunt).toBeGreaterThan(0);
+  });
+});
+
+describe('pngSchreiben mit eigener Höhe', () => {
+  it('schreibt ein nicht quadratisches Bild richtig zurück', () => {
+    /*
+     * Die Symbole sind immer quadratisch, die Hintergrundfassung hat dagegen
+     * die Masse des Logos. Wer eines mit anderem Seitenverhältnis einlegt,
+     * bekäme sonst ein PNG, dessen Kopf etwas anderes behauptet als seine
+     * Daten – und das sieht man dem Ergebnis nicht an, es wird nur schief.
+     */
+    const breite = 4;
+    const hoehe = 2;
+    const punkte = new Uint8Array(breite * hoehe * 4);
+    for (let i = 0; i < breite * hoehe; i += 1) {
+      punkte[i * 4] = i * 10;
+      punkte[i * 4 + 1] = 20;
+      punkte[i * 4 + 2] = 30;
+      punkte[i * 4 + 3] = 255;
+    }
+    const gelesen = pngLesen(pngSchreiben(punkte, breite, { hoehe }));
+    expect(gelesen.breite).toBe(breite);
+    expect(gelesen.hoehe).toBe(hoehe);
+    expect([...gelesen.punkte]).toEqual([...punkte]);
   });
 });

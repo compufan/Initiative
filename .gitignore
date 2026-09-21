@@ -39,3 +39,6 @@ apps/web/blob-report/
 # die still veraltet: Wer das Logo tauscht und den Aufruf vergisst, haette ein
 # neues Logo im Hintergrund und ein altes auf dem Startbildschirm.
 apps/web/public/icons/
+# Aus derselben Quelle und aus demselben Grund: die vorgerechnete Fassung des
+# Logos fuer den App-Hintergrund (farbige Punkte lauter, unbunte leiser).
+apps/web/public/marke/hintergrund.png
