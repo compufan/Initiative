@@ -309,6 +309,25 @@ describe('filmDauerSchaetzenMs', () => {
     expect(mit).toBeGreaterThan(ohne * 5);
   });
 
+  it('zählt die zusätzlichen Schlüsselbilder an den Schnittkanten mit', () => {
+    /*
+     * An jeder Kante kommen zwei dazu – das letzte des alten Stücks und das
+     * erste des neuen (siehe `folgeTeile`). Ohne sie lag die Schätzung bei
+     * fünf Stücken und vierzig Bildern um ein Drittel daneben.
+     */
+    const ohne = filmDauerSchaetzenMs(40, true, 4);
+    const mit = filmDauerSchaetzenMs(40, true, 4, 4);
+    // Vier Kanten sind acht Läufe mehr, jeder rund zwei Sekunden – abzüglich
+    // des Schiebens, das dafür entfällt.
+    expect(mit - ohne).toBe(8 * (2000 - 10));
+  });
+
+  it('meldet nie mehr Läufe, als es Bilder gibt', () => {
+    // Bei einem Abstand von eins ist jedes Bild schon ein Schlüsselbild.
+    const alle = filmDauerSchaetzenMs(10, true, 1, 5);
+    expect(alle).toBe(10 * 90 + 10 * 2000);
+  });
+
   it('wird billiger, je seltener ein Modell läuft', () => {
     expect(filmDauerSchaetzenMs(100, true, 8)).toBeLessThan(filmDauerSchaetzenMs(100, true, 2));
   });
@@ -320,6 +339,7 @@ describe('filmDauerSchaetzenMs', () => {
      * 192 × 144 gegen 14,1 ms bei 960 × 540. Eine Schätzung, die mit der
      * Fläche skaliert, wäre beim Film schlicht erfunden.
      */
-    expect(filmDauerSchaetzenMs.length).toBe(3);
+    // Die Fläche steht in keinem der vier Werte – anders als beim GIF.
+    expect(filmDauerSchaetzenMs(100, false, 4)).toBe(filmDauerSchaetzenMs(100, false, 8));
   });
 });

@@ -363,17 +363,32 @@ export function pngSchreiben(punkte, kante, { alpha = true, hoehe = kante } = {}
  *
  * # Warum Flächenmittelung und nicht etwas Feineres
  *
- * Hier wird immer VERKLEINERT, oft um den Faktor vier oder mehr. Dabei ist
- * die Flächenmittelung nicht der Kompromiss, sondern das Richtige: Jeder
- * Punkt der Vorlage geht genau einmal und mit seinem Flächenanteil ein. Ein
- * Lanczos-Kern brächte hier nur Überschwinger an den harten Kanten.
+ * Meistens wird hier VERKLEINERT, und dann ist die Flächenmittelung nicht
+ * der Kompromiss, sondern das Richtige: Jeder Punkt der Vorlage geht genau
+ * einmal und mit seinem Flächenanteil ein. Ein Lanczos-Kern brächte nur
+ * Überschwinger an den harten Kanten.
+ *
+ * „Immer" stimmt allerdings nicht, und das stand hier lange falsch: Das
+ * 512er Symbol verlangt bei einem Anteil von 0,80 genau 410 Punkte, das
+ * heutige Logo hat 315. Dort wird also HOCHgerechnet, und die Mittelung
+ * verdoppelt dabei jede vierte Spalte. Sichtbar ist das bei Faktor 1,3 aus
+ * einer schon geglätteten Vorlage kaum – wer ein schärferes Symbol will,
+ * legt ein grösseres Logo hin. Ab 512 Punkten Kante wird nur noch
+ * verkleinert.
+ *
+ * # Warum `zielHoehe` getrennt angegeben wird
+ *
+ * Damit ein Logo, das nicht quadratisch ist, nicht in die Breite gezogen
+ * wird. Das Projekt verspricht, dass sich das Logo austauschen lässt; ein
+ * 16:9-Zeichen wurde bisher auf ein Quadrat gestreckt, gemessen auf ein
+ * Seitenverhältnis von 0,48 statt 1,00.
  */
-export function verkleinern(quelle, breite, hoehe, ziel) {
-  const aus = new Uint8Array(ziel * ziel * 4);
+export function verkleinern(quelle, breite, hoehe, ziel, zielHoehe = ziel) {
+  const aus = new Uint8Array(ziel * zielHoehe * 4);
   const xSkala = breite / ziel;
-  const ySkala = hoehe / ziel;
+  const ySkala = hoehe / zielHoehe;
 
-  for (let y = 0; y < ziel; y += 1) {
+  for (let y = 0; y < zielHoehe; y += 1) {
     const y0 = y * ySkala;
     const y1 = (y + 1) * ySkala;
     for (let x = 0; x < ziel; x += 1) {
@@ -441,9 +456,20 @@ function deckung(abstand) {
  */
 export function symbol(logo, { kante, kachel = true, anteil = ANTEIL, nurUmriss = false }) {
   const punkte = new Uint8Array(kante * kante * 4);
-  const innen = Math.max(1, Math.round(kante * anteil));
-  const klein = verkleinern(logo.punkte, logo.breite, logo.hoehe, innen);
+  /*
+   * Das Logo wird in das Quadrat EINGEPASST, nicht darauf gezogen.
+   *
+   * Solange das Logo selbst quadratisch ist, ändert das nichts. Für jedes
+   * andere ist es der Unterschied zwischen einem Zeichen und einer Karikatur
+   * davon – und austauschbar soll es ja sein.
+   */
+  const platz = Math.max(1, Math.round(kante * anteil));
+  const laenger = Math.max(logo.breite, logo.hoehe);
+  const innen = Math.max(1, Math.round((platz * logo.breite) / laenger));
+  const innenHoehe = Math.max(1, Math.round((platz * logo.hoehe) / laenger));
+  const klein = verkleinern(logo.punkte, logo.breite, logo.hoehe, innen, innenHoehe);
   const versatz = Math.round((kante - innen) / 2);
+  const versatzY = Math.round((kante - innenHoehe) / 2);
 
   /*
    * Erst der Untergrund, dann das Logo darüber.
@@ -478,8 +504,8 @@ export function symbol(logo, { kante, kachel = true, anteil = ANTEIL, nurUmriss 
     }
   }
 
-  for (let y = 0; y < innen; y += 1) {
-    const zy = y + versatz;
+  for (let y = 0; y < innenHoehe; y += 1) {
+    const zy = y + versatzY;
     if (zy < 0 || zy >= kante) continue;
     for (let x = 0; x < innen; x += 1) {
       const zx = x + versatz;

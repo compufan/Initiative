@@ -530,3 +530,95 @@ describe('Die Inhaltskennung der Symbole', () => {
     expect(Object.keys(karte)).toHaveLength(AUFTRAEGE.length);
   });
 });
+
+describe('Ein Logo, das nicht quadratisch ist', () => {
+  /** Ein Zeichen im Verhaeltnis 2:1 mit einem quadratischen Fleck in der Mitte. */
+  function breitesLogo() {
+    const breite = 200;
+    const hoehe = 100;
+    const punkte = new Uint8Array(breite * hoehe * 4);
+    for (let y = 30; y < 70; y += 1) {
+      for (let x = 80; x < 120; x += 1) {
+        const an = (y * breite + x) * 4;
+        punkte[an] = 255;
+        punkte[an + 3] = 255;
+      }
+    }
+    return { breite, hoehe, punkte };
+  }
+
+  /** Die Masse des roten Flecks im fertigen Symbol. */
+  function fleck(punkte, kante) {
+    let links = kante;
+    let rechts = -1;
+    let oben = kante;
+    let unten = -1;
+    for (let y = 0; y < kante; y += 1) {
+      for (let x = 0; x < kante; x += 1) {
+        const an = (y * kante + x) * 4;
+        if (punkte[an] > 120 && punkte[an + 3] > 120) {
+          links = Math.min(links, x);
+          rechts = Math.max(rechts, x);
+          oben = Math.min(oben, y);
+          unten = Math.max(unten, y);
+        }
+      }
+    }
+    return { breite: rechts - links + 1, hoehe: unten - oben + 1 };
+  }
+
+  it('zieht es nicht in die Breite', () => {
+    /*
+     * Das Projekt verspricht, dass sich das Logo austauschen laesst – eine
+     * Datei hinlegen, `marke` aufrufen, fertig. Ein Zeichen im Verhaeltnis
+     * 2:1 wurde dabei auf ein Quadrat gestreckt: Ein quadratischer Fleck
+     * darin kam gemessen mit dem Verhaeltnis 0,48 heraus.
+     */
+    const kante = 192;
+    const punkte = symbol(breitesLogo(), { kante, kachel: false, anteil: 0.8 });
+    const masse = fleck(punkte, kante);
+    expect(masse.breite).toBeGreaterThan(0);
+    expect(
+      masse.breite / masse.hoehe,
+      `Fleck ${masse.breite} x ${masse.hoehe} – ein Quadrat war es einmal`,
+    ).toBeCloseTo(1, 1);
+  });
+
+  it('setzt es mittig, oben wie unten gleich viel Rand', () => {
+    const kante = 192;
+    const punkte = symbol(breitesLogo(), { kante, kachel: false, anteil: 0.8 });
+    let oben = kante;
+    let unten = -1;
+    for (let y = 0; y < kante; y += 1) {
+      for (let x = 0; x < kante; x += 1) {
+        if (punkte[(y * kante + x) * 4 + 3] > 0) {
+          oben = Math.min(oben, y);
+          unten = Math.max(unten, y);
+        }
+      }
+    }
+    expect(Math.abs(oben - (kante - 1 - unten))).toBeLessThanOrEqual(2);
+  });
+
+  it('laesst ein quadratisches Logo Punkt fuer Punkt wie bisher', () => {
+    // Die Absicherung in die andere Richtung: Am heutigen Logo darf sich
+    // durch das Einpassen NICHTS aendern, sonst wechselten alle acht
+    // Inhaltskennungen ohne Grund.
+    const logo = pngLesen(readFileSync(QUELLE));
+    expect(logo.breite).toBe(logo.hoehe);
+    const punkte = symbol(logo, { kante: 64 });
+    const klein = verkleinern(logo.punkte, logo.breite, logo.hoehe, Math.round(64 * 0.8));
+    // Der mittlere Punkt des verkleinerten Logos muss im Symbol wieder
+    // auftauchen – ungestreckt liegt er genau dort.
+    const innen = Math.round(64 * 0.8);
+    const versatz = Math.round((64 - innen) / 2);
+    const mitte = Math.floor(innen / 2);
+    const vonKlein = (mitte * innen + mitte) * 4;
+    const imSymbol = ((mitte + versatz) * 64 + mitte + versatz) * 4;
+    if (klein[vonKlein + 3] === 255) {
+      expect(punkte[imSymbol]).toBe(klein[vonKlein]);
+      expect(punkte[imSymbol + 1]).toBe(klein[vonKlein + 1]);
+    }
+    expect(punkte[imSymbol + 3]).toBe(255);
+  });
+});

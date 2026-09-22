@@ -220,7 +220,12 @@ export function VideoEditorSheet({
    * Teileliste und startet kein einziges Modell. Mit `brauchtAlle` gerechnet
    * stünden dort „rund 2 Minuten" für eine Arbeit von vierzehn Sekunden.
    */
-  const dauerSchaetzung = filmDauerSchaetzenMs(anzahl, teile.length > 0, schluesselAbstand);
+  const dauerSchaetzung = filmDauerSchaetzenMs(
+    anzahl,
+    teile.length > 0,
+    schluesselAbstand,
+    plan.schnitte.length,
+  );
   /** Der Anfang des ERSTEN Stücks – dort wird eingestellt. */
   const anfangMs = stuecke[0]?.vonMs ?? 0;
 

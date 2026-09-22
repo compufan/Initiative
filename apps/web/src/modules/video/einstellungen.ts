@@ -158,10 +158,25 @@ export function filmDauerSchaetzenMs(
   bilder: number,
   mitMasken: boolean,
   schluesselAbstand: number,
+  /**
+   * Wie viele Schnittkanten der Film hat.
+   *
+   * An jeder kommen ZWEI Schlüsselbilder dazu – das letzte des alten Stücks
+   * und das erste des neuen (siehe `folgeTeile`). Ohne sie lag die Schätzung
+   * bei fünf Stücken und vierzig Bildern um ein Drittel daneben: zehn
+   * Modelläufe geschätzt, fünfzehn gerechnet.
+   */
+  schnitte = 0,
 ): number {
   let summe = bilder * (FILM_LESEN_MS + FILM_RECHNEN_MS);
   if (mitMasken) {
-    const laeufe = Math.ceil(bilder / Math.max(1, schluesselAbstand));
+    const abstand = Math.max(1, schluesselAbstand);
+    /*
+     * Höchstens so viele Läufe wie Bilder: Bei einem Abstand von 1 ist jedes
+     * Bild schon ein Schlüsselbild, da kommt durch einen Schnitt keines mehr
+     * dazu.
+     */
+    const laeufe = Math.min(bilder, Math.ceil(bilder / abstand) + schnitte * 2);
     summe += laeufe * FILM_LAUF_MS + (bilder - laeufe) * FILM_SCHIEBEN_MS;
   }
   return Math.round(summe);

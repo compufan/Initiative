@@ -78,6 +78,16 @@ export function FileViewer({
        * einem Esc mit ihm zusammen geschlossen.
        */
       if (event.key === 'Escape' && dialogeOffen() === 0) onClose();
+      /*
+       * Die Pfeile gehören dem Abspieler, wenn er den Fokus hat.
+       *
+       * Ein `<video controls>` spult mit den Pfeiltasten um fünf Sekunden –
+       * und derselbe Druck blätterte hier zur Nachbardatei und räumte das
+       * Element gleich mit ab. Mit der Tastatur liess sich im Betrachter
+       * also nicht spulen. Dasselbe gilt für Ton und PDF.
+       */
+      const ziel = event.target;
+      if (ziel instanceof HTMLMediaElement || ziel instanceof HTMLObjectElement) return;
       if (event.key === 'ArrowRight') setAktuell((wert) => (wert + 1) % items.length);
       if (event.key === 'ArrowLeft') setAktuell((wert) => (wert - 1 + items.length) % items.length);
     };
