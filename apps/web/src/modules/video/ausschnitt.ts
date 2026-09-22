@@ -160,6 +160,8 @@ export interface AbtastAuftrag {
 export function abtasten(auftrag: AbtastAuftrag): Ausschnitt {
   const schritt = auftrag.schrittMs;
   const versatz = auftrag.mitte ? schritt / 2 : 0;
+  /** Der zuletzt abgetastete Zeitpunkt – für die Frage, ob eine Naht vorliegt. */
+  let letzter: number | null = null;
   const liste: number[] = [];
   const schnitte: number[] = [];
   let gewuenscht = 0;
@@ -167,6 +169,18 @@ export function abtasten(auftrag: AbtastAuftrag): Ausschnitt {
   for (const stueck of auftrag.stuecke) {
     const von = Math.max(0, stueck.vonMs);
     const bis = Math.max(von, stueck.bisMs);
+    /*
+     * Eine NAHTLOSE Grenze ist kein Schnitt.
+     *
+     * Der Knopf „Stück hinzufügen" legt das neue Stück dort an, wo das
+     * aktive aufhört – das ist der Normalfall und nicht der Sonderfall.
+     * Dort läuft die Szene weiter; ein gemeldeter Schnitt setzte aber die
+     * Lage auf die Ruhe zurück (`folgeTeile`), und ein Verlauf oder
+     * Pinselstrich spränge mitten in einer durchgehenden Einstellung an
+     * seine Ausgangsstelle. Ein erzwungenes Schlüsselbild wäre dort
+     * harmlos; das Zurücksetzen der Bewegung ist es nicht.
+     */
+    const naht = letzter !== null && Math.abs(von + versatz - (letzter + schritt)) <= schritt / 2;
     /*
      * Gerundet und nicht abgeschnitten: Wer bei 10 Bildern je Sekunde 950 ms
      * wählt, bekommt zehn Bilder und damit eine runde Sekunde. Abgeschnitten
@@ -178,8 +192,9 @@ export function abtasten(auftrag: AbtastAuftrag): Ausschnitt {
     const frei = Math.max(0, auftrag.maxBilder - liste.length);
     const anzahl = Math.min(will, frei);
     if (anzahl === 0) continue;
-    if (liste.length > 0) schnitte.push(liste.length);
+    if (liste.length > 0 && !naht) schnitte.push(liste.length);
     for (let i = 0; i < anzahl; i += 1) liste.push(von + i * schritt + versatz);
+    letzter = liste[liste.length - 1];
   }
 
   /*

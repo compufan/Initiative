@@ -132,6 +132,9 @@ export async function gifAusVideo(auftrag: BauAuftrag): Promise<BauErgebnis> {
     gelesen = await videoBilderLesen(auftrag.datei, {
       zeitpunkte: plan.zeitpunkte,
       kante,
+      // Halb so weit vor dem Ende wie ein Bild lang ist – sonst fallen bei
+      // 25 Bildern je Sekunde die letzten zweieinhalb auf eines zusammen.
+      randMs: plan.schrittMs / 2,
       fortschritt: (anteil, text) => melden('lesen', anteil, text),
       abbruch: auftrag.abbruch,
     });

@@ -291,7 +291,15 @@ export function StickerLibraryScreen() {
    * Fall. Andersherum stuende am Sticker ein Ton, der nie ankam.
    */
   function tonSetzen(pack: StickerPackDto, sticker: StickerDto, ergebnis: TonErgebnis) {
-    setTonOffen(false);
+    /*
+     * Die Werkstatt bleibt offen, bis der Ton wirklich oben ist.
+     *
+     * Sie hält Aufnahme, Schnitt, Klangprofil und fünf Regler – und zwar
+     * NUR sie. Wird sie vor dem Hochladen ausgebaut, ist bei einem Fehler
+     * im Zug alles davon weg, und es bleibt ein Fehlerbanner über einem
+     * leeren Blatt. `SavePackSheet` macht es aus demselben Grund
+     * andersherum: Dort liegt das Ergebnis im Zustand des Blattes.
+     */
     void run(async () => {
       const anhang = await uploadBlob({
         kind: 'audio',
@@ -311,6 +319,7 @@ export function StickerLibraryScreen() {
         pack: neu,
         sticker: neu.stickers.find((eintrag) => eintrag.id === sticker.id) ?? sticker,
       });
+      setTonOffen(false);
       toast('Ton gespeichert', 'success');
     }, 'Der Ton konnte nicht gespeichert werden');
   }

@@ -14,7 +14,7 @@ import { clamp, errorMessage, firstEmoji, loadImageFromBlob, supportsWebp } from
 import { SavePackSheet } from './SavePackSheet.js';
 import { VideoGifSheet } from '../video/VideoGifSheet.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
-import { dialogAnmelden } from '../../lib/dialogVerlauf.js';
+import { useDialogAnmeldung } from '../../lib/dialogAnmeldung.js';
 import { bildlage } from './bewegt.js';
 import { TEILBILDER_MAX, lesenMoeglich, teilbilderLesen } from './bewegtLesen.js';
 import { gifSchreiben, type Teilbild } from './gif.js';
@@ -1110,7 +1110,7 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
    *
    * `dialogAnmelden` ruft den Schliesser, und der fragt erst nach.
    */
-  useEffect(() => dialogAnmelden(schliessenVersuchen), [schliessenVersuchen]);
+  useDialogAnmeldung(true, schliessenVersuchen);
 
   const [quellWechsel, setQuellWechsel] = useState<{
     quelle: EditorSource;
@@ -2313,10 +2313,20 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
                    * Quelle sein darf, ist es der Normalfall: Sechs Sekunden
                    * mit zehn Bildern je Sekunde sind sechzig Teilbilder.
                    */
+                  /*
+                   * Bei bewegtem WebP ist die Zahl NICHT bekannt.
+                   *
+                   * `bildlageAus` zählt die ANMF-Abschnitte absichtlich nicht
+                   * (siehe `bewegt.ts`) und liefert `bilder: null`. Ein
+                   * `?? 0` machte daraus „unter vierzig" – und damit blieb
+                   * der Hinweis genau dort aus, wo niemand nachzählen kann.
+                   */
                   const gekappt =
-                    (bewegteQuelle.bilder ?? 0) > TEILBILDER_MAX
-                      ? ` Von ${bewegteQuelle.bilder} Teilbildern bleiben dabei die ersten ${TEILBILDER_MAX} – der Rest fällt weg. Unverändert übernommen wäre es vollständig.`
-                      : '';
+                    bewegteQuelle.bilder === null
+                      ? ` Dabei bleiben höchstens die ersten ${TEILBILDER_MAX} Teilbilder; wie viele es sind, steht in dieser Datei nicht. Unverändert übernommen wäre sie vollständig.`
+                      : bewegteQuelle.bilder > TEILBILDER_MAX
+                        ? ` Von ${bewegteQuelle.bilder} Teilbildern bleiben dabei die ersten ${TEILBILDER_MAX} – der Rest fällt weg. Unverändert übernommen wäre es vollständig.`
+                        : '';
                   return kannBewegtBleiben
                     ? `Dieses Bild bewegt sich${zahl} und bleibt bewegt: Jedes Teilbild bekommt deine Bearbeitung. Als GIF hat es 255 Farben und harte Ränder – mehr gibt das Format nicht her.${gekappt}`
                     : `Dieses Bild bewegt sich${zahl}, aber du hast es bearbeitet – auf diesem Gerät wird daraus ein Standbild. Nimm die Änderungen zurück, wenn die Bewegung bleiben soll.`;

@@ -31,6 +31,15 @@ export interface LeseAuftrag {
   readonly zeitpunkte: readonly number[];
   /** Die längere Kante des Ergebnisses. Das Seitenverhältnis bleibt. */
   readonly kante: number;
+  /**
+   * Wie weit vor dem Ende des Videos spätestens gesprungen wird.
+   *
+   * Siehe `videoLeserOeffnen`. Ohne Angabe eine Zehntelsekunde – das ist
+   * richtig für eine Handvoll Standbilder und falsch für einen Film: Bei 60
+   * Bildern je Sekunde liegen darin sechs Bilder, und alle sechs lieferten
+   * dasselbe Standbild.
+   */
+  readonly randMs?: number;
   readonly fortschritt?: Fortschritt;
   readonly abbruch?: AbortSignal;
 }
@@ -108,6 +117,18 @@ function warten(
   abbruch?: AbortSignal,
 ): Promise<string> {
   return new Promise((fertig, scheitern) => {
+    /*
+     * Ein Signal, das SCHON abgebrochen ist, feuert kein `abort` mehr.
+     *
+     * Ohne diese Zeile wartete der Leser danach noch auf `seeked` und las
+     * den ganzen Rest zu Ende – der Abbruch ging schlicht verloren. Er kam
+     * erst beim nächsten Abschnitt an, und die Oberfläche bot „aus n
+     * Bildern" für eine Arbeit an, die längst fertig war.
+     */
+    if (abbruch?.aborted) {
+      scheitern(new AbbruchError());
+      return;
+    }
     const horcher: [string, () => void][] = [];
     const aufraeumen = () => {
       for (const [name, ruf] of horcher) video.removeEventListener(name, ruf);
@@ -222,9 +243,33 @@ export interface VideoLeser {
   schliessen(): void;
 }
 
+/**
+ * Wie weit vor dem Ende gesprungen wird, wenn niemand etwas anderes sagt.
+ *
+ * Eine Zehntelsekunde. Das stammt aus der Zeit, als aus einem Video acht
+ * Standbilder für den Filmstreifen geholt wurden; für die ist es richtig.
+ */
+const RAND_MS = 100;
+
 export async function videoLeserOeffnen(
   datei: Blob,
-  auftrag: { readonly kante: number; readonly abbruch?: AbortSignal },
+  auftrag: {
+    readonly kante: number;
+    /**
+     * Wie weit vor `dauerMs` spätestens gesprungen wird.
+     *
+     * Hinter das letzte Bild zu springen heisst je nach Browser: das letzte
+     * Bild, ein schwarzes, oder `seeked` bleibt ganz aus. Ein Abstand muss
+     * also sein – aber er muss KLEINER sein als ein Einzelbild, sonst fallen
+     * mehrere Zeitpunkte auf denselben Sprung zusammen. Bei 60 Bildern je
+     * Sekunde und der alten festen Zehntelsekunde waren das sechs Bilder,
+     * die alle dasselbe Standbild lieferten: Das Filmende fror ein.
+     *
+     * Der Aufrufer gibt deshalb die halbe Schrittweite mit.
+     */
+    readonly randMs?: number;
+    readonly abbruch?: AbortSignal;
+  },
 ): Promise<VideoLeser> {
   if (auftrag.abbruch?.aborted) throw new AbbruchError();
   const adresse = URL.createObjectURL(datei);
@@ -259,6 +304,9 @@ export async function videoLeserOeffnen(
       : video.duration;
 
     const { b, h } = masse(video.videoWidth, video.videoHeight, auftrag.kante);
+    // Mindestens eine Millisekunde – null hiesse „genau auf `duration`", und
+    // genau das ist der Sprung, der nichts liefert.
+    const rand = Math.max(0.001, (auftrag.randMs ?? RAND_MS) / 1000);
     const flaeche = document.createElement('canvas');
     flaeche.width = b;
     flaeche.height = h;
@@ -272,14 +320,9 @@ export async function videoLeserOeffnen(
       quellHoehe: video.videoHeight,
       dauerMs: Math.round(dauerS * 1000),
       async bildAn(zeitMs, abbruch) {
-        /*
-         * Das letzte Bild eines Videos ist NICHT bei `duration`.
-         *
-         * Dorthin zu springen heisst „hinter das letzte Bild", und je nach
-         * Browser kommt dann das letzte Bild, ein schwarzes, oder `seeked`
-         * bleibt aus. Ein Zehntel Abstand ist mehr als jedes Einzelbild lang.
-         */
-        const ziel = Math.min(zeitMs / 1000, Math.max(0, dauerS - 0.1));
+        // Das letzte Bild eines Videos ist NICHT bei `duration` – siehe
+        // `randMs` oben.
+        const ziel = Math.min(zeitMs / 1000, Math.max(0, dauerS - rand));
         await springen(video, ziel, abbruch);
         stift.clearRect(0, 0, b, h);
         stift.drawImage(video, 0, 0, b, h);
@@ -296,16 +339,35 @@ export async function videoLeserOeffnen(
 export async function videoBilderLesen(datei: Blob, auftrag: LeseAuftrag): Promise<VideoBilder> {
   const leser = await videoLeserOeffnen(datei, {
     kante: auftrag.kante,
+    randMs: auftrag.randMs,
     abbruch: auftrag.abbruch,
   });
   try {
     const bilder: GelesenesBild[] = [];
     const gesamt = auftrag.zeitpunkte.length;
     for (let i = 0; i < gesamt; i += 1) {
-      // Der Abbruch nimmt mit, was bis hierher gelesen ist – siehe `LeseAbbruch`.
+      // Der Abbruch kann auch ZWISCHEN zwei Bildern kommen – der
+      // Fortschrittsruf unten ist der häufigste Anlass, weil die Oberfläche
+      // daran hängt. Dort wartet niemand, also fängt ihn erst diese Prüfung.
       if (auftrag.abbruch?.aborted) throw new LeseAbbruch(bilder);
       const zeitMs = auftrag.zeitpunkte[i];
-      bilder.push({ zeitMs, daten: await leser.bildAn(zeitMs, auftrag.abbruch) });
+      try {
+        bilder.push({ zeitMs, daten: await leser.bildAn(zeitMs, auftrag.abbruch) });
+      } catch (ausfall) {
+        /*
+         * Der Abbruch nimmt mit, was bis hierher gelesen ist.
+         *
+         * Er kommt aus `warten` als blanker `AbbruchError` – und genau
+         * deshalb muss er HIER eingefangen werden. Eine Prüfung am
+         * Schleifenanfang liefe nie an: Zwischen dem Ende von `bildAn` und
+         * dem nächsten Schleifenkopf liegt kein Makrotask, ein Tipp auf
+         * „Abbrechen" landet also immer mitten im Sprung. Ohne dieses
+         * `catch` bekäme der Anwender nach einem Abbruch kein Angebot,
+         * aus den schon gelesenen Bildern etwas zu machen.
+         */
+        if (ausfall instanceof AbbruchError) throw new LeseAbbruch(bilder);
+        throw ausfall;
+      }
       auftrag.fortschritt?.((i + 1) / gesamt, `Bild ${i + 1} von ${gesamt}`);
     }
 

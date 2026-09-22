@@ -145,7 +145,8 @@ export async function folgeMasken(
   const faktor = bilder.length > 1 ? breite / grau[0].breite : 1;
   const lagen: Lage[] = [LAGE_RUHE];
   for (let i = 1; i < bilder.length; i += 1) {
-    lagen.push(lageVerketten(lagen[i - 1], lageSchaetzen(bewegung(grau[i - 1], grau[i], breite))));
+    // Der jüngste Schritt zuerst, die Kette danach – siehe `lageVerketten`.
+    lagen.push(lageVerketten(lageSchaetzen(bewegung(grau[i - 1], grau[i], breite)), lagen[i - 1]));
   }
 
   const masken: Uint8Array[] = [];
@@ -214,7 +215,7 @@ export async function folgeMasken(
               masken[letzterNetzlauf],
               breite,
               hoehe,
-              lageVerketten(lageKehren(lagen[letzterNetzlauf]), lagen[i]),
+              lageVerketten(lagen[i], lageKehren(lagen[letzterNetzlauf])),
               faktor,
             )
           : null;
@@ -229,7 +230,7 @@ export async function folgeMasken(
       letzterNetzlauf = i;
     } else {
       // Aus dem letzten Netzlauf ziehen, nicht aus dem Vorgänger.
-      const seitDort = lageVerketten(lageKehren(lagen[letzterNetzlauf]), lagen[i]);
+      const seitDort = lageVerketten(lagen[i], lageKehren(lagen[letzterNetzlauf]));
       masken.push(maskeZiehen(masken[letzterNetzlauf], breite, hoehe, seitDort, faktor));
     }
     auftrag.fortschritt?.((i + 1) / schritte, `Freistellen: Bild ${i + 1} von ${schritte}`);

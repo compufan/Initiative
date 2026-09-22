@@ -280,6 +280,53 @@ describe('abtasten', () => {
     expect(plan.schnitte).toEqual([]);
   });
 
+  it('meldet eine NAHTLOSE Grenze nicht als Schnitt', () => {
+    /*
+     * Der Knopf „Stück hinzufügen" legt das neue Stück dort an, wo das
+     * aktive aufhört – das ist der Normalfall. Dort läuft die Szene weiter.
+     * Ein gemeldeter Schnitt setzte in `folgeTeile` die Lage auf die Ruhe
+     * zurück, und ein Verlauf spränge mitten in einer durchgehenden
+     * Einstellung an seine Ausgangsstelle.
+     */
+    const plan = abtasten({
+      stuecke: [
+        { vonMs: 0, bisMs: 500 },
+        { vonMs: 500, bisMs: 900 },
+      ],
+      schrittMs: 100,
+      maxBilder: 50,
+    });
+    expect(plan.zeitpunkte).toEqual([0, 100, 200, 300, 400, 500, 600, 700, 800]);
+    expect(plan.schnitte).toEqual([]);
+  });
+
+  it('meldet einen echten Sprung weiterhin als Schnitt', () => {
+    const plan = abtasten({
+      stuecke: [
+        { vonMs: 0, bisMs: 500 },
+        { vonMs: 2000, bisMs: 2300 },
+      ],
+      schrittMs: 100,
+      maxBilder: 50,
+    });
+    expect(plan.schnitte).toEqual([5]);
+  });
+
+  it('erkennt die Naht auch mit dem Versatz in die Bildmitte', () => {
+    // Mit `mitte` liegen die Zeitpunkte um einen halben Schritt versetzt –
+    // die Nahtprüfung muss denselben Versatz einrechnen, sonst meldet sie bei
+    // JEDEM Filmstück einen Schnitt.
+    const plan = filmZeitpunkte(
+      [
+        { vonMs: 0, bisMs: 400 },
+        { vonMs: 400, bisMs: 800 },
+      ],
+      25,
+      50,
+    );
+    expect(plan.schnitte).toEqual([]);
+  });
+
   it('gibt auch ohne jedes Stück ein Bild zurück', () => {
     // `videoSchreiben` wirft bei null Bildern. Ein leerer Plan darf keine
     // Ausnahme auslösen, sondern muss ein Standbild ergeben.

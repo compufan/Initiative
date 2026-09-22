@@ -74,6 +74,27 @@ function symbolAdressen(): { adressen: Record<SymbolRolle, string>; mitKarte: bo
 function markeAdressen(adressen: Record<SymbolRolle, string>, mitKarte: boolean): Plugin {
   return {
     name: 'initiative-marke-adressen',
+    /*
+     * Die Karte beobachten, damit ein neuer Bausatz im laufenden Betrieb
+     * ankommt.
+     *
+     * `symbolAdressen()` läuft genau einmal, beim Laden dieser Datei. Wer
+     * `marke` bei laufendem Entwicklungsserver aufruft, löscht dabei die
+     * alten Symboldateien (`rmSync` in `scripts/marke.mjs`) – und die Seite
+     * zeigt weiter auf Adressen, die es nicht mehr gibt. Der Server
+     * antwortet darauf nicht einmal mit 404, sondern mit `index.html`, weil
+     * alles Unbekannte dorthin fällt. Ein Neustart holt die neue Karte.
+     */
+    configureServer(server) {
+      const karte = fileURLToPath(new URL('./.marke/symbole.json', import.meta.url));
+      server.watcher.add(karte);
+      server.watcher.on('change', (pfad) => {
+        if (pfad === karte) void server.restart();
+      });
+      server.watcher.on('add', (pfad) => {
+        if (pfad === karte) void server.restart();
+      });
+    },
     transformIndexHtml(html) {
       let raus = html;
       for (const rolle of SYMBOL_ROLLEN) {

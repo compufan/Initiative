@@ -103,3 +103,25 @@ describe('Esc über dem Stapel', () => {
     expect(modul.dialogeOffen()).toBe(0);
   });
 });
+
+describe('Die Reihenfolge am Stapel', () => {
+  it('bleibt erhalten, wenn ein Dialog sich abmeldet und sofort wieder anmeldet', () => {
+    /*
+     * Genau das passierte bei jedem Rendern des Elternteils, solange die
+     * Anmeldung an `onClose` hing: Der untere Dialog meldete ab und wieder
+     * an – und lag danach OBEN. Ein Esc schloss dann ihn statt des Blattes
+     * darüber. `useDialogAnmeldung` verhindert das, indem es gar nicht erst
+     * abmeldet; diese Prüfung hält die Folge fest, die sonst einträte.
+     */
+    const gerufen: string[] = [];
+    const abUnten = modul.dialogAnmelden(() => gerufen.push('unten'));
+    modul.dialogAnmelden(() => gerufen.push('oben'));
+
+    // Der untere meldet sich neu an – wie es ein instabiler Rückruf täte.
+    abUnten();
+    modul.dialogAnmelden(() => gerufen.push('unten-neu'));
+
+    escDruecken();
+    expect(gerufen).toEqual(['unten-neu']);
+  });
+});

@@ -212,7 +212,15 @@ export function VideoEditorSheet({
    * Sekundenabstand ist die Regel, mindestens aber jedes vierte.
    */
   const schluesselAbstand = Math.max(1, Math.min(4, Math.round(bildrate / 2)));
-  const dauerSchaetzung = filmDauerSchaetzenMs(anzahl, brauchtAlle, schluesselAbstand);
+  /*
+   * Die Schätzung hängt an den MODELLÄUFEN, nicht am Weg durch `videoBauen`.
+   *
+   * `brauchtAlle` ist auch bei einem blossen Verlauf wahr – dann liegen zwar
+   * alle Bilder im Speicher, aber `folgeTeile` läuft über eine leere
+   * Teileliste und startet kein einziges Modell. Mit `brauchtAlle` gerechnet
+   * stünden dort „rund 2 Minuten" für eine Arbeit von vierzehn Sekunden.
+   */
+  const dauerSchaetzung = filmDauerSchaetzenMs(anzahl, teile.length > 0, schluesselAbstand);
   /** Der Anfang des ERSTEN Stücks – dort wird eingestellt. */
   const anfangMs = stuecke[0]?.vonMs ?? 0;
 
@@ -308,7 +316,16 @@ export function VideoEditorSheet({
         });
       } catch (ausfall) {
         if (ausfall instanceof VideoBauAbbruch) {
-          setNachAbbruch(ausfall.fertigeBilder >= 2 ? ausfall.fertigeBilder : null);
+          /*
+           * Das Angebot nur, wenn wirklich etwas zu KÜRZEN ist.
+           *
+           * Wären alle Bilder fertig, startete „Ja, aus N Bildern" denselben
+           * Auftrag noch einmal von null – samt aller Modelläufe. Genau das
+           * passierte, solange der Abbruch beim Schreiben die volle
+           * Bilderzahl meldete.
+           */
+          const fertig = ausfall.fertigeBilder;
+          setNachAbbruch(fertig >= 2 && fertig < anzahl ? fertig : null);
         } else if (!(ausfall instanceof AbbruchError)) {
           toast(errorMessage(ausfall, 'Das Video ging nicht'), 'error');
         }
@@ -318,7 +335,18 @@ export function VideoEditorSheet({
         setLauf(null);
       }
     },
-    [bildrate, doc, kante, lauf, maxBilder, schluesselAbstand, stuecke, video, wachePruefen],
+    [
+      anzahl,
+      bildrate,
+      doc,
+      kante,
+      lauf,
+      maxBilder,
+      schluesselAbstand,
+      stuecke,
+      video,
+      wachePruefen,
+    ],
   );
 
   useEffect(
@@ -447,8 +475,12 @@ export function VideoEditorSheet({
                     <strong>
                       Hinten fallen {(plan.gekuerztMs / 1000).toFixed(1).replace('.', ',')} s weg –{' '}
                       {brauchtAlle
-                        ? `bei dieser Grösse passen höchstens ${maxBilder} Bilder in den Speicher, weil die Bereiche am Bildinhalt hängen.`
-                        : `mehr als ${maxBilder} Bilder dauern länger, als vor einem Balken zu sitzen erträglich ist – das sind ${sekundenText(maxBilder / bildrate)} s Film. Bei ${naechstKleiner(bildrate)} Bildern je Sekunde wären es ${sekundenText(maxBilder / naechstKleiner(bildrate))} s.`}
+                        ? `bei dieser Grösse passen höchstens ${maxBilder} Bilder in den Speicher – die Bewegung wird über den ganzen Film geschätzt, also liegen alle Bilder gleichzeitig da.`
+                        : `mehr als ${maxBilder} Bilder dauern länger, als vor einem Balken zu sitzen erträglich ist – das sind ${sekundenText(maxBilder / bildrate)} s Film.${
+                            naechstKleiner(bildrate) < bildrate
+                              ? ` Bei ${naechstKleiner(bildrate)} Bildern je Sekunde wären es ${sekundenText(maxBilder / naechstKleiner(bildrate))} s.`
+                              : ''
+                          }`}
                     </strong>
                   </>
                 )}
@@ -609,11 +641,28 @@ export function VideoEditorSheet({
 
           {doc && (
             <p className="vg-hinweis">
+              {/*
+                  Drei Lagen, und der Unterschied zwischen der zweiten und der
+                  dritten ist nicht offensichtlich.
+
+                  „Nichts eingestellt" ist klar. Bei INHALTSTEILEN (Netz,
+                  Tiefe, Antippen) läuft ein Modell, und das kostet Minuten.
+                  Dazwischen liegt der Fall, der lange falsch beschrieben war:
+                  ein Verlauf, eine Ellipse, ein Pinselstrich. Der hängt nicht
+                  am Bildinhalt und braucht kein Modell – aber er muss mit der
+                  Kamera mitwandern, und dafür wird die Bewegung über den
+                  ganzen Film geschätzt. Also liegen alle Bilder gleichzeitig
+                  im Speicher, und genau daran hängt die kleinere Obergrenze
+                  oben. „Das geht schnell" stand hier und war für diesen Fall
+                  nur die halbe Wahrheit.
+              */}
               {nichtsGetan
                 ? 'Noch nichts eingestellt – der Film käme so heraus, wie er hineingeht.'
-                : teile.length === 0
-                  ? 'Die Bearbeitung gilt für jedes Bild gleich. Das geht schnell.'
-                  : `${teile.length === 1 ? 'Ein Bereich hängt' : `${teile.length} Bereiche hängen`} am Bildinhalt – Netz, Tiefe oder Antippen. Die werden auf jedem ${schluesselAbstand === 1 ? 'Bild' : `${schluesselAbstand}. Bild`} neu gerechnet und dazwischen mitgeschoben. Das dauert.`}
+                : teile.length > 0
+                  ? `${teile.length === 1 ? 'Ein Bereich hängt' : `${teile.length} Bereiche hängen`} am Bildinhalt – Netz, Tiefe oder Antippen. Die werden auf jedem ${schluesselAbstand === 1 ? 'Bild' : `${schluesselAbstand}. Bild`} neu gerechnet und dazwischen mitgeschoben. Das dauert.`
+                  : brauchtAlle
+                    ? 'Ein Bereich beschreibt eine Form – Verlauf, Ellipse oder Pinselstrich. Der wandert mit der Kamera mit, dafür wird die Bewegung über den ganzen Film geschätzt. Kein Modell, aber alle Bilder auf einmal im Speicher.'
+                    : 'Die Bearbeitung gilt für jedes Bild gleich. Das geht schnell, und die Bilder werden einzeln durchgereicht statt gesammelt.'}
             </p>
           )}
 

@@ -5,7 +5,7 @@ import { FotoWerkstatt } from './FotoWerkstatt.js';
 import { CastKnopf } from '../fernseher/CastKnopf.js';
 import { DateiAktionen } from './DateiAktionen.js';
 import { mediaDownloadSrc, mediaSrc } from './helpers.js';
-import { dialogAnmelden } from '../../lib/dialogVerlauf.js';
+import { useDialogAnmeldung } from '../../lib/dialogAnmeldung.js';
 
 interface LightboxProps {
   items: AttachmentDto[];
@@ -83,7 +83,7 @@ export function Lightbox({ items, index, onClose, ablegen, alsRezept, zielName }
    * einem Rechner gibt es keine Zurück-Geste. Auf dem Telefon ist sie die
    * naheliegendste Art, ein Vollbild zu verlassen.
    */
-  useEffect(() => dialogAnmelden(onClose), [onClose]);
+  useDialogAnmeldung(true, onClose);
   const item = items[current];
 
   const reset = useCallback(() => {

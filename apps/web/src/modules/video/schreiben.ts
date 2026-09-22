@@ -168,6 +168,21 @@ export interface SchreibAuftrag {
 /** Woher die Bilder kommen: eine Funktion, die das n-te malt. */
 export type Bildquelle = (nummer: number) => Promise<CanvasImageSource> | CanvasImageSource;
 
+/**
+ * Ein Abbruch, der sagt, wie viele Bilder schon KODIERT waren.
+ *
+ * Nicht dasselbe wie „wie viele gelesen wurden": Wer danach fragt, will
+ * wissen, ob ein kürzerer Film noch etwas wert ist. Ohne diese Zahl meldete
+ * `videoBauen` die volle Bilderzahl, und das Angebot „Ja, aus N Bildern"
+ * startete denselben Auftrag noch einmal von null – mit allen Modelläufen.
+ */
+export class SchreibAbbruch extends AbbruchError {
+  constructor(readonly fertig: number) {
+    super();
+    this.name = 'SchreibAbbruch';
+  }
+}
+
 export async function videoSchreiben(
   anzahl: number,
   quelle: Bildquelle,
@@ -221,10 +236,18 @@ export async function videoSchreiben(
 
   try {
     for (let i = 0; i < anzahl; i += 1) {
-      if (auftrag.abbruch?.aborted) throw new AbbruchError();
+      if (auftrag.abbruch?.aborted) throw new SchreibAbbruch(i);
       if (gescheitert) throw gescheitert;
 
-      const gemalt = await quelle(i);
+      let gemalt: CanvasImageSource;
+      try {
+        gemalt = await quelle(i);
+      } catch (ausfall) {
+        // Auch die Quelle kann abbrechen – sie liest ja selbst aus dem
+        // Video. Die Zahl der fertigen Bilder kennt aber nur diese Schleife.
+        if (ausfall instanceof AbbruchError) throw new SchreibAbbruch(i);
+        throw ausfall;
+      }
       const bild = new Bild(gemalt, {
         timestamp: Math.round(i * abstandMs * 1000),
         duration: Math.round(abstandMs * 1000),
@@ -253,7 +276,7 @@ export async function videoSchreiben(
        */
       while (kodierer.encodeQueueSize > 8) {
         await new Promise((weiter) => setTimeout(weiter, 4));
-        if (auftrag.abbruch?.aborted) throw new AbbruchError();
+        if (auftrag.abbruch?.aborted) throw new SchreibAbbruch(i + 1);
       }
       auftrag.fortschritt?.((i + 1) / anzahl, `Bild ${i + 1} von ${anzahl}`);
     }

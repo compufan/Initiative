@@ -310,6 +310,69 @@ describe('lageVerketten', () => {
     const zusammen = lageVerketten(grad(10), grad(10));
     expect(Math.atan2(zusammen.w, zusammen.s) * (180 / Math.PI)).toBeCloseTo(20, 6);
   });
+
+  it('führt ZUERST die erste Lage aus – und das ist nicht dasselbe wie umgekehrt', () => {
+    /*
+     * Die Prüfung, die gefehlt hat, und sie hat 26,6 Bildpunkte gekostet.
+     *
+     * Die drei Prüfungen darüber benutzen reine Verschiebung ODER reine
+     * Drehung, und genau dort vertauschen die beiden Lagen miteinander – die
+     * falsche Reihenfolge kam durch alle drei. Erst eine Verschiebung UND
+     * eine Drehung trennen sie.
+     */
+    const schieben = { s: 1, w: 0, tx: 10, ty: 0, sicher: 9 };
+    const drehen = {
+      s: Math.cos(Math.PI / 2),
+      w: Math.sin(Math.PI / 2),
+      tx: 0,
+      ty: 0,
+      sicher: 9,
+    };
+
+    // Erst schieben, dann drehen: (0,0) geht auf (10,0) und die
+    // Vierteldrehung macht daraus (0,10).
+    const erstSchieben = lageVerketten(schieben, drehen);
+    expect(punktZurueck(erstSchieben, 1, 0, 0).x).toBeCloseTo(0, 6);
+    expect(punktZurueck(erstSchieben, 1, 0, 0).y).toBeCloseTo(10, 6);
+
+    // Andersherum bleibt der Punkt nach der Drehung bei (0,0) und wird
+    // danach auf (10,0) geschoben.
+    const erstDrehen = lageVerketten(drehen, schieben);
+    expect(punktZurueck(erstDrehen, 1, 0, 0).x).toBeCloseTo(10, 6);
+    expect(punktZurueck(erstDrehen, 1, 0, 0).y).toBeCloseTo(0, 6);
+  });
+
+  it('trägt eine Kette aus Schwenk und Drehung exakt zusammen', () => {
+    /*
+     * Der Fall aus dem Film: Die Kamera schwenkt erst und kippt dann.
+     *
+     * `lagen[i]` soll Bild i auf Bild 0 abbilden. Jeder Schritt bildet Bild k
+     * auf k−1 ab, muss also VOR der schon aufgelaufenen Kette ausgeführt
+     * werden. Geprüft wird gegen die Wahrheit: dieselben Schritte einzeln,
+     * einer nach dem anderen, auf denselben Punkt angewandt.
+     */
+    const grad = (g: number) => ({
+      s: Math.cos((g * Math.PI) / 180),
+      w: Math.sin((g * Math.PI) / 180),
+      tx: 0,
+      ty: 0,
+      sicher: 9,
+    });
+    const schritte = [
+      ...Array.from({ length: 8 }, () => ({ s: 1, w: 0, tx: 8, ty: 0, sicher: 9 })),
+      ...Array.from({ length: 8 }, () => grad(3)),
+    ];
+
+    let wahr = { x: 60, y: 60 };
+    for (const schritt of schritte) wahr = punktVor(schritt, 1, wahr.x, wahr.y);
+
+    let kette = LAGE_RUHE;
+    for (const schritt of schritte) kette = lageVerketten(schritt, kette);
+    const gekettet = punktVor(kette, 1, 60, 60);
+
+    expect(gekettet.x, `x: ${gekettet.x} statt ${wahr.x}`).toBeCloseTo(wahr.x, 6);
+    expect(gekettet.y, `y: ${gekettet.y} statt ${wahr.y}`).toBeCloseTo(wahr.y, 6);
+  });
 });
 
 describe('punktZurueck und punktVor', () => {

@@ -6,7 +6,7 @@ import { flaeche2d } from '../bild/farbraum.js';
 import type { ComposerActionProps } from '../types.js';
 import { prepareImage, videoPreview } from '../../lib/upload.js';
 import { toast, useHideNav } from '../../state/ui.js';
-import { dialogAnmelden } from '../../lib/dialogVerlauf.js';
+import { useDialogAnmeldung } from '../../lib/dialogAnmeldung.js';
 import {
   VIDEO_MIME_CANDIDATES,
   baseMime,
@@ -346,7 +346,7 @@ export function CameraSheet({ conversationId, onClose }: ComposerActionProps) {
    * Vorher gab es nur das ✕ oben links; wer stattdessen die Zurück-Geste
    * benutzte – auf Android die übliche –, landete ausserhalb des Chats.
    */
-  useEffect(() => dialogAnmelden(onClose), [onClose]);
+  useDialogAnmeldung(true, onClose);
 
   const discard = () => {
     setDraft(null);

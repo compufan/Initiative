@@ -176,7 +176,15 @@ export async function folgeTeile(
     }
     const feld = felder[i];
     const schritt = feld ? lageSchaetzen(feld) : LAGE_RUHE;
-    lagen.push(lageVerketten(lagen[i - 1], schritt));
+    /*
+     * Der SCHRITT zuerst, die aufgelaufene Kette danach.
+     *
+     * `schritt` bildet Bild i auf Bild i−1 ab, `lagen[i-1]` bildet Bild i−1
+     * auf Bild 0 ab. Wer sie andersherum verkettet, rechnet die Drehung des
+     * jüngsten Schrittes auf die Verschiebung der ganzen Kette an – gemessen
+     * 26,6 Punkte Abweichung nach acht Schwenken und acht Drehungen.
+     */
+    lagen.push(lageVerketten(schritt, lagen[i - 1]));
   }
 
   /* ---------- Die Tiefensitzung, falls eine gebraucht wird ---------- */
@@ -225,7 +233,7 @@ export async function folgeTeile(
             sammlung.push(sammlung[i - 1]);
             continue;
           }
-          const seitAnker = lageVerketten(kehren(lagen[anker]), lagen[i]);
+          const seitAnker = lageVerketten(lagen[i], kehren(lagen[anker]));
           sammlung.push(maskeZiehen(vorlage, breite, hoehe, seitAnker, faktor));
           continue;
         }
@@ -254,7 +262,7 @@ export async function folgeTeile(
               vorlage,
               breite,
               hoehe,
-              lageVerketten(kehren(lagen[anker]), lagen[i]),
+              lageVerketten(lagen[i], kehren(lagen[anker])),
               faktor,
             )
           : null;

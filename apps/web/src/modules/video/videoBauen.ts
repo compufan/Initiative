@@ -11,7 +11,7 @@ import { filmSchrittMs, filmZeitpunkte, type Stueck } from './ausschnitt.js';
 import { docFuerBild, docMitLage, hatFormTeile, inhaltsTeile } from './bildweise.js';
 import { TeileAbbruch, folgeTeile } from './folgeTeile.js';
 import { LAGE_RUHE, type Lage } from './verfolgung.js';
-import { videoSchreiben, videoTauglich } from './schreiben.js';
+import { SchreibAbbruch, videoSchreiben, videoTauglich } from './schreiben.js';
 
 /**
  * Ein bearbeitetes Video – dieselbe Bearbeitung wie beim Foto, über alle
@@ -129,7 +129,16 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
    */
   const formen = hatFormTeile(auftrag.doc);
   const brauchtAlle = teile.length > 0 || formen;
-  const gewicht = gewichte(plan.zeitpunkte.length, brauchtAlle, auftrag.schluesselAbstand);
+  /*
+   * Die Gewichte hängen an den MODELLÄUFEN, nicht an der Wegewahl.
+   *
+   * Bei einem Dokument mit nur Formteilen ist `brauchtAlle` wahr, `teile`
+   * aber leer – `folgeTeile` schätzt dann nur die Bewegung und rechnet kein
+   * Modell. Mit `brauchtAlle` gewichtet bekäme „Masken rechnen" 85 % der
+   * Balkenbreite für 3 % der Arbeit, und der Balken kröche erst und schösse
+   * dann durch.
+   */
+  const gewicht = gewichte(plan.zeitpunkte.length, teile.length > 0, auftrag.schluesselAbstand);
   const melden = (abschnitt: Abschnitt, anteil: number, text: string) => {
     const vorher =
       abschnitt === 'lesen'
@@ -149,7 +158,7 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
   /* ---------- Der Weg ohne Masken: Bild für Bild, nichts wird gesammelt ---------- */
 
   if (!brauchtAlle) {
-    return await stroemend(auftrag, plan.zeitpunkte, schnitte);
+    return await stroemend(auftrag, plan.zeitpunkte, schnitte, plan.schrittMs);
   }
 
   let gelesen: { bilder: readonly GelesenesBild[]; breite: number; hoehe: number };
@@ -157,6 +166,9 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
     gelesen = await videoBilderLesen(auftrag.datei, {
       zeitpunkte: plan.zeitpunkte,
       kante: auftrag.kante,
+      // Der Abstand zum Videoende darf kleiner sein als ein Bild – sonst
+      // fällt das Filmende bei hohen Bildraten auf ein Standbild zusammen.
+      randMs: plan.schrittMs / 2,
       fortschritt: (anteil, text) => melden('lesen', anteil, text),
       abbruch: auftrag.abbruch,
     });
@@ -258,7 +270,11 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
       },
     );
   } catch (ausfall) {
-    if (ausfall instanceof AbbruchError) throw new VideoBauAbbruch('rechnen', anzahl);
+    // Wie weit der Kodierer gekommen ist, weiss nur er selbst – siehe
+    // `SchreibAbbruch`. Die volle Bilderzahl zu melden hiesse, hinterher
+    // denselben Auftrag noch einmal von null anzubieten.
+    if (ausfall instanceof SchreibAbbruch) throw new VideoBauAbbruch('rechnen', ausfall.fertig);
+    if (ausfall instanceof AbbruchError) throw new VideoBauAbbruch('rechnen', 0);
     throw ausfall;
   }
 
@@ -297,13 +313,14 @@ async function stroemend(
   auftrag: VideoBauAuftrag,
   punkte: readonly number[],
   schnitte: ReadonlySet<number>,
+  schrittMs: number,
 ): Promise<VideoBauErgebnis> {
   const anzahl = punkte.length;
   const leser = await videoLeserOeffnen(auftrag.datei, {
     kante: auftrag.kante,
+    randMs: schrittMs / 2,
     abbruch: auftrag.abbruch,
   });
-  let fertige = 0;
   try {
     const quelle = document.createElement('canvas');
     quelle.width = leser.breite;
@@ -339,7 +356,6 @@ async function stroemend(
           if (auftrag.abbruch?.aborted) throw new AbbruchError();
           const daten = nummer === 0 ? erstes : await leser.bildAn(punkte[nummer], auftrag.abbruch);
           stift.putImageData(daten, 0, 0);
-          fertige = nummer;
           auftrag.fortschritt?.((nummer + 1) / anzahl, 'strom', `Bild ${nummer + 1} von ${anzahl}`);
           return zeichneAusgabe(quelle, leser.breite, leser.hoehe, auftrag.doc);
         },
@@ -352,7 +368,8 @@ async function stroemend(
         },
       );
     } catch (ausfall) {
-      if (ausfall instanceof AbbruchError) throw new VideoBauAbbruch('strom', fertige);
+      if (ausfall instanceof SchreibAbbruch) throw new VideoBauAbbruch('strom', ausfall.fertig);
+      if (ausfall instanceof AbbruchError) throw new VideoBauAbbruch('strom', 0);
       throw ausfall;
     }
 

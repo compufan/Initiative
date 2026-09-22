@@ -7,7 +7,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
-import { dialogAnmelden } from '../../lib/dialogVerlauf.js';
+import { useDialogAnmeldung } from '../../lib/dialogAnmeldung.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 import { herunterladen } from '../../lib/herunterladen.js';
 import { toast, useHideNav } from '../../state/ui.js';
@@ -868,7 +868,7 @@ export function BildEditor({
   }, [etwasZuVerlieren, onClose]);
 
   // Zurück-Taste schliesst den Editor, statt aus der App zu fallen.
-  useEffect(() => dialogAnmelden(schliessenVersuchen), [schliessenVersuchen]);
+  useDialogAnmeldung(true, schliessenVersuchen);
 
   /*
    * `onClose` über eine Referenz, nicht über die Abhängigkeiten.

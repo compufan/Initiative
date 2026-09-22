@@ -640,15 +640,30 @@ export function lageRuht(lage: Lage): boolean {
 }
 
 /**
- * Zwei Lagen hintereinander: erst `frueher`, dann `spaeter`.
+ * Zwei Lagen hintereinander ausführen: erst `zuerst`, dann `danach`.
  *
- * Damit lässt sich aus den Lagen benachbarter Bilder eine Lage vom ERSTEN
- * Bild bis zum n-ten aufsummieren. Genau darauf kommt es an: Eine Maske wird
- * immer aus dem ersten Bild gezogen, nie aus einer schon gezogenen Fassung.
- * Sonst legt sich bei jedem Schritt eine weitere Abtastung darüber, und die
- * Maske franst aus – gemessen 58 % Flächenverlust über 33 Schritte.
+ * # Warum die Namen ANWENDUNGSREIHENFOLGE meinen und nicht Zeit
+ *
+ * Weil beides auseinanderläuft, und das hat gemessen 26,6 Bildpunkte
+ * gekostet. Eine Lage bildet ein Bild auf ein FRÜHERES ab – `punktZurueck`
+ * sagt es im Namen. Die Lage eines Bildes gegenüber dem ersten entsteht
+ * deshalb so: Der jüngste Schritt (von Bild n nach n−1) wird ZUERST
+ * angewandt, die aufgelaufene Kette (von n−1 zurück bis 0) danach. Der
+ * zeitlich spätere Schritt steht also vorn.
+ *
+ * Die Parameter hiessen einmal `frueher` und `spaeter`, und genau an dieser
+ * Verwechslung ist es aufgelaufen: Nachgerechnet mit acht Schwenken und
+ * danach acht Drehungen zu drei Grad lag ein Punkt aus Bild 0 in Bild 16 um
+ * 26,6 Punkte daneben; in der richtigen Reihenfolge sind es 1e−14. Bei reiner
+ * Verschiebung ODER reiner Drehung vertauschen die beiden sich – deshalb ist
+ * es keinem der bisherigen Tests aufgefallen.
+ *
+ * Gebraucht wird die Verkettung, damit eine Maske IMMER aus dem Urbild
+ * gezogen wird und nie aus einer schon gezogenen Fassung. Sonst legt sich bei
+ * jedem Schritt eine weitere Abtastung darüber, und die Maske franst aus –
+ * gemessen 58 % Flächenverlust über 33 Schritte.
  */
-export function lageVerketten(frueher: Lage, spaeter: Lage): Lage {
+export function lageVerketten(zuerst: Lage, danach: Lage): Lage {
   /*
    * Die Ruhe ist neutral, und zwar auch fuer die Sicherheit.
    *
@@ -657,14 +672,14 @@ export function lageVerketten(frueher: Lage, spaeter: Lage): Lage {
    * von Gewissheit. Nachgemessen am Film des Anwenders stehen 8 der 33
    * Uebergaenge still.
    */
-  if (lageRuht(frueher)) return spaeter;
-  if (lageRuht(spaeter)) return frueher;
+  if (lageRuht(zuerst)) return danach;
+  if (lageRuht(danach)) return zuerst;
   return {
-    s: spaeter.s * frueher.s - spaeter.w * frueher.w,
-    w: spaeter.s * frueher.w + spaeter.w * frueher.s,
-    tx: spaeter.s * frueher.tx - spaeter.w * frueher.ty + spaeter.tx,
-    ty: spaeter.w * frueher.tx + spaeter.s * frueher.ty + spaeter.ty,
-    sicher: Math.min(frueher.sicher, spaeter.sicher),
+    s: danach.s * zuerst.s - danach.w * zuerst.w,
+    w: danach.s * zuerst.w + danach.w * zuerst.s,
+    tx: danach.s * zuerst.tx - danach.w * zuerst.ty + danach.tx,
+    ty: danach.w * zuerst.tx + danach.s * zuerst.ty + danach.ty,
+    sicher: Math.min(zuerst.sicher, danach.sicher),
   };
 }
 

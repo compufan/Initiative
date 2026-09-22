@@ -244,6 +244,25 @@ self.addEventListener('message', (event) => {
   }
 });
 
+/*
+ * Die Symboladressen – mit einem Rückfall für den Entwicklungsbetrieb.
+ *
+ * `define` aus `vite.config.ts` ersetzt diese Kennungen nur im BAU:
+ * Vites `vite:define` bricht für den Client ab, solange nicht gebaut wird,
+ * und der Service Worker bekommt auch keine Umgebung eingespritzt.
+ * Nachgemessen liefert `dev-sw.js` deshalb wörtlich `__SYMBOL_ICON__`, und
+ * jede Benachrichtigung endete dort in einem `ReferenceError` – also in gar
+ * keiner Benachrichtigung.
+ *
+ * `typeof` auf eine unbekannte Kennung ist die einzige Abfrage, die nicht
+ * selbst wirft. Im Entwicklungsbetrieb steht dann der schlichte Name da; die
+ * Datei gibt es dort zwar nicht, aber eine Benachrichtigung ohne Bild ist
+ * unendlich viel besser als keine.
+ */
+const SYMBOL_ICON = typeof __SYMBOL_ICON__ === 'string' ? __SYMBOL_ICON__ : '/icons/icon-192.png';
+const SYMBOL_BADGE =
+  typeof __SYMBOL_BADGE__ === 'string' ? __SYMBOL_BADGE__ : '/icons/badge-96.png';
+
 self.addEventListener('push', (event) => {
   if (!event.data) return;
   let payload: PushPayload;
@@ -272,8 +291,8 @@ self.addEventListener('push', (event) => {
 
       await self.registration.showNotification(payload.title, {
         body: payload.body,
-        icon: payload.icon ?? __SYMBOL_ICON__,
-        badge: payload.badge ?? __SYMBOL_BADGE__,
+        icon: payload.icon ?? SYMBOL_ICON,
+        badge: payload.badge ?? SYMBOL_BADGE,
         tag: payload.tag ?? payload.kind,
         renotify: Boolean(payload.tag),
         data: { url: payload.url ?? '/' },
