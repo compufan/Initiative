@@ -480,3 +480,35 @@ export function nachklang(name: ProfilName, regler: Regler): number {
   if (regler.hall > 0) sekunden = Math.max(sekunden, 1.8);
   return sekunden;
 }
+
+/**
+ * Wie lang der AUSSCHNITT höchstens sein darf, damit das Ergebnis in die
+ * Grenze passt.
+ *
+ * # Warum das eine eigene Rechnung ist
+ *
+ * Weil zwei Dinge daran ziehen und beide leicht zu übersehen sind.
+ *
+ * Das Tempo streckt oder staucht: Bei „Tief" mit −12 Halbtönen wird die Datei
+ * fast dreimal so lang wie der gewählte Ausschnitt, bei „Hoch" kürzer. Der
+ * Ausschnitt darf also LÄNGER sein als das erlaubte Ergebnis, wenn das Tempo
+ * über eins liegt.
+ *
+ * Und der Nachhall kommt HINTEN dazu: `tonRendern` legt den Rechenkontext auf
+ * `ausschnitt / tempo + nachklang` an. Bei acht erlaubten Sekunden und „Halle"
+ * (2,2 s) blieben ohne Abzug 10,2 Sekunden Datei stehen – während die Anzeige
+ * acht behauptet und der Server nur die ZAHL auf acht klemmt. Der Sticker
+ * klänge zwei Sekunden länger, als er von sich sagt.
+ *
+ * `mindestens` bleibt immer übrig: Ein Profil, dessen Hall länger nachklingt
+ * als die ganze erlaubte Länge, wäre sonst gar nicht zu benutzen – und ein
+ * Regler ohne jeden Spielraum ist schlimmer als einer mit wenig.
+ */
+export function ausschnittGrenze(
+  maxSekunden: number,
+  tempo: number,
+  schwanz: number,
+  mindestens = 0.5,
+): number {
+  return Math.max(mindestens, maxSekunden - schwanz) * tempo;
+}

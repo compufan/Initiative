@@ -54,6 +54,27 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 60_000,
   expect: { timeout: 10_000 },
+  /*
+   * Ein Arbeiter, keine Nebenläufigkeit – und damit EIN Browser für alles.
+   *
+   * Die Tests teilen sich eine API und eine Datenbank; nebenläufig wären sie
+   * nicht mehr voneinander unabhängig. Der Preis dafür ist gemessen: Ab rund
+   * hundertsechs Tests stirbt der Darstellungsprozess gelegentlich, und zwar
+   * unabhängig davon, welcher Test gerade an der Reihe ist – zweimal
+   * nacheinander traf es denselben Platz in der Reihenfolge, einmal mitten in
+   * `page.evaluate`, einmal schon beim `goto`. Dieselben Dateien allein
+   * laufen durch: Ein Ausschnitt von achtunddreissig Tests ab
+   * `sticker.spec.ts` ist grün, die ganze Reihe nicht immer.
+   *
+   * Es liegt also an der Lebensdauer des Browsers, nicht an einem Test. Die
+   * Reihe ist schwer: ONNX, WebGL, WebCodecs und mehrere hundert Megabyte
+   * Modelle laufen alle in demselben Prozess. Mit einer Wiederholung ist sie
+   * grün.
+   *
+   * Wer das wirklich lösen will, braucht mehrere Arbeiter – und dafür je
+   * einen eigenen Datenbestand. Das ist ein eigener Umbau und keine Zeile
+   * hier.
+   */
   fullyParallel: false,
   workers: 1,
   retries: process.env.CI ? 1 : 0,

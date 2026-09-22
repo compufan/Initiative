@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   KLANGPROFILE,
   REGLER_NEUTRAL,
+  ausschnittGrenze,
+  nachklang,
   profilFinden,
   profilKette,
   reglerKette,
@@ -136,15 +138,34 @@ export function TonWerkstatt({
   const tempo = profilFinden(profil).tempo * Math.pow(2, regler.tonhoehe / 12);
 
   /*
+   * Der Nachhall zählt zur Länge – er steht HINTER dem Ausschnitt.
+   *
+   * `tonRendern` legt den Rechenkontext auf `ausschnitt / tempo + schwanz`
+   * an, und `schwanz` ist bei „Halle" 2,2 Sekunden, bei „Unterwasser" 1,4,
+   * bei „Megafon" 0,4 und bei jedem Hallregler über null 1,8. Wer das nicht
+   * abzieht, bekommt bei acht erlaubten Sekunden mit „Halle" eine Datei von
+   * 10,2 Sekunden – während die Anzeige 0:08 zeigt und der Server die ZAHL
+   * auf acht klemmt. Der Sticker klingt dann zwei Sekunden länger, als er
+   * von sich behauptet.
+   */
+  const schwanz = nachklang(profil, regler);
+
+  /*
    * Wie lang der Ausschnitt sein darf, damit das ERGEBNIS in die Grenze passt.
    *
-   * Bei „Tief" mit −12 Halbtönen zieht das Tempo die Datei auf das
-   * Zweikommaachtfache auseinander; der Ausschnitt darf also nur
-   * `maxSekunden * tempo` lang sein. Wer stattdessen den Ausschnitt
-   * begrenzte, bekäme einen Sticker, dessen Abzeichen acht Sekunden behauptet
-   * und der dreimal so lang klingt.
+   * Zwei Dinge ziehen daran. Das Tempo: Bei „Tief" mit −12 Halbtönen zieht es
+   * die Datei auf das Zweikommaachtfache auseinander, der Ausschnitt darf
+   * also länger sein als das Ergebnis. Und der Nachhall, der oben abgezogen
+   * wird, bevor umgerechnet wird.
+   *
+   * Eine halbe Sekunde bleibt immer übrig. Ein Profil, dessen Hall länger
+   * nachklingt als die ganze erlaubte Länge, wäre sonst gar nicht zu
+   * benutzen – und ein Regler, der auf null steht, ist schlimmer als einer
+   * mit wenig Spielraum.
    */
-  const ausschnittMax = maxSekunden ? maxSekunden * tempo : Number.POSITIVE_INFINITY;
+  const ausschnittMax = maxSekunden
+    ? ausschnittGrenze(maxSekunden, tempo, schwanz)
+    : Number.POSITIVE_INFINITY;
 
   /* ------------------------------------------------------------- Vorhören */
 
@@ -242,8 +263,8 @@ export function TonWerkstatt({
    */
   useEffect(() => {
     if (!maxSekunden) return;
-    setEnde((jetzt) => Math.min(jetzt, beginn + maxSekunden * tempo));
-  }, [maxSekunden, tempo, beginn]);
+    setEnde((jetzt) => Math.min(jetzt, beginn + ausschnittMax));
+  }, [maxSekunden, ausschnittMax, beginn]);
 
   const stilleWeg = () => {
     if (!quelle) return;
@@ -253,7 +274,15 @@ export function TonWerkstatt({
       return;
     }
     setBeginn(grenzen.beginn);
-    setEnde(maxSekunden ? Math.min(grenzen.ende, grenzen.beginn + maxSekunden) : grenzen.ende);
+    /*
+     * Mit `ausschnittMax` klemmen, nicht mit `maxSekunden`.
+     *
+     * Die beiden sind nur bei Tempo eins und ohne Nachhall dasselbe. Und
+     * verlassen darf man sich hier auf nichts: Schneidet `stilleGrenzen` nur
+     * hinten, bleibt `beginn` auf null – dann ändert sich in der
+     * Abhängigkeitsliste des Effekts oben nichts, und er räumt nicht hinterher.
+     */
+    setEnde(Math.min(grenzen.ende, grenzen.beginn + ausschnittMax));
   };
 
   /** Einen Griff auf die Stelle unter dem Finger ziehen. */
@@ -391,10 +420,15 @@ export function TonWerkstatt({
             Bei „Tief" oder „Hoch" sind das zwei verschiedene Zahlen, und die
             erste ist die, die der Empfänger hört. Die zweite steht nur
             daneben, wenn sie abweicht – sonst wäre es dieselbe Zahl zweimal.
+
+            Der Nachhall gehört zur ersten Zahl. Er steht HINTER dem
+            Ausschnitt und macht die Datei länger; ihn wegzulassen hiesse, bei
+            „Halle" 0:08 anzuschreiben und 0:10 zu liefern.
         */}
         <span className="muted">
-          {formatClock(Math.round((gewaehlt / tempo) * 1000))} Ton
-          {Math.abs(tempo - 1) > 0.01 && ` · ${formatClock(Math.round(gewaehlt * 1000))} gewählt`}
+          {formatClock(Math.round((gewaehlt / tempo + schwanz) * 1000))} Ton
+          {(Math.abs(tempo - 1) > 0.01 || schwanz > 0) &&
+            ` · ${formatClock(Math.round(gewaehlt * 1000))} gewählt`}
         </span>
         <div className="row" style={{ gap: 'var(--space-2)' }}>
           <button type="button" className="btn btn-sm" onClick={stilleWeg}>

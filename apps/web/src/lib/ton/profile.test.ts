@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   KLANGPROFILE,
   REGLER_NEUTRAL,
+  ausschnittGrenze,
   begrenzerKurve,
   hallImpuls,
   kennlinie,
@@ -210,6 +211,65 @@ describe('nachklang', () => {
     // Der Regler wirkt unabhängig vom Profil – wer ihn übersieht, schneidet
     // bei „Telefon plus Hall" den Nachklang ab.
     expect(nachklang('telefon', { ...REGLER_NEUTRAL, hall: 0.8 })).toBeGreaterThan(1);
+  });
+});
+
+describe('ausschnittGrenze', () => {
+  it('zieht den Nachhall ab, statt ihn zu vergessen', () => {
+    /*
+     * `tonRendern` legt den Rechenkontext auf `ausschnitt / tempo +
+     * nachklang` an. Bei acht erlaubten Sekunden und „Halle" (2,2 s) blieben
+     * ohne Abzug 10,2 Sekunden Datei stehen – während die Anzeige acht
+     * behauptet und der Server nur die ZAHL auf acht klemmt. Der Sticker
+     * klänge zwei Sekunden länger, als er von sich sagt.
+     */
+    expect(ausschnittGrenze(8, 1, nachklang('halle', REGLER_NEUTRAL))).toBeCloseTo(5.8, 6);
+  });
+
+  it('lässt ein trockenes Profil die volle Länge', () => {
+    expect(ausschnittGrenze(8, 1, nachklang('ohne', REGLER_NEUTRAL))).toBe(8);
+  });
+
+  it('rechnet das Tempo ein – und zwar in die richtige Richtung', () => {
+    /*
+     * Bei „Tief" wird die Datei LÄNGER als der Ausschnitt, der Ausschnitt
+     * darf also kürzer sein. Bei „Hoch" umgekehrt. Wer den Faktor verkehrt
+     * herum anwendet, bekommt bei „Tief" eine Datei von zweiundzwanzig
+     * Sekunden.
+     */
+    expect(ausschnittGrenze(8, 0.72, 0)).toBeCloseTo(5.76, 6);
+    expect(ausschnittGrenze(8, 1.48, 0)).toBeCloseTo(11.84, 6);
+  });
+
+  it('lässt auch dann etwas übrig, wenn der Hall länger ist als die Grenze', () => {
+    // Ein Profil, das man gar nicht mehr benutzen kann, ist schlimmer als
+    // eines mit wenig Spielraum – ein Regler auf null sagt nichts.
+    expect(ausschnittGrenze(2, 1, 5)).toBe(0.5);
+  });
+
+  it('bleibt für jedes Profil unter der Grenze, wenn man sie ausreizt', () => {
+    /*
+     * Die eigentliche Zusage, und sie gilt für alle neun Profile: Wer den
+     * Ausschnitt bis an die Grenze zieht, bekommt eine Datei, die höchstens
+     * so lang ist wie erlaubt. Gerechnet wird mit derselben Formel wie in
+     * `tonRendern`.
+     */
+    const erlaubt = 8;
+    for (const eintrag of KLANGPROFILE) {
+      for (const hall of [0, 0.8]) {
+        const regler = { ...REGLER_NEUTRAL, hall };
+        const schwanz = nachklang(eintrag.name, regler);
+        const ausschnitt = ausschnittGrenze(erlaubt, eintrag.tempo, schwanz);
+        const datei = ausschnitt / eintrag.tempo + schwanz;
+        // Nur der Mindestrest darf darüber liegen – und dann steht es auch so
+        // in der Oberfläche.
+        const grenze = Math.max(erlaubt, 0.5 + schwanz);
+        expect(
+          datei,
+          `${eintrag.name} mit Hall ${hall}: ${datei.toFixed(2)} s`,
+        ).toBeLessThanOrEqual(grenze + 1e-9);
+      }
+    }
   });
 });
 
