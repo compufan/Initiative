@@ -4,7 +4,7 @@ import { Sheet } from '../../components/Sheet.js';
 import { toast } from '../../state/ui.js';
 import { errorMessage } from '../media/helpers.js';
 import { BildEditor } from '../bild/BildEditor.js';
-import { docUnberuehrt, type BildDoc } from '../bild/doc.js';
+import { docUnberuehrt, neuesDoc, type BildDoc } from '../bild/doc.js';
 import { AbbruchError } from '../stickers/engines/index.js';
 import {
   FILM_BILDRATEN,
@@ -16,7 +16,7 @@ import {
   type Stueck,
 } from './ausschnitt.js';
 import { masse, videoBilderLesen } from './bilderLesen.js';
-import { hatFormTeile, inhaltsTeile } from './bildweise.js';
+import { bereicheAbUebernehmen, hatFormTeile, inhaltsTeile } from './bildweise.js';
 import {
   MAX_BILDER_FILM,
   dauerText,
@@ -105,6 +105,12 @@ export function VideoEditorSheet({
   const [bildrate, setBildrate] = useState<number>(FILM_BILDRATE_VORGABE);
   const [kante, setKante] = useState<number>(960);
   const [doc, setDoc] = useState<BildDoc | null>(null);
+  /**
+   * Ist die aktuelle Editor-Sitzung eine „ab hier"-Sitzung, und wenn ja: ab
+   * welcher Stelle im Quellvideo? `null` heisst „normal" – das Ergebnis gilt
+   * wie bisher für den ganzen Film, angesetzt am Anfang des ersten Stücks.
+   */
+  const [abHierMs, setAbHierMs] = useState<number | null>(null);
   const [standbild, setStandbild] = useState<Blob | null>(null);
   const [editorAuf, setEditorAuf] = useState(false);
   const [holt, setHolt] = useState(false);
@@ -276,32 +282,42 @@ export function VideoEditorSheet({
 
   /* ---------- Das Standbild für den Editor ---------- */
 
-  const editorOeffnen = useCallback(async () => {
-    if (!quelle || holt) return;
-    setHolt(true);
-    try {
-      const gelesen = await videoBilderLesen(video, {
-        zeitpunkte: [anfangMs],
-        kante,
-      });
-      const flaeche = document.createElement('canvas');
-      flaeche.width = gelesen.breite;
-      flaeche.height = gelesen.hoehe;
-      flaeche.getContext('2d')?.putImageData(gelesen.bilder[0].daten, 0, 0);
-      const blob = await new Promise<Blob | null>((fertig) =>
-        flaeche.toBlob((ergebnisBlob) => fertig(ergebnisBlob), 'image/png'),
-      );
-      if (!blob) throw new Error('Das Standbild liess sich nicht anlegen');
-      setStandbild(blob);
-      setEditorAuf(true);
-    } catch (ausfall) {
-      if (!(ausfall instanceof AbbruchError)) {
-        toast(errorMessage(ausfall, 'Das Standbild ging nicht'), 'error');
+  /**
+   * `abHier`, falls angegeben: die Sitzung stellt nicht den ganzen Film neu
+   * ein, sondern nur ab dieser Stelle – siehe `abHierMs` und
+   * `bereicheAbUebernehmen`.
+   */
+  const editorOeffnen = useCallback(
+    async (abHier?: number) => {
+      if (!quelle || holt) return;
+      setHolt(true);
+      try {
+        const zeitpunkt = abHier ?? anfangMs;
+        const gelesen = await videoBilderLesen(video, {
+          zeitpunkte: [zeitpunkt],
+          kante,
+        });
+        const flaeche = document.createElement('canvas');
+        flaeche.width = gelesen.breite;
+        flaeche.height = gelesen.hoehe;
+        flaeche.getContext('2d')?.putImageData(gelesen.bilder[0].daten, 0, 0);
+        const blob = await new Promise<Blob | null>((fertig) =>
+          flaeche.toBlob((ergebnisBlob) => fertig(ergebnisBlob), 'image/png'),
+        );
+        if (!blob) throw new Error('Das Standbild liess sich nicht anlegen');
+        setStandbild(blob);
+        setAbHierMs(abHier ?? null);
+        setEditorAuf(true);
+      } catch (ausfall) {
+        if (!(ausfall instanceof AbbruchError)) {
+          toast(errorMessage(ausfall, 'Das Standbild ging nicht'), 'error');
+        }
+      } finally {
+        setHolt(false);
       }
-    } finally {
-      setHolt(false);
-    }
-  }, [anfangMs, holt, kante, quelle, video]);
+    },
+    [anfangMs, holt, kante, quelle, video],
+  );
 
   /* ---------- Rechnen ---------- */
 
@@ -433,9 +449,23 @@ export function VideoEditorSheet({
         quelle={standbild}
         name={name ?? null}
         startDoc={doc}
-        onClose={() => setEditorAuf(false)}
-        dokumentName="Auf den Film anwenden"
-        onDokument={(fertig) => setDoc(fertig)}
+        onClose={() => {
+          setEditorAuf(false);
+          setAbHierMs(null);
+        }}
+        dokumentName={abHierMs === null ? 'Auf den Film anwenden' : 'Ab hier anwenden'}
+        onDokument={(fertig) => {
+          setDoc(
+            abHierMs === null
+              ? fertig
+              : bereicheAbUebernehmen(
+                  doc ?? neuesDoc(rechenmass?.b ?? 1, rechenmass?.h ?? 1),
+                  fertig,
+                  abHierMs,
+                ),
+          );
+          setAbHierMs(null);
+        }}
       />
     ) : null;
 
@@ -725,14 +755,34 @@ export function VideoEditorSheet({
             </div>
           </fieldset>
 
-          <button
-            type="button"
-            className="btn"
-            onClick={() => void editorOeffnen()}
-            disabled={streifen.length === 0 || holt || lauf !== null}
-          >
-            {holt ? '…' : doc ? '✏️ Bearbeitung ändern' : '✏️ Bearbeiten'}
-          </button>
+          <div className="row" style={{ gap: 'var(--space-2)' }}>
+            <button
+              type="button"
+              className="btn"
+              style={{ flex: 1 }}
+              onClick={() => void editorOeffnen()}
+              disabled={streifen.length === 0 || holt || lauf !== null}
+            >
+              {holt ? '…' : doc ? '✏️ Bearbeitung ändern' : '✏️ Bearbeiten'}
+            </button>
+            {/*
+                Nur mit einer bestehenden Bearbeitung sinnvoll: Ohne die gibt
+                es nichts, was „ab hier" abgelöst werden könnte – der Knopf
+                oben tut in dem Fall bereits genau das Richtige.
+            */}
+            {doc && (
+              <button
+                type="button"
+                className="btn btn-ghost"
+                style={{ flex: 1 }}
+                onClick={() => void editorOeffnen(spielkopfMs)}
+                disabled={streifen.length === 0 || holt || lauf !== null}
+                title="Stellt etwas Neues ein, das erst ab der aktuellen Wiedergabestelle gilt – bis zum Ende oder bis du es später wieder änderst."
+              >
+                🕓 Ab {zeitText(spielkopfMs)} neu einstellen
+              </button>
+            )}
+          </div>
 
           {doc && (
             <p className="vg-hinweis">
@@ -758,6 +808,26 @@ export function VideoEditorSheet({
                   : brauchtAlle
                     ? 'Ein Bereich beschreibt eine Form – Verlauf, Ellipse oder Pinselstrich. Der wandert mit der Kamera mit, dafür wird die Bewegung über den ganzen Film geschätzt. Kein Modell, aber alle Bilder auf einmal im Speicher.'
                     : 'Die Bearbeitung gilt für jedes Bild gleich. Das geht schnell, und die Bilder werden einzeln durchgereicht statt gesammelt.'}
+            </p>
+          )}
+
+          {/*
+              Nur zeitlich begrenzte Bereiche auflisten – wer keinen angelegt
+              hat, sieht hier nichts Neues. `BildEditor` selbst zeigt an
+              seinen Bereichs-Kacheln keinen Zeitraum an (siehe dort); ohne
+              diese Liste wäre „ab wann gilt was" nirgends nachzusehen.
+          */}
+          {doc && doc.bereiche.some((bereich) => bereich.zeitraum) && (
+            <p className="vg-hinweis">
+              Zeitlich begrenzt:{' '}
+              {doc.bereiche
+                .filter((bereich) => bereich.zeitraum)
+                .map((bereich) => {
+                  const bis = bereich.zeitraum?.bisMs;
+                  const von = zeitText(bereich.zeitraum?.vonMs ?? 0);
+                  return `„${bereich.name}“ ab ${von}${bis != null ? ` bis ${zeitText(bis)}` : ''}`;
+                })
+                .join(' · ')}
             </p>
           )}
 

@@ -142,6 +142,9 @@ export async function folgeTeile(
   // angehalten und angesehen, und dort sässe die geschobene Maske am
   // schlechtesten.
   schluessel.add(bilder.length - 1);
+  // Aufsteigend, für `teilAnker`: Der erste Treffer beim Durchlaufen ist dort
+  // der KLEINSTE gültige Index, und nur der ist der richtige Anker.
+  const schluesselSortiert = Array.from(schluessel).sort((a, b) => a - b);
 
   // Die Graustufen einmal – jedes Bild ist an zwei Übergängen beteiligt.
   const grau: Grau[] = bilder.map((bild) => graustufen(bild.daten));
@@ -238,6 +241,32 @@ export async function folgeTeile(
           continue;
         }
 
+        /*
+         * Der Anker für DIESES Teil – normalerweise der Stückanfang, aber
+         * für ein zeitlich begrenztes Teil (siehe `Bereich.zeitraum`) das
+         * erste Schlüsselbild AB dessen eigenem Zeitraum. Dieselbe Zahl wird
+         * gleich zweimal gebraucht: einmal, um die angetippten Punkte relativ
+         * zu IHREM Anfang statt zu Bild 0 zu ziehen (sonst zeigten sie bei
+         * einem Bereich, der erst später beginnt, auf die falsche Stelle),
+         * und einmal für die Plausibilitätsprüfung weiter unten.
+         *
+         * An einer Schnittkante gibt es keinen Anker: Die Maske davor gehört
+         * zu einer anderen Szene.
+         */
+        const stueckbasis = i > 0 && !schnitte.has(i) ? stueckAnker(schnitte, i) : -1;
+        const anker =
+          stueckbasis >= 0
+            ? teilAnker(eintrag.zeitraum?.vonMs, bilder, schluesselSortiert, stueckbasis, i)
+            : -1;
+        /*
+         * `LAGE_RUHE` ohne Anker – nicht `lagen[i]` – weil ein Teil ohne
+         * Anker entweder ganz am Stückanfang steht (wo `lagen[i]` ohnehin
+         * `LAGE_RUHE` ist) oder gerade an SEINEM eigenen ersten aktiven Bild
+         * – und dort ist die Verschiebung seit dem eigenen Anfang naturgemäss
+         * keine.
+         */
+        const teilLage =
+          anker >= 0 ? lageVerketten(lagen[i], kehren(lagen[anker])) : LAGE_RUHE;
         const frisch = await teilRechnen(
           eintrag,
           bilder[i],
@@ -245,13 +274,13 @@ export async function folgeTeile(
           hoehe,
           tiefe,
           auftrag.abbruch,
-          lagen[i],
+          teilLage,
           faktor,
         );
         /*
-         * Gegen den ANFANG DES STÜCKS halten, nicht gegen das vorige
-         * Schlüsselbild – die Begründung samt Messung steht bei
-         * `maskePasst`.
+         * Gegen den ANFANG DES STÜCKS (oder, genauer, den Anfang DIESES
+         * TEILS – siehe oben) halten, nicht gegen das vorige Schlüsselbild –
+         * die Begründung samt Messung steht bei `maskePasst`.
          *
          * Ein Vergleich mit dem vorigen Schlüsselbild lässt jeden Schritt
          * für sich plausibel aussehen, selbst wenn er es nicht ist: Rutscht
@@ -261,17 +290,10 @@ export async function folgeTeile(
          * Beispielfilm gemessen eine stetige Wanderung über das halbe Bild,
          * obwohl die Szene selbst stillstand (bestätigt durch eine
          * Bewegungssuche auf denselben Bildern mit ausgeblendetem
-         * Maskenbereich: `LAGE_RUHE` für alle 85 Übergänge). Verglichen mit
-         * dem STÜCKANFANG bleibt die Toleranz dagegen absolut: `lagen[anker]`
-         * ist dort immer `LAGE_RUHE` (siehe oben), also vereinfacht sich die
-         * Verkettung zu `lagen[i]` – keine `kehren`, keine zweite Lage nötig.
+         * Maskenbereich: `LAGE_RUHE` für alle 85 Übergänge).
          */
-        // An einer Schnittkante gibt es nichts zu erwarten: Die Maske davor
-        // gehört zu einer anderen Szene, und `maskePasst` würde die frische
-        // zugunsten einer fremden verwerfen.
-        const anker = i > 0 && !schnitte.has(i) ? stueckAnker(schnitte, i) : -1;
         const vorlage = anker >= 0 ? sammlung[anker] : null;
-        const erwartet = vorlage ? maskeZiehen(vorlage, breite, hoehe, lagen[i], faktor) : null;
+        const erwartet = vorlage ? maskeZiehen(vorlage, breite, hoehe, teilLage, faktor) : null;
         const befund = maskePasst(frisch, erwartet);
         if (!befund.haelt && erwartet) {
           verworfen += 1;
@@ -317,7 +339,14 @@ export async function folgeTeile(
   return { jeBild, laeufe, verworfen, lagen, faktor };
 }
 
-/** Ein einzelnes Teil für ein einzelnes Bild rechnen. */
+/**
+ * Ein einzelnes Teil für ein einzelnes Bild rechnen.
+ *
+ * `lage` ist NICHT die Lage seit Bild 0, sondern seit dem ANKER dieses
+ * Teils – dem Stückanfang, oder, bei einem zeitlich begrenzten Bereich,
+ * dessen eigenem Anfang (siehe `teilAnker` beim Aufrufer). Für ein Teil ohne
+ * eigenen Zeitraum ist das dasselbe.
+ */
 async function teilRechnen(
   eintrag: InhaltsTeil,
   bild: GelesenesBild,
@@ -345,11 +374,12 @@ async function teilRechnen(
     /*
      * Die angetippten PUNKTE wandern mit, nicht die Maske.
      *
-     * Hier stand `teil.punkte` – also die Koordinaten vom ersten Bild, auf
-     * jedem Schlüsselbild aufs Neue. Bei einer Kamera, die sich bewegt, zeigt
-     * ein solcher Punkt nach zwei Sekunden auf etwas ganz anderes, und die
-     * Maske sprang an jedem Schlüsselbild dorthin zurück. `folgeMaske.ts`
-     * (der GIF-Weg) hat die Punkte von Anfang an mitgeführt; hier fehlte es.
+     * Hier stand `teil.punkte` – also die Koordinaten vom ANKER dieses Teils
+     * (siehe oben), auf jedem Schlüsselbild aufs Neue. Bei einer Kamera, die
+     * sich bewegt, zeigt ein solcher Punkt nach zwei Sekunden auf etwas ganz
+     * anderes, und die Maske sprang an jedem Schlüsselbild dorthin zurück.
+     * `folgeMaske.ts` (der GIF-Weg) hat die Punkte von Anfang an mitgeführt;
+     * hier fehlte es.
      */
     const punkte = teil.punkte.map((punkt) => {
       const gezogen = punktVor(lage, faktor, punkt.x, punkt.y);
@@ -408,6 +438,35 @@ function stueckAnker(schnitte: ReadonlySet<number>, bis: number): number {
     if (stelle <= bis && stelle > anker) anker = stelle;
   }
   return anker;
+}
+
+/**
+ * Der Anker für EIN Teil: normalerweise der Stückanfang (`basis`), aber ein
+ * Teil mit eigenem Zeitraum (siehe `Bereich.zeitraum`) bekommt seinen
+ * eigenen, späteren Anker – das erste Schlüsselbild AB dem Beginn seines
+ * Zeitraums.
+ *
+ * Der Grund ist derselbe wie bei `stueckAnker`, nur eine Ebene tiefer: Gilt
+ * ein Bereich erst ab der Hälfte des Films, ist der Stückanfang für IHN kein
+ * verlässlicher Bezug – dort war er noch gar nicht aktiv, und was das
+ * Verfahren dort geliefert hat (nichts, oder etwas Zufälliges), taugt nicht
+ * als Massstab für alles Weitere. `-1` heisst: `bis` selbst ist das erste
+ * Schlüsselbild dieses Teils – dort gibt es noch nichts zu erwarten, genau
+ * wie am allerersten Schlüsselbild eines Stücks.
+ */
+function teilAnker(
+  vonMs: number | undefined,
+  bilder: readonly GelesenesBild[],
+  schluesselSortiert: readonly number[],
+  basis: number,
+  bis: number,
+): number {
+  if (vonMs === undefined || bilder[basis].zeitMs >= vonMs) return basis;
+  for (const k of schluesselSortiert) {
+    if (k < basis || k >= bis) continue;
+    if (bilder[k].zeitMs >= vonMs) return k;
+  }
+  return -1;
 }
 
 /**

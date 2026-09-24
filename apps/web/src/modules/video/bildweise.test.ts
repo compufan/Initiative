@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { BEREICH_NEUTRAL, neuesDoc } from '../bild/doc.js';
-import type { BildDoc, Maskenteil } from '../bild/doc.js';
+import { BEREICHE_MAX, BEREICH_NEUTRAL, neuesDoc } from '../bild/doc.js';
+import type { Bereich, BildDoc, Maskenteil } from '../bild/doc.js';
 import {
+  bereicheAbUebernehmen,
   brauchtBildweise,
   docFuerBild,
   inhaltsTeile,
   istInhaltsTeil,
+  zeitraumAktiv,
   type NeueDaten,
 } from './bildweise.js';
 
@@ -114,7 +116,7 @@ describe('docFuerBild', () => {
     const daten = new Map<string, NeueDaten>([
       ['n1', { breite: 2, hoehe: 2, werte: new Uint8Array([1, 2, 3, 4]) }],
     ]);
-    const neu = docFuerBild(doc, daten);
+    const neu = docFuerBild(doc, daten, 0);
     const teil = neu.bereiche[0].teile[0];
     expect(teil.art).toBe('netz');
     if (teil.art !== 'netz') return;
@@ -134,10 +136,12 @@ describe('docFuerBild', () => {
     const eins = docFuerBild(
       doc,
       new Map([['n1', { breite: 2, hoehe: 2, werte: new Uint8Array(4) }]]),
+      0,
     );
     const zwei = docFuerBild(
       doc,
       new Map([['n1', { breite: 2, hoehe: 2, werte: new Uint8Array(4) }]]),
+      0,
     );
     const marke = (d: BildDoc) => {
       const teil = d.bereiche[0].teile[0];
@@ -155,6 +159,7 @@ describe('docFuerBild', () => {
     const neu = docFuerBild(
       doc,
       new Map([['d1', { breite: 2, hoehe: 2, werte: new Uint8Array([9, 9, 9, 9]) }]]),
+      0,
     );
     const teil = neu.bereiche[0].teile[0];
     expect(teil.art).toBe('tiefe');
@@ -176,6 +181,7 @@ describe('docFuerBild', () => {
     const neu = docFuerBild(
       doc,
       new Map([['n1', { breite: 2, hoehe: 2, werte: new Uint8Array(4) }]]),
+      0,
     );
     expect(neu.bereiche[0].teile[1]).toBe(doc.bereiche[0].teile[1]);
   });
@@ -185,7 +191,7 @@ describe('docFuerBild', () => {
     // es dabei verändert, baut das zweite Bild auf dem ersten auf.
     const doc = docMit(netzTeil('n1'));
     const vorher = doc.bereiche[0].teile[0];
-    docFuerBild(doc, new Map([['n1', { breite: 2, hoehe: 2, werte: new Uint8Array(4) }]]));
+    docFuerBild(doc, new Map([['n1', { breite: 2, hoehe: 2, werte: new Uint8Array(4) }]]), 0);
     expect(doc.bereiche[0].teile[0]).toBe(vorher);
   });
 
@@ -196,6 +202,176 @@ describe('docFuerBild', () => {
      * Maske dieselbe – und ein Bild ohne Inhaltsteile kostet dann gar nichts.
      */
     const doc = docMit(verlaufTeil('v1'));
-    expect(docFuerBild(doc, new Map())).toBe(doc);
+    expect(docFuerBild(doc, new Map(), 0)).toBe(doc);
+  });
+
+  it('blendet einen zeitlich begrenzten Bereich ausserhalb seines Zeitraums aus', () => {
+    // Der Kern von „ab hier freistellen": Ein Bereich mit `zeitraum` wirkt
+    // nur innerhalb seines Fensters – ausserhalb wird er wie abgeschaltet
+    // behandelt, obwohl sein eigener `aktiv`-Haken gesetzt bleibt.
+    const doc: BildDoc = {
+      ...neuesDoc(64, 48),
+      bereiche: [
+        {
+          id: 'b1',
+          name: 'Ab der Mitte',
+          aktiv: true,
+          teile: [netzTeil('n1')],
+          anpassung: BEREICH_NEUTRAL,
+          zeitraum: { vonMs: 2000, bisMs: null },
+        },
+      ],
+    };
+    expect(docFuerBild(doc, new Map(), 1000).bereiche[0].aktiv).toBe(false);
+    expect(docFuerBild(doc, new Map(), 2000).bereiche[0].aktiv).toBe(true);
+    expect(docFuerBild(doc, new Map(), 5000).bereiche[0].aktiv).toBe(true);
+  });
+
+  it('blendet einen zeitlich begrenzten Bereich nach seinem Ende wieder aus', () => {
+    const doc: BildDoc = {
+      ...neuesDoc(64, 48),
+      bereiche: [
+        {
+          id: 'b1',
+          name: 'Nur die Mitte',
+          aktiv: true,
+          teile: [netzTeil('n1')],
+          anpassung: BEREICH_NEUTRAL,
+          zeitraum: { vonMs: 2000, bisMs: 4000 },
+        },
+      ],
+    };
+    expect(docFuerBild(doc, new Map(), 1000).bereiche[0].aktiv).toBe(false);
+    expect(docFuerBild(doc, new Map(), 3000).bereiche[0].aktiv).toBe(true);
+    expect(docFuerBild(doc, new Map(), 4000).bereiche[0].aktiv).toBe(false);
+  });
+
+  it('lässt einen abgeschalteten Bereich abgeschaltet, auch innerhalb seines Zeitraums', () => {
+    const doc: BildDoc = {
+      ...neuesDoc(64, 48),
+      bereiche: [
+        {
+          id: 'b1',
+          name: 'Aus',
+          aktiv: false,
+          teile: [netzTeil('n1')],
+          anpassung: BEREICH_NEUTRAL,
+          zeitraum: { vonMs: 0, bisMs: null },
+        },
+      ],
+    };
+    expect(docFuerBild(doc, new Map(), 500).bereiche[0].aktiv).toBe(false);
+  });
+});
+
+describe('zeitraumAktiv', () => {
+  it('gilt ohne Zeitraum immer', () => {
+    expect(zeitraumAktiv(undefined, 0)).toBe(true);
+    expect(zeitraumAktiv(undefined, 999_999)).toBe(true);
+  });
+
+  it('gilt ab dem Anfang, ohne Ende', () => {
+    const zeitraum = { vonMs: 1000, bisMs: null };
+    expect(zeitraumAktiv(zeitraum, 999)).toBe(false);
+    expect(zeitraumAktiv(zeitraum, 1000)).toBe(true);
+    expect(zeitraumAktiv(zeitraum, 1_000_000)).toBe(true);
+  });
+
+  it('endet GENAU an bisMs – das Bild dort gehört schon der Ablösung', () => {
+    // „Bis der Bereich verändert wird": Der ABGELÖSTE Bereich endet exakt
+    // dort, wo der ABLÖSENDE beginnt – kein Bild darf beiden gehören, sonst
+    // zeichnete `zeichnen.ts` zwei einander widersprechende Masken.
+    const zeitraum = { vonMs: 0, bisMs: 2000 };
+    expect(zeitraumAktiv(zeitraum, 1999)).toBe(true);
+    expect(zeitraumAktiv(zeitraum, 2000)).toBe(false);
+  });
+});
+
+describe('bereicheAbUebernehmen', () => {
+  const bereich = (teile: Maskenteil[], zusatz: Partial<Bereich> = {}): Bereich => ({
+    id: 'b1',
+    name: 'Motiv',
+    aktiv: true,
+    teile,
+    anpassung: BEREICH_NEUTRAL,
+    ...zusatz,
+  });
+  const docMitBereichen = (...bereiche: Bereich[]): BildDoc => ({
+    ...neuesDoc(64, 48),
+    bereiche,
+  });
+
+  it('gibt einem neu angelegten Bereich einen offenen Zeitraum ab der Sitzungsstelle', () => {
+    const alt = docMitBereichen();
+    const neu = docMitBereichen(bereich([netzTeil('n1')]));
+    const ergebnis = bereicheAbUebernehmen(alt, neu, 4200);
+    expect(ergebnis.bereiche).toHaveLength(1);
+    expect(ergebnis.bereiche[0].zeitraum).toEqual({ vonMs: 4200, bisMs: null });
+  });
+
+  it('lässt einen unangetasteten Bereich exakt die ALTE Fassung bleiben', () => {
+    // Referenzgleich, nicht nur wertgleich – sonst verliert der
+    // Maskenzwischenspeicher seinen Treffer für jeden unberührten Bereich.
+    const vorhanden = bereich([netzTeil('n1')], { zeitraum: { vonMs: 500, bisMs: null } });
+    const alt = docMitBereichen(vorhanden);
+    // „neu" simuliert `docKopie`: gleiche Teile-REFERENZ, aber eine neue
+    // `anpassung`-Kopie mit denselben Werten.
+    const neu = docMitBereichen({ ...vorhanden, anpassung: { ...vorhanden.anpassung } });
+    const ergebnis = bereicheAbUebernehmen(alt, neu, 4200);
+    expect(ergebnis.bereiche[0]).toBe(vorhanden);
+  });
+
+  it('teilt einen bereits aktiven Bereich, der in der Sitzung verändert wurde', () => {
+    const vorhanden = bereich([netzTeil('n1')], { zeitraum: { vonMs: 0, bisMs: null } });
+    const alt = docMitBereichen(vorhanden);
+    const neu = docMitBereichen(bereich([netzTeil('n1', 9)], { id: 'b1' }));
+    const ergebnis = bereicheAbUebernehmen(alt, neu, 4200);
+
+    expect(ergebnis.bereiche).toHaveLength(2);
+    expect(ergebnis.bereiche[0]).toEqual({ ...vorhanden, zeitraum: { vonMs: 0, bisMs: 4200 } });
+    expect(ergebnis.bereiche[1].id).not.toBe('b1');
+    expect(ergebnis.bereiche[1].zeitraum).toEqual({ vonMs: 4200, bisMs: null });
+    expect(ergebnis.bereiche[1].teile).toEqual([netzTeil('n1', 9)]);
+  });
+
+  it('übernimmt eine Änderung an einem noch NICHT begonnenen Bereich als Ganzes', () => {
+    // Wer an einem Bereich schraubt, der zur Sitzungsstelle noch gar nicht
+    // aktiv ist, meint offensichtlich seine ganze Zeitspanne.
+    const vorhanden = bereich([netzTeil('n1')], { zeitraum: { vonMs: 5000, bisMs: null } });
+    const alt = docMitBereichen(vorhanden);
+    const neu = docMitBereichen(bereich([netzTeil('n1', 9)], {
+      id: 'b1',
+      zeitraum: { vonMs: 5000, bisMs: null },
+    }));
+    const ergebnis = bereicheAbUebernehmen(alt, neu, 4200);
+    expect(ergebnis.bereiche).toHaveLength(1);
+    expect(ergebnis.bereiche[0].zeitraum).toEqual({ vonMs: 5000, bisMs: null });
+    expect(ergebnis.bereiche[0].teile).toEqual([netzTeil('n1', 9)]);
+  });
+
+  it('lässt einen gelöschten Bereich gelöscht', () => {
+    const vorhanden = bereich([netzTeil('n1')]);
+    const alt = docMitBereichen(vorhanden);
+    const neu = docMitBereichen();
+    expect(bereicheAbUebernehmen(alt, neu, 4200).bereiche).toEqual([]);
+  });
+
+  it('teilt nicht über BEREICHE_MAX hinaus', () => {
+    /*
+     * `tonGpu.ts` reserviert genau `BEREICHE_MAX` Plätze auf der
+     * Grafikeinheit – ein Bereich darüber hinaus würde dort schlicht nicht
+     * mehr gezeichnet. Bei vier bereits aktiven, alle in der Sitzung
+     * verändert, blieben bei ungebremstem Teilen acht übrig; hier dürfen es
+     * höchstens vier werden.
+     */
+    const vorhandene = Array.from({ length: BEREICHE_MAX }, (_, i) =>
+      bereich([netzTeil(`n${i}`)], { id: `b${i}`, zeitraum: { vonMs: 0, bisMs: null } }),
+    );
+    const alt = docMitBereichen(...vorhandene);
+    const neu = docMitBereichen(
+      ...vorhandene.map((b, i) => bereich([netzTeil(`n${i}`, 9)], { id: b.id })),
+    );
+    const ergebnis = bereicheAbUebernehmen(alt, neu, 4200);
+    expect(ergebnis.bereiche.length).toBeLessThanOrEqual(BEREICHE_MAX);
   });
 });

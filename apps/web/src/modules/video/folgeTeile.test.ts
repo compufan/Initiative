@@ -4,6 +4,7 @@ import { AbbruchError, NichtsGefunden } from '../stickers/engines/index.js';
 import { TeileAbbruch, folgeTeile } from './folgeTeile.js';
 import type { InhaltsTeil } from './bildweise.js';
 import type { GelesenesBild } from './bilderLesen.js';
+import { bewegung, graustufen, lageSchaetzen, punktVor } from './verfolgung.js';
 
 /**
  * Die inhaltsabhängigen Maskenteile über einen ganzen Film.
@@ -32,6 +33,9 @@ const DRIFT_SCHRITT = 5;
 // Für die Verschwinde-Prüfung unten: die Aufrufnummern (1-indiziert), bei
 // denen der Tipp nichts findet – das angetippte Ding ist gerade nicht da.
 let tippNichtsBei = new Set<number>();
+// Für die Anker-Prüfung unten: mit welchen Punkten der Tipp bei jedem Lauf
+// tatsächlich aufgerufen wurde – zeigt, welche Lage wirklich gezogen hat.
+let tippAufrufPunkte: { x: number; y: number }[][] = [];
 
 vi.mock('../stickers/engines/index.js', async () => {
   const echt = await vi.importActual<typeof import('../stickers/engines/index.js')>(
@@ -65,8 +69,9 @@ vi.mock('../stickers/engines/prepare.js', async () => {
 });
 
 vi.mock('../bild/tippMaske.js', () => ({
-  tippTeilRechnen: async (bild: ImageData) => {
+  tippTeilRechnen: async (bild: ImageData, punkte: { x: number; y: number }[]) => {
     tippLaeufe += 1;
+    tippAufrufPunkte.push(punkte);
     if (tippNichtsBei.has(tippLaeufe)) {
       throw new NichtsGefunden('An dieser Stelle wurde nichts gefunden.', 'tippen');
     }
@@ -198,6 +203,7 @@ beforeEach(() => {
   drift = false;
   driftAufruf = 0;
   tippNichtsBei = new Set();
+  tippAufrufPunkte = [];
 });
 
 describe('folgeTeile', () => {
@@ -437,5 +443,62 @@ describe('folgeTeile, wenn ein angetipptes Objekt verschwindet', () => {
     // fällt damit durch `maskePasst` – genau die Prüfung, die eine Maske
     // schützt, die nur kurz und fälschlich als leer gemeldet wurde.
     expect(verworfen).toBeGreaterThan(0);
+  });
+});
+
+describe('folgeTeile bei einem Teil mit eigenem Zeitraum', () => {
+  it('zieht die angetippten Punkte relativ zum EIGENEN Anfang, nicht zu Bild 0', async () => {
+    /*
+     * Sechs Bilder mit echter Bewegung (`folge`), Abstand zwei: Schlüsselbilder
+     * bei 0, 2, 4 und 5 (das letzte immer). `bild(nummer).zeitMs` ist
+     * `nummer * 100`, also 0/200/400/500 an diesen vier Stellen.
+     *
+     * Der Zeitraum beginnt bei 250 ms – zwischen Bild 2 (200) und Bild 4
+     * (400). Bild 4 ist damit das ERSTE Schlüsselbild, an dem das Teil
+     * überhaupt gilt: kein Anker, also `LAGE_RUHE`, also der angetippte
+     * Punkt unverändert. Bild 5 hat Bild 4 als Anker – EIN Schlüsselbild
+     * weiter, ohne Lücke –, und die Lage von 4 nach 5 lässt sich deshalb
+     * unabhängig nachrechnen: Sie ist genau der einzelne Bewegungsschritt
+     * zwischen diesen beiden Bildern, ohne die Bewegung der Bilder davor.
+     */
+    const ZEIT_TIPP: InhaltsTeil = {
+      ...TIPP,
+      teil:
+        TIPP.teil.art === 'tipp'
+          ? { ...TIPP.teil, punkte: [{ x: 64, y: 64 }] }
+          : TIPP.teil,
+      zeitraum: { vonMs: 250, bisMs: null },
+    };
+    await folgeTeile(folge(6), { teile: [ZEIT_TIPP], schluesselAbstand: 2 });
+
+    // Vier Schlüsselbilder, also vier Läufe: 0, 2, 4, 5 – in der Reihenfolge.
+    expect(tippAufrufPunkte).toHaveLength(4);
+    const [, , beiEigenemAnfang, beiEinemSchrittWeiter] = tippAufrufPunkte;
+
+    // Bild 4: kein Anker, `LAGE_RUHE` – der Punkt bleibt exakt, wo er war.
+    expect(beiEigenemAnfang).toEqual([{ x: 64, y: 64 }]);
+
+    // Bild 5: die Lage von Bild 4 zu Bild 5, unabhängig nachgerechnet über
+    // die öffentlichen Bausteine derselben Verfolgung.
+    const breite = 128;
+    const grauVier = graustufen(bild(4).daten);
+    const grauFuenf = graustufen(bild(5).daten);
+    const feld = bewegung(grauVier, grauFuenf, breite);
+    const schritt = lageSchaetzen(feld);
+    const erwartet = punktVor(schritt, feld.faktor, 64, 64);
+    expect(beiEinemSchrittWeiter[0].x).toBeCloseTo(Math.round(erwartet.x), 0);
+    expect(beiEinemSchrittWeiter[0].y).toBeCloseTo(Math.round(erwartet.y), 0);
+    // Und, damit der Test nicht zufällig durchginge: Bild 5 unterscheidet
+    // sich wirklich von Bild 4 – es gibt echte Bewegung zu ziehen.
+    expect(beiEinemSchrittWeiter).not.toEqual(beiEigenemAnfang);
+  });
+
+  it('lässt ein Teil ohne Zeitraum unverändert – wie vor dieser Änderung', async () => {
+    // Dieselbe Szene, aber ohne `zeitraum`: Der Anker bleibt der Stückanfang,
+    // und das Verhalten muss exakt dem alten entsprechen.
+    await folgeTeile(folge(6), { teile: [TIPP], schluesselAbstand: 2 });
+    expect(tippAufrufPunkte).toHaveLength(4);
+    // Bild 0 hat keinen Anker (Stückanfang selbst) – Punkt unverändert.
+    expect(tippAufrufPunkte[0]).toEqual([{ x: 4, y: 4 }]);
   });
 });

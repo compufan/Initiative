@@ -312,6 +312,18 @@ export interface Bereich {
    */
   teile: readonly Maskenteil[];
   anpassung: Bereichston;
+  /**
+   * Ab wann (und bis wann) dieser Bereich im VIDEO gilt – nur dort gesetzt,
+   * beim Foto immer `undefined`.
+   *
+   * Ohne Angabe gilt ein Bereich für den ganzen Film, wie es das bisher
+   * immer getan hat – diese Eigenschaft ändert also an keinem bestehenden
+   * Dokument etwas. `bisMs: null` heisst „bis zum Ende, oder bis ein
+   * späterer Bereich ihn ablöst" – siehe `zeitraumAktiv` in `bildweise.ts`,
+   * wo aus dieser Angabe wird, ob der Bereich an einem gegebenen Bild der
+   * Reihe überhaupt gezeichnet wird.
+   */
+  zeitraum?: { vonMs: number; bisMs: number | null };
 }
 
 export interface BildDoc {

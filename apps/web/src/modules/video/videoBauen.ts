@@ -257,7 +257,11 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
           quelle,
           gelesen.breite,
           gelesen.hoehe,
-          docFuerBild(docMitLage(auftrag.doc, lagen[nummer], grauFaktor), jeBild[nummer]),
+          docFuerBild(
+            docMitLage(auftrag.doc, lagen[nummer], grauFaktor),
+            jeBild[nummer],
+            gelesen.bilder[nummer].zeitMs,
+          ),
         );
       },
       {
