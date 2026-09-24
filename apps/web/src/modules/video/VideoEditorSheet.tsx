@@ -11,6 +11,8 @@ import {
   FILM_BILDRATE_VORGABE,
   filmSchrittMs,
   filmZeitpunkte,
+  kannTeilen,
+  stueckTeilen,
   type Stueck,
 } from './ausschnitt.js';
 import { masse, videoBilderLesen } from './bilderLesen.js';
@@ -92,9 +94,14 @@ export function VideoEditorSheet({
    * sich das Blatt wie vorher – der zweite Satz Bedienelemente entsteht erst,
    * wenn jemand selbst ein zweites Stück angelegt hat.
    */
-  const [stuecke, setStuecke] = useState<Stueck[]>([{ vonMs: 0, bisMs: 0 }]);
+  const [stuecke, setStuecke] = useState<readonly Stueck[]>([{ vonMs: 0, bisMs: 0 }]);
   /** Welches Stück die Griffe im Streifen bedienen. */
   const [aktiv, setAktiv] = useState(0);
+  /** Die Wiedergabestelle im QUELLvideo, in Millisekunden. */
+  const [spielkopfMs, setSpielkopfMs] = useState(0);
+  const [spielt, setSpielt] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [quelleUrl, setQuelleUrl] = useState<string | null>(null);
   const [bildrate, setBildrate] = useState<number>(FILM_BILDRATE_VORGABE);
   const [kante, setKante] = useState<number>(960);
   const [doc, setDoc] = useState<BildDoc | null>(null);
@@ -120,6 +127,22 @@ export function VideoEditorSheet({
       gilt = false;
     };
   }, []);
+
+  /*
+   * Die Adresse für die LIVE-Vorschau – einmal je Datei, nicht bei jedem
+   * Render.
+   *
+   * Anders als der Streifen (acht feste Standbilder) spielt diese Vorschau
+   * das Quellvideo wirklich ab, damit sich eine Stelle finden lässt, ohne
+   * acht Standbilder danebenzutippen. Die Adresse muss wieder freigegeben
+   * werden, sonst hält der Browser die Datei ein zweites Mal im Speicher, bis
+   * die Seite neu lädt.
+   */
+  useEffect(() => {
+    const url = URL.createObjectURL(video);
+    setQuelleUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [video]);
 
   /* ---------- Filmstreifen ---------- */
 
@@ -228,6 +251,28 @@ export function VideoEditorSheet({
   );
   /** Der Anfang des ERSTEN Stücks – dort wird eingestellt. */
   const anfangMs = stuecke[0]?.vonMs ?? 0;
+
+  /* ---------- Wiedergabe und Teilen ---------- */
+
+  /** Dieselbe Grenze wie im Streifen: mindestens ein Bild lang. */
+  const mindestMs = Math.max(1, Math.round(schrittMs));
+  const aktivStueck = stuecke[aktiv];
+  const teilenMoeglich =
+    lauf === null && aktivStueck !== undefined && kannTeilen(aktivStueck, spielkopfMs, mindestMs);
+
+  /**
+   * Springt an eine Stelle – aus dem Streifen (Tipp oder Ziehen) oder aus
+   * einer Taste. Pausiert dabei: Ein Sprung während der Wiedergabe sähe aus
+   * wie ein Ruckler, nicht wie eine Wahl.
+   */
+  const spielkopfSetzen = useCallback((ms: number) => {
+    const element = videoRef.current;
+    if (element) {
+      element.pause();
+      element.currentTime = ms / 1000;
+    }
+    setSpielkopfMs(ms);
+  }, []);
 
   /* ---------- Das Standbild für den Editor ---------- */
 
@@ -454,6 +499,49 @@ export function VideoEditorSheet({
             </p>
           ) : (
             <>
+              <video
+                ref={videoRef}
+                className="vg-quelle"
+                src={quelleUrl ?? undefined}
+                playsInline
+                preload="metadata"
+                onTimeUpdate={(ereignis) =>
+                  setSpielkopfMs(Math.round(ereignis.currentTarget.currentTime * 1000))
+                }
+                onPlay={() => setSpielt(true)}
+                onPause={() => setSpielt(false)}
+              />
+              <div className="vg-abspielzeile">
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={!quelleUrl || lauf !== null}
+                  onClick={() => {
+                    const element = videoRef.current;
+                    if (!element) return;
+                    if (element.paused) void element.play();
+                    else element.pause();
+                  }}
+                >
+                  {spielt ? '⏸ Pause' : '▶ Abspielen'}
+                </button>
+                <span className="vg-zeit">{zeitText(spielkopfMs)}</span>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={!teilenMoeglich}
+                  title="Teilt das aktive Stück an der Wiedergabestelle in zwei"
+                  onClick={() => {
+                    if (!aktivStueck) return;
+                    const neu = stueckTeilen(stuecke, aktiv, spielkopfMs, mindestMs);
+                    if (neu === stuecke) return;
+                    setStuecke(neu);
+                    setAktiv(aktiv + 1);
+                  }}
+                >
+                  ✂ Hier teilen
+                </button>
+              </div>
               <Streifen
                 bilder={streifen}
                 dauerMs={dauerMs}
@@ -461,7 +549,9 @@ export function VideoEditorSheet({
                 aktiv={aktiv}
                 gesperrt={lauf !== null}
                 schrittMs={schrittMs}
+                spielkopfMs={spielkopfMs}
                 onAktiv={setAktiv}
+                onSpielkopf={spielkopfSetzen}
                 onBereich={(von, bis) =>
                   setStuecke((alt) =>
                     alt.map((eintrag, i) => (i === aktiv ? { vonMs: von, bisMs: bis } : eintrag)),

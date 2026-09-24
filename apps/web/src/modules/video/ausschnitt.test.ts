@@ -9,6 +9,8 @@ import {
   filmZeitpunkte,
   groesseSchaetzenB,
   groesseText,
+  kannTeilen,
+  stueckTeilen,
   zeitpunkte,
 } from './ausschnitt.js';
 
@@ -331,5 +333,60 @@ describe('abtasten', () => {
     // `videoSchreiben` wirft bei null Bildern. Ein leerer Plan darf keine
     // Ausnahme auslösen, sondern muss ein Standbild ergeben.
     expect(abtasten({ stuecke: [], schrittMs: 40, maxBilder: 10 }).zeitpunkte).toHaveLength(1);
+  });
+});
+
+describe('stueckTeilen', () => {
+  const stueck = { vonMs: 200, bisMs: 800 };
+
+  it('teilt ein Stück an der Stelle in zwei aufeinanderfolgende', () => {
+    expect(stueckTeilen([stueck], 0, 500, 40)).toEqual([
+      { vonMs: 200, bisMs: 500 },
+      { vonMs: 500, bisMs: 800 },
+    ]);
+  });
+
+  it('lässt andere Stücke in der Liste unangetastet', () => {
+    const davor = { vonMs: 0, bisMs: 100 };
+    const danach = { vonMs: 900, bisMs: 1000 };
+    expect(stueckTeilen([davor, stueck, danach], 1, 500, 40)).toEqual([
+      davor,
+      { vonMs: 200, bisMs: 500 },
+      { vonMs: 500, bisMs: 800 },
+      danach,
+    ]);
+  });
+
+  it('tut nichts, wenn die Stelle zu nah an einem Ende liegt', () => {
+    // Ein Reststück unter `mindestMs` wäre eine Falle: Es liesse sich mit
+    // denselben Werkzeugen nicht mehr sauber anfassen. Dieselbe Liste kommt
+    // unverändert zurück (auch als Referenz), nicht bloss inhaltsgleich.
+    const liste = [stueck];
+    expect(stueckTeilen(liste, 0, 230, 40)).toBe(liste);
+    expect(stueckTeilen(liste, 0, 770, 40)).toBe(liste);
+  });
+
+  it('tut nichts, wenn der Index nicht existiert', () => {
+    const liste = [stueck];
+    expect(stueckTeilen(liste, 5, 500, 40)).toBe(liste);
+  });
+});
+
+describe('kannTeilen', () => {
+  const stueck = { vonMs: 200, bisMs: 800 };
+
+  it('erlaubt eine Stelle mit vollem Mindestabstand zu beiden Enden', () => {
+    expect(kannTeilen(stueck, 240, 40)).toBe(true);
+    expect(kannTeilen(stueck, 760, 40)).toBe(true);
+  });
+
+  it('lehnt eine Stelle zu nah an einem Ende ab', () => {
+    expect(kannTeilen(stueck, 239, 40)).toBe(false);
+    expect(kannTeilen(stueck, 761, 40)).toBe(false);
+  });
+
+  it('lehnt eine Stelle ausserhalb des Stücks ab', () => {
+    expect(kannTeilen(stueck, 100, 40)).toBe(false);
+    expect(kannTeilen(stueck, 900, 40)).toBe(false);
   });
 });

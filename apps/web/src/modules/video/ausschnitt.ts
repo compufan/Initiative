@@ -251,6 +251,45 @@ export function filmZeitpunkte(
   });
 }
 
+/* ---------- Schneiden ---------- */
+
+/** Ob `stueckTeilen` an dieser Stelle im Stück wirklich etwas täte. */
+export function kannTeilen(stueck: Stueck, beiMs: number, mindestMs: number): boolean {
+  return beiMs >= stueck.vonMs + mindestMs && beiMs <= stueck.bisMs - mindestMs;
+}
+
+/**
+ * Ein Stück an einer Stelle in zwei aufeinanderfolgende teilen.
+ *
+ * Reine Rechnung, kein Zugriff auf `stuecke[index]` von aussen nötig: Ersetzt
+ * das Stück durch zwei, die zusammen genau denselben Bereich abdecken. Liegt
+ * `beiMs` nicht echt DAZWISCHEN – mit mindestens `mindestMs` Abstand zu
+ * beiden Enden, siehe `kannTeilen` –, bleibt die Liste unverändert: Ein
+ * Schnitt, der ein leeres oder ein Bild schmales Reststück erzeugte, wäre
+ * keine Hilfe, sondern eine Falle, aus der sich das Stück nicht mehr entfernen
+ * liesse.
+ *
+ * Die beiden Teile bleiben in der Abtastung NAHTLOS – `abtasten` erkennt sie
+ * über `naht` als direkte Fortsetzung, nicht als Schnittkante. Die
+ * Bewegungsschätzung läuft also über die Teilungsstelle hinweg unverändert
+ * weiter, genau wie vor dem Teilen.
+ */
+export function stueckTeilen(
+  stuecke: readonly Stueck[],
+  index: number,
+  beiMs: number,
+  mindestMs: number,
+): readonly Stueck[] {
+  const stueck = stuecke[index];
+  if (!stueck || !kannTeilen(stueck, beiMs, mindestMs)) return stuecke;
+  return [
+    ...stuecke.slice(0, index),
+    { vonMs: stueck.vonMs, bisMs: beiMs },
+    { vonMs: beiMs, bisMs: stueck.bisMs },
+    ...stuecke.slice(index + 1),
+  ];
+}
+
 /* ---------- Was es am Ende wiegt ---------- */
 
 /*

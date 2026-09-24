@@ -33,8 +33,10 @@ export function Streifen({
   aktiv,
   gesperrt,
   schrittMs = 100,
+  spielkopfMs,
   onBereich,
   onAktiv,
+  onSpielkopf,
 }: {
   bilder: { zeitMs: number; bild: string }[];
   dauerMs: number;
@@ -49,11 +51,26 @@ export function Streifen({
    * auf einmal; bildgenau zu schneiden ginge damit gar nicht.
    */
   schrittMs?: number;
+  /**
+   * Die Wiedergabestelle, falls es eine gibt – ohne Angabe kein Strich.
+   *
+   * Optional, damit „GIF aus Video" (das den Streifen auch benutzt, aber
+   * keine Wiedergabe hat) unverändert bleibt.
+   */
+  spielkopfMs?: number;
   onBereich: (vonMs: number, bisMs: number) => void;
   onAktiv?: (nummer: number) => void;
+  /**
+   * Ein Tipp oder ein Ziehen auf dem GRUND des Streifens – nicht auf einem
+   * Griff oder einem Stück, die fangen ihren eigenen Druck ab (siehe dort).
+   * Ohne diese Angabe bleibt der Streifen ein reiner Bereichswähler, wie
+   * bisher.
+   */
+  onSpielkopf?: (ms: number) => void;
 }) {
   const bahn = useRef<HTMLDivElement | null>(null);
   const zieht = useRef<'von' | 'bis' | null>(null);
+  const ziehtKopf = useRef(false);
 
   const stueck = stuecke[aktiv] ?? { vonMs: 0, bisMs: dauerMs };
   /* Mindestens ein Bild lang – ein Stück ohne Länge liefert trotzdem eines. */
@@ -81,14 +98,25 @@ export function Streifen({
     <div
       className={`vg-streifen${gesperrt ? ' ist-aus' : ''}`}
       ref={bahn}
+      onPointerDown={(ereignis) => {
+        // Nur der GRUND – ein Griff oder ein Stück hat den Druck über
+        // `stopPropagation` schon für sich behalten.
+        if (!onSpielkopf || gesperrt) return;
+        ziehtKopf.current = true;
+        ereignis.currentTarget.setPointerCapture(ereignis.pointerId);
+        onSpielkopf(zeitAus(ereignis.clientX));
+      }}
       onPointerMove={(ereignis) => {
         if (zieht.current) schieben(ereignis.clientX);
+        else if (ziehtKopf.current && onSpielkopf) onSpielkopf(zeitAus(ereignis.clientX));
       }}
       onPointerUp={() => {
         zieht.current = null;
+        ziehtKopf.current = false;
       }}
       onPointerLeave={() => {
         zieht.current = null;
+        ziehtKopf.current = false;
       }}
     >
       {bilder.map((bild) => (
@@ -122,11 +150,18 @@ export function Streifen({
             disabled={gesperrt}
             aria-label={`Stück ${nummer + 1} auswählen`}
             aria-pressed={nummer === aktiv}
-            onPointerDown={() => onAktiv?.(nummer)}
+            onPointerDown={(ereignis) => {
+              ereignis.stopPropagation();
+              onAktiv?.(nummer);
+            }}
           >
             <span aria-hidden="true">{nummer + 1}</span>
           </button>
         ))}
+
+      {spielkopfMs !== undefined && (
+        <div className="vg-spielkopf" style={{ left: `${anteil(spielkopfMs) * 100}%` }} />
+      )}
 
       {(['von', 'bis'] as const).map((welcher) => (
         <button
@@ -137,6 +172,7 @@ export function Streifen({
           disabled={gesperrt}
           aria-label={welcher === 'von' ? 'Anfang' : 'Ende'}
           onPointerDown={(ereignis) => {
+            ereignis.stopPropagation();
             zieht.current = welcher;
             ereignis.currentTarget.setPointerCapture(ereignis.pointerId);
           }}
