@@ -19,6 +19,16 @@ let tippLaeufe = 0;
 let tiefeLaeufe = 0;
 let sitzungenAuf = 0;
 let sitzungenZu = 0;
+/*
+ * Für die Drift-Prüfung unten: Wenn `drift` an ist, wandert der gelieferte
+ * Block bei jedem Aufruf ein Stück nach rechts – nicht weil sich das Motiv
+ * bewegt (die Bilder sind identisch), sondern weil das Modell selbst bei
+ * jedem Lauf ein wenig danebenliegt. Genau dieses Verhalten hat den
+ * gemeldeten Fehler ausgelöst: Das Video stand still, die Maske wanderte.
+ */
+let drift = false;
+let driftAufruf = 0;
+const DRIFT_SCHRITT = 5;
 
 vi.mock('../stickers/engines/index.js', async () => {
   const echt = await vi.importActual<typeof import('../stickers/engines/index.js')>(
@@ -30,9 +40,13 @@ vi.mock('../stickers/engines/index.js', async () => {
       netzlaeufe += 1;
       await Promise.resolve();
       const maske = new Uint8Array(anfrage.image.width * anfrage.image.height);
-      // Ein Block links – etwas, das sich schieben lässt.
+      const versatz = drift ? driftAufruf * DRIFT_SCHRITT : 0;
+      if (drift) driftAufruf += 1;
+      // Ein Block links – etwas, das sich schieben lässt (oder, im
+      // Driftfall, ein Block, der bei jedem Aufruf weiter rechts liegt).
+      const breiteViertel = anfrage.image.width / 4;
       for (let y = 0; y < anfrage.image.height; y += 1) {
-        for (let x = 0; x < anfrage.image.width / 4; x += 1)
+        for (let x = versatz; x < versatz + breiteViertel && x < anfrage.image.width; x += 1)
           maske[y * anfrage.image.width + x] = 255;
       }
       return maske;
@@ -165,6 +179,9 @@ const TIPP: InhaltsTeil = {
 };
 
 const folge = (anzahl: number) => Array.from({ length: anzahl }, (_, i) => bild(i));
+// Lauter identische Bilder – ein Video, das wirklich stillsteht, statt eins,
+// dessen Inhalt sich (wie bei `folge`) von Bild zu Bild verschiebt.
+const stillstand = (anzahl: number) => Array.from({ length: anzahl }, () => bild(0));
 
 beforeEach(() => {
   netzlaeufe = 0;
@@ -172,6 +189,8 @@ beforeEach(() => {
   tiefeLaeufe = 0;
   sitzungenAuf = 0;
   sitzungenZu = 0;
+  drift = false;
+  driftAufruf = 0;
 });
 
 describe('folgeTeile', () => {
@@ -326,5 +345,55 @@ describe('folgeTeile an einer Schnittkante', () => {
   it('kommt ohne Schnittangabe genauso durch wie bisher', async () => {
     const { jeBild } = await folgeTeile(folge(6), { teile: [NETZ], schluesselAbstand: 4 });
     expect(jeBild).toHaveLength(6);
+  });
+});
+
+describe('folgeTeile bei einem Modell, das bei jedem Aufruf ein Stück danebenliegt', () => {
+  const mitte = (werte: Uint8Array | undefined) => {
+    if (!werte) return -1;
+    let sx = 0;
+    let summe = 0;
+    for (let i = 0; i < werte.length; i += 1) {
+      sx += (i % 128) * werte[i];
+      summe += werte[i];
+    }
+    return summe === 0 ? -1 : sx / summe;
+  };
+
+  it('lässt die Maske nicht unbegrenzt wegdriften, obwohl das Video stillsteht', async () => {
+    /*
+     * Der gemeldete Fehler: Das Video steht still (`stillstand` – jedes Bild
+     * ist dasselbe, `lagen[i]` bleibt also `LAGE_RUHE`), aber die Maske
+     * wandert trotzdem, weil das Erkennungsmodell bei jedem Schlüsselbild ein
+     * kleines Stück danebenliegt. Verglichen mit dem VORIGEN Schlüsselbild
+     * ist jeder einzelne Schritt (5 von 32 Bildpunkten, 84 % Deckung) für
+     * sich genommen unauffällig – nach elf Schlüsselbildern läge der Block
+     * bei 55 Bildpunkten Versatz, ein Drittel des Bildes weiter rechts, ohne
+     * dass eine einzige Prüfung angeschlagen hätte.
+     *
+     * Verglichen mit dem STÜCKANFANG (dem Fix) reisst die Deckung dagegen ab
+     * 23 Bildpunkten Versatz unter 30 % – die Prüfung verwirft ab da JEDEN
+     * weiteren Lauf und hält an der ursprünglichen Stelle fest, weil
+     * `erwartet` immer wieder aus genau derselben Vorlage gezogen wird.
+     */
+    drift = true;
+    const { jeBild, lagen, verworfen } = await folgeTeile(stillstand(12), {
+      teile: [NETZ],
+      schluesselAbstand: 1,
+    });
+
+    // Die Grundannahme des Tests: Ein Video ohne echte Bewegung liefert auch
+    // keine – sonst könnte auch das Nachziehen den Versatz erklären.
+    for (const lage of lagen) expect(lage).toEqual({ s: 1, w: 0, tx: 0, ty: 0, sicher: 0 });
+
+    const erste = mitte(jeBild[0].get('n1')?.werte);
+    const letzte = mitte(jeBild[11].get('n1')?.werte);
+
+    // Die Prüfung muss tatsächlich angeschlagen haben – sonst bewiese der
+    // Test nur, dass nichts geprüft wurde.
+    expect(verworfen).toBeGreaterThan(0);
+    // Gebunden an die Vorlage, nicht am halben Bild vorbei: Ohne den Fix
+    // läge `letzte` bei rund 70 (55 Versatz + 15,5 Blockmitte).
+    expect(Math.abs(letzte - erste)).toBeLessThan(20);
   });
 });

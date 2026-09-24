@@ -249,23 +249,29 @@ export async function folgeTeile(
           faktor,
         );
         /*
-         * Gegen das halten, was aus dem vorigen Schlüsselbild zu erwarten
-         * war – die Begründung samt Messung steht bei `maskePasst`.
+         * Gegen den ANFANG DES STÜCKS halten, nicht gegen das vorige
+         * Schlüsselbild – die Begründung samt Messung steht bei
+         * `maskePasst`.
+         *
+         * Ein Vergleich mit dem vorigen Schlüsselbild lässt jeden Schritt
+         * für sich plausibel aussehen, selbst wenn er es nicht ist: Rutscht
+         * die Maske an jedem Schlüsselbild um ein gerade noch toleriertes
+         * Stück, hält `maskePasst` jeden einzelnen Schritt für gut, und die
+         * Abweichung läuft über viele Schlüsselbilder unbegrenzt auf – am
+         * Beispielfilm gemessen eine stetige Wanderung über das halbe Bild,
+         * obwohl die Szene selbst stillstand (bestätigt durch eine
+         * Bewegungssuche auf denselben Bildern mit ausgeblendetem
+         * Maskenbereich: `LAGE_RUHE` für alle 85 Übergänge). Verglichen mit
+         * dem STÜCKANFANG bleibt die Toleranz dagegen absolut: `lagen[anker]`
+         * ist dort immer `LAGE_RUHE` (siehe oben), also vereinfacht sich die
+         * Verkettung zu `lagen[i]` – keine `kehren`, keine zweite Lage nötig.
          */
         // An einer Schnittkante gibt es nichts zu erwarten: Die Maske davor
         // gehört zu einer anderen Szene, und `maskePasst` würde die frische
         // zugunsten einer fremden verwerfen.
-        const anker = i > 0 && !schnitte.has(i) ? schluesselVor(schluessel, i - 1) : -1;
+        const anker = i > 0 && !schnitte.has(i) ? stueckAnker(schnitte, i) : -1;
         const vorlage = anker >= 0 ? sammlung[anker] : null;
-        const erwartet = vorlage
-          ? maskeZiehen(
-              vorlage,
-              breite,
-              hoehe,
-              lageVerketten(lagen[i], kehren(lagen[anker])),
-              faktor,
-            )
-          : null;
+        const erwartet = vorlage ? maskeZiehen(vorlage, breite, hoehe, lagen[i], faktor) : null;
         const befund = maskePasst(frisch, erwartet);
         if (!befund.haelt && erwartet) {
           verworfen += 1;
@@ -369,6 +375,24 @@ async function teilRechnen(
 function schluesselVor(schluessel: ReadonlySet<number>, bis: number): number {
   for (let i = bis; i >= 0; i -= 1) if (schluessel.has(i)) return i;
   return 0;
+}
+
+/**
+ * Der Anfang des Stücks, in dem `bis` liegt – 0 oder die letzte Schnittkante
+ * davor.
+ *
+ * Anders als `schluesselVor` läuft das nicht über alle Bilder, sondern nur
+ * über die (wenigen) Schnittstellen: `lagen[]` wird dort ohnehin auf
+ * `LAGE_RUHE` zurückgesetzt, und genau dieser feste Punkt ist es, gegen den
+ * die Plausibilitätsprüfung eines Schlüsselbilds halten muss, statt gegen
+ * das vorige – siehe die Begründung dort.
+ */
+function stueckAnker(schnitte: ReadonlySet<number>, bis: number): number {
+  let anker = 0;
+  for (const stelle of schnitte) {
+    if (stelle <= bis && stelle > anker) anker = stelle;
+  }
+  return anker;
 }
 
 /**
