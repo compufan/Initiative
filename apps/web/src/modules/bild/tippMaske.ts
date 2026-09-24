@@ -39,7 +39,12 @@
  * Buchführung.
  */
 
-import { EngineError, engineAvailable, runEngine } from '../stickers/engines/index.js';
+import {
+  EngineError,
+  NichtsGefunden,
+  engineAvailable,
+  runEngine,
+} from '../stickers/engines/index.js';
 import { flutmaske } from '../stickers/engines/flutung.js';
 import { maskeTraegt, vorlageAus } from '../stickers/engines/prepare.js';
 import { naechsteMarke } from './maske.js';
@@ -123,7 +128,9 @@ export function vereinigen(a: Uint8Array, b: Uint8Array): Uint8Array {
  *
  * Wirft `EngineError` mit einem Satz für den Anwender – ausser bei einer
  * leeren Punktliste, die gibt `null` zurück: Das ist kein Fehler, sondern der
- * letzte zurückgenommene Tipp.
+ * letzte zurückgenommene Tipp. Fand sich an der Stelle nichts, ist der
+ * Fehler genauer `NichtsGefunden` – wichtig für alles, was diese Funktion
+ * wiederholt aufruft, siehe dort.
  */
 export async function tippTeilRechnen(
   bild: HTMLImageElement | ImageData,
@@ -203,7 +210,7 @@ export async function tippTeilRechnen(
   }
 
   if (!maskeTraegt(alpha)) {
-    throw new EngineError(
+    throw new NichtsGefunden(
       wahl.mitNetz
         ? 'An dieser Stelle wurde nichts gefunden. Tipp mitten auf das Ding – oder nimm den Haken weg, dann wird nach Farbe getippt.'
         : 'An dieser Stelle ist nichts aufgegangen. Zieh die Toleranz höher, dann greift die Farbe weiter.',

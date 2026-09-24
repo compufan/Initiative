@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { AbbruchError } from '../stickers/engines/index.js';
+import { AbbruchError, NichtsGefunden } from '../stickers/engines/index.js';
 import { TeileAbbruch, folgeTeile } from './folgeTeile.js';
 import type { InhaltsTeil } from './bildweise.js';
 import type { GelesenesBild } from './bilderLesen.js';
@@ -29,6 +29,9 @@ let sitzungenZu = 0;
 let drift = false;
 let driftAufruf = 0;
 const DRIFT_SCHRITT = 5;
+// Für die Verschwinde-Prüfung unten: die Aufrufnummern (1-indiziert), bei
+// denen der Tipp nichts findet – das angetippte Ding ist gerade nicht da.
+let tippNichtsBei = new Set<number>();
 
 vi.mock('../stickers/engines/index.js', async () => {
   const echt = await vi.importActual<typeof import('../stickers/engines/index.js')>(
@@ -64,6 +67,9 @@ vi.mock('../stickers/engines/prepare.js', async () => {
 vi.mock('../bild/tippMaske.js', () => ({
   tippTeilRechnen: async (bild: ImageData) => {
     tippLaeufe += 1;
+    if (tippNichtsBei.has(tippLaeufe)) {
+      throw new NichtsGefunden('An dieser Stelle wurde nichts gefunden.', 'tippen');
+    }
     return {
       id: 't1',
       modus: 'dazu' as const,
@@ -191,6 +197,7 @@ beforeEach(() => {
   sitzungenZu = 0;
   drift = false;
   driftAufruf = 0;
+  tippNichtsBei = new Set();
 });
 
 describe('folgeTeile', () => {
@@ -395,5 +402,40 @@ describe('folgeTeile bei einem Modell, das bei jedem Aufruf ein Stück danebenli
     // Gebunden an die Vorlage, nicht am halben Bild vorbei: Ohne den Fix
     // läge `letzte` bei rund 70 (55 Versatz + 15,5 Blockmitte).
     expect(Math.abs(letzte - erste)).toBeLessThan(20);
+  });
+});
+
+describe('folgeTeile, wenn ein angetipptes Objekt verschwindet', () => {
+  it('bricht nicht ab, wenn der Tipp von Anfang an nichts trägt', async () => {
+    /*
+     * Am allerersten Schlüsselbild gibt es noch keine Vorlage, gegen die
+     * `maskePasst` prüfen könnte (`erwartet` ist `null`) – eine leere Maske
+     * geht hier also unverändert durch. Vor dem Fix hätte `tippTeilRechnen`
+     * hier `NichtsGefunden` geworfen, und nichts in `folgeTeile` fing das
+     * ab: der ganze Filmbau wäre abgebrochen, nur weil das angetippte Ding
+     * im allerersten Bild nicht (mehr) zu finden war.
+     */
+    tippNichtsBei = new Set([1]);
+    const { jeBild } = await folgeTeile(folge(4), { teile: [TIPP], schluesselAbstand: 2 });
+    expect(Array.from(jeBild[0].get('t1')?.werte ?? [])).toEqual(new Array(128 * 128).fill(0));
+  });
+
+  it('bricht den Filmbau nicht ab, wenn das Objekt mittendrin verschwindet und später wiederkehrt', async () => {
+    // Acht Bilder, Abstand zwei: Schlüsselbilder bei 0, 2, 4, 6 und 7 (das
+    // letzte immer) – fünf Tipp-Läufe. Der dritte (Bild 4) findet nichts.
+    tippNichtsBei = new Set([3]);
+    const { jeBild, verworfen } = await folgeTeile(folge(8), {
+      teile: [TIPP],
+      schluesselAbstand: 2,
+    });
+    // Jedes Bild bekommt weiterhin eine vollständige, richtig grosse Maske –
+    // kein Loch, kein Rest eines abgebrochenen Laufs. Vor dem Fix wäre die
+    // Zusicherung oben (`await folgeTeile(...)`) schon mit `NichtsGefunden`
+    // fehlgeschlagen, statt hierher zu kommen.
+    for (const karte of jeBild) expect(karte.get('t1')?.werte.length).toBe(128 * 128);
+    // Die leere Kandidatin an Bild 4 hat eine Vorlage (Bild 0 trägt voll) und
+    // fällt damit durch `maskePasst` – genau die Prüfung, die eine Maske
+    // schützt, die nur kurz und fälschlich als leer gemeldet wurde.
+    expect(verworfen).toBeGreaterThan(0);
   });
 });

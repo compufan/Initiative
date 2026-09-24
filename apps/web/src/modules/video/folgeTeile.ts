@@ -1,4 +1,4 @@
-import { AbbruchError, runEngine } from '../stickers/engines/index.js';
+import { AbbruchError, NichtsGefunden, runEngine } from '../stickers/engines/index.js';
 import { kanteWeichzeichnen } from '../stickers/engines/prepare.js';
 import { tippTeilRechnen } from '../bild/tippMaske.js';
 import type { GelesenesBild, Fortschritt } from './bilderLesen.js';
@@ -358,14 +358,29 @@ async function teilRechnen(
         y: Math.min(hoehe - 1, Math.max(0, Math.round(gezogen.y))),
       };
     });
-    const gerechnet = await tippTeilRechnen(bild.daten, punkte, {
-      modus: teil.modus,
-      mitNetz: teil.mitNetz,
-      toleranz: teil.toleranz,
-      id: teil.id,
-    });
-    if (!gerechnet || gerechnet.art !== 'tipp') throw new Error('Der Tipp ergab keine Maske');
-    return gerechnet.alpha;
+    try {
+      const gerechnet = await tippTeilRechnen(bild.daten, punkte, {
+        modus: teil.modus,
+        mitNetz: teil.mitNetz,
+        toleranz: teil.toleranz,
+        id: teil.id,
+      });
+      if (!gerechnet || gerechnet.art !== 'tipp') throw new Error('Der Tipp ergab keine Maske');
+      return gerechnet.alpha;
+    } catch (fehler) {
+      /*
+       * `NichtsGefunden` heisst: An dieser Stelle ist gerade nichts – das
+       * angetippte Ding kann aus dem Bild gelaufen sein. Das darf den ganzen
+       * Filmbau nicht abbrechen, sonst kostete ein Objekt, das für ein paar
+       * Sekunden hinter etwas verschwindet, den kompletten Export. Eine leere
+       * Maske ist die ehrliche Antwort; `maskePasst` weiss damit ohnehin
+       * umzugehen (leer gegen leer hält, siehe dort). Jeder andere Fehler
+       * bleibt tödlich – ein abgeschaltetes oder abgestürztes Verfahren
+       * fände beim nächsten Schlüsselbild ebenso wenig.
+       */
+      if (fehler instanceof NichtsGefunden) return new Uint8Array(breite * hoehe);
+      throw fehler;
+    }
   }
 
   throw new Error(`Diese Maskenart wird je Bild nicht gerechnet: ${teil.art}`);

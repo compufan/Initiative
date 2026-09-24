@@ -73,6 +73,24 @@ export class EngineError extends Error {
   }
 }
 
+/**
+ * Ein Sonderfall von `EngineError`: nicht das Verfahren ist kaputt, es hat
+ * schlicht nichts gefunden.
+ *
+ * Der Unterschied zählt für jeden, der ein Verfahren wiederholt aufruft – ein
+ * Video etwa, Schlüsselbild für Schlüsselbild. Ist das Gerät zu schwach oder
+ * das Modell abgeschaltet, gilt das für JEDEN Aufruf gleich, und weiterlaufen
+ * hiesse, denselben Fehler fünfzig Mal zu ignorieren. Wurde dagegen nur an
+ * DIESER Stelle nichts gefunden – das angetippte Ding ist aus dem Bild
+ * gelaufen –, kann der nächste Aufruf wieder etwas finden.
+ */
+export class NichtsGefunden extends EngineError {
+  constructor(message: string, engine: EngineKey) {
+    super(message, engine);
+    this.name = 'NichtsGefunden';
+  }
+}
+
 export function engineInfo(key: EngineKey): EngineInfo {
   const info = ENGINE_INFO.find((entry) => entry.key === key);
   if (!info) throw new Error(`Unbekanntes Verfahren: ${key}`);
