@@ -635,3 +635,145 @@ test('zwei Stücke laufen in der gewählten Reihenfolge', async ({ page }) => {
     `hinten müsste rot sein, ist aber ${(ergebnis.hinten ?? []).join(',')}`,
   ).toBeGreaterThan(hg);
 });
+
+test('das Bild läuft weiter, wenn eine Bearbeitung darauf liegt', async ({ page }) => {
+  /*
+   * Gemeldet als „Jetzt bleibt das Video stehen, während sich die Maske
+   * bewegt". Die Ursache sass in den Merkzetteln von `tonGpu.ts` und
+   * `zeichnen.ts`: Sie erkannten „dasselbe Bild" an der Objektidentität, und
+   * `videoBauen` schreibt jedes Filmbild mit `putImageData` in DIESELBE
+   * Leinwand. Heraus kam Bild 0 in jedem Bild – mit einer Farbanpassung
+   * ebenso wie mit einem Bereich, Masken darüber je Bild richtig.
+   *
+   * Die übrigen Prüfungen hier merkten das nicht, weil ihre Aufnahme einfarbig
+   * ist: Ein eingefrorenes rotes Bild ist von einem laufenden roten Bild nicht
+   * zu unterscheiden. Hier wandert deshalb ein weisses Quadrat, und gemessen
+   * wird, wo es steht.
+   */
+  test.setTimeout(180_000);
+  await page.goto('/');
+  await page.waitForLoadState('networkidle');
+
+  const ergebnis = await page.evaluate(async () => {
+    const bauenPfad = '/src/modules/video/videoBauen.ts';
+    const docPfad = '/src/modules/bild/doc.ts';
+    const schreibenPfad = '/src/modules/video/schreiben.ts';
+    const bauen = (await import(
+      /* @vite-ignore */ bauenPfad
+    )) as typeof import('../src/modules/video/videoBauen.js');
+    const docModul = (await import(
+      /* @vite-ignore */ docPfad
+    )) as typeof import('../src/modules/bild/doc.js');
+    const schreiben = (await import(
+      /* @vite-ignore */ schreibenPfad
+    )) as typeof import('../src/modules/video/schreiben.js');
+    if (!(await schreiben.videoTauglich(320, 240)).moeglich) return { uebersprungen: true };
+
+    // Die Aufnahme: ein weisses Quadrat wandert über einen Verlauf, 8 Punkte
+    // je Bild, dreissig Bilder bei zehn je Sekunde.
+    const leinwand = document.createElement('canvas');
+    leinwand.width = 320;
+    leinwand.height = 240;
+    const ctx = leinwand.getContext('2d')!;
+    const datei = await schreiben.videoSchreiben(
+      30,
+      (nummer) => {
+        const verlauf = ctx.createLinearGradient(0, 0, 320, 0);
+        verlauf.addColorStop(0, '#203060');
+        verlauf.addColorStop(1, '#604020');
+        ctx.fillStyle = verlauf;
+        ctx.fillRect(0, 0, 320, 240);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(20 + nummer * 8, 100, 40, 40);
+        return leinwand;
+      },
+      { breite: 320, hoehe: 240, bildrate: 10 },
+    );
+
+    const quadratBei = async (blob: Blob, sekunden: number) => {
+      const video = document.createElement('video');
+      video.muted = true;
+      video.src = URL.createObjectURL(blob);
+      await new Promise((auf) => {
+        video.onloadedmetadata = auf;
+      });
+      await new Promise<void>((auf) => {
+        video.onseeked = () => auf();
+        video.currentTime = sekunden;
+      });
+      const probe = document.createElement('canvas');
+      probe.width = video.videoWidth;
+      probe.height = video.videoHeight;
+      const pctx = probe.getContext('2d', { willReadFrequently: true })!;
+      pctx.drawImage(video, 0, 0);
+      const d = pctx.getImageData(0, 0, probe.width, probe.height).data;
+      let summe = 0;
+      let anzahl = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        if (d[i] > 200 && d[i + 1] > 200 && d[i + 2] > 200) {
+          summe += (i / 4) % probe.width;
+          anzahl += 1;
+        }
+      }
+      return anzahl > 0 ? summe / anzahl : -1;
+    };
+
+    const leer = docModul.neuesDoc(320, 240);
+    const docs = {
+      // Nur eine Farbanpassung – der Stromweg, ohne Masken.
+      farbe: { ...leer, anpassung: { ...leer.anpassung, belichtung: 0.4 } },
+      // Ein Verlauf oben – der Weg, der alle Bilder sammelt.
+      bereich: {
+        ...leer,
+        bereiche: [
+          {
+            id: 'b1',
+            name: 'Himmel',
+            aktiv: true,
+            anpassung: { ...docModul.BEREICH_NEUTRAL, belichtung: -1 },
+            teile: [
+              {
+                id: 'v1',
+                modus: 'dazu' as const,
+                umkehren: false,
+                art: 'verlauf' as const,
+                von: { x: 0, y: 60 },
+                bis: { x: 0, y: 0 },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const lagen: Record<string, [number, number]> = {};
+    for (const [name, doc] of Object.entries(docs)) {
+      const fertig = await bauen.videoAusVideo({
+        datei,
+        doc,
+        stuecke: [{ vonMs: 0, bisMs: 3000 }],
+        bildrate: 10,
+        kante: 320,
+        schluesselAbstand: 4,
+        maxBilder: 100,
+      });
+      lagen[name] = [await quadratBei(fertig.blob, 0.25), await quadratBei(fertig.blob, 2.45)];
+    }
+    return { uebersprungen: false, quelle: [await quadratBei(datei, 0.25), await quadratBei(datei, 2.45)], lagen };
+  });
+
+  if (ergebnis.uebersprungen) {
+    test.skip(true, 'Kein Videokodierer in diesem Browser');
+    return;
+  }
+  const [quelleVorn, quelleHinten] = ergebnis.quelle ?? [0, 0];
+  // Die Aufnahme selbst: Das Quadrat wandert um gut 170 Punkte.
+  expect(quelleHinten - quelleVorn).toBeGreaterThan(150);
+  for (const [name, [vorn, hinten]] of Object.entries(ergebnis.lagen ?? {})) {
+    expect(vorn, `${name}: vorn nicht gefunden`).toBeGreaterThan(0);
+    expect(
+      Math.abs(hinten - quelleHinten),
+      `${name}: das Quadrat steht bei ${hinten} statt bei ${quelleHinten} – der Film ist eingefroren`,
+    ).toBeLessThan(6);
+    expect(Math.abs(vorn - quelleVorn), `${name}: vorn verschoben`).toBeLessThan(6);
+  }
+});

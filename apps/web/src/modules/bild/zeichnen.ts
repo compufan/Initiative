@@ -21,7 +21,7 @@ import {
   type Schriftzug,
   type Zuschnitt,
 } from './doc.js';
-import { bildRechnen } from './tonGpu.js';
+import { bildRechnen, quellstand } from './tonGpu.js';
 import { griffeVon, radialRand, verlaufLinien } from './bereichGriffe.js';
 import type { Raster } from './maske.js';
 import { szeneBauen } from './maskenSpeicher.js';
@@ -197,6 +197,8 @@ interface Unkenntlichkeit {
    * das dunkle Foto von vorhin verpixelt.
    */
   quelle: CanvasImageSource;
+  /** Und deren Inhalt – siehe `quellstand` in `tonGpu.ts`. */
+  stand: number;
 }
 
 /**
@@ -237,7 +239,13 @@ function unkenntlich(
   quellSkalaY: number,
 ): void {
   const alt = gemerkt.get(strich);
-  if (alt && alt.skala === skala && alt.punkte === strich.punkte.length && alt.quelle === bild) {
+  if (
+    alt &&
+    alt.skala === skala &&
+    alt.punkte === strich.punkte.length &&
+    alt.quelle === bild &&
+    alt.stand === quellstand(bild)
+  ) {
     ctx.drawImage(alt.flaeche, alt.x0, alt.y0, alt.bw, alt.bh);
     return;
   }
@@ -403,6 +411,7 @@ function unkenntlich(
       skala,
       punkte: strich.punkte.length,
       quelle: bild,
+      stand: quellstand(bild),
     });
   }
   ctx.drawImage(hilf, x0, y0, bw, bh);

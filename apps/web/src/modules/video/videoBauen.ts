@@ -1,6 +1,7 @@
 import { AbbruchError } from '../stickers/engines/index.js';
 import type { BildDoc } from '../bild/doc.js';
 import { zeichneAusgabe } from '../bild/zeichnen.js';
+import { quelleVeraendert } from '../bild/tonGpu.js';
 import {
   LeseAbbruch,
   videoBilderLesen,
@@ -243,6 +244,7 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
   // Einmal zeichnen, um die Ausgabegrösse zu erfahren – sie hängt am
   // Zuschnitt und an der Drehung, nicht nur an der Quelle.
   stift.putImageData(gelesen.bilder[0].daten, 0, 0);
+  quelleVeraendert(quelle);
   const probe = zeichneAusgabe(quelle, gelesen.breite, gelesen.hoehe, auftrag.doc);
   const breite = probe.width;
   const hoehe = probe.height;
@@ -253,6 +255,7 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
       anzahl,
       (nummer) => {
         stift.putImageData(gelesen.bilder[nummer].daten, 0, 0);
+        quelleVeraendert(quelle);
         return zeichneAusgabe(
           quelle,
           gelesen.breite,
@@ -348,6 +351,7 @@ async function stroemend(
      */
     const erstes = await leser.bildAn(punkte[0], auftrag.abbruch);
     stift.putImageData(erstes, 0, 0);
+    quelleVeraendert(quelle);
     const probe = zeichneAusgabe(quelle, leser.breite, leser.hoehe, auftrag.doc);
     const breite = probe.width;
     const hoehe = probe.height;
@@ -360,6 +364,7 @@ async function stroemend(
           if (auftrag.abbruch?.aborted) throw new AbbruchError();
           const daten = nummer === 0 ? erstes : await leser.bildAn(punkte[nummer], auftrag.abbruch);
           stift.putImageData(daten, 0, 0);
+          quelleVeraendert(quelle);
           auftrag.fortschritt?.((nummer + 1) / anzahl, 'strom', `Bild ${nummer + 1} von ${anzahl}`);
           return zeichneAusgabe(quelle, leser.breite, leser.hoehe, auftrag.doc);
         },

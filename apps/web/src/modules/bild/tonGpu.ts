@@ -629,7 +629,42 @@ let werk: Werk | null | undefined;
  * Reglerraste, sechzigmal in der Sekunde gewünscht. Das war der grösste
  * Einzelposten auf dem Reglerweg und hat mit den Reglern selbst nichts zu tun.
  */
-let quellzettel: { quelle: CanvasImageSource; breite: number; hoehe: number } | null = null;
+let quellzettel: {
+  quelle: CanvasImageSource;
+  stand: number;
+  breite: number;
+  hoehe: number;
+} | null = null;
+
+/*
+ * Wie oft der INHALT einer Quelle seit ihrem Anlegen ausgetauscht wurde.
+ *
+ * Die Zettel hier und in `zeichnen.ts` erkannten „dasselbe Bild" an der
+ * Objektidentität. Für ein Foto stimmt das; eine Leinwand, in die Bild für
+ * Bild mit `putImageData` ein neuer Filmbild geschrieben wird, bleibt aber
+ * dasselbe Objekt. Nachgemessen: Ein Film mit wanderndem Quadrat kam mit
+ * dem Quadrat von Bild 0 in JEDEM Bild heraus – mit Farbanpassung und mit
+ * Bereichen, auf der Grafikeinheit. Die Masken wurden je Bild neu gerechnet,
+ * das Bild darunter nicht: „das Video bleibt stehen, die Maske wandert".
+ */
+const quellStand = new WeakMap<object, number>();
+
+/**
+ * Meldet, dass in `bild` jetzt ein anderes Bild steht – nach jedem
+ * `putImageData` oder `drawImage` in eine wiederverwendete Leinwand.
+ */
+export function quelleVeraendert(bild: CanvasImageSource): void {
+  quellStand.set(bild, (quellStand.get(bild) ?? 0) + 1);
+}
+
+/**
+ * Der Stand, mit dem ein Zettel sein Ergebnis vergleicht. Ein laufendes
+ * Video zählt als jedes Mal neu – sein Inhalt wechselt ohne Meldung.
+ */
+export function quellstand(bild: CanvasImageSource): number {
+  if (typeof HTMLVideoElement !== 'undefined' && bild instanceof HTMLVideoElement) return NaN;
+  return quellStand.get(bild) ?? 0;
+}
 
 /**
  * Was gerade im Maskenatlas liegt.
@@ -829,9 +864,11 @@ function aufGpu(
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, w.textur);
+    const stand = quellstand(bild);
     const passt =
       quellzettel &&
       quellzettel.quelle === bild &&
+      quellzettel.stand === stand &&
       quellzettel.breite === breite &&
       quellzettel.hoehe === hoehe;
     if (!passt) {
@@ -852,7 +889,7 @@ function aufGpu(
         gl.UNSIGNED_BYTE,
         verkleinern(bild, breite, hoehe) as TexImageSource,
       );
-      quellzettel = { quelle: bild, breite, hoehe };
+      quellzettel = { quelle: bild, stand, breite, hoehe };
       zaehler.quellHochladen += 1;
     }
 
@@ -1258,6 +1295,7 @@ interface Merkzettel {
   breite: number;
   hoehe: number;
   quelle: CanvasImageSource;
+  stand: number;
 }
 
 let gemerkt: Merkzettel | null = null;
@@ -1324,12 +1362,14 @@ export function bildRechnen(
    */
   if ((istNeutral(a) && szene.bereiche.length === 0) || breite <= 0 || hoehe <= 0) return bild;
   const schluessel = szene.bereiche.length > 0 ? szene.schluessel : tonSchluessel(a);
+  const stand = quellstand(bild);
   if (
     gemerkt &&
     gemerkt.schluessel === schluessel &&
     gemerkt.breite === breite &&
     gemerkt.hoehe === hoehe &&
-    gemerkt.quelle === bild
+    gemerkt.quelle === bild &&
+    gemerkt.stand === stand
   ) {
     return gemerkt.flaeche;
   }
@@ -1348,7 +1388,7 @@ export function bildRechnen(
   const ectx = flaeche2d(eigen);
   if (!ectx) return fertig;
   ectx.drawImage(fertig, 0, 0);
-  gemerkt = { flaeche: eigen, schluessel, breite, hoehe, quelle: bild };
+  gemerkt = { flaeche: eigen, schluessel, breite, hoehe, quelle: bild, stand };
   return eigen;
 }
 
