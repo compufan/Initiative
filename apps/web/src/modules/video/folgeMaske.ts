@@ -3,19 +3,8 @@ import { TOLERANZ_VORGABE } from '../bild/doc.js';
 import { tippNetzVerfuegbar, tippTeilRechnen, vereinigen } from '../bild/tippMaske.js';
 import type { GueteInfo } from './einstellungen.js';
 import type { Fortschritt, GelesenesBild } from './bilderLesen.js';
-import {
-  LAGE_RUHE,
-  bewegung,
-  graustufen,
-  lageSchaetzen,
-  lageVerketten,
-  maskePasst,
-  maskeZiehen,
-  punktVor,
-  zeitlichGlaetten,
-  type Grau,
-  type Lage,
-} from './verfolgung.js';
+import { Spur } from './objektFolge.js';
+import { bewegtGlaetten, graustufen } from './verfolgung.js';
 
 /**
  * Eine Maske über ein ganzes Video hinweg.
@@ -34,15 +23,18 @@ import {
  * ist der Speicher; zwei Modelle nebeneinander sind der sicherste Weg, auf
  * einem Telefon den Arbeiter zu verlieren.
  *
- * # Warum die Bewegung zwischen NACHBARN gemessen, aber AUFSUMMIERT angewandt
- * wird
+ * # Wie die Maske dem Motiv folgt
  *
- * Gemessen zwischen Nachbarn, weil die Blocksuche nur eine begrenzte Weite
- * hat: Über drei Bilder hinweg ist eine gehende Person weiter als das, und
- * die Suche fände nichts. Angewandt wird die Summe, weil jede Abtastung die
- * Maske aufweicht – nachgemessen verliert eine Maske, die 33-mal nacheinander
- * gezogen wird, 58 % ihrer Fläche. Gezogen wird deshalb immer aus dem letzten
- * NETZLAUF, mit einer einzigen Abbildung.
+ * Über die Spur aus `objektFolge.ts`, wie beim Film: Die Maske selbst wird
+ * Bild für Bild gesucht, jede frische Maske gegen die Vorhersage geprüft,
+ * und dazwischen wandern beide Schlüsselmasken den gesuchten Weg. Vorher
+ * wanderte die Maske hier mit der Bewegung des GANZEN Bildes – bei ruhender
+ * Kamera also gar nicht, während das Motiv darunter weglief. Dieselbe
+ * Beschwerde, dieselbe Ursache wie beim Film.
+ *
+ * Die Tipps wandern um denselben Weg wie das Motiv, und zwar alle, auch die
+ * zum Wegnehmen: Ein Schatten, der mit abgezogen werden soll, hängt am
+ * Motiv, nicht an der Kamera.
  */
 
 export interface FolgeAuftrag {
@@ -112,8 +104,8 @@ export async function folgeMasken(
   const breite = bilder[0].daten.width;
   const hoehe = bilder[0].daten.height;
   const abstand = Math.max(1, auftrag.guete.schluesselAbstand);
-  const netzBei = new Set<number>();
-  for (let i = 0; i < bilder.length; i += abstand) netzBei.add(i);
+  const schluessel: number[] = [];
+  for (let i = 0; i < bilder.length; i += abstand) schluessel.push(i);
   /*
    * Das LETZTE Bild ist immer ein Schlüsselbild.
    *
@@ -121,9 +113,9 @@ export async function folgeMasken(
    * mit bis zu drei geschobenen Masken – und gerade am Ende, wo die Bewegung
    * am weitesten vom letzten Netzlauf entfernt ist, sitzt der Rand am
    * schlechtesten. Das Ende eines GIF sieht man aber besonders oft: Es läuft
-   * in einer Schleife.
+   * in einer Schleife. (Die Spur nimmt das letzte Bild ohnehin dazu.)
    */
-  netzBei.add(bilder.length - 1);
+  schluessel.push(bilder.length - 1);
 
   /*
    * Die Graustufen werden EINMAL gerechnet und gemerkt.
@@ -132,49 +124,21 @@ export async function folgeMasken(
    * „vorher". Zweimal gerechnet wären das bei 150 Bildern 150 überflüssige
    * Durchläufe zu je einer Millisekunde.
    */
-  const grau: Grau[] = bilder.map((bild) => graustufen(bild.daten));
+  const grau = bilder.map((bild) => graustufen(bild.daten));
 
-  /*
-   * Die Lage jedes Bildes gegenüber dem ERSTEN.
-   *
-   * Aufsummiert aus den Nachbarschritten und danach in einem Zug angewandt –
-   * die Begründung steht im Kopf von `verfolgung.ts`: Wer eine Maske Schritt
-   * für Schritt weiterzieht, legt Abtastung auf Abtastung, und sie verliert
-   * gemessen 58 % ihrer Fläche über 33 Schritte.
-   */
-  const faktor = bilder.length > 1 ? breite / grau[0].breite : 1;
-  const lagen: Lage[] = [LAGE_RUHE];
-  for (let i = 1; i < bilder.length; i += 1) {
-    // Der jüngste Schritt zuerst, die Kette danach – siehe `lageVerketten`.
-    lagen.push(lageVerketten(lageSchaetzen(bewegung(grau[i - 1], grau[i], breite)), lagen[i - 1]));
-  }
-
-  const masken: Uint8Array[] = [];
   let netzlaeufe = 0;
-  let verworfen = 0;
-  let letzterNetzlauf = 0;
-  const schritte = bilder.length;
-
-  for (let i = 0; i < bilder.length; i += 1) {
-    // Der Abbruch nimmt mit, was bis hierher fertig ist – siehe `FolgeAbbruch`.
-    if (auftrag.abbruch?.aborted) throw new FolgeAbbruch(zeitlichGlaetten(masken));
-
-    /*
-     * Die angetippten Punkte wandern mit – gerechnet aus der Lage gegenüber
-     * dem ERSTEN Bild, nicht von Nachbar zu Nachbar aufsummiert. Beides
-     * beschreibt denselben Weg; über die Lage bleibt der Fehler der eines
-     * einzigen Schrittes statt der Summe aller.
-     */
-    const tipps = auftrag.tipps?.map((tipp) => {
-      const gezogen = punktVor(lagen[i], faktor, tipp.x, tipp.y);
-      return {
-        x: Math.min(breite - 1, Math.max(0, Math.round(gezogen.x))),
-        y: Math.min(hoehe - 1, Math.max(0, Math.round(gezogen.y))),
-        dazu: tipp.dazu,
-      };
-    });
-
-    if (netzBei.has(i)) {
+  const spur = new Spur({
+    grau,
+    breite,
+    hoehe,
+    von: 0,
+    bis: bilder.length - 1,
+    anker: 0,
+    schluessel,
+    // Die Spur führt keine Punkte: Die Tipps ergänzen das Netz, sie SIND
+    // nicht die Maske, und ein Tipp zum Wegnehmen liegt mit Absicht daneben.
+    punkte: null,
+    rechnen: async (nummer, _punkte, weg) => {
       /*
        * Das Motivnetz UND die Tipps – nicht das eine statt des anderen.
        *
@@ -189,58 +153,85 @@ export async function folgeMasken(
        * hier dazukommt oder abgezogen wird – dieselbe Aufteilung wie im
        * Sticker-Studio und im Fotoeditor.
        */
+      netzlaeufe += 1;
       let maske = await runEngine(auftrag.guete.netz, {
-        image: bilder[i].daten,
+        image: bilder[nummer].daten,
         abbruch: auftrag.abbruch,
       });
-      if (tipps && tipps.length > 0) {
+      const tipps = mitgewandert(auftrag.tipps, weg, breite, hoehe);
+      if (tipps.length > 0) {
         maske = await tippsAnwenden(
           maske,
-          bilder[i].daten,
+          bilder[nummer].daten,
           tipps,
           auftrag.mitNetz,
           auftrag.toleranz,
         );
       }
-      /*
-       * Gegen das halten, was aus dem vorigen Netzlauf zu erwarten war.
-       *
-       * Am Film eines Anwenders gemessen sprang die Fläche auf jedem vierten
-       * Bild um den Faktor dreizehn – die Maske wanderte nicht weg, sie
-       * platzte auf. Die Begründung steht bei `maskePasst`.
-       */
-      const erwartet =
-        i > 0
-          ? maskeZiehen(
-              masken[letzterNetzlauf],
-              breite,
-              hoehe,
-              lageVerketten(lagen[i], lageKehren(lagen[letzterNetzlauf])),
-              faktor,
-            )
-          : null;
-      const befund = maskePasst(maske, erwartet);
-      if (!befund.haelt && erwartet) {
-        verworfen += 1;
-        masken.push(erwartet);
-      } else {
-        masken.push(maske);
+      return maske;
+    },
+  });
+
+  const plan = spur.plan();
+  let schritt = 0;
+  while (spur.naechstes() !== null) {
+    // Der Abbruch nimmt mit, was bis hierher fertig ist – siehe `FolgeAbbruch`.
+    if (auftrag.abbruch?.aborted) throw new FolgeAbbruch(fertigeMasken(spur, breite, hoehe));
+    try {
+      await spur.schritt();
+    } catch (ausfall) {
+      if (ausfall instanceof AbbruchError) {
+        throw new FolgeAbbruch(fertigeMasken(spur, breite, hoehe));
       }
-      netzlaeufe += 1;
-      letzterNetzlauf = i;
-    } else {
-      // Aus dem letzten Netzlauf ziehen, nicht aus dem Vorgänger.
-      const seitDort = lageVerketten(lagen[i], lageKehren(lagen[letzterNetzlauf]));
-      masken.push(maskeZiehen(masken[letzterNetzlauf], breite, hoehe, seitDort, faktor));
+      throw ausfall;
     }
-    auftrag.fortschritt?.((i + 1) / schritte, `Freistellen: Bild ${i + 1} von ${schritte}`);
+    schritt += 1;
+    auftrag.fortschritt?.(
+      schritt / plan.length,
+      `Freistellen: Schlüsselbild ${schritt} von ${plan.length}`,
+    );
   }
 
   /*
-   * Geglättet wird ganz am Ende und nicht unterwegs: Das Fenster reicht auch
-   * NACH VORN, und das nächste Bild gibt es unterwegs noch nicht.
+   * Geglättet wird ganz am Ende und MIT der Bewegung: Die Nachbarn werden
+   * dorthin verschoben, wo die Maske in diesem Bild steht – das blosse
+   * Mittel legte um ein wanderndes Motiv einen Saum.
    */
-  return { masken: zeitlichGlaetten(masken), netzlaeufe, verworfen };
+  const lauf = spur.ergebnis();
+  return {
+    masken: bewegtGlaetten(lauf.masken, breite, hoehe, lauf.versatz),
+    netzlaeufe,
+    verworfen: lauf.verworfen,
+  };
+}
+
+/**
+ * Die Tipps um den Weg des Motivs verschoben. Wer dabei das Bild verlässt,
+ * fällt weg – am Rand festgeklemmt läge er auf dem Hintergrund.
+ */
+function mitgewandert(
+  tipps: FolgeAuftrag['tipps'],
+  weg: { readonly x: number; readonly y: number },
+  breite: number,
+  hoehe: number,
+): { x: number; y: number; dazu: boolean }[] {
+  const raus: { x: number; y: number; dazu: boolean }[] = [];
+  for (const tipp of tipps ?? []) {
+    const x = Math.round(tipp.x + weg.x);
+    const y = Math.round(tipp.y + weg.y);
+    if (x < 0 || y < 0 || x >= breite || y >= hoehe) continue;
+    raus.push({ x, y, dazu: tipp.dazu });
+  }
+  return raus;
+}
+
+/** Die Masken der Bilder, die bis zum Abbruch fertig geworden sind. */
+function fertigeMasken(spur: Spur, breite: number, hoehe: number): Uint8Array[] {
+  const bis = spur.fertigBis();
+  if (bis <= 0) return [];
+  const lauf = spur.ergebnis();
+  const anzahl = Math.min(lauf.masken.length, bis);
+  return bewegtGlaetten(lauf.masken.slice(0, anzahl), breite, hoehe, lauf.versatz.slice(0, anzahl));
 }
 
 /**
@@ -289,23 +280,4 @@ async function tippsAnwenden(
     raus = dazu ? vereinigen(raus, teil.alpha) : abziehen(raus, teil.alpha);
   }
   return raus;
-}
-
-/**
- * Eine Lage umkehren – erst zurück, dann vorwärts.
- *
- * Damit wird aus „Bild 0 nach a" und „Bild 0 nach b" die Lage „a nach b".
- */
-function lageKehren(lage: Lage): Lage {
-  const nenner = lage.s * lage.s + lage.w * lage.w;
-  if (nenner === 0) return LAGE_RUHE;
-  const s = lage.s / nenner;
-  const w = -lage.w / nenner;
-  return {
-    s,
-    w,
-    tx: -(s * lage.tx - w * lage.ty),
-    ty: -(w * lage.tx + s * lage.ty),
-    sicher: lage.sicher,
-  };
 }

@@ -94,8 +94,18 @@ export interface SpurAuftrag {
    * gesehen hat.
    */
   readonly ankerMaske?: Uint8Array;
-  /** Rechnet die frische Maske an einem Schlüsselbild. */
-  readonly rechnen: (bild: number, punkte: readonly Punkt[] | null) => Promise<Uint8Array>;
+  /**
+   * Rechnet die frische Maske an einem Schlüsselbild.
+   *
+   * `weg` ist, wie weit der Gegenstand seit dem Anker gewandert sein
+   * sollte – für Punkte, die die Spur nicht selbst führt (die Tipps beim GIF,
+   * die zu einer anderen Maske gehören als der verfolgten).
+   */
+  readonly rechnen: (
+    bild: number,
+    punkte: readonly Punkt[] | null,
+    weg: { readonly x: number; readonly y: number },
+  ) => Promise<Uint8Array>;
 }
 
 export interface SpurErgebnis {
@@ -146,6 +156,8 @@ interface Stand {
   flaeche: number;
   /** Wie weit die angenommenen Masken von dem abgewichen sind, was die Suche sah. */
   drift: Ort;
+  /** Wie weit der Gegenstand seit dem Anker gewandert ist. */
+  vomAnker: Ort;
 }
 
 /** Ein Zwischenbild: wo der Gegenstand steht, gemessen ab beiden Enden seines Abschnitts. */
@@ -252,7 +264,7 @@ export class Spur {
       const maske =
         vorgabe && vorgabe.length === breite * hoehe
           ? vorgabe
-          : await auftrag.rechnen(auftrag.anker, auftrag.punkte);
+          : await auftrag.rechnen(auftrag.anker, auftrag.punkte, { x: 0, y: 0 });
       const mass = vermessen(maske, breite, hoehe);
       this.merken(auftrag.anker, maske, mass, auftrag.punkte ? [...auftrag.punkte] : null);
       this.anfang = {
@@ -264,6 +276,7 @@ export class Spur {
         abgelehnt: 0,
         flaeche: mass.mitte?.flaeche ?? 0,
         drift: { x: 0, y: 0 },
+        vomAnker: { x: 0, y: 0 },
       };
       this.stand = { ...this.anfang };
       this.richtung = this.rueck.length > 0 ? -1 : 1;
@@ -315,7 +328,10 @@ export class Spur {
     const ohnePunkte = punkte !== null && punkte.length === 0;
     const frisch = ohnePunkte
       ? new Uint8Array(breite * hoehe)
-      : await this.auftrag.rechnen(ziel, punkte);
+      : await this.auftrag.rechnen(ziel, punkte, {
+          x: alt.vomAnker.x + gesamt.x,
+          y: alt.vomAnker.y + gesamt.y,
+        });
     const frischMass = vermessen(frisch, breite, hoehe);
     const frischMitte = frischMass.mitte;
 
@@ -433,6 +449,7 @@ export class Spur {
       abgelehnt: annehmen ? 0 : alt.abgelehnt + 1,
       flaeche: mitte?.flaeche ?? alt.flaeche,
       drift: neuDrift,
+      vomAnker: { x: alt.vomAnker.x + gesamt.x + k.x, y: alt.vomAnker.y + gesamt.y + k.y },
     };
   }
 

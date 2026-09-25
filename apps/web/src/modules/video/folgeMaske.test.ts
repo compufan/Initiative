@@ -34,16 +34,11 @@ vi.mock('../stickers/engines/index.js', async () => {
       // Eine Umdrehung des Mikroaufgabenrades: Ohne sie liefe der Ersatz
       // synchron durch, und zwei gleichzeitige Läufe wären gar nicht möglich.
       await Promise.resolve();
-      const maske = new Uint8Array(anfrage.image.width * anfrage.image.height);
-      // Ein Kreis um die Mitte – etwas, das sich verschieben lässt.
-      const b = anfrage.image.width;
-      const h = anfrage.image.height;
-      for (let y = 0; y < h; y += 1) {
-        for (let x = 0; x < b; x += 1) {
-          const d = (x - b / 2) ** 2 + (y - h / 2) ** 2;
-          maske[y * b + x] = d < (b / 4) ** 2 ? 255 : 0;
-        }
-      }
+      // Das Motiv ist, was im Blaukanal voll steht – ein Netz, das genau das
+      // findet, was im Bild ist (siehe `bild`).
+      const { data, width, height } = anfrage.image;
+      const maske = new Uint8Array(width * height);
+      for (let i = 0; i < maske.length; i += 1) maske[i] = data[i * 4 + 2] === 255 ? 255 : 0;
       gleichzeitig -= 1;
       return maske;
     },
@@ -91,16 +86,23 @@ const GUETE: GueteInfo = {
   brauchtGrafik: false,
 };
 
-/** Ein Bild mit Struktur, verschoben um (vx, 0). */
+/**
+ * Ein ruhender, gemusterter Grund und darauf ein Motiv – eine gemusterte
+ * Scheibe um (20 + vx, 32), im Blaukanal markiert, damit das Ersatznetz sie
+ * findet. Die Kamera steht; nur das Motiv wandert.
+ */
 function bild(zeitMs: number, vx: number, kante = 64): GelesenesBild {
   const daten = new Uint8ClampedArray(kante * kante * 4);
   for (let y = 0; y < kante; y += 1) {
     for (let x = 0; x < kante; x += 1) {
       const at = (y * kante + x) * 4;
-      const wert = 128 + 90 * Math.sin((x - vx) / 3.7) * Math.cos(y / 5.3);
+      const drin = (x - 20 - vx) ** 2 + (y - 32) ** 2 < 100;
+      const wert = drin
+        ? 128 + 100 * Math.sin((x - vx) / 2.1) * Math.cos(y / 2.9)
+        : 128 + 60 * Math.sin(x / 5.3 + Math.cos(y / 7.1)) * Math.cos(y / 4.7 - x / 13);
       daten[at] = wert;
       daten[at + 1] = wert;
-      daten[at + 2] = wert;
+      daten[at + 2] = drin ? 255 : Math.min(254, wert);
       daten[at + 3] = 255;
     }
   }
@@ -110,7 +112,7 @@ function bild(zeitMs: number, vx: number, kante = 64): GelesenesBild {
   };
 }
 
-/** Eine Folge, in der sich das Motiv Bild für Bild um zwei Punkte bewegt. */
+/** Eine Folge, in der sich das Motiv Bild für Bild um `schritt` Punkte bewegt. */
 function folge(anzahl: number, schritt = 2): GelesenesBild[] {
   return Array.from({ length: anzahl }, (_, i) => bild(i * 100, i * schritt));
 }
@@ -161,11 +163,13 @@ describe('folgeMasken', () => {
     for (const maske of masken) expect(maske.length).toBe(64 * 64);
   });
 
-  it('schiebt zwischen den Netzläufen, statt zu wiederholen', async () => {
+  it('schiebt zwischen den Netzläufen mit dem MOTIV, statt zu wiederholen', async () => {
     /*
      * Ohne Schieben wäre die Maske zwischen zwei Schlüsselbildern identisch –
-     * und das Motiv liefe darunter weg. Geprüft wird über den Schwerpunkt:
-     * Er muss wandern.
+     * und das Motiv liefe darunter weg. Die Kamera steht hier still; vorher
+     * wanderte die Maske mit der Bewegung des ganzen Bildes und blieb in
+     * genau diesem Fall stehen. Geprüft wird über den Schwerpunkt: Er muss
+     * mit dem Motiv wandern, drei Punkte je Bild.
      */
     const { masken } = await folgeMasken(folge(9, 3), { guete: GUETE });
     const mitte = (maske: Uint8Array) => {
@@ -179,6 +183,9 @@ describe('folgeMasken', () => {
     };
     expect(mitte(masken[2])).toBeGreaterThan(mitte(masken[1]));
     expect(mitte(masken[1])).toBeGreaterThan(mitte(masken[0]));
+    for (const i of [1, 2, 3, 5, 6, 7]) {
+      expect(mitte(masken[i]) - mitte(masken[0]), `Bild ${i}`).toBeCloseTo(3 * i, 0);
+    }
   });
 
   it('schiebt die Tipps mit, statt sie liegen zu lassen', async () => {
@@ -276,13 +283,16 @@ describe('folgeMasken', () => {
     await expect(versprechen).rejects.toBeInstanceOf(AbbruchError);
   });
 
-  it('meldet den Fortschritt für jedes Bild', async () => {
+  it('meldet den Fortschritt für jedes Schlüsselbild', async () => {
     // Bei „Genau" dauert das Minuten. Ohne Rückmeldung steht der Anwender vor
-    // einem Knopf, der nichts tut.
+    // einem Knopf, der nichts tut. Gemeldet wird je Netzlauf – dazwischen
+    // vergehen Millisekunden, und dort zu melden hiesse, den Balken zappeln
+    // zu lassen, während das Warten am Netz hängt.
     const anteile: number[] = [];
     await folgeMasken(folge(8), { guete: GUETE, fortschritt: (a) => anteile.push(a) });
-    expect(anteile).toHaveLength(8);
-    expect(anteile[7]).toBe(1);
+    // Schlüsselbilder 0, 4 und 7.
+    expect(anteile).toHaveLength(3);
+    expect(anteile[2]).toBe(1);
     for (let i = 1; i < anteile.length; i += 1) expect(anteile[i]).toBeGreaterThan(anteile[i - 1]);
   });
 
