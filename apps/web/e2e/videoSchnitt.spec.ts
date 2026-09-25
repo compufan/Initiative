@@ -1066,3 +1066,65 @@ test('eine Maske in EINEM Abschnitt kürzt nicht den ganzen Film', async ({ page
   expect(e.vorn, 'erster Abschnitt').toBeGreaterThan(200);
   expect(e.hinten, 'dritter Abschnitt').toBeGreaterThan(200);
 });
+
+test('ein Zug an der Leiste, während der Editor aufgeht, bleibt nicht hängen', async ({ page }) => {
+  /*
+   * Beim ersten Öffnen steht die Zeitleiste in einem schlichten Rahmen, bis
+   * das erste Standbild da ist; dann wird sie in den Editor umgehängt, und
+   * der Browser löst dabei die Zeigerbindung. Das Loslassen landete
+   * woanders: Die Wiedergabe blieb über dem Bild liegen, und schon das
+   * Überfahren mit der Maus – ohne Taste – zog die Wiedergabestelle mit.
+   * Das Standbild wird hier künstlich verzögert, damit der Wechsel sicher
+   * mitten in den Zug fällt.
+   */
+  test.setTimeout(120_000);
+  await page.addInitScript(() => {
+    const w = window as unknown as { verzoegern: number };
+    w.verzoegern = 0;
+    const toBlob = HTMLCanvasElement.prototype.toBlob;
+    HTMLCanvasElement.prototype.toBlob = function (
+      this: HTMLCanvasElement,
+      fertig: BlobCallback,
+      ...rest: [string?, number?]
+    ) {
+      const ms = w.verzoegern;
+      return toBlob.call(
+        this,
+        (blob) => (ms ? setTimeout(() => fertig(blob), ms) : fertig(blob)),
+        ...rest,
+      );
+    };
+  });
+  await page.setViewportSize({ width: 412, height: 880 });
+  if (!(await blattMitVideo(page))) {
+    test.skip(true, 'Kein Videokodierer in diesem Browser');
+    return;
+  }
+  const bearbeiten = page.getByRole('button', { name: /Bearbeiten und schneiden/ });
+  await expect(bearbeiten).toBeEnabled({ timeout: 30_000 });
+  await page.evaluate(() => {
+    (window as unknown as { verzoegern: number }).verzoegern = 1200;
+  });
+  await bearbeiten.click();
+  const editor = page.locator('.bild-editor');
+  await expect(editor.getByText('Standbild wird geholt')).toBeVisible();
+
+  const bahn = (await editor.locator('.zl-bahn').boundingBox())!;
+  await page.mouse.move(bahn.x + bahn.width * 0.3, bahn.y + bahn.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bahn.x + bahn.width * 0.35, bahn.y + bahn.height / 2, { steps: 3 });
+  // Der Editor geht auf, während die Taste noch unten ist.
+  await expect(editor.getByRole('button', { name: 'Rückgängig' })).toBeAttached({
+    timeout: 20_000,
+  });
+  await page.mouse.up();
+
+  // Die Wiedergabe gibt das Standbild wieder frei …
+  await expect(editor.locator('.bild-wiedergabe')).toBeHidden({ timeout: 10_000 });
+  // … und Überfahren ohne Taste verschiebt nichts.
+  const vorher = await editor.locator('.zl-zeit').textContent();
+  const neu = (await editor.locator('.zl-bahn').boundingBox())!;
+  await page.mouse.move(neu.x + neu.width * 0.8, neu.y + neu.height / 2, { steps: 5 });
+  await page.waitForTimeout(300);
+  await expect(editor.locator('.zl-zeit')).toHaveText(vorher ?? '');
+});

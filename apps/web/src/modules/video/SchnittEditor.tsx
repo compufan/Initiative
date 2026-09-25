@@ -262,8 +262,9 @@ export function SchnittEditor({
    * Das hat noch einen zweiten Grund: Beim ersten Öffnen steht der Editor
    * erst, wenn sein erstes Standbild da ist; bis dahin hängen Video und
    * Zeitleiste in einem schlichten Rahmen. Hingen sie im Editor selbst,
-   * begänne das Video beim Wechsel von vorn zu laden, und ein Zug an der
-   * Zeitleiste risse ab.
+   * begänne das Video beim Wechsel von vorn zu laden, und die Zeitleiste
+   * fiele auf ihren Anfangszustand zurück. (Ein Zug, der gerade läuft,
+   * endet beim Umhängen trotzdem – siehe `verloren` in `Zeitleiste.tsx`.)
    */
   const ueberKnoten = useMemo(steckKnoten, []);
   const unterKnoten = useMemo(steckKnoten, []);
@@ -404,8 +405,21 @@ export function SchnittEditor({
 
   return (
     <>
-      {createPortal(wiedergabeFlaeche, ueberKnoten)}
-      {createPortal(zeitleiste, unterKnoten)}
+      {/*
+          Die beiden Steckplatz-Inhalte in einem Portal an `document.body`,
+          wie der Editor selbst. Ohne diese Hülle fände React über ihnen
+          keinen Behälter an `body`, hielte den Knoten für eine eigene Wurzel
+          und reichte jedes Ereignis aus Leiste und Wiedergabe ZWEIMAL an die
+          Vorfahren weiter – harmlos, solange dort niemand zählt oder
+          umschaltet, aber eine Falle für den Nächsten, der es tut.
+      */}
+      {createPortal(
+        <>
+          {createPortal(wiedergabeFlaeche, ueberKnoten)}
+          {createPortal(zeitleiste, unterKnoten)}
+        </>,
+        document.body,
+      )}
       {gezeigt ? (
         <RuhigerEditor
           quelle={gezeigt.blob}

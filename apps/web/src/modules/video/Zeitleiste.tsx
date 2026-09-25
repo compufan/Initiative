@@ -158,6 +158,31 @@ export function Zeitleiste({
     setFesterUmfang(null);
   };
 
+  /*
+   * Die Leiste hat den Finger verloren, ohne dass er losgelassen wurde.
+   *
+   * So kommt es beim ersten Öffnen des Editors: Die Leiste wird aus dem
+   * schlichten Rahmen in den Editor umgehängt, sobald das erste Standbild da
+   * ist, und dabei löst der Browser die Zeigerbindung. Das Loslassen landet
+   * dann woanders. Ohne dieses Ende hinge der Zug fest – die Wiedergabe
+   * bliebe über dem Bild, und schon das Überfahren mit der Maus zöge weiter.
+   * Beendet wird an der Stelle, die zuletzt zu sehen war. Nach einem
+   * gewöhnlichen Loslassen ist hier nichts mehr offen.
+   */
+  const verloren = () => {
+    const g = griff.current;
+    if (g) {
+      griff.current = null;
+      const grenzen = zug ?? { vonMs: g.von, bisMs: g.bis };
+      setZug(null);
+      onKuerzen(aktiv, Math.round(grenzen.vonMs), Math.round(grenzen.bisMs), true);
+    } else if (kopfZieht.current) {
+      onSpielkopf(spielkopfMs, true);
+    }
+    kopfZieht.current = false;
+    setFesterUmfang(null);
+  };
+
   return (
     <div className={`zl${gesperrt ? ' ist-aus' : ''}`}>
       <div className="zl-leiste">
@@ -248,6 +273,7 @@ export function Zeitleiste({
         }}
         onPointerUp={(ereignis) => loslassen(ereignis.clientX)}
         onPointerCancel={(ereignis) => loslassen(ereignis.clientX)}
+        onLostPointerCapture={verloren}
         onKeyDown={(ereignis) => {
           // Bildgenau mit den Pfeiltasten, mit Umschalt zehn Bilder weit.
           if (ereignis.key !== 'ArrowLeft' && ereignis.key !== 'ArrowRight') return;

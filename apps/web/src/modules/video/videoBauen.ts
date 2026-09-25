@@ -15,7 +15,7 @@ import { folgeTeile } from './folgeTeile.js';
 import { LAGE_RUHE, lageKehren, lageVerketten, type Lage } from './verfolgung.js';
 import { haengtAmBild } from './schnitt.js';
 import { SchreibAbbruch, videoSchreiben, videoTauglich } from './schreiben.js';
-import { teileVerlegen } from './verlegen.js';
+import { BILDER_MAX as MITNAHME_MAX, teileVerlegen } from './verlegen.js';
 
 /**
  * Ein bearbeitetes Video – dieselbe Bearbeitung wie beim Foto, über alle
@@ -144,15 +144,14 @@ export async function videoAusVideo(auftrag: VideoBauAuftrag): Promise<VideoBauE
     max: auftrag.maxGepuffert ?? auftrag.maxBilder,
   });
   let gruppen = gruppieren(plan, auftrag);
+  const stand = fortschrittRechner(auftrag, gruppen, plan);
   try {
-    gruppen = await stellbilderEinholen(gruppen, plan, auftrag, (text) =>
-      auftrag.fortschritt?.(0, 'lesen', text),
-    );
+    gruppen = await stellbilderEinholen(gruppen, plan, auftrag, stand);
   } catch (ausfall) {
     if (ausfall instanceof AbbruchError) throw new VideoBauAbbruch('lesen', 0);
     throw ausfall;
   }
-  return await bauen(auftrag, plan, gruppen);
+  return await bauen(auftrag, plan, gruppen, stand);
 }
 
 /**
@@ -259,32 +258,42 @@ async function stellbilderEinholen(
   gruppen: readonly Gruppe[],
   plan: Ausschnitt,
   auftrag: VideoBauAuftrag,
-  melden: (text: string) => void,
+  stand: FortschrittRechner,
 ): Promise<Gruppe[]> {
   const raus: Gruppe[] = [];
-  for (const gruppe of gruppen) {
+  for (const [nummer, gruppe] of gruppen.entries()) {
     const standMs = gruppe.standMs;
-    const ankerMs = plan.zeitpunkte[gruppe.anker];
-    if (
-      !gruppe.doc ||
-      standMs === undefined ||
-      !haengtAmBild(gruppe.doc) ||
-      Math.abs(ankerMs - standMs) <= plan.schrittMs
-    ) {
+    if (!gruppe.doc || standMs === undefined || einholBilder(gruppe, plan) === 0) {
       raus.push(gruppe);
       continue;
     }
-    melden('Masken werden an den gekürzten Film angepasst …');
+    const ankerMs = plan.zeitpunkte[gruppe.anker];
+    const text = 'Masken werden an den gekürzten Film angepasst …';
+    stand.einholen(nummer, 0, text);
     const doc = await teileVerlegen(auftrag.datei, gruppe.doc, {
       vonMs: standMs,
       nachMs: ankerMs,
       kante: auftrag.kante,
       schrittMs: plan.schrittMs,
       abbruch: auftrag.abbruch,
+      fortschritt: (anteil) => stand.einholen(nummer, anteil, text),
     });
+    stand.einholen(nummer, 1, text);
     raus.push({ ...gruppe, doc, teile: inhaltsTeile(doc), standMs: ankerMs });
   }
   return raus;
+}
+
+/**
+ * Wie viele Bilder `stellbilderEinholen` für diese Gruppe liest – null, wenn
+ * sie ihr Stellbild im Film hat oder nichts an einem Bild hängt.
+ */
+function einholBilder(gruppe: Gruppe, plan: Ausschnitt): number {
+  const standMs = gruppe.standMs;
+  if (!gruppe.doc || standMs === undefined || !haengtAmBild(gruppe.doc)) return 0;
+  const weg = Math.abs(plan.zeitpunkte[gruppe.anker] - standMs);
+  if (weg <= plan.schrittMs) return 0;
+  return Math.min(MITNAHME_MAX, Math.ceil(weg / Math.max(1, plan.schrittMs)) + 1);
 }
 
 function gruppenJeBild(gruppen: readonly Gruppe[], anzahl: number): number[] {
@@ -391,6 +400,7 @@ async function bauen(
   auftrag: VideoBauAuftrag,
   plan: Ausschnitt,
   gruppen: readonly Gruppe[],
+  stand: FortschrittRechner,
 ): Promise<VideoBauErgebnis> {
   const punkte = plan.zeitpunkte;
   const anzahl = punkte.length;
@@ -428,7 +438,6 @@ async function bauen(
     const film = filmMass(docs[0], breite, hoehe);
     const einpassen = einpasser(film);
     const gruppeJeBild = gruppenJeBild(gruppen, anzahl);
-    const stand = fortschrittRechner(auftrag, gruppen, anzahl);
 
     let puffer: Puffer | null = null;
     let laeufe = 0;
@@ -596,28 +605,49 @@ interface FortschrittRechner {
   gelesen(): void;
   geschrieben(schritt: Bauschritt, text: string): void;
   masken(gruppe: number, anteil: number, text: string): void;
+  /** Die Mitnahme an ein Stellbild im Film – siehe `stellbilderEinholen`. */
+  einholen(gruppe: number, anteil: number, text: string): void;
   melden(schritt: Bauschritt, text: string): void;
 }
 
 function fortschrittRechner(
   auftrag: VideoBauAuftrag,
   gruppen: readonly Gruppe[],
-  anzahl: number,
+  plan: Ausschnitt,
 ): FortschrittRechner {
+  const anzahl = plan.zeitpunkte.length;
   const maskenKosten = gruppen.map((gruppe) => {
     if (!gepuffert(gruppe) || gruppe.teile.length === 0) return 0;
     const bilder = gruppe.bis - gruppe.von + 1;
     const laeufe = Math.min(bilder, Math.ceil(bilder / Math.max(1, auftrag.schluesselAbstand)) + 2);
     return laeufe * JE_LAUF_MASKE + (bilder - laeufe) * JE_BILD_SCHIEBEN;
   });
+  /*
+   * Eine Mitnahme liest ihre Bilder und rechnet am Ziel jedes Teil einmal.
+   * Ohne eigenen Anteil stünde der Balken währenddessen auf null – bei einem
+   * Netz auf einem langsamen Telefon viele Sekunden lang.
+   */
+  const einholKosten = gruppen.map((gruppe) => {
+    const bilder = einholBilder(gruppe, plan);
+    return bilder === 0 ? 0 : bilder * JE_BILD_LESEN + gruppe.teile.length * JE_LAUF_MASKE;
+  });
   const summe = Math.max(
     1,
-    anzahl * (JE_BILD_LESEN + JE_BILD_RECHNEN) + maskenKosten.reduce((a, b) => a + b, 0),
+    anzahl * (JE_BILD_LESEN + JE_BILD_RECHNEN) +
+      maskenKosten.reduce((a, b) => a + b, 0) +
+      einholKosten.reduce((a, b) => a + b, 0),
   );
   let fertig = 0;
-  /** Welche Gruppe gerade ihre Masken rechnet, und wo der Balken dabei anfing. */
-  let maskenGruppe = -1;
-  let maskenAb = 0;
+  /** Welcher Schritt mit eigenem Anteil gerade läuft, und wo der Balken dabei anfing. */
+  let laufend = '';
+  let ab = 0;
+  const teilweise = (schluessel: string, kosten: number, anteil: number) => {
+    if (schluessel !== laufend) {
+      laufend = schluessel;
+      ab = fertig;
+    }
+    fertig = Math.max(fertig, ab + Math.max(0, Math.min(1, anteil)) * kosten);
+  };
   const melden = (schritt: Bauschritt, text: string) =>
     auftrag.fortschritt?.(Math.min(1, fertig / summe), schritt, text);
   return {
@@ -629,13 +659,12 @@ function fortschrittRechner(
       melden(schritt, text);
     },
     masken(gruppe, anteil, text) {
-      if (gruppe !== maskenGruppe) {
-        maskenGruppe = gruppe;
-        maskenAb = fertig;
-      }
-      const jetzt = maskenAb + Math.max(0, Math.min(1, anteil)) * (maskenKosten[gruppe] ?? 0);
-      fertig = Math.max(fertig, jetzt);
+      teilweise(`masken ${gruppe}`, maskenKosten[gruppe] ?? 0, anteil);
       melden('masken', text);
+    },
+    einholen(gruppe, anteil, text) {
+      teilweise(`einholen ${gruppe}`, einholKosten[gruppe] ?? 0, anteil);
+      melden('lesen', text);
     },
     melden,
   };

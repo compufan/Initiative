@@ -71,7 +71,7 @@ export interface VerlegeAuftrag {
  * schlimmsten Fall, wo sie waren, und das Ergebnis steht im Editor zur
  * Ansicht.
  */
-const BILDER_MAX = 150;
+export const BILDER_MAX = 150;
 
 /** Alle Teile, die zu einem Bild gehören – auch in abgeschalteten Bereichen. */
 function alleInhaltsTeile(doc: BildDoc): InhaltsTeil[] {
