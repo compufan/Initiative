@@ -2,18 +2,17 @@ import { AbbruchError, NichtsGefunden, runEngine } from '../stickers/engines/ind
 import { kanteWeichzeichnen } from '../stickers/engines/prepare.js';
 import { tippTeilRechnen } from '../bild/tippMaske.js';
 import type { GelesenesBild, Fortschritt } from './bilderLesen.js';
-import type { InhaltsTeil } from './bildweise.js';
-import type { NeueDaten } from './bildweise.js';
+import type { InhaltsTeil, NeueDaten } from './bildweise.js';
+import { Spur, type Punkt } from './objektFolge.js';
 import {
   LAGE_RUHE,
+  bewegtGlaetten,
   bewegung,
   graustufen,
-  lageSchaetzen,
+  lageKehren,
+  lageRobust,
   lageVerketten,
-  maskePasst,
   maskeZiehen,
-  punktVor,
-  zeitlichGlaetten,
   type Grau,
   type Lage,
 } from './verfolgung.js';
@@ -48,9 +47,31 @@ import {
  * Schlüsselbildabstand, statt sie einmal zu rechnen.
  */
 
-export interface TeileAuftrag {
-  /** Die Teile, die je Bild neu müssen – aus `inhaltsTeile(doc)`. */
+/**
+ * Ein Abschnitt des Films mit SEINEN Teilen und seinem Anker.
+ *
+ * Jeder Abschnitt trägt seine eigene Bearbeitung (`schnitt.ts`), und die
+ * Masken darin gehören zu dem Bild, an dem sie eingestellt wurden – dem
+ * Anker. Von dort läuft die Verfolgung rückwärts zum Anfang des Abschnitts
+ * und vorwärts zu seinem Ende.
+ */
+export interface TeileAbschnitt {
+  /** Erstes und letztes Bild, einschliesslich. */
+  readonly von: number;
+  readonly bis: number;
+  /** Das Bild, zu dem die Teile gehören. */
+  readonly anker: number;
   readonly teile: readonly InhaltsTeil[];
+}
+
+export interface TeileAuftrag {
+  /**
+   * Die Teile, die je Bild neu müssen – aus `inhaltsTeile(doc)`, für einen
+   * Film mit EINER Bearbeitung. Angesetzt wird dann am Anfang jedes Stücks.
+   */
+  readonly teile?: readonly InhaltsTeil[];
+  /** Oder je Abschnitt eigene Teile mit eigenem Anker. Hat Vorrang vor `teile`. */
+  readonly abschnitte?: readonly TeileAbschnitt[];
   /** Jedes wievielte Bild wirklich gerechnet wird. */
   readonly schluesselAbstand: number;
   /**
@@ -83,7 +104,7 @@ export interface TeileErgebnis {
    */
   readonly verworfen: number;
   /**
-   * Je Bild die Lage gegenüber dem ersten.
+   * Je Bild die Lage gegenüber dem ersten seines Stücks.
    *
    * Sie wird hier ohnehin gerechnet, und der Aufrufer braucht sie für die
    * Bereiche, die eine FORM beschreiben – Verlauf, Ellipse, Pinselstrich.
@@ -112,6 +133,9 @@ export class TeileAbbruch extends AbbruchError {
  */
 const KANTE_WEICH = 1;
 
+/** Der Seite Luft lassen – ein Makrotask, damit Zeichnen und „Abbrechen" durchkommen. */
+const luftholen = () => new Promise<void>((weiter) => setTimeout(weiter, 0));
+
 export async function folgeTeile(
   bilder: readonly GelesenesBild[],
   auftrag: TeileAuftrag,
@@ -124,6 +148,9 @@ export async function folgeTeile(
   const hoehe = bilder[0].daten.height;
   const abstand = Math.max(1, auftrag.schluesselAbstand);
   const schnitte = new Set(auftrag.schnitte ?? []);
+  const stuecke = stueckGrenzen(bilder.length, schnitte);
+  const abschnitte = abschnitteFuer(auftrag, stuecke, bilder.length);
+
   const schluessel = new Set<number>();
   for (let i = 0; i < bilder.length; i += abstand) schluessel.add(i);
   /*
@@ -140,10 +167,13 @@ export async function folgeTeile(
   }
   // Das letzte Bild immer – siehe `folgeMaske.ts`: Ein Film wird am Ende
   // angehalten und angesehen, und dort sässe die geschobene Maske am
-  // schlechtesten.
+  // schlechtesten. Dazu Anfang, Ende und Anker jedes Abschnitts.
   schluessel.add(bilder.length - 1);
-  // Aufsteigend, für `teilAnker`: Der erste Treffer beim Durchlaufen ist dort
-  // der KLEINSTE gültige Index, und nur der ist der richtige Anker.
+  for (const abschnitt of abschnitte) {
+    schluessel.add(abschnitt.von);
+    schluessel.add(abschnitt.bis);
+    schluessel.add(abschnitt.anker);
+  }
   const schluesselSortiert = Array.from(schluessel).sort((a, b) => a - b);
 
   // Die Graustufen einmal – jedes Bild ist an zwei Übergängen beteiligt.
@@ -161,24 +191,26 @@ export async function folgeTeile(
   const faktor = felder.find(Boolean)?.faktor ?? 1;
 
   /*
-   * Die Lage JEDES Bildes gegenüber dem ERSTEN – aufsummiert, nicht Schritt
-   * für Schritt angewandt.
+   * Die Lage der KAMERA für jedes Bild gegenüber dem ersten seines Stücks –
+   * aufsummiert, nicht Schritt für Schritt angewandt.
    *
-   * Das ist der Unterschied zwischen einer Maske, die mitgeht, und einer, die
-   * zerfranst: Gezogen wird immer aus dem Urbild mit einer einzigen
-   * Abbildung. Nachgemessen verliert eine Maske, die 33-mal nacheinander
-   * gezogen wird, 58 % ihrer Fläche; in einem Zug gezogen behält sie sie.
+   * Gebraucht für das, was an der Szene klebt und nicht an einem
+   * Gegenstand: die Tiefenkarte hier, Verlauf, Ellipse und Pinselstrich beim
+   * Aufrufer. Masken folgen ihrem Gegenstand über `Spur` (objektFolge.ts).
+   *
+   * `lageRobust` statt `lageSchaetzen`: Bei ruhender Kamera zählte die alte
+   * Schätzung nur, was sich bewegte – und die „Kamera" lief mit dem einzigen
+   * Gegenstand mit, der durchs Bild ging. Ruhende Blöcke mit Struktur
+   * stimmen jetzt für den Stillstand.
    */
   const lagen: Lage[] = [LAGE_RUHE];
   for (let i = 1; i < bilder.length; i += 1) {
-    // An einer Schnittkante fängt die Rechnung von vorn an, statt die Lage
-    // des vorigen Stücks weiterzutragen.
     if (schnitte.has(i)) {
       lagen.push(LAGE_RUHE);
       continue;
     }
     const feld = felder[i];
-    const schritt = feld ? lageSchaetzen(feld) : LAGE_RUHE;
+    const schritt = feld ? (lageRobust(feld)?.lage ?? LAGE_RUHE) : LAGE_RUHE;
     /*
      * Der SCHRITT zuerst, die aufgelaufene Kette danach.
      *
@@ -190,18 +222,84 @@ export async function folgeTeile(
     lagen.push(lageVerketten(schritt, lagen[i - 1]));
   }
 
-  /* ---------- Die Tiefensitzung, falls eine gebraucht wird ---------- */
+  /* ---------- Welche Teile über welche Bilder laufen ---------- */
 
-  const brauchtTiefe = auftrag.teile.some((eintrag) => eintrag.art === 'tiefe');
+  const brauchtTiefe = abschnitte.some((a) => a.teile.some((e) => e.art === 'tiefe'));
   type Sitzung = Awaited<ReturnType<typeof import('../bild/tiefeNetz.js').tiefensitzungOeffnen>>;
   let tiefe: Sitzung | null = null;
 
-  const roh = new Map<string, Uint8Array[]>();
-  for (const eintrag of auftrag.teile) roh.set(eintrag.teil.id, []);
-
-  let laeufe = 0;
+  const gerechnetAn = new Set<number>();
   let verworfen = 0;
-  const schritte = bilder.length;
+  /*
+   * Je Abschnitt und Teil eine Folge über SEINE Bilder. Nach Kennung allein
+   * ginge es nicht: Zwei Hälften eines geteilten Abschnitts tragen dieselben
+   * Teile mit denselben Kennungen, aber verschiedenen Ankern.
+   */
+  const folgen = abschnitte.map(
+    (abschnitt) =>
+      new Map<string, (Uint8Array | undefined)[]>(
+        abschnitt.teile.map((eintrag) => [
+          eintrag.teil.id,
+          new Array(abschnitt.bis - abschnitt.von + 1),
+        ]),
+      ),
+  );
+
+  const rechnenFuer =
+    (eintrag: InhaltsTeil) =>
+    async (bild: number, punkte: readonly Punkt[] | null): Promise<Uint8Array> => {
+      gerechnetAn.add(bild);
+      return teilRechnen(eintrag, bilder[bild], breite, hoehe, tiefe, auftrag.abbruch, punkte);
+    };
+
+  const spuren: { nummer: number; eintrag: InhaltsTeil; spur: Spur }[] = [];
+  const tiefenArbeit: { nummer: number; bild: number }[] = [];
+  abschnitte.forEach((abschnitt, nummer) => {
+    for (const eintrag of abschnitt.teile) {
+      if (eintrag.art === 'tiefe') continue;
+      spuren.push({
+        nummer,
+        eintrag,
+        spur: new Spur({
+          grau,
+          breite,
+          hoehe,
+          von: abschnitt.von,
+          bis: abschnitt.bis,
+          anker: abschnitt.anker,
+          schluessel: schluesselSortiert,
+          punkte: eintrag.teil.art === 'tipp' ? eintrag.teil.punkte : null,
+          rechnen: rechnenFuer(eintrag),
+        }),
+      });
+    }
+    if (abschnitt.teile.some((eintrag) => eintrag.art === 'tiefe')) {
+      for (const bild of schluesselSortiert) {
+        if (bild >= abschnitt.von && bild <= abschnitt.bis) tiefenArbeit.push({ nummer, bild });
+      }
+    }
+  });
+  tiefenArbeit.sort((a, b) => a.bild - b.bild);
+  let tiefenPos = 0;
+  const tiefenJe = (nummer: number) =>
+    abschnitte[nummer].teile.filter((eintrag) => eintrag.art === 'tiefe');
+
+  const gesamt =
+    spuren.reduce((summe, { spur }) => summe + zaehlen(spur), 0) +
+    tiefenArbeit.reduce((summe, arbeit) => summe + tiefenJe(arbeit.nummer).length, 0) +
+    // Das Zusammensetzen je Spur zählt mit – sonst stünde der Balken voll,
+    // während noch gerechnet wird.
+    spuren.length;
+  let erledigt = 0;
+  const melden = () =>
+    auftrag.fortschritt?.(gesamt > 0 ? erledigt / gesamt : 1, `Masken: ${erledigt} von ${gesamt}`);
+
+  const fertigBis = () => {
+    let bis = bilder.length;
+    for (const { spur } of spuren) bis = Math.min(bis, spur.fertigBis());
+    if (tiefenPos < tiefenArbeit.length) bis = Math.min(bis, tiefenArbeit[tiefenPos].bild);
+    return bis;
+  };
 
   try {
     if (brauchtTiefe) {
@@ -214,148 +312,174 @@ export async function folgeTeile(
       tiefe = await modul.tiefensitzungOeffnen((text) => auftrag.fortschritt?.(0, text));
     }
 
-    for (let i = 0; i < bilder.length; i += 1) {
-      if (auftrag.abbruch?.aborted) throw new TeileAbbruch(i);
-      const istSchluessel = schluessel.has(i);
-      // Nur zählen, wenn wirklich etwas zu rechnen war – sonst meldete ein
-      // Dokument ohne Inhaltsteile Modelläufe, die nie stattfanden.
-      if (istSchluessel && auftrag.teile.length > 0) laeufe += 1;
-
-      for (const eintrag of auftrag.teile) {
-        const sammlung = roh.get(eintrag.teil.id);
-        if (!sammlung) continue;
-
-        if (!istSchluessel) {
-          /*
-           * Aus dem letzten SCHLÜSSELBILD ziehen, nicht aus dem Vorgänger –
-           * und mit der Lage, die von dort bis hierher gilt.
-           */
-          const anker = schluesselVor(schluessel, i);
-          const vorlage = sammlung[anker];
-          if (!vorlage) {
-            sammlung.push(sammlung[i - 1]);
-            continue;
-          }
-          const seitAnker = lageVerketten(lagen[i], kehren(lagen[anker]));
-          sammlung.push(maskeZiehen(vorlage, breite, hoehe, seitAnker, faktor));
-          continue;
-        }
-
-        /*
-         * Der Anker für DIESES Teil – normalerweise der Stückanfang, aber
-         * für ein zeitlich begrenztes Teil (siehe `Bereich.zeitraum`) das
-         * erste Schlüsselbild AB dessen eigenem Zeitraum. Dieselbe Zahl wird
-         * gleich zweimal gebraucht: einmal, um die angetippten Punkte relativ
-         * zu IHREM Anfang statt zu Bild 0 zu ziehen (sonst zeigten sie bei
-         * einem Bereich, der erst später beginnt, auf die falsche Stelle),
-         * und einmal für die Plausibilitätsprüfung weiter unten.
-         *
-         * An einer Schnittkante gibt es keinen Anker: Die Maske davor gehört
-         * zu einer anderen Szene.
-         */
-        const stueckbasis = i > 0 && !schnitte.has(i) ? stueckAnker(schnitte, i) : -1;
-        const anker =
-          stueckbasis >= 0
-            ? teilAnker(eintrag.zeitraum?.vonMs, bilder, schluesselSortiert, stueckbasis, i)
-            : -1;
-        /*
-         * `LAGE_RUHE` ohne Anker – nicht `lagen[i]` – weil ein Teil ohne
-         * Anker entweder ganz am Stückanfang steht (wo `lagen[i]` ohnehin
-         * `LAGE_RUHE` ist) oder gerade an SEINEM eigenen ersten aktiven Bild
-         * – und dort ist die Verschiebung seit dem eigenen Anfang naturgemäss
-         * keine.
-         */
-        const teilLage =
-          anker >= 0 ? lageVerketten(lagen[i], kehren(lagen[anker])) : LAGE_RUHE;
-        const frisch = await teilRechnen(
-          eintrag,
-          bilder[i],
-          breite,
-          hoehe,
-          tiefe,
-          auftrag.abbruch,
-          teilLage,
-          faktor,
-        );
-        /*
-         * Gegen den ANFANG DES STÜCKS (oder, genauer, den Anfang DIESES
-         * TEILS – siehe oben) halten, nicht gegen das vorige Schlüsselbild –
-         * die Begründung samt Messung steht bei `maskePasst`.
-         *
-         * Ein Vergleich mit dem vorigen Schlüsselbild lässt jeden Schritt
-         * für sich plausibel aussehen, selbst wenn er es nicht ist: Rutscht
-         * die Maske an jedem Schlüsselbild um ein gerade noch toleriertes
-         * Stück, hält `maskePasst` jeden einzelnen Schritt für gut, und die
-         * Abweichung läuft über viele Schlüsselbilder unbegrenzt auf – am
-         * Beispielfilm gemessen eine stetige Wanderung über das halbe Bild,
-         * obwohl die Szene selbst stillstand (bestätigt durch eine
-         * Bewegungssuche auf denselben Bildern mit ausgeblendetem
-         * Maskenbereich: `LAGE_RUHE` für alle 85 Übergänge).
-         */
-        const vorlage = anker >= 0 ? sammlung[anker] : null;
-        const erwartet = vorlage ? maskeZiehen(vorlage, breite, hoehe, teilLage, faktor) : null;
-        const befund = maskePasst(frisch, erwartet);
-        if (!befund.haelt && erwartet) {
-          verworfen += 1;
-          sammlung.push(erwartet);
-        } else {
-          sammlung.push(frisch);
+    /*
+     * In der Reihenfolge der Bilder, quer über alle Teile.
+     *
+     * Nicht Teil für Teil: Ein Abbruch soll sagen können, bis wohin ALLE
+     * Teile fertig sind – daran hängt das Angebot „aus den fertigen Bildern
+     * trotzdem einen Film machen".
+     */
+    for (;;) {
+      if (auftrag.abbruch?.aborted) throw new TeileAbbruch(fertigBis());
+      let naechste: { spur: Spur } | null = null;
+      let bild = Infinity;
+      for (const eintrag of spuren) {
+        const k = eintrag.spur.naechstes();
+        if (k !== null && k < bild) {
+          bild = k;
+          naechste = eintrag;
         }
       }
+      const arbeit = tiefenPos < tiefenArbeit.length ? tiefenArbeit[tiefenPos] : null;
+      if (!naechste && !arbeit) break;
+      if (arbeit && arbeit.bild <= bild) {
+        const abschnitt = abschnitte[arbeit.nummer];
+        for (const eintrag of tiefenJe(arbeit.nummer)) {
+          const karte = await rechnenFuer(eintrag)(arbeit.bild, null);
+          const folge = folgen[arbeit.nummer].get(eintrag.teil.id) as (Uint8Array | undefined)[];
+          folge[arbeit.bild - abschnitt.von] = karte;
+          erledigt += 1;
+        }
+        tiefenPos += 1;
+      } else if (naechste) {
+        await naechste.spur.schritt();
+        erledigt += 1;
+      }
+      melden();
+    }
 
-      auftrag.fortschritt?.((i + 1) / schritte, `Masken: Bild ${i + 1} von ${schritte}`);
+    /* ---------- Zusammensetzen, glätten, ausliefern ---------- */
+
+    for (const { nummer, eintrag, spur } of spuren) {
+      /*
+       * Zwischen zwei Spuren kommt die Seite zu Wort.
+       *
+       * Hier liefen vorher alle Spuren am Stück, ohne ein einziges `await`:
+       * Der Balken stand auf voll, „Abbrechen" kam nicht an, und auf einem
+       * Telefon stand die Seite gemessen zwanzig bis dreissig Sekunden.
+       */
+      await luftholen();
+      if (auftrag.abbruch?.aborted) throw new TeileAbbruch(fertigBis());
+      const abschnitt = abschnitte[nummer];
+      const lauf = spur.ergebnis();
+      verworfen += lauf.verworfen;
+      /*
+       * Geglättet wird MIT der Bewegung: Die Nachbarn werden dorthin
+       * verschoben, wo die Maske in diesem Bild steht. Das blosse Mittel
+       * legte um einen wandernden Gegenstand einen Saum, so breit wie sein
+       * Weg je Bild.
+       */
+      const glatt = bewegtGlaetten(lauf.masken, breite, hoehe, lauf.versatz);
+      const folge = folgen[nummer].get(eintrag.teil.id) as (Uint8Array | undefined)[];
+      glatt.forEach((maske, i) => {
+        if (abschnitt.von + i <= abschnitt.bis) folge[i] = maske;
+      });
+      erledigt += 1;
+      melden();
     }
   } finally {
     await tiefe?.schliessen();
   }
 
-  /* ---------- Glätten und ausliefern ---------- */
-
-  const geglaettet = new Map<string, Uint8Array[]>();
-  for (const [id, folge] of roh) {
-    const eintrag = auftrag.teile.find((kandidat) => kandidat.teil.id === id);
-    /*
-     * Die TIEFENKARTE wird NICHT geglättet.
-     *
-     * Bei einer Maske nimmt das Mitteln über drei Bilder das Flimmern an der
-     * Kante heraus – dort stehen ohnehin nur Null und 255, und dazwischen
-     * gehört ein weicher Übergang. Eine Tiefenkarte besteht dagegen überall
-     * aus Zwischenwerten; über drei Bilder gemittelt zieht sie eine
-     * bewegte Kante zu einem Verlauf auseinander, und die Unschärfe bekäme
-     * an jeder Silhouette einen Hof.
-     */
-    geglaettet.set(id, eintrag?.art === 'tiefe' ? folge : zeitlichGlaetten(folge, 3, schnitte));
-  }
-
-  const jeBild = bilder.map((_, i) => {
-    const karte = new Map<string, NeueDaten>();
-    for (const [id, folge] of geglaettet) {
-      const werte = folge[i];
-      if (werte) karte.set(id, { breite, hoehe, werte });
+  /*
+   * Die TIEFENKARTE zwischen den Schlüsselbildern: aus dem letzten
+   * Schlüsselbild DES ABSCHNITTS mit der Bewegung der KAMERA gezogen – eine
+   * Entfernung klebt an der Szene, nicht an einem Gegenstand. Geglättet wird
+   * sie nicht: Sie besteht überall aus Zwischenwerten, und über drei Bilder
+   * gemittelt bekäme die Unschärfe an jeder Silhouette einen Hof.
+   */
+  abschnitte.forEach((abschnitt, nummer) => {
+    for (const eintrag of tiefenJe(nummer)) {
+      const folge = folgen[nummer].get(eintrag.teil.id) as (Uint8Array | undefined)[];
+      for (let i = abschnitt.von; i <= abschnitt.bis; i += 1) {
+        if (folge[i - abschnitt.von]) continue;
+        const anker = Math.max(abschnitt.von, schluesselVor(schluessel, i));
+        const vorlage = folge[anker - abschnitt.von];
+        if (!vorlage) continue;
+        const seitAnker = lageVerketten(lagen[i], lageKehren(lagen[anker]));
+        folge[i - abschnitt.von] = maskeZiehen(vorlage, breite, hoehe, seitAnker, faktor);
+      }
     }
-    return karte;
   });
 
-  return { jeBild, laeufe, verworfen, lagen, faktor };
+  const jeBild = bilder.map(() => new Map<string, NeueDaten>());
+  abschnitte.forEach((abschnitt, nummer) => {
+    for (const [id, folge] of folgen[nummer]) {
+      for (let i = abschnitt.von; i <= abschnitt.bis; i += 1) {
+        const werte = folge[i - abschnitt.von];
+        if (werte) jeBild[i].set(id, { breite, hoehe, werte });
+      }
+    }
+  });
+
+  const irgendwas = abschnitte.some((abschnitt) => abschnitt.teile.length > 0);
+  return {
+    jeBild,
+    laeufe: irgendwas ? gerechnetAn.size : 0,
+    verworfen,
+    lagen,
+    faktor,
+  };
+}
+
+/** Wie viele Schritte eine Spur insgesamt macht – für den Fortschritt. */
+function zaehlen(spur: Spur): number {
+  return spur.plan().length;
+}
+
+/** Die Stücke zwischen den Schnitten: erstes und letztes Bild, einschliesslich. */
+function stueckGrenzen(
+  anzahl: number,
+  schnitte: ReadonlySet<number>,
+): { von: number; bis: number }[] {
+  const anfaenge = [0, ...[...schnitte].filter((s) => s > 0 && s < anzahl).sort((a, b) => a - b)];
+  return anfaenge.map((von, i) => ({ von, bis: (anfaenge[i + 1] ?? anzahl) - 1 }));
 }
 
 /**
- * Ein einzelnes Teil für ein einzelnes Bild rechnen.
+ * Die Abschnitte, über die gerechnet wird – nie über einen Schnitt hinweg.
  *
- * `lage` ist NICHT die Lage seit Bild 0, sondern seit dem ANKER dieses
- * Teils – dem Stückanfang, oder, bei einem zeitlich begrenzten Bereich,
- * dessen eigenem Anfang (siehe `teilAnker` beim Aufrufer). Für ein Teil ohne
- * eigenen Zeitraum ist das dasselbe.
+ * Ohne eigene Abschnitte ist jedes Stück einer, angesetzt an seinem Anfang:
+ * Eingestellt wurde dann an genau einem Bild, und nach einem Schnitt beginnt
+ * eine andere Szene, in der nur die ursprünglichen Koordinaten einen Sinn
+ * haben können. Ein mitgegebener Abschnitt, der über einen Schnitt reicht,
+ * wird dort geteilt; der Teil ohne den Anker setzt an seinem Anfang an.
  */
-async function teilRechnen(
+function abschnitteFuer(
+  auftrag: TeileAuftrag,
+  stuecke: readonly { von: number; bis: number }[],
+  anzahl: number,
+): TeileAbschnitt[] {
+  if (!auftrag.abschnitte) {
+    const teile = auftrag.teile ?? [];
+    return stuecke.map((stueck) => ({ ...stueck, anker: stueck.von, teile }));
+  }
+  const raus: TeileAbschnitt[] = [];
+  for (const abschnitt of auftrag.abschnitte) {
+    const von = Math.max(0, abschnitt.von);
+    const bis = Math.min(anzahl - 1, abschnitt.bis);
+    if (bis < von) continue;
+    for (const stueck of stuecke) {
+      const a = Math.max(von, stueck.von);
+      const b = Math.min(bis, stueck.bis);
+      if (b < a) continue;
+      const anker = abschnitt.anker >= a && abschnitt.anker <= b ? abschnitt.anker : a;
+      raus.push({ von: a, bis: b, anker, teile: abschnitt.teile });
+    }
+  }
+  return raus;
+}
+
+/** Ein einzelnes Teil für ein einzelnes Bild rechnen. */
+export async function teilRechnen(
   eintrag: InhaltsTeil,
   bild: GelesenesBild,
   breite: number,
   hoehe: number,
   tiefe: { karteFuer(bild: ImageData): Promise<{ feld: Uint8Array }> } | null,
   abbruch: AbortSignal | undefined,
-  lage: Lage,
-  faktor: number,
+  /** Die angetippten Punkte an DIESEM Bild – schon mitgezogen, siehe `Spur`. */
+  punkte: readonly Punkt[] | null,
 ): Promise<Uint8Array> {
   const teil = eintrag.teil;
 
@@ -371,25 +495,12 @@ async function teilRechnen(
   }
 
   if (teil.art === 'tipp') {
-    /*
-     * Die angetippten PUNKTE wandern mit, nicht die Maske.
-     *
-     * Hier stand `teil.punkte` – also die Koordinaten vom ANKER dieses Teils
-     * (siehe oben), auf jedem Schlüsselbild aufs Neue. Bei einer Kamera, die
-     * sich bewegt, zeigt ein solcher Punkt nach zwei Sekunden auf etwas ganz
-     * anderes, und die Maske sprang an jedem Schlüsselbild dorthin zurück.
-     * `folgeMaske.ts` (der GIF-Weg) hat die Punkte von Anfang an mitgeführt;
-     * hier fehlte es.
-     */
-    const punkte = teil.punkte.map((punkt) => {
-      const gezogen = punktVor(lage, faktor, punkt.x, punkt.y);
-      return {
-        x: Math.min(breite - 1, Math.max(0, Math.round(gezogen.x))),
-        y: Math.min(hoehe - 1, Math.max(0, Math.round(gezogen.y))),
-      };
-    });
+    const gezogen = (punkte ?? teil.punkte).map((punkt) => ({
+      x: Math.min(breite - 1, Math.max(0, Math.round(punkt.x))),
+      y: Math.min(hoehe - 1, Math.max(0, Math.round(punkt.y))),
+    }));
     try {
-      const gerechnet = await tippTeilRechnen(bild.daten, punkte, {
+      const gerechnet = await tippTeilRechnen(bild.daten, gezogen, {
         modus: teil.modus,
         mitNetz: teil.mitNetz,
         toleranz: teil.toleranz,
@@ -403,10 +514,10 @@ async function teilRechnen(
        * angetippte Ding kann aus dem Bild gelaufen sein. Das darf den ganzen
        * Filmbau nicht abbrechen, sonst kostete ein Objekt, das für ein paar
        * Sekunden hinter etwas verschwindet, den kompletten Export. Eine leere
-       * Maske ist die ehrliche Antwort; `maskePasst` weiss damit ohnehin
-       * umzugehen (leer gegen leer hält, siehe dort). Jeder andere Fehler
-       * bleibt tödlich – ein abgeschaltetes oder abgestürztes Verfahren
-       * fände beim nächsten Schlüsselbild ebenso wenig.
+       * Maske ist die ehrliche Antwort; die Spur weiss damit umzugehen.
+       * Jeder andere Fehler bleibt tödlich – ein abgeschaltetes oder
+       * abgestürztes Verfahren fände beim nächsten Schlüsselbild ebenso
+       * wenig.
        */
       if (fehler instanceof NichtsGefunden) return new Uint8Array(breite * hoehe);
       throw fehler;
@@ -420,71 +531,4 @@ async function teilRechnen(
 function schluesselVor(schluessel: ReadonlySet<number>, bis: number): number {
   for (let i = bis; i >= 0; i -= 1) if (schluessel.has(i)) return i;
   return 0;
-}
-
-/**
- * Der Anfang des Stücks, in dem `bis` liegt – 0 oder die letzte Schnittkante
- * davor.
- *
- * Anders als `schluesselVor` läuft das nicht über alle Bilder, sondern nur
- * über die (wenigen) Schnittstellen: `lagen[]` wird dort ohnehin auf
- * `LAGE_RUHE` zurückgesetzt, und genau dieser feste Punkt ist es, gegen den
- * die Plausibilitätsprüfung eines Schlüsselbilds halten muss, statt gegen
- * das vorige – siehe die Begründung dort.
- */
-function stueckAnker(schnitte: ReadonlySet<number>, bis: number): number {
-  let anker = 0;
-  for (const stelle of schnitte) {
-    if (stelle <= bis && stelle > anker) anker = stelle;
-  }
-  return anker;
-}
-
-/**
- * Der Anker für EIN Teil: normalerweise der Stückanfang (`basis`), aber ein
- * Teil mit eigenem Zeitraum (siehe `Bereich.zeitraum`) bekommt seinen
- * eigenen, späteren Anker – das erste Schlüsselbild AB dem Beginn seines
- * Zeitraums.
- *
- * Der Grund ist derselbe wie bei `stueckAnker`, nur eine Ebene tiefer: Gilt
- * ein Bereich erst ab der Hälfte des Films, ist der Stückanfang für IHN kein
- * verlässlicher Bezug – dort war er noch gar nicht aktiv, und was das
- * Verfahren dort geliefert hat (nichts, oder etwas Zufälliges), taugt nicht
- * als Massstab für alles Weitere. `-1` heisst: `bis` selbst ist das erste
- * Schlüsselbild dieses Teils – dort gibt es noch nichts zu erwarten, genau
- * wie am allerersten Schlüsselbild eines Stücks.
- */
-function teilAnker(
-  vonMs: number | undefined,
-  bilder: readonly GelesenesBild[],
-  schluesselSortiert: readonly number[],
-  basis: number,
-  bis: number,
-): number {
-  if (vonMs === undefined || bilder[basis].zeitMs >= vonMs) return basis;
-  for (const k of schluesselSortiert) {
-    if (k < basis || k >= bis) continue;
-    if (bilder[k].zeitMs >= vonMs) return k;
-  }
-  return -1;
-}
-
-/**
- * Eine Lage umkehren.
- *
- * Gebraucht, um aus „Bild 0 nach Bild a" und „Bild 0 nach Bild b" die Lage
- * „Bild a nach Bild b" zu machen: erst zurück, dann vorwärts.
- */
-function kehren(lage: Lage): Lage {
-  const nenner = lage.s * lage.s + lage.w * lage.w;
-  if (nenner === 0) return LAGE_RUHE;
-  const s = lage.s / nenner;
-  const w = -lage.w / nenner;
-  return {
-    s,
-    w,
-    tx: -(s * lage.tx - w * lage.ty),
-    ty: -(w * lage.tx + s * lage.ty),
-    sicher: lage.sicher,
-  };
 }

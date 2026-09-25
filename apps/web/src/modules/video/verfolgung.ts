@@ -192,7 +192,38 @@ export interface Feld {
    * „keine Bewegung" heraus.
    */
   readonly gewinn: Float32Array;
+  /**
+   * Je Block, wie viel Struktur er im NEUEN Bild hat – und zwar in BEIDE
+   * Richtungen, in Graustufen (siehe `gefaelle`).
+   *
+   * `gewinn` allein sagt „hat Struktur UND hat sich bewegt": Ein ruhender
+   * Block mit Struktur findet (0, 0) zuerst und hat deshalb genau null
+   * Gewinn, genau wie ein Block auf blanker Wand. Wer wissen will, ob sich
+   * NICHTS bewegt hat, braucht die Unterscheidung – sonst zählt bei ruhender
+   * Kamera nur, was sich bewegt, und die „Kamerabewegung" ist in Wahrheit
+   * die des einzigen Gegenstandes, der durchs Bild läuft.
+   */
+  readonly struktur: Float32Array;
 }
+
+/**
+ * Um so viel darf die Suche nahe dem Stillstand schlechter passen als die
+ * grob geführte und wird trotzdem genommen – Graustufen im Mittel. Etwa das
+ * Rauschen zweier aufeinanderfolgender Bilder.
+ */
+const NAH_VORZUG = 0.25;
+
+/**
+ * Ab welcher Struktur ein Block auch dann zählt, wenn er stillsteht.
+ *
+ * Gemessen wird die SCHWÄCHERE der beiden Richtungen (siehe `gefaelle`).
+ * Eine Maserung mit Gefälle g in allen Richtungen kommt dabei auf etwa
+ * g / √2; Rauschen einer glatten Wand liegt nach dem Verkleinern auf
+ * höchstens 320 Punkte deutlich unter 1,7, jede Schrift oder Maserung
+ * deutlich darüber. Eine blosse Kante – ein Regalbrett, eine Jalousie, der
+ * Horizont – kommt auf fast null, und das ist der Zweck.
+ */
+export const STRUKTUR_AB = 1.7;
 
 /**
  * Alle Versätze, nach Abstand vom Stillstand sortiert.
@@ -242,12 +273,13 @@ function blockSuchen(
   weite: number,
   schritt: number,
   strafe: number,
-): { dx: number; dy: number; gewinn: number } {
+): { dx: number; dy: number; gewinn: number; roh: number } {
   const { breite, hoehe } = nachher;
   const ordnung = versaetze(weite);
   let besteX = umX;
   let besteY = umY;
   let bestes = Infinity;
+  let bestesRoh = Infinity;
   let beiMitte = Infinity;
 
   for (let k = 0; k < ordnung.length; k += 2) {
@@ -277,6 +309,7 @@ function blockSuchen(
     if (ordnung[k] === 0 && ordnung[k + 1] === 0) beiMitte = wert;
     if (wert < bestes) {
       bestes = wert;
+      bestesRoh = summe / proben;
       besteX = ox;
       besteY = oy;
     }
@@ -285,6 +318,9 @@ function blockSuchen(
     dx: besteX,
     dy: besteY,
     gewinn: Number.isFinite(beiMitte) ? beiMitte - bestes : 0,
+    // Ohne Aufschlag – nur so lassen sich zwei Suchen um verschiedene
+    // Mittelpunkte vergleichen.
+    roh: bestesRoh,
   };
 }
 
@@ -308,6 +344,7 @@ export function bewegung(vorher: Grau, nachher: Grau, bildBreite: number): Feld 
   const dx = new Float32Array(spalten * zeilen);
   const dy = new Float32Array(spalten * zeilen);
   const gewinn = new Float32Array(spalten * zeilen);
+  const struktur = new Float32Array(spalten * zeilen);
 
   /*
    * Die grobe Stufe entsteht durch nochmaliges Verkleinern der feinen – nicht
@@ -315,7 +352,17 @@ export function bewegung(vorher: Grau, nachher: Grau, bildBreite: number): Feld 
    * Bildpunkte, und der Unterschied ist nicht messbar: Beide Wege mitteln
    * dieselben Punkte, nur in anderer Reihenfolge.
    */
-  const stufe = Math.max(1, Math.round(breite / Math.min(breite, GRAU_GROB)));
+  /*
+   * Die LÄNGERE Kante bestimmt die Stufe, nicht die Breite.
+   *
+   * Hier stand die Breite. Ein hochkant gedrehtes Telefonvideo ist nach dem
+   * Verkleinern 180 breit und 320 hoch – die Stufe fiel auf eins, die grobe
+   * Suche weg, und die Reichweite schrumpfte auf ±8 Graupunkte, ±25
+   * Bildpunkte bei 540 × 960. Nachgemessen: Eine Verschiebung um 45 Punkte
+   * kam hochkant als −3,4 heraus, quer richtig.
+   */
+  const langeKante = Math.max(breite, hoehe);
+  const stufe = Math.max(1, Math.round(langeKante / Math.min(langeKante, GRAU_GROB)));
   const grobVor = stufe > 1 ? verkleinern(vorher, stufe) : vorher;
   const grobNach = stufe > 1 ? verkleinern(nachher, stufe) : nachher;
 
@@ -364,7 +411,7 @@ export function bewegung(vorher: Grau, nachher: Grau, bildBreite: number): Feld 
        * die Reichweite bei zwei Punkten, und jede grössere Bewegung wäre
        * unsichtbar; genau das hat eine Prüfung sofort gezeigt.
        */
-      const fein = blockSuchen(
+      let fein = blockSuchen(
         vorher,
         nachher,
         x0,
@@ -377,6 +424,25 @@ export function bewegung(vorher: Grau, nachher: Grau, bildBreite: number): Feld 
         1,
         STRAFE,
       );
+      /*
+       * Führt die grobe Stufe weg vom Stillstand, wird die Nähe des
+       * Stillstands trotzdem fein angesehen – und gewinnt, wenn sie
+       * mindestens so gut passt.
+       *
+       * Die grobe Stufe würfelt in Randblöcken, die nur halb so gross sind,
+       * und auf feinem, sich wiederholendem Muster. Seit auch hochkant grob
+       * gesucht wird, kam eine kleine Bewegung dort als Sprung von zwanzig
+       * Graupunkten heraus – nachgemessen 3 statt 0,4 Punkte Fehler bei einer
+       * Verschiebung um (4, −3).
+       */
+      if (stufe > 1 && (umX !== 0 || umY !== 0)) {
+        const nah = blockSuchen(vorher, nachher, x0, y0, x1, y1, 0, 0, FEIN_SUCHE, 1, STRAFE);
+        if (nah.roh <= fein.roh + NAH_VORZUG) {
+          fein = nah;
+          umX = 0;
+          umY = 0;
+        }
+      }
       /*
        * Zwischen den Punkten nachsehen.
        *
@@ -404,6 +470,7 @@ export function bewegung(vorher: Grau, nachher: Grau, bildBreite: number): Feld 
         umX === 0 && umY === 0
           ? fein.gewinn
           : gegenRuhe(vorher, nachher, x0, y0, x1, y1, fein.dx, fein.dy);
+      struktur[at] = gefaelle(nachher, x0, y0, x1, y1);
     }
   }
 
@@ -413,6 +480,7 @@ export function bewegung(vorher: Grau, nachher: Grau, bildBreite: number): Feld 
     dx,
     dy,
     gewinn,
+    struktur,
     faktor: bildBreite / breite,
     grauBreite: breite,
     grauHoehe: hoehe,
@@ -506,6 +574,44 @@ function gegenRuhe(
 }
 
 /** Ein Graubild um einen ganzzahligen Faktor verkleinern – mittelnd. */
+/**
+ * Wie viel Struktur ein Block in seiner SCHWÄCHEREN Richtung hat – siehe
+ * `Feld.struktur`.
+ *
+ * Nicht mehr das mittlere Gefälle. Das zählte auch einen Block mit lauter
+ * waagrechten Streifen als strukturreich, und der passt bei einem
+ * waagrechten Schwenk an JEDER Stelle gleich gut – die Suche bleibt bei
+ * (0, 0) stehen, und der Block stimmte für Stillstand. Nachgemessen: Bei
+ * 18 Punkten Schwenk und 60 % Streifen im Bild kam als Kamerabewegung
+ * genau null heraus.
+ *
+ * Gerechnet über den Strukturtensor: Die kleinere seiner beiden Eigenwerte
+ * sagt, wie stark sich der Block in der Richtung verändert, in der er sich
+ * am WENIGSTEN verändert. Bei einer Kante ist das fast nichts.
+ */
+function gefaelle(bild: Grau, x0: number, y0: number, x1: number, y1: number): number {
+  const { breite, werte } = bild;
+  let xx = 0;
+  let yy = 0;
+  let xy = 0;
+  let zahl = 0;
+  for (let y = y0; y < y1 - 1; y += 1) {
+    for (let x = x0; x < x1 - 1; x += 1) {
+      const at = y * breite + x;
+      const gx = werte[at + 1] - werte[at];
+      const gy = werte[at + breite] - werte[at];
+      xx += gx * gx;
+      yy += gy * gy;
+      xy += gx * gy;
+      zahl += 1;
+    }
+  }
+  if (zahl === 0) return 0;
+  const mitte = (xx + yy) / 2;
+  const kleinster = mitte - Math.sqrt(((xx - yy) / 2) ** 2 + xy * xy);
+  return Math.sqrt(Math.max(0, kleinster) / zahl);
+}
+
 function verkleinern(bild: Grau, faktor: number): Grau {
   const breite = Math.max(1, Math.floor(bild.breite / faktor));
   const hoehe = Math.max(1, Math.floor(bild.hoehe / faktor));
@@ -583,25 +689,66 @@ export const LAGE_RUHE: Lage = { s: 1, w: 0, tx: 0, ty: 0, sicher: 0 };
  * gefunden wurde, als die Maske auf einen Zufall zu schieben.
  */
 export function lageSchaetzen(feld: Feld, mindestGewinn = SICHER_AB): Lage {
-  let n = 0;
-  let mpx = 0;
-  let mpy = 0;
-  let mqx = 0;
-  let mqy = 0;
+  const px: number[] = [];
+  const py: number[] = [];
+  const vx: number[] = [];
+  const vy: number[] = [];
   for (let bz = 0; bz < feld.zeilen; bz += 1) {
     for (let bs = 0; bs < feld.spalten; bs += 1) {
       const at = bz * feld.spalten + bs;
       if (feld.gewinn[at] < mindestGewinn) continue;
-      const cx = bs * BLOCK + BLOCK / 2;
-      const cy = bz * BLOCK + BLOCK / 2;
-      mpx += cx;
-      mpy += cy;
-      mqx += cx + feld.dx[at];
-      mqy += cy + feld.dy[at];
-      n += 1;
+      px.push(bs * BLOCK + BLOCK / 2);
+      py.push(bz * BLOCK + BLOCK / 2);
+      vx.push(feld.dx[at]);
+      vy.push(feld.dy[at]);
     }
   }
-  if (n < 5) return LAGE_RUHE;
+  if (px.length < 5) return LAGE_RUHE;
+  const alle = px.map(() => true);
+  const erste = ausgleichen(px, py, vx, vy, alle);
+  if (!erste) return LAGE_RUHE;
+  /*
+   * Ein zweiter Durchgang ohne die Blöcke, die gar nicht passen.
+   *
+   * Am Bildrand kommt der Inhalt eines Blocks bei einem Schwenk von
+   * ausserhalb des alten Bildes; er findet dort nichts Richtiges und landet
+   * irgendwo im Suchfenster. Seit die grobe Stufe auch hochkant läuft, ist
+   * dieses Fenster zwanzig Graupunkte weit, und drei, vier solcher Blöcke
+   * zogen das Mittel sichtbar mit – nachgemessen 2,3 statt 0,4 Punkte Fehler
+   * bei einer Verschiebung um (10, 6). Weggelassen wird nur, was deutlich
+   * weiter danebenliegt als die übrigen.
+   */
+  const reste = px.map((x, i) => abweichung(erste, x, py[i], vx[i], vy[i]));
+  const sortiert = [...reste].sort((a, b) => a - b);
+  const typisch = sortiert[sortiert.length >> 1];
+  const grenze = Math.max(1, 3 * typisch);
+  const drin = reste.map((rest) => rest <= grenze);
+  if (drin.filter(Boolean).length < 5 || drin.every(Boolean)) return erste;
+  return ausgleichen(px, py, vx, vy, drin) ?? erste;
+}
+
+/** Kleinste Quadrate über die markierten Blöcke – `null`, wenn es nichts auszugleichen gibt. */
+function ausgleichen(
+  px: readonly number[],
+  py: readonly number[],
+  vx: readonly number[],
+  vy: readonly number[],
+  drin: readonly boolean[],
+): Lage | null {
+  let mpx = 0;
+  let mpy = 0;
+  let mqx = 0;
+  let mqy = 0;
+  let n = 0;
+  for (let i = 0; i < px.length; i += 1) {
+    if (!drin[i]) continue;
+    mpx += px[i];
+    mpy += py[i];
+    mqx += px[i] + vx[i];
+    mqy += py[i] + vy[i];
+    n += 1;
+  }
+  if (n === 0) return null;
   mpx /= n;
   mpy /= n;
   mqx /= n;
@@ -610,23 +757,274 @@ export function lageSchaetzen(feld: Feld, mindestGewinn = SICHER_AB): Lage {
   let a = 0;
   let b = 0;
   let nenner = 0;
-  for (let bz = 0; bz < feld.zeilen; bz += 1) {
-    for (let bs = 0; bs < feld.spalten; bs += 1) {
-      const at = bz * feld.spalten + bs;
-      if (feld.gewinn[at] < mindestGewinn) continue;
-      const px = bs * BLOCK + BLOCK / 2 - mpx;
-      const py = bz * BLOCK + BLOCK / 2 - mpy;
-      const qx = bs * BLOCK + BLOCK / 2 + feld.dx[at] - mqx;
-      const qy = bz * BLOCK + BLOCK / 2 + feld.dy[at] - mqy;
-      a += px * qx + py * qy;
-      b += px * qy - py * qx;
-      nenner += px * px + py * py;
-    }
+  for (let i = 0; i < px.length; i += 1) {
+    if (!drin[i]) continue;
+    const x = px[i] - mpx;
+    const y = py[i] - mpy;
+    const qx = px[i] + vx[i] - mqx;
+    const qy = py[i] + vy[i] - mqy;
+    a += x * qx + y * qy;
+    b += x * qy - y * qx;
+    nenner += x * x + y * y;
   }
-  if (nenner === 0) return LAGE_RUHE;
+  if (nenner === 0) return null;
   const s = a / nenner;
   const w = b / nenner;
   return { s, w, tx: mqx - (s * mpx - w * mpy), ty: mqy - (w * mpx + s * mpy), sicher: n };
+}
+
+/** Was `lageRobust` gefunden hat – und auf wie viele Blöcke es sich stützt. */
+export interface Schaetzung {
+  readonly lage: Lage;
+  /** Die Blöcke, die am Ende mit dem Ergebnis übereinstimmen. */
+  readonly stimmen: number;
+}
+
+/**
+ * Die Bewegung, die die MEHRHEIT der aussagekräftigen Blöcke zeigt – oder
+ * `null`, wenn es keine solche Mehrheit gibt.
+ *
+ * # Was sie von `lageSchaetzen` unterscheidet
+ *
+ * 1. Auch ein ruhender Block mit Struktur stimmt mit – für „keine
+ *    Bewegung". `lageSchaetzen` zählt nur Blöcke, die sich bewegt haben;
+ *    bei ruhender Kamera ist deren „Kamerabewegung" deshalb die Bewegung
+ *    des Gegenstandes, der durchs Bild läuft. Nachgemessen (960 × 540, ein
+ *    Gegenstand wandert 15 Punkte je Bild vor ruhendem Regal): Die Kette von
+ *    `lageSchaetzen` folgte dem Gegenstand, und alles, was an der Szene
+ *    kleben sollte – ein Verlauf, eine Tiefenkarte – lief mit ihm mit.
+ * 2. Ausreisser fallen heraus: Gewählt wird die grösste Gruppe von
+ *    Blöcken, die EINE Bewegung teilen, und nur über diese die Ähnlichkeit
+ *    gerechnet. Ein Gegenstand, der durchs ruhende Bild läuft, ist für die
+ *    Kamera ein Ausreisser – und umgekehrt. Sind beide Gruppen gleich
+ *    gross, gewinnt eine von ihnen, nicht ihr Mittel.
+ * 3. `gewicht` schränkt die Blöcke ein, etwa auf die innerhalb einer Maske.
+ *    Dasselbe Verfahren liefert dann die Bewegung des GEGENSTANDES statt der
+ *    Kamera.
+ *
+ * Zwei bis vier übereinstimmende Blöcke ergeben eine reine Verschiebung,
+ * ab fünf eine Ähnlichkeit. Eine Ähnlichkeit, die von einem Bild zum
+ * nächsten mehr als zehn Prozent Massstab oder sechs Grad Drehung
+ * behauptet, ist ein Zufallstreffer und fällt ebenfalls auf die
+ * Verschiebung zurück.
+ */
+export function lageRobust(
+  feld: Feld,
+  gewicht?: ArrayLike<number> | null,
+  mindestGewicht = 0.5,
+): Schaetzung | null {
+  const anzahl = feld.spalten * feld.zeilen;
+  const px: number[] = [];
+  const py: number[] = [];
+  const vx: number[] = [];
+  const vy: number[] = [];
+  for (let at = 0; at < anzahl; at += 1) {
+    if (gewicht && gewicht[at] < mindestGewicht) continue;
+    if (feld.gewinn[at] < SICHER_AB && feld.struktur[at] < STRUKTUR_AB) continue;
+    const bs = at % feld.spalten;
+    const bz = Math.floor(at / feld.spalten);
+    const x0 = bs * BLOCK;
+    const y0 = bz * BLOCK;
+    px.push((x0 + Math.min(x0 + BLOCK, feld.grauBreite)) / 2);
+    py.push((y0 + Math.min(y0 + BLOCK, feld.grauHoehe)) / 2);
+    vx.push(feld.dx[at]);
+    vy.push(feld.dy[at]);
+  }
+  if (px.length < 2) return null;
+
+  /*
+   * Die grösste Gruppe, die EINE Bewegung teilt – nicht der Median.
+   *
+   * Der Median lag bei zwei fast gleich grossen Gruppen (die Hälfte des
+   * Bildes steht, die andere zieht vorbei) zwischen beiden; die Streuung
+   * wurde halb so gross wie ihr Abstand, und die Grenze nahm beide Gruppen
+   * auf. Heraus kam ein Mittelwert, der zu keiner passte: −13,5 Punkte statt
+   * −18 oder 0, und dazu eine „Zoomstufe" von 0,979. Hier wird stattdessen
+   * jede Bewegung, die ein einzelner Block oder ein Paar von Blöcken
+   * vorschlägt, daran gemessen, wie viele andere Blöcke sie erklärt.
+   */
+  const probe = (lage: Lage) => {
+    let zahl = 0;
+    let rest = 0;
+    for (let i = 0; i < px.length; i += 1) {
+      const d = abweichung(lage, px[i], py[i], vx[i], vy[i]);
+      if (d <= GRUPPE_GRENZE) {
+        zahl += 1;
+        rest += d;
+      }
+    }
+    return { zahl, rest };
+  };
+  let beste: { lage: Lage; zahl: number; rest: number } | null = null;
+  const vorschlagen = (lage: Lage) => {
+    const { zahl, rest } = probe(lage);
+    if (!beste || zahl > beste.zahl || (zahl === beste.zahl && rest < beste.rest - 1e-9)) {
+      beste = { lage, zahl, rest };
+    }
+  };
+  // Höchstens so viele Blöcke als Vorschläge – gleichmässig über das Feld.
+  const auswahl: number[] = [];
+  const schritt = Math.max(1, Math.ceil(px.length / VORSCHLAEGE_MAX));
+  for (let i = 0; i < px.length; i += schritt) auswahl.push(i);
+  for (const i of auswahl) vorschlagen({ s: 1, w: 0, tx: vx[i], ty: vy[i], sicher: 0 });
+  for (let a = 0; a < auswahl.length; a += 1) {
+    for (let b = a + 1; b < auswahl.length; b += 1) {
+      const paar = paarLage(px, py, vx, vy, auswahl[a], auswahl[b]);
+      if (paar) vorschlagen(paar);
+    }
+  }
+  const gewaehlt = beste as { lage: Lage; zahl: number; rest: number } | null;
+  if (!gewaehlt || gewaehlt.zahl < 2) return null;
+
+  // Über die ganze Gruppe nachgerechnet, zweimal: Ein Vorschlag aus zwei
+  // Blöcken trifft die Gruppe, aber nicht ihr Mittel.
+  let lage = gewaehlt.lage;
+  let drin: boolean[] = [];
+  for (let runde = 0; runde < 2; runde += 1) {
+    const vorige = lage;
+    drin = px.map((x, i) => abweichung(vorige, x, py[i], vx[i], vy[i]) <= GRUPPE_GRENZE);
+    if (drin.filter(Boolean).length < 2) break;
+    lage = aehnlichkeit(px, py, vx, vy, drin) ?? verschiebung(vx, vy, drin);
+  }
+  const stimmen = drin.filter(Boolean).length;
+  if (stimmen < 2) return null;
+  // Beinahe-Ruhe IST Ruhe: Ein Rauschen von ein paar Hundertstel Punkten
+  // hätte über hundertfünfzig Bilder aufsummiert sichtbar geschoben.
+  if (
+    Math.abs(lage.tx) < 0.15 &&
+    Math.abs(lage.ty) < 0.15 &&
+    Math.abs(lage.s - 1) < 0.002 &&
+    Math.abs(lage.w) < 0.002
+  ) {
+    return { lage: LAGE_RUHE, stimmen };
+  }
+  return { lage: { ...lage, sicher: stimmen }, stimmen };
+}
+
+/**
+ * Wie weit ein Block in Graupunkten von dem abweicht, was eine Lage für ihn
+ * vorhersagt.
+ */
+function abweichung(lage: Lage, x: number, y: number, vx: number, vy: number): number {
+  const qx = lage.s * x - lage.w * y + lage.tx;
+  const qy = lage.w * x + lage.s * y + lage.ty;
+  return Math.hypot(qx - (x + vx), qy - (y + vy));
+}
+
+/**
+ * Die Ähnlichkeit, die zwei Blöcke genau erklärt – oder `null`, wenn sie
+ * nicht plausibel ist (zu nah beieinander, zu viel Massstab, zu viel
+ * Drehung für einen Schritt von einem Bild zum nächsten).
+ */
+function paarLage(
+  px: readonly number[],
+  py: readonly number[],
+  vx: readonly number[],
+  vy: readonly number[],
+  a: number,
+  b: number,
+): Lage | null {
+  const dpx = px[b] - px[a];
+  const dpy = py[b] - py[a];
+  const nenner = dpx * dpx + dpy * dpy;
+  // Zwei Blöcke nebeneinander bestimmen keine Drehung, nur ihr Rauschen.
+  if (nenner < (2 * BLOCK) ** 2) return null;
+  const dqx = px[b] + vx[b] - (px[a] + vx[a]);
+  const dqy = py[b] + vy[b] - (py[a] + vy[a]);
+  const s = (dqx * dpx + dqy * dpy) / nenner;
+  const w = (dqy * dpx - dqx * dpy) / nenner;
+  const massstab = Math.hypot(s, w);
+  if (massstab < 0.9 || massstab > 1.1 || Math.abs(Math.atan2(w, s)) > 0.1) return null;
+  const qx = px[a] + vx[a];
+  const qy = py[a] + vy[a];
+  return { s, w, tx: qx - (s * px[a] - w * py[a]), ty: qy - (w * px[a] + s * py[a]), sicher: 0 };
+}
+
+/** Wie weit ein Block von einer Bewegung abweichen darf und trotzdem zu ihr gehört – Graupunkte. */
+const GRUPPE_GRENZE = 1.5;
+/** Aus höchstens so vielen Blöcken werden Bewegungen vorgeschlagen – Paare davon im Quadrat. */
+const VORSCHLAEGE_MAX = 40;
+
+function verschiebung(
+  vx: readonly number[],
+  vy: readonly number[],
+  drin: readonly boolean[],
+): Lage {
+  let sx = 0;
+  let sy = 0;
+  let n = 0;
+  for (let i = 0; i < vx.length; i += 1) {
+    if (!drin[i]) continue;
+    sx += vx[i];
+    sy += vy[i];
+    n += 1;
+  }
+  return { s: 1, w: 0, tx: sx / n, ty: sy / n, sicher: n };
+}
+
+/** Die Ähnlichkeit über die markierten Blöcke – oder `null`, wenn sie nicht trägt. */
+function aehnlichkeit(
+  px: readonly number[],
+  py: readonly number[],
+  vx: readonly number[],
+  vy: readonly number[],
+  drin: readonly boolean[],
+): Lage | null {
+  let n = 0;
+  let mpx = 0;
+  let mpy = 0;
+  let mqx = 0;
+  let mqy = 0;
+  for (let i = 0; i < px.length; i += 1) {
+    if (!drin[i]) continue;
+    mpx += px[i];
+    mpy += py[i];
+    mqx += px[i] + vx[i];
+    mqy += py[i] + vy[i];
+    n += 1;
+  }
+  if (n < 5) return null;
+  mpx /= n;
+  mpy /= n;
+  mqx /= n;
+  mqy /= n;
+  let a = 0;
+  let b = 0;
+  let nenner = 0;
+  for (let i = 0; i < px.length; i += 1) {
+    if (!drin[i]) continue;
+    const x = px[i] - mpx;
+    const y = py[i] - mpy;
+    const qx = px[i] + vx[i] - mqx;
+    const qy = py[i] + vy[i] - mqy;
+    a += x * qx + y * qy;
+    b += x * qy - y * qx;
+    nenner += x * x + y * y;
+  }
+  if (nenner === 0) return null;
+  const s = a / nenner;
+  const w = b / nenner;
+  const massstab = Math.hypot(s, w);
+  if (massstab < 0.9 || massstab > 1.1 || Math.abs(Math.atan2(w, s)) > 0.1) return null;
+  return { s, w, tx: mqx - (s * mpx - w * mpy), ty: mqy - (w * mpx + s * mpy), sicher: n };
+}
+
+/**
+ * Eine Lage umkehren: aus „Bild b nach Bild a" wird „Bild a nach Bild b".
+ */
+export function lageKehren(lage: Lage): Lage {
+  if (lageRuht(lage)) return LAGE_RUHE;
+  const nenner = lage.s * lage.s + lage.w * lage.w;
+  if (nenner === 0) return LAGE_RUHE;
+  const s = lage.s / nenner;
+  const w = -lage.w / nenner;
+  return {
+    s,
+    w,
+    tx: -(s * lage.tx - w * lage.ty),
+    ty: -(w * lage.tx + s * lage.ty),
+    sicher: lage.sicher,
+  };
 }
 
 /** Ob sich überhaupt etwas bewegt – oder ob die Lage die Ruhe ist. */
@@ -822,6 +1220,163 @@ export function zeitlichGlaetten(
     }
     return raus;
   });
+}
+
+/**
+ * Wo eine Maske liegt und wie gross sie ist – nach Deckung gewichtet, in
+ * Bildpunkten. `null` für eine (fast) leere Maske.
+ */
+export function schwerpunkt(
+  alpha: Uint8Array,
+  breite: number,
+  hoehe: number,
+): { x: number; y: number; flaeche: number } | null {
+  let summe = 0;
+  let sx = 0;
+  let sy = 0;
+  for (let y = 0; y < hoehe; y += 1) {
+    const zeile = y * breite;
+    for (let x = 0; x < breite; x += 1) {
+      const a = alpha[zeile + x];
+      if (a === 0) continue;
+      summe += a;
+      sx += a * x;
+      sy += a * y;
+    }
+  }
+  const flaeche = summe / 255;
+  if (flaeche < 1) return null;
+  return { x: sx / summe, y: sy / summe, flaeche };
+}
+
+/** Eine Maske um ganze Bildpunkte verschieben; was hereinkommt, ist leer. */
+export function maskeVerschieben(
+  alpha: Uint8Array,
+  breite: number,
+  hoehe: number,
+  dx: number,
+  dy: number,
+): Uint8Array {
+  const vx = Math.round(dx);
+  const vy = Math.round(dy);
+  if (vx === 0 && vy === 0) return alpha;
+  const raus = new Uint8Array(breite * hoehe);
+  const x0 = Math.max(0, vx);
+  const x1 = Math.min(breite, breite + vx);
+  if (x1 <= x0) return raus;
+  for (let y = Math.max(0, vy); y < Math.min(hoehe, hoehe + vy); y += 1) {
+    const quelle = (y - vy) * breite - vx;
+    raus.set(alpha.subarray(quelle + x0, quelle + x1), y * breite + x0);
+  }
+  return raus;
+}
+
+/**
+ * Wie `zeitlichGlaetten`, aber mit den Nachbarn DORTHIN verschoben, wo die
+ * Maske in diesem Bild steht.
+ *
+ * Das blosse Mittel über drei Bilder legt um einen Gegenstand, der sich
+ * bewegt, einen Saum aus zwei Drittel- und Eindrittelstufen, so breit wie
+ * sein Weg je Bild – nachgemessen 15 Punkte bei 15 Punkten je Bild. Mit dem
+ * Versatz der Schwerpunkte verschoben, bleibt vom Mitteln nur, wofür es da
+ * ist: Der Rand flimmert nicht mehr.
+ *
+ * `versatz[i]` ist der Weg der Maske von Bild i−1 nach Bild i. Über
+ * `grenzen` (erstes Bild eines neuen Laufs) wird nicht gemittelt.
+ */
+export function bewegtGlaetten(
+  masken: readonly Uint8Array[],
+  breite: number,
+  hoehe: number,
+  versatz: readonly { x: number; y: number }[],
+  grenzen: ReadonlySet<number> = new Set(),
+): Uint8Array[] {
+  /*
+   * Nur im Rechteck, in dem eine der drei Masken etwas hat, und die
+   * Nachbarn werden gelesen statt kopiert. Über das ganze Bild und mit
+   * zwei verschobenen Kopien je Bild waren es 0,74 s je Teil – nach allen
+   * Modelläufen, mit stehender Seite.
+   */
+  const kaesten = masken.map((maske) => maskenKasten(maske, breite, hoehe));
+  return masken.map((maske, i) => {
+    const nachbarn: { maske: Uint8Array; dx: number; dy: number }[] = [];
+    if (i > 0 && !grenzen.has(i)) {
+      nachbarn.push({
+        maske: masken[i - 1],
+        dx: Math.round(versatz[i].x),
+        dy: Math.round(versatz[i].y),
+      });
+    }
+    if (i + 1 < masken.length && !grenzen.has(i + 1)) {
+      nachbarn.push({
+        maske: masken[i + 1],
+        dx: -Math.round(versatz[i + 1].x),
+        dy: -Math.round(versatz[i + 1].y),
+      });
+    }
+    if (nachbarn.length === 0) return maske;
+    let x0 = breite;
+    let y0 = hoehe;
+    let x1 = -1;
+    let y1 = -1;
+    const dazu = (k: MaskenKasten | null, dx: number, dy: number) => {
+      if (!k) return;
+      x0 = Math.min(x0, k.x0 + dx);
+      y0 = Math.min(y0, k.y0 + dy);
+      x1 = Math.max(x1, k.x1 + dx);
+      y1 = Math.max(y1, k.y1 + dy);
+    };
+    dazu(kaesten[i], 0, 0);
+    if (i > 0 && !grenzen.has(i)) dazu(kaesten[i - 1], nachbarn[0].dx, nachbarn[0].dy);
+    const hinten = nachbarn[nachbarn.length - 1];
+    if (i + 1 < masken.length && !grenzen.has(i + 1)) dazu(kaesten[i + 1], hinten.dx, hinten.dy);
+    const raus = new Uint8Array(breite * hoehe);
+    x0 = Math.max(0, x0);
+    y0 = Math.max(0, y0);
+    x1 = Math.min(breite - 1, x1);
+    y1 = Math.min(hoehe - 1, y1);
+    const teiler = nachbarn.length + 1;
+    for (let y = y0; y <= y1; y += 1) {
+      for (let x = x0; x <= x1; x += 1) {
+        const p = y * breite + x;
+        let summe = maske[p];
+        for (const n of nachbarn) {
+          // Was von ausserhalb käme, ist leer – wie bei `maskeVerschieben`.
+          const qx = x - n.dx;
+          const qy = y - n.dy;
+          if (qx >= 0 && qy >= 0 && qx < breite && qy < hoehe) summe += n.maske[qy * breite + qx];
+        }
+        raus[p] = Math.round(summe / teiler);
+      }
+    }
+    return raus;
+  });
+}
+
+interface MaskenKasten {
+  readonly x0: number;
+  readonly y0: number;
+  readonly x1: number;
+  readonly y1: number;
+}
+
+/** Das Rechteck, in dem eine Maske überhaupt etwas hat – `null` für eine leere. */
+function maskenKasten(maske: Uint8Array, breite: number, hoehe: number): MaskenKasten | null {
+  let x0 = breite;
+  let y0 = hoehe;
+  let x1 = -1;
+  let y1 = -1;
+  for (let y = 0; y < hoehe; y += 1) {
+    const zeile = y * breite;
+    for (let x = 0; x < breite; x += 1) {
+      if (maske[zeile + x] === 0) continue;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      y1 = y;
+    }
+  }
+  return x1 < 0 ? null : { x0, y0, x1, y1 };
 }
 
 /* ---------- Ob eine frisch gerechnete Maske plausibel ist ---------- */

@@ -13,6 +13,7 @@ import {
   punktVor,
   punktZurueck,
   zeitlichGlaetten,
+  lageRobust,
 } from './verfolgung.js';
 
 /**
@@ -631,5 +632,255 @@ describe('zeitlichGlaetten an einer Schnittkante', () => {
     expect(raus[1][0]).toBe(85);
     // Bild 4 liegt im zweiten Stück und sieht 90, 120, 150 – also 120.
     expect(raus[4][0]).toBe(120);
+  });
+});
+
+/** Ein Rechteckbild mit Struktur, Hintergrund bei `hx`, ein Kasten an (kx, ky). */
+function szene(breite: number, hoehe: number, hx: number, kx: number, ky: number): ImageData {
+  const daten = new Uint8ClampedArray(breite * hoehe * 4);
+  for (let y = 0; y < hoehe; y += 1) {
+    for (let x = 0; x < breite; x += 1) {
+      const at = (y * breite + x) * 4;
+      const sx = x - hx;
+      let wert = 128 + 70 * Math.sin(sx / 4.1 + Math.cos(y / 6.7)) * Math.cos(y / 3.9 - sx / 11);
+      if (x >= kx && x < kx + 60 && y >= ky && y < ky + 60) {
+        // Ein eigenes, sich nicht wiederholendes Muster – ein periodisches
+        // passte bei mehreren Versätzen gleich gut.
+        const ox = x - kx;
+        const oy = y - ky;
+        wert = 128 + 90 * Math.sin(ox / 5.1 + Math.cos(oy / 3.7)) * Math.cos(oy / 7.3 - ox / 13);
+      }
+      daten[at] = wert;
+      daten[at + 1] = wert;
+      daten[at + 2] = wert;
+      daten[at + 3] = 255;
+    }
+  }
+  return { data: daten, width: breite, height: hoehe, colorSpace: 'srgb' } as ImageData;
+}
+
+describe('lageRobust', () => {
+  it('sieht bei ruhender Kamera keine Bewegung, auch wenn ein Gegenstand durchs Bild läuft', () => {
+    /*
+     * Der Fall, an dem `lageSchaetzen` die Kamera mit dem Gegenstand
+     * verwechselt: Nur der Kasten hat sich bewegt, also zählte nur er. Hier
+     * stimmen die ruhenden Hintergrundblöcke mit.
+     */
+    const vorher = graustufen(szene(320, 180, 0, 100, 60));
+    const nachher = graustufen(szene(320, 180, 0, 108, 60));
+    const feld = bewegung(vorher, nachher, 320);
+    const alt = lageSchaetzen(feld);
+    expect(Math.abs(alt.tx), 'die alte Schätzung folgt dem Kasten').toBeGreaterThan(3);
+    const neu = lageRobust(feld);
+    expect(neu).not.toBeNull();
+    expect(lageRuht(neu?.lage ?? LAGE_RUHE)).toBe(true);
+  });
+
+  it('findet einen Schwenk des ganzen Bildes', () => {
+    const vorher = graustufen(szene(320, 180, 0, 100, 60));
+    const nachher = graustufen(szene(320, 180, 5, 105, 60));
+    const neu = lageRobust(bewegung(vorher, nachher, 320));
+    expect(neu?.lage.tx).toBeCloseTo(-5, 0);
+    expect(neu?.lage.ty).toBeCloseTo(0, 0);
+  });
+
+  it('findet die Bewegung des Gegenstandes, wenn nur seine Blöcke zählen', () => {
+    const vorher = graustufen(szene(320, 180, 0, 96, 48));
+    const nachher = graustufen(szene(320, 180, 0, 104, 48));
+    const feld = bewegung(vorher, nachher, 320);
+    // Die Blöcke, die ganz im Kasten des NEUEN Bildes liegen.
+    const gewicht = new Float32Array(feld.spalten * feld.zeilen);
+    for (let bz = 0; bz < feld.zeilen; bz += 1) {
+      for (let bs = 0; bs < feld.spalten; bs += 1) {
+        const x0 = bs * 24;
+        const y0 = bz * 24;
+        if (x0 >= 104 && x0 + 24 <= 164 && y0 >= 48 && y0 + 24 <= 108)
+          gewicht[bz * feld.spalten + bs] = 1;
+      }
+    }
+    const neu = lageRobust(feld, gewicht);
+    expect(neu?.lage.tx).toBeCloseTo(-8, 0);
+  });
+
+  it('gibt ohne aussagekräftige Blöcke null zurück, statt Ruhe zu behaupten', () => {
+    const glatt = {
+      data: new Uint8ClampedArray(64 * 64 * 4).fill(128),
+      width: 64,
+      height: 64,
+      colorSpace: 'srgb',
+    } as ImageData;
+    expect(lageRobust(bewegung(graustufen(glatt), graustufen(glatt), 64))).toBeNull();
+  });
+});
+
+describe('bewegung bei hochkant gehaltenem Telefon', () => {
+  it('findet eine grosse Verschiebung auch, wenn das Bild höher als breit ist', () => {
+    /*
+     * Die grobe Stufe hing an der Breite. Hochkant (540 × 960) fiel sie weg,
+     * und die Reichweite schrumpfte auf ±25 Bildpunkte – nachgemessen kam
+     * eine Verschiebung um 45 als −3,4 heraus.
+     */
+    const hochkant = (vx: number) => {
+      const b = 540;
+      const h = 960;
+      const daten = new Uint8ClampedArray(b * h * 4);
+      for (let y = 0; y < h; y += 1) {
+        for (let x = 0; x < b; x += 1) {
+          const qx = x - vx;
+          const at = (y * b + x) * 4;
+          const wert =
+            128 + 80 * Math.sin(qx / 9.7 + Math.cos(y / 17)) * Math.cos(y / 12.3 - qx / 31);
+          daten[at] = wert;
+          daten[at + 1] = wert;
+          daten[at + 2] = wert;
+          daten[at + 3] = 255;
+        }
+      }
+      return { data: daten, width: b, height: h, colorSpace: 'srgb' } as ImageData;
+    };
+    const feld = bewegung(graustufen(hochkant(0)), graustufen(hochkant(45)), 540);
+    const lage = lageRobust(feld)?.lage ?? LAGE_RUHE;
+    // In Bildpunkten: tx ist in Graupunkten, `faktor` rechnet zurück.
+    expect(lage.tx * feld.faktor).toBeCloseTo(-45, -0.5);
+  });
+});
+
+describe('lageRobust nach der Gegenlesung', () => {
+  /** Ein Bild, dessen Hintergrund um `hx` verschoben ist; oben ein Band nur aus waagrechten Streifen. */
+  function mitStreifen(hx: number, anteil: number): ImageData {
+    const breite = 320;
+    const hoehe = 180;
+    const daten = new Uint8ClampedArray(breite * hoehe * 4);
+    for (let y = 0; y < hoehe; y += 1) {
+      for (let x = 0; x < breite; x += 1) {
+        const sx = x - hx;
+        const wert =
+          y < hoehe * anteil
+            ? // Ein Regal, eine Jalousie: nur senkrechte Veränderung.
+              128 + 80 * Math.sin(y / 2.3)
+            : 128 + 70 * Math.sin(sx / 4.1 + Math.cos(y / 6.7)) * Math.cos(y / 3.9 - sx / 11);
+        const at = (y * breite + x) * 4;
+        daten[at] = wert;
+        daten[at + 1] = wert;
+        daten[at + 2] = wert;
+        daten[at + 3] = 255;
+      }
+    }
+    return { data: daten, width: breite, height: hoehe, colorSpace: 'srgb' } as ImageData;
+  }
+
+  it('lässt Blöcke mit Struktur in nur einer Richtung nicht für Stillstand stimmen', () => {
+    /*
+     * Bei einem waagrechten Schwenk passt ein Block aus waagrechten
+     * Streifen an jeder Stelle gleich gut und bleibt bei (0, 0). Zählte er
+     * als „ruhend mit Struktur", gewänne bei 60 % Streifen der Stillstand –
+     * nachgemessen kam genau null heraus statt des Schwenks.
+     */
+    for (const anteil of [0.5, 0.6, 0.7]) {
+      const feld = bewegung(
+        graustufen(mitStreifen(0, anteil)),
+        graustufen(mitStreifen(6, anteil)),
+        320,
+      );
+      const lage = lageRobust(feld)?.lage;
+      expect(lage?.tx ?? 0, `Streifenanteil ${anteil}`).toBeCloseTo(-6, 0);
+    }
+  });
+
+  it('wählt bei zwei gleich grossen Gruppen EINE – nicht ihr Mittel', () => {
+    /*
+     * Eine Mitzieh-Aufnahme: links steht der Gegenstand still im Bild,
+     * rechts zieht der Hintergrund vorbei. Der Median lag zwischen beiden,
+     * und heraus kam eine Bewegung, die zu keiner Hälfte passte.
+     */
+    const szeneHaelfte = (hx: number) => {
+      const breite = 320;
+      const hoehe = 180;
+      const daten = new Uint8ClampedArray(breite * hoehe * 4);
+      for (let y = 0; y < hoehe; y += 1) {
+        for (let x = 0; x < breite; x += 1) {
+          const links = x < breite / 2;
+          const sx = links ? x : x - hx;
+          const wert = links
+            ? 128 + 90 * Math.sin(sx / 5.1 + Math.cos(y / 3.7)) * Math.cos(y / 7.3 - sx / 13)
+            : 128 + 70 * Math.sin(sx / 4.1 + Math.cos(y / 6.7)) * Math.cos(y / 3.9 - sx / 11);
+          const at = (y * breite + x) * 4;
+          daten[at] = wert;
+          daten[at + 1] = wert;
+          daten[at + 2] = wert;
+          daten[at + 3] = 255;
+        }
+      }
+      return { data: daten, width: breite, height: hoehe, colorSpace: 'srgb' } as ImageData;
+    };
+    const feld = bewegung(graustufen(szeneHaelfte(0)), graustufen(szeneHaelfte(6)), 320);
+    const lage = lageRobust(feld)?.lage ?? LAGE_RUHE;
+    const naechste = Math.min(Math.abs(lage.tx), Math.abs(lage.tx + 6));
+    expect(naechste, `tx ${lage.tx.toFixed(2)}`).toBeLessThan(0.5);
+    expect(Math.hypot(lage.s, lage.w)).toBeCloseTo(1, 2);
+  });
+});
+
+describe('bewegung bei kleinen Schritten hochkant', () => {
+  it('lässt eine kleine Verschiebung nicht von der groben Stufe verwürfeln', () => {
+    /*
+     * Seit auch hochkant grob gesucht wird, sprangen einzelne Randblöcke auf
+     * zwanzig Graupunkte daneben, und die einfache Schätzung (die das GIF
+     * benutzt) mittelte sie mit. Weiches Rauschen als Bild.
+     */
+    const breite = 540;
+    const hoehe = 960;
+    const rauschen = new Float32Array((breite + 40) * (hoehe + 40));
+    // Ein ordentlicher Zufall (mulberry32): Ein einfacher Kongruenzgenerator
+    // legt ein Gitter ins Rauschen, und die Suche fände dessen Wiederholung.
+    let saat = 12345;
+    for (let i = 0; i < rauschen.length; i += 1) {
+      saat = (saat + 0x6d2b79f5) | 0;
+      let t = Math.imul(saat ^ (saat >>> 15), 1 | saat);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      rauschen[i] = ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    }
+    const rb = breite + 40;
+    const weich = (x: number, y: number) => {
+      let summe = 0;
+      for (let dy = -2; dy <= 2; dy += 1) {
+        for (let dx = -2; dx <= 2; dx += 1) summe += rauschen[(y + dy) * rb + x + dx];
+      }
+      return summe / 25;
+    };
+    const bildMit = (vx: number, vy: number) => {
+      const daten = new Uint8ClampedArray(breite * hoehe * 4);
+      for (let y = 0; y < hoehe; y += 1) {
+        for (let x = 0; x < breite; x += 1) {
+          const wert = 40 + 400 * (weich(x - vx + 20, y - vy + 20) - 0.5) + 88;
+          const at = (y * breite + x) * 4;
+          daten[at] = wert;
+          daten[at + 1] = wert;
+          daten[at + 2] = wert;
+          daten[at + 3] = 255;
+        }
+      }
+      return { data: daten, width: breite, height: hoehe, colorSpace: 'srgb' } as ImageData;
+    };
+    // Gemessen vorher: 0,9 und 2,3 Punkte; im Querformat vor dieser Fassung
+    // 4,9 und 2,4. Und eine Verschiebung um 45 Punkte hochkant: 40 statt 0.
+    for (const [vx, vy] of [
+      [4, -3],
+      [10, 6],
+      [0, 45],
+    ]) {
+      const feld = bewegung(graustufen(bildMit(0, 0)), graustufen(bildMit(vx, vy)), breite);
+      const lage = lageSchaetzen(feld);
+      let fehler = 0;
+      let zahl = 0;
+      for (let y = 100; y < hoehe - 100; y += 60) {
+        for (let x = 100; x < breite - 100; x += 60) {
+          const q = punktZurueck(lage, feld.faktor, x, y);
+          fehler += Math.hypot(q.x - (x - vx), q.y - (y - vy));
+          zahl += 1;
+        }
+      }
+      expect(fehler / zahl, `(${vx}, ${vy})`).toBeLessThan(0.8);
+    }
   });
 });

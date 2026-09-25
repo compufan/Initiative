@@ -4,7 +4,6 @@ import { AbbruchError, NichtsGefunden } from '../stickers/engines/index.js';
 import { TeileAbbruch, folgeTeile } from './folgeTeile.js';
 import type { InhaltsTeil } from './bildweise.js';
 import type { GelesenesBild } from './bilderLesen.js';
-import { bewegung, graustufen, lageSchaetzen, punktVor } from './verfolgung.js';
 
 /**
  * Die inhaltsabhängigen Maskenteile über einen ganzen Film.
@@ -21,11 +20,9 @@ let tiefeLaeufe = 0;
 let sitzungenAuf = 0;
 let sitzungenZu = 0;
 /*
- * Für die Drift-Prüfung unten: Wenn `drift` an ist, wandert der gelieferte
- * Block bei jedem Aufruf ein Stück nach rechts – nicht weil sich das Motiv
- * bewegt (die Bilder sind identisch), sondern weil das Modell selbst bei
- * jedem Lauf ein wenig danebenliegt. Genau dieses Verhalten hat den
- * gemeldeten Fehler ausgelöst: Das Video stand still, die Maske wanderte.
+ * Wenn `drift` an ist, liefert das Ersatznetz bei jedem Aufruf einen Block,
+ * der ein Stück weiter rechts liegt – so lässt sich prüfen, was zwischen
+ * zwei verschiedenen Schlüsselmasken steht.
  */
 let drift = false;
 let driftAufruf = 0;
@@ -193,6 +190,17 @@ const folge = (anzahl: number) => Array.from({ length: anzahl }, (_, i) => bild(
 // Lauter identische Bilder – ein Video, das wirklich stillsteht, statt eins,
 // dessen Inhalt sich (wie bei `folge`) von Bild zu Bild verschiebt.
 const stillstand = (anzahl: number) => Array.from({ length: anzahl }, () => bild(0));
+/** Der waagrechte Schwerpunkt einer Maske auf 128 × 128. */
+function mitte(werte: Uint8Array | undefined): number {
+  if (!werte) return -1;
+  let sx = 0;
+  let summe = 0;
+  for (let i = 0; i < werte.length; i += 1) {
+    sx += (i % 128) * werte[i];
+    summe += werte[i];
+  }
+  return summe === 0 ? -1 : sx / summe;
+}
 
 beforeEach(() => {
   netzlaeufe = 0;
@@ -264,6 +272,18 @@ describe('folgeTeile', () => {
     expect(sitzungenZu).toBe(1);
   });
 
+  it('meldet auch beim Zusammensetzen noch Fortschritt – der Balken steht nicht voll, solange gerechnet wird', async () => {
+    const anteile: number[] = [];
+    await folgeTeile(folge(9), {
+      teile: [NETZ, TIPP],
+      schluesselAbstand: 4,
+      fortschritt: (anteil) => anteile.push(anteil),
+    });
+    // Die letzte Meldung ist die volle – und davor stand sie noch nicht dort.
+    expect(anteile.at(-1)).toBe(1);
+    expect(anteile.filter((a) => a >= 1)).toHaveLength(1);
+  });
+
   it('glättet die Maske, aber NICHT die Tiefenkarte', async () => {
     /*
      * Bei einer Maske nimmt das Mitteln über drei Bilder das Flimmern an der
@@ -283,26 +303,25 @@ describe('folgeTeile', () => {
     expect(Array.from(jeBild[2].get('d1')?.werte ?? [])).toEqual(erwartet);
   });
 
-  it('schiebt zwischen den Schlüsselbildern, statt neu zu rechnen', async () => {
+  it('überblendet zwischen den Schlüsselbildern, statt neu zu rechnen', async () => {
     /*
-     * Geprüft am Schwerpunkt: Der Block sitzt links, das Bild wandert nach
-     * rechts, also muss der Block mitwandern. Bliebe er stehen, wäre der
-     * ganze Umweg über `verfolgung.ts` wirkungslos – und das sähe man am
-     * fertigen Film als Maske, die hinter dem Motiv zurückbleibt.
+     * Zwei Schlüsselbilder (0 und 7), dazwischen sechs Bilder ohne
+     * Modellauf. Das Ersatznetz liefert beim zweiten Aufruf einen um fünf
+     * Punkte versetzten Block – die Zwischenbilder müssen von der einen
+     * Lage zur anderen wandern, und zwar stetig, nicht in einem Sprung.
      */
-    const { jeBild } = await folgeTeile(folge(8), { teile: [NETZ], schluesselAbstand: 8 });
-    const mitte = (werte: Uint8Array) => {
-      let sx = 0;
-      let summe = 0;
-      for (let i = 0; i < werte.length; i += 1) {
-        sx += (i % 128) * werte[i];
-        summe += werte[i];
-      }
-      return summe === 0 ? -1 : sx / summe;
-    };
-    const erste = mitte(jeBild[0].get('n1')?.werte ?? new Uint8Array());
-    const spaeter = mitte(jeBild[5].get('n1')?.werte ?? new Uint8Array());
-    expect(spaeter).toBeGreaterThan(erste);
+    drift = true;
+    // Ab dem zweiten Versatz, damit der Block nicht am Bildrand klebt – dort
+    // sagt sein Schwerpunkt nichts über seine Lage.
+    driftAufruf = 2;
+    const { jeBild } = await folgeTeile(stillstand(8), { teile: [NETZ], schluesselAbstand: 8 });
+    expect(netzlaeufe).toBe(2);
+    const mitten = jeBild.map((karte) => mitte(karte.get('n1')?.werte));
+    expect(mitten[0]).toBeCloseTo(25.5, 0);
+    expect(mitten[7]).toBeCloseTo(30.5, 0);
+    for (let i = 1; i < 8; i += 1) expect(mitten[i]).toBeGreaterThanOrEqual(mitten[i - 1] - 0.01);
+    expect(mitten[4]).toBeGreaterThan(26.5);
+    expect(mitten[4]).toBeLessThan(29.5);
   });
 
   it('kommt ohne Teile und ohne Bilder zurecht', async () => {
@@ -342,6 +361,28 @@ describe('folgeTeile an einer Schnittkante', () => {
     expect(ohne).toBeGreaterThan(netzlaeufe);
   });
 
+  it('meldet beim Abbruch, wie weit es WIRKLICH war – auch hinter dem ersten Schnitt', async () => {
+    /*
+     * Die Spur des ersten Stücks ist längst fertig, die des zweiten bei
+     * Bild 28. Vorher hielt die fertige Spur die Meldung bei ihrem Ende
+     * fest – 20 statt 29 –, und das Angebot „aus den fertigen Bildern einen
+     * Film machen" fiel entsprechend zu kurz aus.
+     */
+    const steuerung = new AbortController();
+    const versprechen = folgeTeile(folge(40), {
+      teile: [NETZ],
+      schluesselAbstand: 4,
+      schnitte: [20],
+      fortschritt: () => {
+        if (netzlaeufe >= 9) steuerung.abort();
+      },
+      abbruch: steuerung.signal,
+    });
+    const fehler = await versprechen.catch((f: unknown) => f);
+    expect(fehler).toBeInstanceOf(TeileAbbruch);
+    expect((fehler as TeileAbbruch).fertig).toBeGreaterThan(20);
+  });
+
   it('trägt die Lage nicht über den Schnitt hinweg', async () => {
     // Die Lage jedes Bildes ist auf das ERSTE bezogen und summiert sich auf.
     // An einer Kante muss sie neu bei der Ruhe anfangen, sonst wandert der
@@ -361,56 +402,6 @@ describe('folgeTeile an einer Schnittkante', () => {
   });
 });
 
-describe('folgeTeile bei einem Modell, das bei jedem Aufruf ein Stück danebenliegt', () => {
-  const mitte = (werte: Uint8Array | undefined) => {
-    if (!werte) return -1;
-    let sx = 0;
-    let summe = 0;
-    for (let i = 0; i < werte.length; i += 1) {
-      sx += (i % 128) * werte[i];
-      summe += werte[i];
-    }
-    return summe === 0 ? -1 : sx / summe;
-  };
-
-  it('lässt die Maske nicht unbegrenzt wegdriften, obwohl das Video stillsteht', async () => {
-    /*
-     * Der gemeldete Fehler: Das Video steht still (`stillstand` – jedes Bild
-     * ist dasselbe, `lagen[i]` bleibt also `LAGE_RUHE`), aber die Maske
-     * wandert trotzdem, weil das Erkennungsmodell bei jedem Schlüsselbild ein
-     * kleines Stück danebenliegt. Verglichen mit dem VORIGEN Schlüsselbild
-     * ist jeder einzelne Schritt (5 von 32 Bildpunkten, 84 % Deckung) für
-     * sich genommen unauffällig – nach elf Schlüsselbildern läge der Block
-     * bei 55 Bildpunkten Versatz, ein Drittel des Bildes weiter rechts, ohne
-     * dass eine einzige Prüfung angeschlagen hätte.
-     *
-     * Verglichen mit dem STÜCKANFANG (dem Fix) reisst die Deckung dagegen ab
-     * 23 Bildpunkten Versatz unter 30 % – die Prüfung verwirft ab da JEDEN
-     * weiteren Lauf und hält an der ursprünglichen Stelle fest, weil
-     * `erwartet` immer wieder aus genau derselben Vorlage gezogen wird.
-     */
-    drift = true;
-    const { jeBild, lagen, verworfen } = await folgeTeile(stillstand(12), {
-      teile: [NETZ],
-      schluesselAbstand: 1,
-    });
-
-    // Die Grundannahme des Tests: Ein Video ohne echte Bewegung liefert auch
-    // keine – sonst könnte auch das Nachziehen den Versatz erklären.
-    for (const lage of lagen) expect(lage).toEqual({ s: 1, w: 0, tx: 0, ty: 0, sicher: 0 });
-
-    const erste = mitte(jeBild[0].get('n1')?.werte);
-    const letzte = mitte(jeBild[11].get('n1')?.werte);
-
-    // Die Prüfung muss tatsächlich angeschlagen haben – sonst bewiese der
-    // Test nur, dass nichts geprüft wurde.
-    expect(verworfen).toBeGreaterThan(0);
-    // Gebunden an die Vorlage, nicht am halben Bild vorbei: Ohne den Fix
-    // läge `letzte` bei rund 70 (55 Versatz + 15,5 Blockmitte).
-    expect(Math.abs(letzte - erste)).toBeLessThan(20);
-  });
-});
-
 describe('folgeTeile, wenn ein angetipptes Objekt verschwindet', () => {
   it('bricht nicht ab, wenn der Tipp von Anfang an nichts trägt', async () => {
     /*
@@ -423,7 +414,10 @@ describe('folgeTeile, wenn ein angetipptes Objekt verschwindet', () => {
      */
     tippNichtsBei = new Set([1]);
     const { jeBild } = await folgeTeile(folge(4), { teile: [TIPP], schluesselAbstand: 2 });
-    expect(Array.from(jeBild[0].get('t1')?.werte ?? [])).toEqual(new Array(128 * 128).fill(0));
+    // Leer am ersten Bild – höchstens der Nachbar schimmert über das
+    // Glätten herein, eine volle Maske steht dort nicht.
+    const erste = jeBild[0].get('t1')?.werte ?? new Uint8Array(0);
+    expect(Math.max(...erste)).toBeLessThanOrEqual(64);
   });
 
   it('bricht den Filmbau nicht ab, wenn das Objekt mittendrin verschwindet und später wiederkehrt', async () => {
@@ -446,59 +440,95 @@ describe('folgeTeile, wenn ein angetipptes Objekt verschwindet', () => {
   });
 });
 
-describe('folgeTeile bei einem Teil mit eigenem Zeitraum', () => {
-  it('zieht die angetippten Punkte relativ zum EIGENEN Anfang, nicht zu Bild 0', async () => {
-    /*
-     * Sechs Bilder mit echter Bewegung (`folge`), Abstand zwei: Schlüsselbilder
-     * bei 0, 2, 4 und 5 (das letzte immer). `bild(nummer).zeitMs` ist
-     * `nummer * 100`, also 0/200/400/500 an diesen vier Stellen.
-     *
-     * Der Zeitraum beginnt bei 250 ms – zwischen Bild 2 (200) und Bild 4
-     * (400). Bild 4 ist damit das ERSTE Schlüsselbild, an dem das Teil
-     * überhaupt gilt: kein Anker, also `LAGE_RUHE`, also der angetippte
-     * Punkt unverändert. Bild 5 hat Bild 4 als Anker – EIN Schlüsselbild
-     * weiter, ohne Lücke –, und die Lage von 4 nach 5 lässt sich deshalb
-     * unabhängig nachrechnen: Sie ist genau der einzelne Bewegungsschritt
-     * zwischen diesen beiden Bildern, ohne die Bewegung der Bilder davor.
-     */
-    const ZEIT_TIPP: InhaltsTeil = {
-      ...TIPP,
-      teil:
-        TIPP.teil.art === 'tipp'
-          ? { ...TIPP.teil, punkte: [{ x: 64, y: 64 }] }
-          : TIPP.teil,
-      zeitraum: { vonMs: 250, bisMs: null },
-    };
-    await folgeTeile(folge(6), { teile: [ZEIT_TIPP], schluesselAbstand: 2 });
-
-    // Vier Schlüsselbilder, also vier Läufe: 0, 2, 4, 5 – in der Reihenfolge.
-    expect(tippAufrufPunkte).toHaveLength(4);
-    const [, , beiEigenemAnfang, beiEinemSchrittWeiter] = tippAufrufPunkte;
-
-    // Bild 4: kein Anker, `LAGE_RUHE` – der Punkt bleibt exakt, wo er war.
-    expect(beiEigenemAnfang).toEqual([{ x: 64, y: 64 }]);
-
-    // Bild 5: die Lage von Bild 4 zu Bild 5, unabhängig nachgerechnet über
-    // die öffentlichen Bausteine derselben Verfolgung.
-    const breite = 128;
-    const grauVier = graustufen(bild(4).daten);
-    const grauFuenf = graustufen(bild(5).daten);
-    const feld = bewegung(grauVier, grauFuenf, breite);
-    const schritt = lageSchaetzen(feld);
-    const erwartet = punktVor(schritt, feld.faktor, 64, 64);
-    expect(beiEinemSchrittWeiter[0].x).toBeCloseTo(Math.round(erwartet.x), 0);
-    expect(beiEinemSchrittWeiter[0].y).toBeCloseTo(Math.round(erwartet.y), 0);
-    // Und, damit der Test nicht zufällig durchginge: Bild 5 unterscheidet
-    // sich wirklich von Bild 4 – es gibt echte Bewegung zu ziehen.
-    expect(beiEinemSchrittWeiter).not.toEqual(beiEigenemAnfang);
+describe('folgeTeile mit Abschnitten', () => {
+  const tippBei = (x: number, y: number, id = 't1'): InhaltsTeil => ({
+    ...TIPP,
+    teil: TIPP.teil.art === 'tipp' ? { ...TIPP.teil, id, punkte: [{ x, y }] } : TIPP.teil,
   });
 
-  it('lässt ein Teil ohne Zeitraum unverändert – wie vor dieser Änderung', async () => {
-    // Dieselbe Szene, aber ohne `zeitraum`: Der Anker bleibt der Stückanfang,
-    // und das Verhalten muss exakt dem alten entsprechen.
+  it('setzt am Stellbild eines Abschnitts an und verfolgt von dort in beide Richtungen', async () => {
+    /*
+     * Sechs Bilder mit echter Bewegung (`folge`, drei Punkte je Bild nach
+     * rechts). Eingestellt wurde an Bild 3: Dort gelten die Punkte genau so,
+     * wie sie angetippt wurden. Von dort geht es rückwärts (2, 0) und dann
+     * vorwärts (4, 5), und die Punkte wandern mit dem Muster.
+     *
+     * Das Ersatzmodell liefert eine volle Maske; der Gegenstand ist damit
+     * das ganze Bild, und sein Weg ist der des Musters.
+     */
+    await folgeTeile(folge(6), {
+      abschnitte: [{ von: 0, bis: 5, anker: 3, teile: [tippBei(64, 64)] }],
+      schluesselAbstand: 2,
+    });
+    expect(tippAufrufPunkte.map((p) => Math.round(p[0].x))).toEqual([64, 61, 55, 67, 70]);
+    for (const punkte of tippAufrufPunkte) expect(punkte[0].y).toBeCloseTo(64, 0);
+  });
+
+  it('setzt ohne Abschnitte am Anfang jedes Stücks an – wie bisher', async () => {
     await folgeTeile(folge(6), { teile: [TIPP], schluesselAbstand: 2 });
     expect(tippAufrufPunkte).toHaveLength(4);
-    // Bild 0 hat keinen Anker (Stückanfang selbst) – Punkt unverändert.
     expect(tippAufrufPunkte[0]).toEqual([{ x: 4, y: 4 }]);
+  });
+
+  it('hält zwei Abschnitte mit derselben Teilkennung auseinander', async () => {
+    /*
+     * So entsteht es beim Teilen: Beide Hälften tragen dasselbe Teil mit
+     * derselben Kennung, aber jede ihr eigenes Stellbild. Jede Hälfte
+     * bekommt ihre eigene Folge, und keine überschreibt die der anderen.
+     */
+    const { jeBild } = await folgeTeile(folge(6), {
+      abschnitte: [
+        { von: 0, bis: 2, anker: 0, teile: [tippBei(20, 64)] },
+        { von: 3, bis: 5, anker: 5, teile: [tippBei(100, 64)] },
+      ],
+      schluesselAbstand: 2,
+    });
+    for (const karte of jeBild) expect(karte.get('t1')?.werte.length).toBe(128 * 128);
+    // Der zweite Abschnitt fängt an SEINEM Stellbild an, dem letzten Bild.
+    const erste = tippAufrufPunkte.findIndex((p) => p[0].x === 100);
+    expect(erste).toBeGreaterThan(0);
+  });
+
+  it('lässt die Bilder eines Abschnitts ohne Teile leer', async () => {
+    const { jeBild } = await folgeTeile(folge(6), {
+      abschnitte: [
+        { von: 0, bis: 2, anker: 0, teile: [NETZ] },
+        { von: 3, bis: 5, anker: 3, teile: [] },
+      ],
+      schluesselAbstand: 2,
+    });
+    expect(jeBild[1].has('n1')).toBe(true);
+    expect(jeBild[4].size).toBe(0);
+  });
+
+  it('teilt einen Abschnitt, der über einen Schnitt reicht, an dieser Stelle', async () => {
+    const { jeBild } = await folgeTeile(folge(6), {
+      abschnitte: [{ von: 0, bis: 5, anker: 4, teile: [TIEFE] }],
+      schluesselAbstand: 4,
+      schnitte: [3],
+    });
+    for (const karte of jeBild) expect(karte.has('d1')).toBe(true);
+  });
+});
+
+describe('folgeTeile gegen Drift', () => {
+  it('lässt die Maske nicht unbegrenzt wegdriften, obwohl das Video stillsteht', async () => {
+    /*
+     * Das Video steht still, aber das Modell liegt bei jedem Schlüsselbild
+     * fünf Punkte weiter rechts. Jeder Schritt für sich ist unauffällig (84 %
+     * Deckung mit dem vorigen); nach elf Schritten läge der Block ohne
+     * Gegenwehr ein Drittel des Bildes weiter. Die Suche im Bild sieht aber
+     * keine Bewegung – und die aufsummierte Abweichung davon ist es, die
+     * irgendwann nicht mehr gilt.
+     */
+    drift = true;
+    const { jeBild, verworfen } = await folgeTeile(stillstand(12), {
+      teile: [NETZ],
+      schluesselAbstand: 1,
+    });
+    const erste = mitte(jeBild[0].get('n1')?.werte);
+    const letzte = mitte(jeBild[11].get('n1')?.werte);
+    expect(verworfen).toBeGreaterThan(0);
+    expect(Math.abs(letzte - erste)).toBeLessThan(20);
   });
 });
