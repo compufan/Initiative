@@ -122,45 +122,6 @@ describe('docNachRoh / docAusRoh', () => {
     expect(Array.from(teil.alpha)).toEqual(Array.from(alpha));
   });
 
-  it('bringt den Zeitraum eines Bereichs unverändert hin und zurück', () => {
-    /*
-     * Ein Entwurf wird über genau diesen Weg zwischengespeichert
-     * (`entwurf.ts`) – ohne Rundreise für `zeitraum` verlöre jedes
-     * automatische Speichern und Wiederherstellen eine „ab hier"-Bearbeitung
-     * stillschweigend.
-     */
-    const doc = bild();
-    doc.bereiche.push({
-      id: 'b1',
-      name: 'Ab der Mitte',
-      aktiv: true,
-      teile: [netzTeil()],
-      anpassung: bereichNeutral(),
-      zeitraum: { vonMs: 4200, bisMs: null },
-    });
-    doc.bereiche.push({
-      id: 'b2',
-      name: 'Nur ein Stück',
-      aktiv: true,
-      teile: [netzTeil()],
-      anpassung: bereichNeutral(),
-      zeitraum: { vonMs: 1000, bisMs: 3000 },
-    });
-    doc.bereiche.push({
-      id: 'b3',
-      name: 'Der ganze Film',
-      aktiv: true,
-      teile: [netzTeil()],
-      anpassung: bereichNeutral(),
-    });
-
-    const zurueck = docAusRoh(docNachRoh(doc), 1200, 900);
-
-    expect(zurueck.bereiche[0].zeitraum).toEqual({ vonMs: 4200, bisMs: null });
-    expect(zurueck.bereiche[1].zeitraum).toEqual({ vonMs: 1000, bisMs: 3000 });
-    expect(zurueck.bereiche[2].zeitraum).toBeUndefined();
-  });
-
   it('vergibt neue Marken, statt die fremden zu übernehmen', () => {
     const doc = bild();
     doc.bereiche.push({

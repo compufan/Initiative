@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { useDialogAnmeldung } from '../../lib/dialogAnmeldung.js';
@@ -288,6 +289,17 @@ const ANSICHT_KANTE_MAX = 1400;
 
 const VERLAUF_MAX = 25;
 
+/**
+ * Trägt das Dokument etwas, das zu EINEM Bild gehört?
+ *
+ * Jedes Maskenteil tut das: Netz, Tiefe und Tipp sind aus dem Bild
+ * gerechnet, Verlauf, Ellipse und Pinsel an eine Stelle darin gezeichnet.
+ * Frei davon sind nur Regler, Striche und Schrift.
+ */
+function haengtAmBild(doc: BildDoc): boolean {
+  return doc.bereiche.some((bereich) => bereich.teile.length > 0);
+}
+
 interface BildEditorProps {
   /** Das zu bearbeitende Bild. */
   quelle: Blob;
@@ -350,6 +362,48 @@ interface BildEditorProps {
   onDokument?: (doc: BildDoc, breite: number, hoehe: number) => Promise<void> | void;
   /** Was auf dem Knopf für `onDokument` steht. */
   dokumentName?: string;
+  /**
+   * Meldet JEDE Änderung am Dokument, sofort.
+   *
+   * Für die Videobearbeitung: Dort ist der Editor einer von vielen Blicken
+   * auf den Film – ein Tipp in die Zeitleiste wechselt den Abschnitt, und
+   * was bis dahin eingestellt war, muss schon beim Abschnitt liegen, nicht
+   * erst nach einem Knopf. Steht es, gibt es beim Schliessen nichts mehr zu
+   * verlieren, und die Rückfrage entfällt.
+   *
+   * `herkunft` sagt, zu welchem Bild und welcher Sitzung das Dokument
+   * gehört. Zwischen einem neuen `quelle` und dem Ende des Ladens steht
+   * noch das alte Dokument im Editor; wer in diesem Augenblick einen Regler
+   * bewegt, meldet eine Änderung am ALTEN – und der Aufrufer muss sie
+   * erkennen können.
+   */
+  onAenderung?: (doc: BildDoc, herkunft: { quelle: Blob; sitzung?: string }) => void;
+  /**
+   * Keinen Entwurf anlegen und keinen anbieten.
+   *
+   * Ein Entwurf hängt an den Bytes des Bildes. Ein Standbild aus einem Film
+   * ist aber nur ein Blick auf einen Abschnitt; die Bearbeitung gehört dem
+   * Abschnitt, und ein Entwurf dazu tauchte beim nächsten Film mit
+   * demselben ersten Bild als Frage auf, die niemand versteht.
+   */
+  ohneEntwurf?: boolean;
+  /** Was oben steht – ohne Angabe „Bild bearbeiten“. */
+  titel?: string;
+  /** Liegt über der Leinwand – die Wiedergabe im Videoeditor. */
+  ueberBuehne?: ReactNode;
+  /** Steht zwischen Leinwand und Werkzeugen – die Zeitleiste im Videoeditor. */
+  unterBuehne?: ReactNode;
+  /**
+   * Wessen Bearbeitung gerade offen ist – im Videoeditor der Abschnitt.
+   *
+   * Wechselt sie, lädt der Editor `quelle` und `startDoc` neu und vergisst
+   * seinen Rückgängig-Verlauf; der gehörte zu einem anderen Abschnitt.
+   * Neu aufgebaut wird er dafür NICHT: Die Zeitleiste darunter behielte
+   * sonst weder ihren Fokus noch einen laufenden Zug.
+   */
+  sitzung?: string;
+  /** Werkzeuge und Rückgängig ruhen – etwa solange eine Maske mitgenommen wird. */
+  gesperrt?: boolean;
 }
 
 /** `foto.jpg` → `foto-bearbeitet.webp`. Das Original behält seinen Namen. */
@@ -379,6 +433,13 @@ export function BildEditor({
   onRezept,
   stapelAnzahl = 0,
   onStapel,
+  onAenderung,
+  ohneEntwurf = false,
+  titel = 'Bild bearbeiten',
+  ueberBuehne,
+  unterBuehne,
+  sitzung,
+  gesperrt = false,
 }: BildEditorProps) {
   useHideNav(true);
 
@@ -860,12 +921,12 @@ export function BildEditor({
   }, [hatBearbeitung, kannZurueck]);
 
   const schliessenVersuchen = useCallback(() => {
-    if (!etwasZuVerlieren()) {
+    if (onAenderung || !etwasZuVerlieren()) {
       onClose();
       return;
     }
     setSchliessFrage(true);
-  }, [etwasZuVerlieren, onClose]);
+  }, [etwasZuVerlieren, onAenderung, onClose]);
 
   // Zurück-Taste schliesst den Editor, statt aus der App zu fallen.
   useDialogAnmeldung(true, schliessenVersuchen);
@@ -885,6 +946,9 @@ export function BildEditor({
    */
   const schliessenRef = useRef(onClose);
   schliessenRef.current = onClose;
+  const letzteSitzung = useRef(sitzung);
+  /** Zu welchem Bild und welcher Sitzung das Dokument im Editor gerade gehört. */
+  const herkunftRef = useRef<{ quelle: Blob; sitzung?: string }>({ quelle, sitzung });
 
   useEffect(() => {
     let weg = false;
@@ -892,6 +956,31 @@ export function BildEditor({
       .then((geladen) => {
         if (weg) return;
         setBild(geladen);
+        /*
+         * Ein neues Bild MITTEN in der Sitzung – das gibt es nur im
+         * Videoeditor: ein anderes Stellbild, oder ein anderer Abschnitt.
+         *
+         * Ein anderer Abschnitt nimmt den Rückgängig-Verlauf nicht mit; er
+         * gehörte zu einer anderen Bearbeitung. Dasselbe gilt für ein anderes
+         * Stellbild, sobald im Verlauf etwas steht, das zu EINEM Bild gehört –
+         * eine Maske, eine Tiefe, eine Form: Zurückgeholt läge sie über einem
+         * Bild, zu dem sie nie gehörte. Nachgestellt: Tipp, ↺, Stellbild
+         * verschoben, ↻ – und die Maske des alten Bildes galt für das neue.
+         */
+        const neueSitzung = letzteSitzung.current !== sitzung;
+        letzteSitzung.current = sitzung;
+        herkunftRef.current = { quelle, sitzung };
+        if (neueSitzung || [...verlauf.current, ...vor.current].some(haengtAmBild)) {
+          verlauf.current = [];
+          vor.current = [];
+          setKannZurueck(false);
+          setKannVor(false);
+        }
+        if (neueSitzung) {
+          setBereichId(null);
+          setTeilId(null);
+          setLupe({ zoom: 1, x: 0, y: 0 });
+        }
         /*
          * Ein mitgebrachtes Dokument gilt – aber nur, wenn es zu DIESEM Bild
          * gehört.
@@ -928,6 +1017,7 @@ export function BildEditor({
          * einer Frage nach einem alten Entwurf zu überschreiben, wäre die
          * falsche Reihenfolge.
          */
+        if (ohneEntwurf) return;
         void (async () => {
           const id = await bildKennung(quelle);
           if (weg) return;
@@ -949,13 +1039,13 @@ export function BildEditor({
     return () => {
       weg = true;
     };
-    // `startVerhaeltnis`, `startDoc` und `onClose` gehören bewusst nicht in
+    // `startVerhaeltnis`, `startDoc`, `ohneEntwurf` und `onClose` gehören bewusst nicht in
     // die Abhängigkeiten: Die ersten beiden geben den ANFANGSstand vor,
     // `onClose` läuft über eine Referenz (siehe oben). Stünde eines davon
     // hier, würde ein Wechsel das Bild neu laden und jede Bearbeitung
     // wegwerfen.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quelle]);
+  }, [quelle, sitzung]);
 
   /*
    * Der Entwurf wird beim ARBEITEN fortgeschrieben, nicht beim Verlassen.
@@ -988,6 +1078,17 @@ export function BildEditor({
     }, 750);
     return () => window.clearTimeout(timer);
   }, [kennung, doc, bild, name, entwurfsfrage]);
+
+  /*
+   * Jede Änderung hinaus, wenn jemand zuhört – über eine Referenz, aus
+   * demselben Grund wie bei `onClose`: Der Aufrufer reicht bei jedem
+   * Rendern eine neue Funktion herein.
+   */
+  const aenderungRef = useRef(onAenderung);
+  aenderungRef.current = onAenderung;
+  useEffect(() => {
+    if (doc) aenderungRef.current?.(doc, herkunftRef.current);
+  }, [doc]);
 
   /** Merkt den Stand für „Rückgängig“. */
   const merken = useCallback(() => {
@@ -2104,6 +2205,9 @@ export function BildEditor({
     setNetzLaeuft('Wird vorbereitet …');
     try {
       const teil = await netzTeilRechnen(quellBild, netz, (text) => setNetzLaeuft(text));
+      // Hat das Bild unterdessen gewechselt (im Videoeditor: ein anderes
+      // Stellbild), gehört die Maske zu keinem Bild mehr, das hier steht.
+      if (bildRef.current !== quellBild) return;
       teilEinsetzen([teil], netz === 'person' ? 'Person' : 'Motiv');
     } catch (fehler) {
       // Der Satz aus dem `EngineError` ist für den Anwender geschrieben –
@@ -2341,6 +2445,7 @@ export function BildEditor({
     setNetzLaeuft('Wird vorbereitet …');
     try {
       const teil = await tiefenTeilRechnen(quellBild, (text) => setNetzLaeuft(text));
+      if (bildRef.current !== quellBild) return;
       teilEinsetzen([teil], 'Tiefe');
     } catch (fehler) {
       setNetzFehler(errorMessage(fehler, 'Die Tiefenkarte konnte nicht gerechnet werden'));
@@ -2434,6 +2539,7 @@ export function BildEditor({
     setNetzLaeuft('Wird vorbereitet …');
     try {
       const tiefe = await tiefenTeilRechnen(quellBild, (text) => setNetzLaeuft(text));
+      if (bildRef.current !== quellBild) return;
       if (!kante) {
         teilEinsetzen([tiefe], 'Tiefe', 0.6);
         setNetzFehler(
@@ -2442,6 +2548,7 @@ export function BildEditor({
         return;
       }
       const silhouette = await netzTeilRechnen(quellBild, kante, (text) => setNetzLaeuft(text));
+      if (bildRef.current !== quellBild) return;
       teilEinsetzen([tiefe, { ...silhouette, modus: 'weg' }], 'Motiv + Tiefe', 0.6);
     } catch (fehler) {
       setNetzFehler(errorMessage(fehler, 'Motiv und Tiefe konnten nicht gerechnet werden'));
@@ -2765,7 +2872,12 @@ export function BildEditor({
         : 'Schickt das UNBEARBEITETE Bild und die Bearbeitung als Anweisung daneben – der Empfänger sieht dasselbe Ergebnis, kann aber das Original ansehen und die Regler weiterschieben.';
 
   return createPortal(
-    <div className="bild-editor" role="dialog" aria-modal="true" aria-label="Bild bearbeiten">
+    <div
+      className={`bild-editor${unterBuehne ? ' mit-zeitleiste' : ''}`}
+      role="dialog"
+      aria-modal="true"
+      aria-label={titel}
+    >
       <header className="bild-kopf">
         <button
           type="button"
@@ -2775,12 +2887,12 @@ export function BildEditor({
         >
           ✕
         </button>
-        <strong className="truncate">Bild bearbeiten</strong>
+        <strong className="truncate">{titel}</strong>
         <button
           type="button"
           className="icon-btn"
           onClick={zurueck}
-          disabled={!kannZurueck}
+          disabled={!kannZurueck || gesperrt}
           aria-label="Rückgängig"
         >
           ↺
@@ -2789,7 +2901,7 @@ export function BildEditor({
           type="button"
           className="btn btn-sm"
           onClick={wieder}
-          disabled={!kannVor}
+          disabled={!kannVor || gesperrt}
           aria-label="Wiederherstellen"
         >
           ↻
@@ -2850,10 +2962,15 @@ export function BildEditor({
           onPointerCancel={onPointerCancel}
           onContextMenu={(event) => event.preventDefault()}
         />
+        {ueberBuehne}
       </div>
+
+      {unterBuehne && <div className="bild-zeitleiste">{unterBuehne}</div>}
 
       <div
         className={`bild-panel ${werkzeug === 'ton' || werkzeug === 'bereich' ? 'ist-ton' : ''}`}
+        inert={gesperrt}
+        aria-disabled={gesperrt || undefined}
       >
         {werkzeug === 'zuschnitt' && (
           <>
@@ -3165,19 +3282,26 @@ export function BildEditor({
               ein gutes Bild ein wenig knackiger will, ist beim Regler
               „Schärfe“ oben richtig.
             */}
-            <Entfaltungsfeld
-              bild={bild}
-              entfaltet={entfaltet}
-              onAnwenden={(neu) => {
-                if (!urbildRef.current) urbildRef.current = bild;
-                setBild(neu);
-                setEntfaltet(true);
-              }}
-              onZuruecknehmen={() => {
-                if (urbildRef.current) setBild(urbildRef.current);
-                setEntfaltet(false);
-              }}
-            />
+            {/*
+              Nicht im Videoeditor: Die Entfaltung ersetzt das Standbild,
+              nicht den Film – eingestellt sähe man sie, im fertigen Film
+              fehlte sie.
+            */}
+            {!onDokument && (
+              <Entfaltungsfeld
+                bild={bild}
+                entfaltet={entfaltet}
+                onAnwenden={(neu) => {
+                  if (!urbildRef.current) urbildRef.current = bild;
+                  setBild(neu);
+                  setEntfaltet(true);
+                }}
+                onZuruecknehmen={() => {
+                  if (urbildRef.current) setBild(urbildRef.current);
+                  setEntfaltet(false);
+                }}
+              />
+            )}
           </>
         )}
 
@@ -4203,7 +4327,7 @@ export function BildEditor({
             </button>
           )}
         </div>
-        {unberuehrt && !laedt && (
+        {unberuehrt && !laedt && !onDokument && (
           <p className="bild-hinweis">
             Noch nichts geändert – gespeichert würde eine Kopie des Originals.
           </p>

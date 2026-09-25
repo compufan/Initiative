@@ -118,6 +118,11 @@ export interface Ausschnitt {
    */
   readonly gekuerztMs: number;
   /**
+   * Welche Grenze gegriffen hat, wenn `gekuerztMs` nicht null ist: die für
+   * den ganzen Film oder die für eine gesammelte Gruppe (`PufferGrenze`).
+   */
+  readonly gekuerztWegen?: 'gesamt' | 'puffer';
+  /**
    * An welchen Stellen ein neues Stück anfängt – immer ohne die Null.
    *
    * Leer, solange es nur ein Stück gibt. Wer schneidet, braucht diese Zahlen
@@ -125,6 +130,15 @@ export interface Ausschnitt {
    * Unfug, und ein Abspieler erwartet dort ein Schlüsselbild.
    */
   readonly schnitte: readonly number[];
+  /**
+   * Zu welchem Stück jedes Bild gehört – als Stelle in der Stückliste.
+   *
+   * `schnitte` allein reicht dafür nicht: Eine NAHTLOSE Grenze ist dort mit
+   * Absicht kein Schnitt, und trotzdem trägt das Stück dahinter eine andere
+   * Bearbeitung (siehe `schnitt.ts`). Ein Stück, das wegen der Obergrenze
+   * gar kein Bild bekam, taucht hier nicht auf.
+   */
+  readonly stueckJeBild: readonly number[];
 }
 
 /** Ein Stück Film: von wann bis wann. */
@@ -143,6 +157,32 @@ export interface AbtastAuftrag {
    * Nur für den Film – warum, steht im Kopf dieser Datei.
    */
   readonly mitte?: boolean;
+  /** Die Grenze für Stücke, deren Bilder gesammelt werden – siehe dort. */
+  readonly puffer?: PufferGrenze;
+}
+
+/**
+ * Eine zweite Obergrenze, nur für die Bilder, die zugleich im Speicher liegen.
+ *
+ * Ein Film wird Bild für Bild durchgereicht – ausser dort, wo eine Maske oder
+ * eine Form verfolgt wird: Dafür liegen alle Bilder dieser Gruppe gleichzeitig
+ * da. Die Grenze dafür hängt an der Rechengrösse und ist viel kleiner als die
+ * für den ganzen Film. Sie gilt je GRUPPE, nicht für den Film: Wer einen von
+ * fünf Abschnitten freistellt, soll nicht die anderen vier dafür hergeben.
+ *
+ * Gekürzt wird trotzdem hinten, wie bei `maxBilder`: Ist eine Gruppe zu
+ * lang, endet der Film dort. Ein Loch mitten im Film fiele niemandem auf,
+ * bis er ihn ansieht; ein kürzerer Film steht vorher in der Oberfläche.
+ */
+export interface PufferGrenze {
+  /**
+   * Je Stück die Gruppe, zu der es gehört – `null`, wenn seine Bilder
+   * durchgereicht werden. Aufeinanderfolgende Stücke mit derselben Zahl
+   * zählen zusammen, solange kein Schnitt dazwischenliegt.
+   */
+  readonly gruppeJeStueck: readonly (number | null)[];
+  /** So viele Bilder darf eine Gruppe höchstens haben. */
+  readonly max: number;
 }
 
 /**
@@ -164,9 +204,14 @@ export function abtasten(auftrag: AbtastAuftrag): Ausschnitt {
   let letzter: number | null = null;
   const liste: number[] = [];
   const schnitte: number[] = [];
+  const stueckJeBild: number[] = [];
   let gewuenscht = 0;
+  let wegen: 'gesamt' | 'puffer' | undefined;
+  /** Die Gruppe, deren Bilder gerade gezählt werden, und wie viele es sind. */
+  let gruppe: number | null = null;
+  let gesammelt = 0;
 
-  for (const stueck of auftrag.stuecke) {
+  for (const [nummer, stueck] of auftrag.stuecke.entries()) {
     const von = Math.max(0, stueck.vonMs);
     const bis = Math.max(von, stueck.bisMs);
     /*
@@ -189,11 +234,24 @@ export function abtasten(auftrag: AbtastAuftrag): Ausschnitt {
      */
     const will = Math.max(1, Math.round((bis - von) / schritt));
     gewuenscht += will;
-    const frei = Math.max(0, auftrag.maxBilder - liste.length);
-    const anzahl = Math.min(will, frei);
+    const frei = wegen ? 0 : Math.max(0, auftrag.maxBilder - liste.length);
+    let anzahl = Math.min(will, frei);
+    const eigene = auftrag.puffer?.gruppeJeStueck[nummer] ?? null;
+    if (eigene !== null && auftrag.puffer) {
+      // Ein Schnitt beginnt immer eine neue Gruppe – so zählt `videoBauen` auch.
+      if (eigene !== gruppe || (liste.length > 0 && !naht)) gesammelt = 0;
+      anzahl = Math.min(anzahl, Math.max(0, auftrag.puffer.max - gesammelt));
+      if (anzahl < Math.min(will, frei)) wegen = 'puffer';
+      gesammelt += anzahl;
+    }
+    gruppe = eigene;
+    if (anzahl < will) wegen ??= 'gesamt';
     if (anzahl === 0) continue;
     if (liste.length > 0 && !naht) schnitte.push(liste.length);
-    for (let i = 0; i < anzahl; i += 1) liste.push(von + i * schritt + versatz);
+    for (let i = 0; i < anzahl; i += 1) {
+      liste.push(von + i * schritt + versatz);
+      stueckJeBild.push(nummer);
+    }
     letzter = liste[liste.length - 1];
   }
 
@@ -207,6 +265,7 @@ export function abtasten(auftrag: AbtastAuftrag): Ausschnitt {
   if (liste.length === 0) {
     const erst = auftrag.stuecke[0];
     liste.push(erst ? Math.max(0, erst.vonMs) + versatz : versatz);
+    stueckJeBild.push(0);
     gewuenscht = Math.max(gewuenscht, 1);
   }
 
@@ -214,7 +273,9 @@ export function abtasten(auftrag: AbtastAuftrag): Ausschnitt {
     zeitpunkte: liste,
     schrittMs: schritt,
     gekuerztMs: (gewuenscht - liste.length) * schritt,
+    ...(liste.length < gewuenscht && wegen ? { gekuerztWegen: wegen } : {}),
     schnitte,
+    stueckJeBild,
   };
 }
 
@@ -242,12 +303,14 @@ export function filmZeitpunkte(
   stuecke: readonly Stueck[],
   bildrate: number,
   maxBilder: number,
+  puffer?: PufferGrenze,
 ): Ausschnitt {
   return abtasten({
     stuecke,
     schrittMs: filmSchrittMs(bildrate),
     maxBilder,
     mitte: true,
+    ...(puffer ? { puffer } : {}),
   });
 }
 

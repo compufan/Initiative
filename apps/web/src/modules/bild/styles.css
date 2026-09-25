@@ -37,6 +37,8 @@
 }
 
 .bild-buehne {
+  /* Bezug für das, was darüber liegen darf – die Wiedergabe im Videoeditor. */
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;

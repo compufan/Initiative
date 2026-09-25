@@ -139,6 +139,27 @@ export interface Grau {
 }
 
 /**
+ * Wie gross `graustufen` ein Bild dieser Grösse macht.
+ *
+ * Für den, der das kleine Bild lieber gleich klein liest (`bildAn` mit
+ * `groesse`): Genau diese Masse, sonst passen die Graustufen nicht zu denen,
+ * die aus vollen Bildern entstehen, und der Faktor zurück ins volle Bild
+ * stimmte nicht mehr.
+ */
+export function grauMass(
+  breite: number,
+  hoehe: number,
+  maxKante = GRAU_KANTE,
+): { faktor: number; b: number; h: number } {
+  const faktor = Math.max(1, Math.ceil(Math.max(breite, hoehe) / maxKante));
+  return {
+    faktor,
+    b: Math.max(1, Math.floor(breite / faktor)),
+    h: Math.max(1, Math.floor(hoehe / faktor)),
+  };
+}
+
+/**
  * Ein Bild auf Graustufen und auf Briefmarkengrösse bringen.
  *
  * Gewichtet nach Empfindlichkeit des Auges, weil eine rote Jacke vor grünem
@@ -146,9 +167,7 @@ export interface Grau {
  * Blockvergleich dann nichts mehr zu vergleichen hätte.
  */
 export function graustufen(daten: ImageData, maxKante = GRAU_KANTE): Grau {
-  const faktor = Math.max(1, Math.ceil(Math.max(daten.width, daten.height) / maxKante));
-  const breite = Math.max(1, Math.floor(daten.width / faktor));
-  const hoehe = Math.max(1, Math.floor(daten.height / faktor));
+  const { faktor, b: breite, h: hoehe } = grauMass(daten.width, daten.height, maxKante);
   const werte = new Float32Array(breite * hoehe);
   const d = daten.data;
 

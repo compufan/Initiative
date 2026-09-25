@@ -3,43 +3,49 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Sheet } from '../../components/Sheet.js';
 import { toast } from '../../state/ui.js';
 import { errorMessage } from '../media/helpers.js';
-import { BildEditor } from '../bild/BildEditor.js';
-import { docUnberuehrt, neuesDoc, type BildDoc } from '../bild/doc.js';
 import { AbbruchError } from '../stickers/engines/index.js';
 import {
   FILM_BILDRATEN,
   FILM_BILDRATE_VORGABE,
   filmSchrittMs,
   filmZeitpunkte,
-  kannTeilen,
-  stueckTeilen,
-  type Stueck,
 } from './ausschnitt.js';
 import { masse, videoBilderLesen } from './bilderLesen.js';
-import { bereicheAbUebernehmen, hatFormTeile, inhaltsTeile } from './bildweise.js';
+import { hatFormTeile, inhaltsTeile } from './bildweise.js';
 import {
   MAX_BILDER_FILM,
   dauerText,
   filmDauerSchaetzenMs,
   maxBilderFuer,
 } from './einstellungen.js';
-import { Streifen } from './Streifen.js';
+import { useFilmWiedergabe } from './filmWiedergabe.js';
+import { SchnittEditor } from './SchnittEditor.js';
+import { filmZuQuelle } from './schnitt.js';
+import { nochOffen, useSchnitt } from './schnittZustand.js';
 import { videoTauglich } from './schreiben.js';
-import { ABSCHNITT_TITEL, VideoBauAbbruch, videoAusVideo, type Abschnitt } from './videoBauen.js';
+import {
+  BAUSCHRITT_TITEL,
+  VideoBauAbbruch,
+  pufferGruppen,
+  videoAusVideo,
+  type Bauschritt,
+} from './videoBauen.js';
+import { Zeitleiste } from './Zeitleiste.js';
 
 /**
- * Videobearbeitung – derselbe Editor wie beim Foto, über alle Bilder.
+ * Videobearbeitung – derselbe Editor wie beim Foto, Abschnitt für Abschnitt.
  *
- * # Warum an EINEM Bild eingestellt wird
+ * # Warum an EINEM Bild je Abschnitt eingestellt wird
  *
  * Weil eine Bearbeitung eine Entscheidung ist. „Etwas wärmer, den Himmel
- * dunkler" gilt für den ganzen Film; an fünfzig Bildern einzeln eingestellt
- * wären es fünfzig Mal dieselbe Entscheidung mit fünfzig leicht verschiedenen
- * Ergebnissen – und ein flackernder Film.
+ * dunkler" gilt für eine ganze Einstellung; an fünfzig Bildern einzeln
+ * eingestellt wären es fünfzig Mal dieselbe Entscheidung mit fünfzig leicht
+ * verschiedenen Ergebnissen – und ein flackernder Film.
  *
- * Eingestellt wird am ERSTEN Bild des gewählten Ausschnitts. Nicht an einem
- * mittleren: Wer den Anfang wählt, sieht beim Einstellen genau das, was er
- * eben im Streifen angesehen hat.
+ * Aber eben für eine EINSTELLUNG, nicht zwingend für den ganzen Film. Die
+ * Zeitleiste teilt den Film in Abschnitte, und jeder trägt seine eigene
+ * Bearbeitung – geschnitten und bearbeitet wird am selben Ort, im Editor mit
+ * der Zeitleiste darunter (`SchnittEditor.tsx`).
  *
  * # Warum die Rechengrösse gewählt wird
  *
@@ -49,8 +55,12 @@ import { ABSCHNITT_TITEL, VideoBauAbbruch, videoAusVideo, type Abschnitt } from 
  * wie viele Bilder sie zulässt, und die Zahl stimmt.
  */
 
-const STREIFEN = 8;
-const STREIFEN_KANTE = 96;
+/*
+ * Sechzehn Vorschaubilder statt acht: Die Zeitleiste zeigt sie JE ABSCHNITT,
+ * und ein kurzer Abschnitt aus einem langen Video bekam bei acht oft keines.
+ */
+const VORSCHAU = 16;
+const VORSCHAU_KANTE = 96;
 
 /** Die Rechengrössen zur Wahl – längere Kante. */
 const KANTEN = [
@@ -61,7 +71,7 @@ const KANTEN = [
 
 interface Lauf {
   readonly anteil: number;
-  readonly abschnitt: Abschnitt;
+  readonly abschnitt: Bauschritt;
   readonly text: string;
 }
 
@@ -83,37 +93,13 @@ export function VideoEditorSheet({
   zielName?: string;
 }) {
   const [dauerMs, setDauerMs] = useState(0);
-  const [streifen, setStreifen] = useState<{ zeitMs: number; bild: string }[]>([]);
+  const [vorschau, setVorschau] = useState<{ zeitMs: number; bild: string }[]>([]);
   const [quelle, setQuelle] = useState<{ b: number; h: number } | null>(null);
-  /**
-   * Die Stücke, aus denen der Film wird – in dieser Reihenfolge.
-   *
-   * Eine Liste und kein Von-Bis, weil „Schnittoptionen" genau das heisst: ein
-   * Stück in der Mitte herausnehmen, zwei Ausschnitte hintereinanderhängen,
-   * die Reihenfolge tauschen. Solange es EIN Stück gibt, sieht und bedient
-   * sich das Blatt wie vorher – der zweite Satz Bedienelemente entsteht erst,
-   * wenn jemand selbst ein zweites Stück angelegt hat.
-   */
-  const [stuecke, setStuecke] = useState<readonly Stueck[]>([{ vonMs: 0, bisMs: 0 }]);
-  /** Welches Stück die Griffe im Streifen bedienen. */
-  const [aktiv, setAktiv] = useState(0);
-  /** Die Wiedergabestelle im QUELLvideo, in Millisekunden. */
-  const [spielkopfMs, setSpielkopfMs] = useState(0);
-  const [spielt, setSpielt] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [quelleUrl, setQuelleUrl] = useState<string | null>(null);
   const [bildrate, setBildrate] = useState<number>(FILM_BILDRATE_VORGABE);
   const [kante, setKante] = useState<number>(960);
-  const [doc, setDoc] = useState<BildDoc | null>(null);
-  /**
-   * Ist die aktuelle Editor-Sitzung eine „ab hier"-Sitzung, und wenn ja: ab
-   * welcher Stelle im Quellvideo? `null` heisst „normal" – das Ergebnis gilt
-   * wie bisher für den ganzen Film, angesetzt am Anfang des ersten Stücks.
-   */
-  const [abHierMs, setAbHierMs] = useState<number | null>(null);
-  const [standbild, setStandbild] = useState<Blob | null>(null);
   const [editorAuf, setEditorAuf] = useState(false);
-  const [holt, setHolt] = useState(false);
   const [absage, setAbsage] = useState<string | null>(null);
   const [lauf, setLauf] = useState<Lauf | null>(null);
   const [ergebnis, setErgebnis] = useState<{ url: string; blob: Blob; text: string } | null>(null);
@@ -121,6 +107,43 @@ export function VideoEditorSheet({
   const [speichert, setSpeichert] = useState(false);
   const steuerung = useRef<AbortController | null>(null);
   const wache = useRef<Wachposten | null>(null);
+
+  const rechenmass = useMemo(
+    () => (quelle ? masse(quelle.b, quelle.h, kante) : null),
+    [quelle, kante],
+  );
+  const schrittMs = filmSchrittMs(bildrate);
+  /**
+   * Die Abschnitte des Films – jeder mit seiner eigenen Bearbeitung.
+   *
+   * Eine Liste und kein Von-Bis, weil „Schnittoptionen" genau das heisst: ein
+   * Stück in der Mitte herausnehmen, zwei Ausschnitte hintereinanderhängen,
+   * die Reihenfolge tauschen. Solange es EINEN Abschnitt gibt, gilt seine
+   * Bearbeitung für den ganzen Film, wie bisher.
+   */
+  const schnitt = useSchnitt({
+    datei: video,
+    kante,
+    schrittMs,
+    quelleMs: dauerMs,
+    mass: rechenmass,
+  });
+  const { abschnitte } = schnitt;
+  const wiedergabe = useFilmWiedergabe(videoRef, abschnitte);
+
+  /*
+   * Zurück aus dem Editor steht das Video des Blatts neu da – auf seinem
+   * ersten Bild, denn solange der Editor offen war, gab es es nicht. Die
+   * Wiedergabestelle des Blatts gilt aber weiter; also springt es dorthin.
+   */
+  const stelle = useRef(0);
+  stelle.current = wiedergabe.spielkopfMs;
+  const { setzen: stelleSetzen } = wiedergabe;
+  const warImEditor = useRef(false);
+  useEffect(() => {
+    if (warImEditor.current && !editorAuf) stelleSetzen(stelle.current);
+    warImEditor.current = editorAuf;
+  }, [editorAuf, stelleSetzen]);
 
   /* ---------- Kann dieser Browser überhaupt Videos schreiben? ---------- */
 
@@ -136,13 +159,8 @@ export function VideoEditorSheet({
 
   /*
    * Die Adresse für die LIVE-Vorschau – einmal je Datei, nicht bei jedem
-   * Render.
-   *
-   * Anders als der Streifen (acht feste Standbilder) spielt diese Vorschau
-   * das Quellvideo wirklich ab, damit sich eine Stelle finden lässt, ohne
-   * acht Standbilder danebenzutippen. Die Adresse muss wieder freigegeben
-   * werden, sonst hält der Browser die Datei ein zweites Mal im Speicher, bis
-   * die Seite neu lädt.
+   * Render. Sie muss wieder freigegeben werden, sonst hält der Browser die
+   * Datei ein zweites Mal im Speicher, bis die Seite neu lädt.
    */
   useEffect(() => {
     const url = URL.createObjectURL(video);
@@ -150,8 +168,9 @@ export function VideoEditorSheet({
     return () => URL.revokeObjectURL(url);
   }, [video]);
 
-  /* ---------- Filmstreifen ---------- */
+  /* ---------- Vorschaubilder ---------- */
 
+  const { anfangen } = schnitt;
   useEffect(() => {
     let gilt = true;
     const abbruch = new AbortController();
@@ -159,20 +178,20 @@ export function VideoEditorSheet({
       try {
         const erst = await videoBilderLesen(video, {
           zeitpunkte: [0],
-          kante: STREIFEN_KANTE,
+          kante: VORSCHAU_KANTE,
           abbruch: abbruch.signal,
         });
         if (!gilt) return;
         setDauerMs(erst.dauerMs);
         setQuelle({ b: erst.quellBreite, h: erst.quellHoehe });
-        setStuecke([{ vonMs: 0, bisMs: Math.min(erst.dauerMs, 5000) }]);
+        anfangen(Math.min(erst.dauerMs, 5000));
 
-        const marken = Array.from({ length: STREIFEN }, (_, i) =>
-          Math.round((erst.dauerMs * i) / STREIFEN),
+        const marken = Array.from({ length: VORSCHAU }, (_, i) =>
+          Math.round((erst.dauerMs * i) / VORSCHAU),
         );
         const alle = await videoBilderLesen(video, {
           zeitpunkte: marken,
-          kante: STREIFEN_KANTE,
+          kante: VORSCHAU_KANTE,
           abbruch: abbruch.signal,
         });
         if (!gilt) return;
@@ -180,7 +199,7 @@ export function VideoEditorSheet({
         flaeche.width = alle.breite;
         flaeche.height = alle.hoehe;
         const stift = flaeche.getContext('2d');
-        setStreifen(
+        setVorschau(
           alle.bilder.map((bild) => {
             stift?.putImageData(bild.daten, 0, 0);
             return { zeitMs: bild.zeitMs, bild: flaeche.toDataURL('image/webp', 0.7) };
@@ -201,38 +220,44 @@ export function VideoEditorSheet({
 
   /* ---------- Was daraus wird ---------- */
 
-  const rechenmass = quelle ? masse(quelle.b, quelle.h, kante) : null;
-  const teile = doc ? inhaltsTeile(doc) : [];
   /*
-   * Dieselbe Weiche wie in `videoBauen`, und das ist kein Zufall, sondern
-   * Pflicht.
-   *
-   * Dort entscheidet `teile.length > 0 || hatFormTeile(doc)`, ob alle Bilder
-   * gesammelt werden müssen. Eine Oberfläche, die ihre Grenze nur an
-   * `teile.length` festmacht, verspricht bei einem Verlauf oder einem
-   * Pinselstrich sechshundert Bilder – und der Maskenweg hält sie dann doch
-   * alle, bis das Telefon den Reiter wegwirft.
+   * Je Dokument EINMAL gezählt: Nach einem Teilen tragen beide Hälften
+   * dasselbe, und ein Bereich stünde sonst zweimal da.
    */
-  const brauchtAlle = doc ? teile.length > 0 || hatFormTeile(doc) : false;
+  const teile = [...new Set(abschnitte.map((abschnitt) => abschnitt.doc))].reduce(
+    (summe, doc) => summe + (doc ? inhaltsTeile(doc).length : 0),
+    0,
+  );
+  const formen = abschnitte.some((abschnitt) => abschnitt.doc && hatFormTeile(abschnitt.doc));
+  const bearbeitet = abschnitte.some((abschnitt) => abschnitt.doc !== null);
   /*
-   * Ohne Masken zählt nur die Wartezeit, mit Masken der Speicher.
+   * Zwei Grenzen: eine für den ganzen Film (die Wartezeit) und eine für jede
+   * Gruppe, deren Bilder zum Verfolgen gesammelt werden (der Speicher).
    *
-   * Solange noch nichts eingestellt ist (`doc` ist null), gilt die
-   * Strom-Grenze – denn genau so liefe der Film dann auch. Sie springt
-   * später nur, wenn jemand wirklich einen inhaltsabhängigen Bereich anlegt,
-   * und dann steht der Grund daneben.
+   * Dieselbe Weiche wie in `videoBauen` – `pufferGruppen` ist dieselbe
+   * Funktion –, und das ist kein Zufall, sondern Pflicht: Eine Oberfläche,
+   * die eine andere Grenze verspricht als die, die beim Bauen gilt, zeigt
+   * einen Film an, der dann nicht herauskommt.
    */
-  const maxBilder = brauchtAlle
-    ? rechenmass
-      ? maxBilderFuer(rechenmass.b, rechenmass.h)
-      : 1
-    : MAX_BILDER_FILM;
+  const mitForm = teile > 0 || formen;
+  const maxBilder = MAX_BILDER_FILM;
+  const maxGepuffert = rechenmass ? maxBilderFuer(rechenmass.b, rechenmass.h) : 1;
   const plan = useMemo(
-    () => filmZeitpunkte(stuecke, bildrate, maxBilder),
-    [stuecke, bildrate, maxBilder],
+    () =>
+      filmZeitpunkte(abschnitte, bildrate, maxBilder, {
+        gruppeJeStueck: pufferGruppen(abschnitte),
+        max: maxGepuffert,
+      }),
+    [abschnitte, bildrate, maxBilder, maxGepuffert],
   );
   const anzahl = plan.zeitpunkte.length;
-  const schrittMs = filmSchrittMs(bildrate);
+  /** Die Bilder, die durch ein Modell gehen – nur die zählen für die Masken. */
+  const unterMaske = plan.stueckJeBild.filter((stueck) => {
+    const doc = abschnitte[stueck]?.doc;
+    return doc ? inhaltsTeile(doc).length > 0 : false;
+  });
+  const maskenBilder = unterMaske.length;
+  const maskenAbschnitte = new Set(unterMaske).size;
 
   /*
    * Der Schlüsselbildabstand hängt an der Bildrate, nicht an einer festen
@@ -242,82 +267,15 @@ export function VideoEditorSheet({
    */
   const schluesselAbstand = Math.max(1, Math.min(4, Math.round(bildrate / 2)));
   /*
-   * Die Schätzung hängt an den MODELLÄUFEN, nicht am Weg durch `videoBauen`.
-   *
-   * `brauchtAlle` ist auch bei einem blossen Verlauf wahr – dann liegen zwar
-   * alle Bilder im Speicher, aber `folgeTeile` läuft über eine leere
-   * Teileliste und startet kein einziges Modell. Mit `brauchtAlle` gerechnet
-   * stünden dort „rund 2 Minuten" für eine Arbeit von vierzehn Sekunden.
+   * Lesen und Schreiben kostet jedes Bild, die Modelle nur die Bilder unter
+   * einer Maske. Jeder Abschnitt mit Maske setzt an beiden Enden neu an –
+   * das zählt wie eine Schnittkante.
    */
-  const dauerSchaetzung = filmDauerSchaetzenMs(
-    anzahl,
-    teile.length > 0,
-    schluesselAbstand,
-    plan.schnitte.length,
-  );
-  /** Der Anfang des ERSTEN Stücks – dort wird eingestellt. */
-  const anfangMs = stuecke[0]?.vonMs ?? 0;
-
-  /* ---------- Wiedergabe und Teilen ---------- */
-
-  /** Dieselbe Grenze wie im Streifen: mindestens ein Bild lang. */
-  const mindestMs = Math.max(1, Math.round(schrittMs));
-  const aktivStueck = stuecke[aktiv];
-  const teilenMoeglich =
-    lauf === null && aktivStueck !== undefined && kannTeilen(aktivStueck, spielkopfMs, mindestMs);
-
-  /**
-   * Springt an eine Stelle – aus dem Streifen (Tipp oder Ziehen) oder aus
-   * einer Taste. Pausiert dabei: Ein Sprung während der Wiedergabe sähe aus
-   * wie ein Ruckler, nicht wie eine Wahl.
-   */
-  const spielkopfSetzen = useCallback((ms: number) => {
-    const element = videoRef.current;
-    if (element) {
-      element.pause();
-      element.currentTime = ms / 1000;
-    }
-    setSpielkopfMs(ms);
-  }, []);
-
-  /* ---------- Das Standbild für den Editor ---------- */
-
-  /**
-   * `abHier`, falls angegeben: die Sitzung stellt nicht den ganzen Film neu
-   * ein, sondern nur ab dieser Stelle – siehe `abHierMs` und
-   * `bereicheAbUebernehmen`.
-   */
-  const editorOeffnen = useCallback(
-    async (abHier?: number) => {
-      if (!quelle || holt) return;
-      setHolt(true);
-      try {
-        const zeitpunkt = abHier ?? anfangMs;
-        const gelesen = await videoBilderLesen(video, {
-          zeitpunkte: [zeitpunkt],
-          kante,
-        });
-        const flaeche = document.createElement('canvas');
-        flaeche.width = gelesen.breite;
-        flaeche.height = gelesen.hoehe;
-        flaeche.getContext('2d')?.putImageData(gelesen.bilder[0].daten, 0, 0);
-        const blob = await new Promise<Blob | null>((fertig) =>
-          flaeche.toBlob((ergebnisBlob) => fertig(ergebnisBlob), 'image/png'),
-        );
-        if (!blob) throw new Error('Das Standbild liess sich nicht anlegen');
-        setStandbild(blob);
-        setAbHierMs(abHier ?? null);
-        setEditorAuf(true);
-      } catch (ausfall) {
-        if (!(ausfall instanceof AbbruchError)) {
-          toast(errorMessage(ausfall, 'Das Standbild ging nicht'), 'error');
-        }
-      } finally {
-        setHolt(false);
-      }
-    },
-    [anfangMs, holt, kante, quelle, video],
-  );
+  const dauerSchaetzung =
+    filmDauerSchaetzenMs(anzahl - maskenBilder, false, schluesselAbstand) +
+    filmDauerSchaetzenMs(maskenBilder, true, schluesselAbstand, maskenAbschnitte);
+  /** Masken, die noch an ein neues Stellbild mitgenommen werden – bis dahin wird nicht gebaut. */
+  const offen = nochOffen(abschnitte);
 
   /* ---------- Rechnen ---------- */
 
@@ -342,9 +300,18 @@ export function VideoEditorSheet({
     wache.current = null;
   }, []);
 
+  /*
+   * Das Angebot nach einem Abbruch gilt für DIESEN Schnitt. Wer danach
+   * schneidet, hat einen anderen Film, und die Zahl stimmt nicht mehr.
+   */
+  useEffect(() => {
+    setNachAbbruch(null);
+  }, [abschnitte]);
+
   const starten = useCallback(
     async (nurBilder?: number) => {
-      if (!doc || lauf) return;
+      if (lauf || abschnitte.length === 0 || nochOffen(abschnitte)) return;
+      wiedergabe.anhalten();
       setNachAbbruch(null);
       const steuer = new AbortController();
       steuerung.current = steuer;
@@ -353,8 +320,7 @@ export function VideoEditorSheet({
       try {
         const fertig = await videoAusVideo({
           datei: video,
-          doc,
-          stuecke,
+          stuecke: abschnitte,
           bildrate,
           kante,
           schluesselAbstand,
@@ -362,12 +328,13 @@ export function VideoEditorSheet({
            * Nach einem Abbruch wird die GRENZE gesenkt, nicht das Ende
            * verschoben.
            *
-           * Das Ende auszurechnen ginge bei einem Stück noch; bei dreien
+           * Das Ende auszurechnen ginge bei einem Abschnitt noch; bei dreien
            * läge es im falschen. Eine kleinere Obergrenze schneidet dagegen
-           * genau dort ab, wo der Abbruch kam – quer über alle Stücke, in
-           * derselben Reihenfolge.
+           * genau dort ab, wo der Abbruch kam – quer über alle Abschnitte,
+           * in derselben Reihenfolge.
            */
           maxBilder: nurBilder === undefined ? maxBilder : Math.min(maxBilder, nurBilder),
+          maxGepuffert,
           fortschritt: (anteil, abschnitt, text) => setLauf({ anteil, abschnitt, text }),
           abbruch: steuer.signal,
         });
@@ -386,9 +353,7 @@ export function VideoEditorSheet({
            * Das Angebot nur, wenn wirklich etwas zu KÜRZEN ist.
            *
            * Wären alle Bilder fertig, startete „Ja, aus N Bildern" denselben
-           * Auftrag noch einmal von null – samt aller Modelläufe. Genau das
-           * passierte, solange der Abbruch beim Schreiben die volle
-           * Bilderzahl meldete.
+           * Auftrag noch einmal von null – samt aller Modelläufe.
            */
           const fertig = ausfall.fertigeBilder;
           setNachAbbruch(fertig >= 2 && fertig < anzahl ? fertig : null);
@@ -402,16 +367,17 @@ export function VideoEditorSheet({
       }
     },
     [
+      abschnitte,
       anzahl,
       bildrate,
-      doc,
       kante,
       lauf,
       maxBilder,
+      maxGepuffert,
       schluesselAbstand,
-      stuecke,
       video,
       wachePruefen,
+      wiedergabe,
     ],
   );
 
@@ -431,41 +397,26 @@ export function VideoEditorSheet({
   const dateiname = `${(name ?? 'video').replace(/\.[^.]+$/, '')}-bearbeitet.webm`;
 
   /*
-   * Der Fotoeditor liegt ÜBER dem Blatt, nicht anstelle davon.
+   * Der Editor liegt ÜBER dem Blatt, nicht anstelle davon.
    *
    * `beiseite` blendet das Blatt aus und lässt es stehen (`.is-beiseite` in
    * `global.css`) – dieselbe Lösung wie beim Blatt „Foto oder Video". Der
    * Grund sind die Ebenen: Der Editor liegt auf 75, ein Blatt auf 77. Wäre
    * das Blatt noch sichtbar, läge es über dem Editor, und jeder Fingertipp
    * ginge an das falsche von beiden.
-   *
-   * Das Blatt zu VERWERFEN wäre die andere Möglichkeit und die schlechtere:
-   * Die Rollposition und jedes offene Aufklappfeld wären nach dem Zurückkommen
-   * weg.
    */
   const editor =
-    editorAuf && standbild ? (
-      <BildEditor
-        quelle={standbild}
+    editorAuf && quelleUrl ? (
+      <SchnittEditor
+        schnitt={schnitt}
+        datei={video}
+        quelleUrl={quelleUrl}
+        kante={kante}
+        schrittMs={schrittMs}
+        quelleMs={dauerMs}
+        vorschau={vorschau}
         name={name ?? null}
-        startDoc={doc}
-        onClose={() => {
-          setEditorAuf(false);
-          setAbHierMs(null);
-        }}
-        dokumentName={abHierMs === null ? 'Auf den Film anwenden' : 'Ab hier anwenden'}
-        onDokument={(fertig) => {
-          setDoc(
-            abHierMs === null
-              ? fertig
-              : bereicheAbUebernehmen(
-                  doc ?? neuesDoc(rechenmass?.b ?? 1, rechenmass?.h ?? 1),
-                  fertig,
-                  abHierMs,
-                ),
-          );
-          setAbHierMs(null);
-        }}
+        onClose={() => setEditorAuf(false)}
       />
     ) : null;
 
@@ -514,8 +465,6 @@ export function VideoEditorSheet({
     );
   }
 
-  const nichtsGetan = !doc || (rechenmass && docUnberuehrt(doc, rechenmass.b, rechenmass.h));
-
   return (
     <>
       {editor}
@@ -523,74 +472,82 @@ export function VideoEditorSheet({
         <div className="stack">
           {absage && <p className="vg-absage">{absage}</p>}
 
-          {streifen.length === 0 ? (
+          {vorschau.length === 0 || abschnitte.length === 0 ? (
             <p className="vg-hinweis">
               <span className="spinner" aria-hidden="true" /> Das Video wird durchgesehen …
             </p>
           ) : (
             <>
-              <video
-                ref={videoRef}
-                className="vg-quelle"
-                src={quelleUrl ?? undefined}
-                playsInline
-                preload="metadata"
-                onTimeUpdate={(ereignis) =>
-                  setSpielkopfMs(Math.round(ereignis.currentTarget.currentTime * 1000))
-                }
-                onPlay={() => setSpielt(true)}
-                onPause={() => setSpielt(false)}
-              />
-              <div className="vg-abspielzeile">
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={!quelleUrl || lauf !== null}
-                  onClick={() => {
-                    const element = videoRef.current;
-                    if (!element) return;
-                    if (element.paused) void element.play();
-                    else element.pause();
-                  }}
-                >
-                  {spielt ? '⏸ Pause' : '▶ Abspielen'}
-                </button>
-                <span className="vg-zeit">{zeitText(spielkopfMs)}</span>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={!teilenMoeglich}
-                  title="Teilt das aktive Stück an der Wiedergabestelle in zwei"
-                  onClick={() => {
-                    if (!aktivStueck) return;
-                    const neu = stueckTeilen(stuecke, aktiv, spielkopfMs, mindestMs);
-                    if (neu === stuecke) return;
-                    setStuecke(neu);
-                    setAktiv(aktiv + 1);
-                  }}
-                >
-                  ✂ Hier teilen
-                </button>
-              </div>
-              <Streifen
-                bilder={streifen}
-                dauerMs={dauerMs}
-                stuecke={stuecke}
-                aktiv={aktiv}
-                gesperrt={lauf !== null}
+              {/*
+                  Nur, solange das Blatt zu sehen ist: Der Editor hat sein
+                  eigenes Video, und jedes weitere hielte auf einem Telefon
+                  einen Dekodierer samt Puffer fest, der gegen die Wiedergabe
+                  dort und gegen die Mitnahme der Masken arbeitet.
+              */}
+              {!editorAuf && (
+                <video
+                  ref={videoRef}
+                  className="vg-quelle"
+                  src={quelleUrl ?? undefined}
+                  playsInline
+                  muted
+                  preload="metadata"
+                />
+              )}
+              <Zeitleiste
+                abschnitte={abschnitte}
+                aktiv={schnitt.aktiv}
+                spielkopfMs={wiedergabe.spielkopfMs}
+                quelleMs={dauerMs}
                 schrittMs={schrittMs}
-                spielkopfMs={spielkopfMs}
-                onAktiv={setAktiv}
-                onSpielkopf={spielkopfSetzen}
-                onBereich={(von, bis) =>
-                  setStuecke((alt) =>
-                    alt.map((eintrag, i) => (i === aktiv ? { vonMs: von, bisMs: bis } : eintrag)),
-                  )
+                vorschau={vorschau}
+                spielt={wiedergabe.spielt}
+                gesperrt={lauf !== null}
+                beschaeftigt={schnitt.beschaeftigt}
+                onSpielkopf={(filmMs, fertig) => {
+                  wiedergabe.setzen(filmMs);
+                  if (!fertig) return;
+                  const ort = filmZuQuelle(abschnitte, filmMs);
+                  if (ort) schnitt.setAktiv(ort.nummer);
+                }}
+                onKuerzen={(nummer, vonMs, bisMs, fertig) => {
+                  // Erst anhalten – eine laufende Wiedergabe hielte die
+                  // gezogene Kante für das Ende und spränge weiter.
+                  if (wiedergabe.spielt) wiedergabe.anhalten();
+                  if (!fertig) {
+                    // Beim Ziehen zeigt das Video die Kante, an der man ist.
+                    const element = videoRef.current;
+                    const alt = abschnitte[nummer];
+                    if (element && alt) {
+                      element.currentTime = (vonMs !== alt.vonMs ? vonMs : bisMs) / 1000;
+                    }
+                    return;
+                  }
+                  schnitt.kuerzen(nummer, vonMs, bisMs);
+                }}
+                onAbspielen={() =>
+                  wiedergabe.spielt ? wiedergabe.anhalten() : wiedergabe.abspielen()
                 }
+                onTeilen={() => {
+                  wiedergabe.anhalten();
+                  const ort = filmZuQuelle(abschnitte, wiedergabe.spielkopfMs);
+                  if (ort) schnitt.teilen(ort.nummer, ort.quelleMs);
+                }}
+                onEntfernen={() => {
+                  wiedergabe.anhalten();
+                  schnitt.entfernen();
+                }}
+                onVerschieben={(richtung) => {
+                  wiedergabe.anhalten();
+                  schnitt.verschieben(richtung);
+                }}
+                onDazu={() => {
+                  wiedergabe.anhalten();
+                  schnitt.dazu();
+                }}
               />
               <p className="vg-hinweis">
-                {stuecke.length > 1 && `Stück ${aktiv + 1}: `}
-                {zeitText(stuecke[aktiv]?.vonMs ?? 0)} – {zeitText(stuecke[aktiv]?.bisMs ?? 0)} ·{' '}
+                {abschnitte.length > 1 && `${abschnitte.length} Abschnitte · `}
                 {anzahl} {anzahl === 1 ? 'Bild' : 'Bilder'}
                 {rechenmass && ` · ${rechenmass.b} × ${rechenmass.h}`} ·{' '}
                 {sekundenText((anzahl * schrittMs) / 1000)} s Film · {dauerText(dauerSchaetzung)}
@@ -599,8 +556,8 @@ export function VideoEditorSheet({
                     {' '}
                     <strong>
                       Hinten fallen {(plan.gekuerztMs / 1000).toFixed(1).replace('.', ',')} s weg –{' '}
-                      {brauchtAlle
-                        ? `bei dieser Grösse passen höchstens ${maxBilder} Bilder in den Speicher – die Bewegung wird über den ganzen Film geschätzt, also liegen alle Bilder gleichzeitig da.`
+                      {plan.gekuerztWegen === 'puffer'
+                        ? `ein Abschnitt mit Maske oder Form darf bei dieser Grösse höchstens ${maxGepuffert} Bilder lang sein – zum Verfolgen liegen seine Bilder alle gleichzeitig im Speicher. Kürzer schneiden oder teilen hilft.`
                         : `mehr als ${maxBilder} Bilder dauern länger, als vor einem Balken zu sitzen erträglich ist – das sind ${sekundenText(maxBilder / bildrate)} s Film.${
                             naechstKleiner(bildrate) < bildrate
                               ? ` Bei ${naechstKleiner(bildrate)} Bildern je Sekunde wären es ${sekundenText(maxBilder / naechstKleiner(bildrate))} s.`
@@ -610,105 +567,21 @@ export function VideoEditorSheet({
                   </>
                 )}
               </p>
-
-              {/*
-                  Die Schnittoptionen entstehen ERST, wenn jemand ein zweites
-                  Stück angelegt hat.
-
-                  Ein Film aus einem Stück ist der Normalfall, und für den
-                  sieht das Blatt aus wie vorher: ein Streifen, zwei Griffe.
-                  Wer die Liste nie braucht, bekommt sie auch nie zu sehen.
-              */}
-              <div className="row" style={{ gap: 'var(--space-2)', flexWrap: 'wrap' }}>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={lauf !== null || dauerMs <= 0}
-                  onClick={() => {
-                    /*
-                     * Das neue Stück fängt dort an, wo das aktive aufhört.
-                     *
-                     * Nicht bei null: Wer ein zweites Stück anlegt, will fast
-                     * immer die Stelle DANACH – und ein Stück, das auf dem
-                     * vorigen liegt, sähe aus wie ein Fehler.
-                     */
-                    const letzte = stuecke[aktiv] ?? { vonMs: 0, bisMs: 0 };
-                    const von = Math.min(letzte.bisMs, Math.max(0, dauerMs - 1000));
-                    setStuecke((alt) => [
-                      ...alt,
-                      { vonMs: von, bisMs: Math.min(dauerMs, von + 2000) },
-                    ]);
-                    setAktiv(stuecke.length);
-                  }}
-                >
-                  ＋ Stück hinzufügen
-                </button>
-                {stuecke.length > 1 && (
-                  <button
-                    type="button"
-                    className="btn btn-sm"
-                    disabled={lauf !== null}
-                    onClick={() => {
-                      setStuecke((alt) => alt.filter((_, i) => i !== aktiv));
-                      setAktiv((alt) => Math.max(0, alt - 1));
-                    }}
-                  >
-                    ✕ Stück {aktiv + 1} entfernen
-                  </button>
-                )}
-                {stuecke.length > 1 &&
-                  (['vor', 'zurueck'] as const).map((richtung) => (
-                    <button
-                      key={richtung}
-                      type="button"
-                      className="btn btn-sm"
-                      disabled={
-                        lauf !== null ||
-                        (richtung === 'vor' ? aktiv === 0 : aktiv === stuecke.length - 1)
-                      }
-                      aria-label={
-                        richtung === 'vor'
-                          ? `Stück ${aktiv + 1} nach vorn`
-                          : `Stück ${aktiv + 1} nach hinten`
-                      }
-                      onClick={() => {
-                        const ziel = richtung === 'vor' ? aktiv - 1 : aktiv + 1;
-                        setStuecke((alt) => {
-                          const neu = alt.slice();
-                          [neu[aktiv], neu[ziel]] = [neu[ziel], neu[aktiv]];
-                          return neu;
-                        });
-                        setAktiv(ziel);
-                      }}
-                    >
-                      {richtung === 'vor' ? '↑ nach vorn' : '↓ nach hinten'}
-                    </button>
-                  ))}
-              </div>
-
-              {stuecke.length > 1 && (
-                <p className="vg-hinweis">
-                  Der Film läuft in dieser Reihenfolge:{' '}
-                  {stuecke
-                    .map((eintrag) => `${zeitText(eintrag.vonMs)}–${zeitText(eintrag.bisMs)}`)
-                    .join(' · ')}
-                </p>
-              )}
             </>
           )}
 
           {/*
-          Die Grösse steht FEST, sobald etwas eingestellt ist – und das ist
-          keine Bequemlichkeit.
+            Die Grösse steht FEST, sobald etwas eingestellt ist – und das ist
+            keine Bequemlichkeit.
 
-          Ein `BildDoc` steht in Punkten seines Quellbildes. Eingestellt wird
-          an einem Standbild in der Rechengrösse; ein Zuschnitt „von 0 bis
-          160" meint bei 640 die linke Hälfte und bei 1280 das linke Viertel.
-          Wer die Grösse danach wechselt, bekäme einen Ausschnitt, den er nie
-          gewählt hat – ohne Fehlermeldung und ohne dass irgendwo stünde,
-          woran es liegt.
-        */}
-          <fieldset className="vg-gruppe" disabled={lauf !== null || doc !== null}>
+            Ein `BildDoc` steht in Punkten seines Quellbildes. Eingestellt wird
+            an einem Standbild in der Rechengrösse; ein Zuschnitt „von 0 bis
+            160" meint bei 640 die linke Hälfte und bei 1280 das linke Viertel.
+            Wer die Grösse danach wechselt, bekäme einen Ausschnitt, den er nie
+            gewählt hat – ohne Fehlermeldung und ohne dass irgendwo stünde,
+            woran es liegt.
+          */}
+          <fieldset className="vg-gruppe" disabled={lauf !== null || bearbeitet}>
             <legend>Grösse</legend>
             <div className="vg-kacheln">
               {KANTEN.map((wahl) => (
@@ -723,17 +596,14 @@ export function VideoEditorSheet({
                 </button>
               ))}
             </div>
-            {doc && (
+            {bearbeitet && (
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
                 disabled={lauf !== null}
-                onClick={() => {
-                  setDoc(null);
-                  setStandbild(null);
-                }}
+                onClick={() => schnitt.alleVerwerfen()}
               >
-                Grösse ändern – verwirft die Bearbeitung
+                Grösse ändern – verwirft alle Bearbeitungen
               </button>
             )}
           </fieldset>
@@ -755,85 +625,51 @@ export function VideoEditorSheet({
             </div>
           </fieldset>
 
-          <div className="row" style={{ gap: 'var(--space-2)' }}>
-            <button
-              type="button"
-              className="btn"
-              style={{ flex: 1 }}
-              onClick={() => void editorOeffnen()}
-              disabled={streifen.length === 0 || holt || lauf !== null}
-            >
-              {holt ? '…' : doc ? '✏️ Bearbeitung ändern' : '✏️ Bearbeiten'}
-            </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => {
+              wiedergabe.anhalten();
+              setEditorAuf(true);
+            }}
+            disabled={vorschau.length === 0 || abschnitte.length === 0 || lauf !== null}
+          >
+            ✏️ Bearbeiten und schneiden
+          </button>
+
+          <p className="vg-hinweis">
             {/*
-                Nur mit einer bestehenden Bearbeitung sinnvoll: Ohne die gibt
-                es nichts, was „ab hier" abgelöst werden könnte – der Knopf
-                oben tut in dem Fall bereits genau das Richtige.
+                Drei Lagen, und der Unterschied zwischen der zweiten und der
+                dritten ist nicht offensichtlich.
+
+                Bei INHALTSTEILEN (Netz, Tiefe, Antippen) läuft ein Modell, und
+                das kostet Minuten. Dazwischen liegt der Fall, der lange falsch
+                beschrieben war: ein Verlauf, eine Ellipse, ein Pinselstrich.
+                Der hängt nicht am Bildinhalt und braucht kein Modell – aber er
+                muss mit der Kamera mitwandern, und dafür wird die Bewegung
+                über seinen Abschnitt geschätzt. Also liegen dessen Bilder
+                gleichzeitig im Speicher, und genau daran hängt die kleinere
+                Obergrenze je Abschnitt oben.
             */}
-            {doc && (
-              <button
-                type="button"
-                className="btn btn-ghost"
-                style={{ flex: 1 }}
-                onClick={() => void editorOeffnen(spielkopfMs)}
-                disabled={streifen.length === 0 || holt || lauf !== null}
-                title="Stellt etwas Neues ein, das erst ab der aktuellen Wiedergabestelle gilt – bis zum Ende oder bis du es später wieder änderst."
-              >
-                🕓 Ab {zeitText(spielkopfMs)} neu einstellen
-              </button>
-            )}
-          </div>
+            {!bearbeitet
+              ? 'Noch nichts eingestellt – der Film käme geschnitten, sonst aber so heraus, wie er hineingeht. Im Editor wird jeder Abschnitt für sich bearbeitet; teilen, kürzen und verschieben geht dort ebenso.'
+              : teile > 0
+                ? `${teile === 1 ? 'Ein Bereich hängt' : `${teile} Bereiche hängen`} am Bildinhalt – Netz, Tiefe oder Antippen. Die werden auf jedem ${schluesselAbstand === 1 ? 'Bild' : `${schluesselAbstand}. Bild`} neu gerechnet und folgen dazwischen dem Gegenstand. Das dauert.`
+                : mitForm
+                  ? 'Ein Bereich beschreibt eine Form – Verlauf, Ellipse oder Pinselstrich. Der wandert mit der Kamera mit, dafür wird die Bewegung über seinen Abschnitt geschätzt. Kein Modell, aber dessen Bilder liegen auf einmal im Speicher.'
+                  : 'Die Bearbeitung gilt für jedes Bild eines Abschnitts gleich. Das geht schnell, und die Bilder werden einzeln durchgereicht statt gesammelt.'}
+          </p>
 
-          {doc && (
+          {offen && !lauf && (
             <p className="vg-hinweis">
-              {/*
-                  Drei Lagen, und der Unterschied zwischen der zweiten und der
-                  dritten ist nicht offensichtlich.
-
-                  „Nichts eingestellt" ist klar. Bei INHALTSTEILEN (Netz,
-                  Tiefe, Antippen) läuft ein Modell, und das kostet Minuten.
-                  Dazwischen liegt der Fall, der lange falsch beschrieben war:
-                  ein Verlauf, eine Ellipse, ein Pinselstrich. Der hängt nicht
-                  am Bildinhalt und braucht kein Modell – aber er muss mit der
-                  Kamera mitwandern, und dafür wird die Bewegung über den
-                  ganzen Film geschätzt. Also liegen alle Bilder gleichzeitig
-                  im Speicher, und genau daran hängt die kleinere Obergrenze
-                  oben. „Das geht schnell" stand hier und war für diesen Fall
-                  nur die halbe Wahrheit.
-              */}
-              {nichtsGetan
-                ? 'Noch nichts eingestellt – der Film käme so heraus, wie er hineingeht.'
-                : teile.length > 0
-                  ? `${teile.length === 1 ? 'Ein Bereich hängt' : `${teile.length} Bereiche hängen`} am Bildinhalt – Netz, Tiefe oder Antippen. Die werden auf jedem ${schluesselAbstand === 1 ? 'Bild' : `${schluesselAbstand}. Bild`} neu gerechnet und dazwischen mitgeschoben. Das dauert.`
-                  : brauchtAlle
-                    ? 'Ein Bereich beschreibt eine Form – Verlauf, Ellipse oder Pinselstrich. Der wandert mit der Kamera mit, dafür wird die Bewegung über den ganzen Film geschätzt. Kein Modell, aber alle Bilder auf einmal im Speicher.'
-                    : 'Die Bearbeitung gilt für jedes Bild gleich. Das geht schnell, und die Bilder werden einzeln durchgereicht statt gesammelt.'}
-            </p>
-          )}
-
-          {/*
-              Nur zeitlich begrenzte Bereiche auflisten – wer keinen angelegt
-              hat, sieht hier nichts Neues. `BildEditor` selbst zeigt an
-              seinen Bereichs-Kacheln keinen Zeitraum an (siehe dort); ohne
-              diese Liste wäre „ab wann gilt was" nirgends nachzusehen.
-          */}
-          {doc && doc.bereiche.some((bereich) => bereich.zeitraum) && (
-            <p className="vg-hinweis">
-              Zeitlich begrenzt:{' '}
-              {doc.bereiche
-                .filter((bereich) => bereich.zeitraum)
-                .map((bereich) => {
-                  const bis = bereich.zeitraum?.bisMs;
-                  const von = zeitText(bereich.zeitraum?.vonMs ?? 0);
-                  return `„${bereich.name}“ ab ${von}${bis != null ? ` bis ${zeitText(bis)}` : ''}`;
-                })
-                .join(' · ')}
+              <span className="spinner" aria-hidden="true" /> Masken werden an ein neues Stellbild
+              mitgenommen – danach lässt sich der Film bauen.
             </p>
           )}
 
           {lauf && (
             <div className="stk-lauf">
-              <strong>{ABSCHNITT_TITEL[lauf.abschnitt]}</strong>
+              <strong>{BAUSCHRITT_TITEL[lauf.abschnitt]}</strong>
               <div
                 className="stk-balken"
                 role="progressbar"
@@ -867,6 +703,7 @@ export function VideoEditorSheet({
                 <button
                   type="button"
                   className="btn btn-primary"
+                  disabled={offen}
                   onClick={() => void starten(nachAbbruch)}
                 >
                   Ja, aus {nachAbbruch} Bildern
@@ -879,31 +716,16 @@ export function VideoEditorSheet({
             <button
               type="button"
               className="btn btn-primary"
-              disabled={!doc || absage !== null || anzahl === 0}
+              disabled={absage !== null || anzahl === 0 || abschnitte.length === 0 || offen}
               onClick={() => void starten()}
             >
               Film bauen
             </button>
           )}
-          {!doc && !absage && (
-            <p className="vg-hinweis">
-              Tipp zuerst auf „Bearbeiten“. Was du dort am ersten Bild einstellst, gilt danach für
-              den ganzen Ausschnitt – auch Freistellen und Tiefenschärfe.
-            </p>
-          )}
         </div>
       </Sheet>
     </>
   );
-}
-
-/** „0:02,45" – eine Zeit, die man ablesen und vergleichen kann. */
-function zeitText(ms: number): string {
-  const gesamt = Math.max(0, ms);
-  const minuten = Math.floor(gesamt / 60_000);
-  const sekunden = Math.floor((gesamt % 60_000) / 1000);
-  const hundertstel = Math.floor((gesamt % 1000) / 10);
-  return `${minuten}:${String(sekunden).padStart(2, '0')},${String(hundertstel).padStart(2, '0')}`;
 }
 
 /** Sekunden mit einer Nachkommastelle, deutsch – und nie „0". */

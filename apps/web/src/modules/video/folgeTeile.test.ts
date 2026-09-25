@@ -511,6 +511,23 @@ describe('folgeTeile mit Abschnitten', () => {
   });
 });
 
+describe('folgeTeile mit einem Tipp ohne Punkte', () => {
+  it('rechnet eine leere Maske, statt den Filmbau abzubrechen', async () => {
+    /*
+     * So kommt ein Tipp aus `verlegen.ts`, dessen Gegenstand am neuen
+     * Stellbild schon aus dem Bild war. `tippTeilRechnen` gibt für keine
+     * Punkte nichts zurück – und das brach vorher jeden weiteren Filmbau ab.
+     */
+    const ohne: InhaltsTeil = {
+      ...TIPP,
+      teil: TIPP.teil.art === 'tipp' ? { ...TIPP.teil, punkte: [] } : TIPP.teil,
+    };
+    const { jeBild } = await folgeTeile(folge(6), { teile: [ohne], schluesselAbstand: 2 });
+    for (const karte of jeBild) expect(Math.max(...(karte.get('t1')?.werte ?? [0]))).toBe(0);
+    expect(tippLaeufe).toBe(0);
+  });
+});
+
 describe('folgeTeile gegen Drift', () => {
   it('lässt die Maske nicht unbegrenzt wegdriften, obwohl das Video stillsteht', async () => {
     /*

@@ -4,6 +4,7 @@ import {
   BLOCK,
   LAGE_RUHE,
   bewegung,
+  grauMass,
   graustufen,
   lageRuht,
   lageSchaetzen,
@@ -81,7 +82,35 @@ function drehen(bild: ImageData, grad: number): ImageData {
   return { data: raus, width: b, height: h, colorSpace: 'srgb' } as ImageData;
 }
 
+function leer(b: number, h: number): ImageData {
+  return {
+    data: new Uint8ClampedArray(b * h * 4),
+    width: b,
+    height: h,
+    colorSpace: 'srgb',
+  } as ImageData;
+}
+
 describe('graustufen', () => {
+  it('wird genau so gross, wie grauMass sagt', () => {
+    // Die Mitnahme liest ihre Zwischenbilder gleich in dieser Grösse; passte
+    // sie nicht, hätten die Graustufen zweierlei Masse.
+    for (const [b, h] of [
+      [960, 540],
+      [1280, 720],
+      [958, 539],
+      [320, 180],
+      [100, 700],
+    ]) {
+      const grau = graustufen(leer(b, h));
+      const mass = grauMass(b, h);
+      expect([grau.breite, grau.hoehe]).toEqual([mass.b, mass.h]);
+      // Ein Bild in dieser Grösse bleibt, wie es ist.
+      const klein = graustufen(leer(mass.b, mass.h));
+      expect([klein.breite, klein.hoehe]).toEqual([mass.b, mass.h]);
+    }
+  });
+
   it('gewichtet nach dem, was das Auge sieht', () => {
     /*
      * Ungewichtet bekämen kräftiges Rot und kräftiges Grün denselben Grauwert

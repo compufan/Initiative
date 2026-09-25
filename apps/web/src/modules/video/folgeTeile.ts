@@ -499,6 +499,13 @@ export async function teilRechnen(
       x: Math.min(breite - 1, Math.max(0, Math.round(punkt.x))),
       y: Math.min(hoehe - 1, Math.max(0, Math.round(punkt.y))),
     }));
+    /*
+     * Keine Punkte, keine Maske. So kommt ein Tipp aus `verlegen.ts`, dessen
+     * Gegenstand am neuen Stellbild schon aus dem Bild war – und
+     * `tippTeilRechnen` gäbe dafür nichts zurück, was hier den ganzen
+     * Filmbau abbräche.
+     */
+    if (gezogen.length === 0) return new Uint8Array(breite * hoehe);
     try {
       const gerechnet = await tippTeilRechnen(bild.daten, gezogen, {
         modus: teil.modus,

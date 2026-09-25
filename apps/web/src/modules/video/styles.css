@@ -393,3 +393,305 @@
 .vg-regler > input {
   width: 100%;
 }
+
+/* ---------- Die Zeitleiste ---------- */
+
+/*
+ * Der Film als Reihe von Abschnitten – siehe `Zeitleiste.tsx`.
+ *
+ * Dieselbe Leiste im Blatt und im Editor. Im Editor steht sie zwischen
+ * Bühne und Werkzeugen und darf deshalb nicht hoch sein: 52 Punkte Bahn und
+ * eine Zeile Knöpfe, mehr Platz nimmt sie dem Bild nicht weg.
+ */
+.zl {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.zl.ist-aus .zl-bahn {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.zl-leiste {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.zl-leiste .btn {
+  min-width: 36px;
+  padding-inline: 8px;
+}
+
+.zl-zeit {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.zl-luecke {
+  flex: 1;
+}
+
+.zl-bahn {
+  position: relative;
+  height: 52px;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  overflow: hidden;
+  touch-action: none;
+  cursor: pointer;
+}
+
+.zl-bahn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/*
+ * Ein Abschnitt: seine Vorschaubilder, eine Nummer, und am gewählten die
+ * beiden Griffe. Die Fuge zwischen zwei Abschnitten ist ein dunkler Rand –
+ * ohne sie sähen zwei Abschnitte aus derselben Einstellung aus wie einer.
+ */
+.zl-abschnitt {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  border: 2px solid rgba(4, 8, 20, 0.85);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #111;
+}
+
+.zl-abschnitt.ist-aktiv {
+  z-index: 1;
+  border-color: var(--accent);
+  overflow: visible;
+}
+
+.zl-bilder {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.zl-bilder > img {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  object-fit: cover;
+}
+
+.zl-nummer {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  border-radius: var(--radius-full);
+  background: rgba(4, 8, 20, 0.72);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.2;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.zl-abschnitt.ist-aktiv .zl-nummer {
+  background: var(--accent);
+}
+
+.zl-kreisel {
+  width: 9px;
+  height: 9px;
+  border-width: 2px;
+}
+
+/* Breiter als sie aussehen – dieselbe Überlegung wie beim `.vg-griff`. */
+.zl-griff {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 26px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: ew-resize;
+  touch-action: none;
+  z-index: 2;
+}
+
+.zl-griff-von {
+  left: -13px;
+}
+
+.zl-griff-bis {
+  right: -13px;
+}
+
+.zl-griff::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 10px;
+  width: 6px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  box-shadow: 0 0 0 1px rgba(4, 8, 20, 0.5);
+}
+
+.zl-griff:focus-visible::before {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.zl-kopf {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(4, 8, 20, 0.65);
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* Das Stellbild: ein kleiner Keil oben – wo eingestellt wird, nicht wo man steht. */
+.zl-stellbild {
+  position: absolute;
+  top: 0;
+  width: 0;
+  height: 0;
+  margin-left: -6px;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 8px solid var(--accent);
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* ---------- Die Zeitleiste im Editor ---------- */
+
+.bild-zeitleiste {
+  flex: none;
+  padding: 6px var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+/*
+ * Mit der Zeitleiste bekommt das Werkzeugfeld weniger Höhe – sonst bliebe
+ * für das Bild auf einem Telefon kaum ein Streifen übrig.
+ */
+.bild-editor.mit-zeitleiste .bild-panel {
+  max-height: 30vh;
+}
+
+.bild-editor.mit-zeitleiste .bild-panel.ist-ton {
+  max-height: 40vh;
+}
+
+/* Die laufende Wiedergabe liegt über dem Standbild, solange sie zu sehen sein soll. */
+.bild-wiedergabe {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  background: var(--surface-2);
+}
+
+.bild-wiedergabe[hidden] {
+  display: none;
+}
+
+.bild-wiedergabe-platz {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* Die Steckplätze des Editors (`SchnittEditor.tsx`) stehen im Layout nicht im Weg. */
+.bild-steckplatz {
+  display: contents;
+}
+
+.bild-wiedergabe-video {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.bild-wiedergabe-zeile {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--space-3);
+  background: var(--bg-elevated);
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.bild-wiedergabe-zeile > span {
+  flex: 1 1 12rem;
+}
+
+.bild-panel[inert] {
+  opacity: 0.5;
+}
+
+/*
+ * Schmale Telefone: Die Knopfzeile der Zeitleiste darf umbrechen, statt
+ * „＋" über den Rand zu schieben – bei 320 Punkten Breite war er gar nicht
+ * mehr zu erreichen.
+ */
+@media (max-width: 400px) {
+  .zl-leiste {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .zl-leiste .btn {
+    min-width: 32px;
+    padding-inline: 6px;
+  }
+}
+
+/*
+ * Quer gehaltene Telefone: Die Höhe reicht nicht für Bild, Zeitleiste,
+ * Werkzeuge und Fuss. Werkzeuge und Leiste geben Höhe ab, damit das Bild
+ * sichtbar bleibt.
+ */
+@media (max-height: 520px) {
+  .bild-editor.mit-zeitleiste .bild-panel,
+  .bild-editor.mit-zeitleiste .bild-panel.ist-ton {
+    max-height: 22vh;
+  }
+
+  .zl-bahn {
+    height: 34px;
+  }
+
+  .bild-zeitleiste {
+    padding-block: 4px;
+  }
+}

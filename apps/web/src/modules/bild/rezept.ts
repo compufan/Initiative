@@ -682,12 +682,6 @@ function teilAusRoh(
   }
 }
 
-/*
- * Nur eine Schranke gegen böswillige Eingaben, keine echte Grenze für ein
- * Video – kein Film dauert 24 Stunden, aber `zahl` braucht trotzdem eine.
- */
-const ZEITRAUM_MS_GRENZE = 86_400_000;
-
 function bereichNachRoh(b: Bereich): unknown {
   return {
     id: b.id,
@@ -698,11 +692,6 @@ function bereichNachRoh(b: Bereich): unknown {
       ...anpassungNachRoh(b.anpassung, FARB_SCHLUESSEL),
       unschaerfe: b.anpassung.unschaerfe,
     },
-    // `bisMs: null` bleibt null – JSON kennt das, und `zahl` bekäme es sonst
-    // nie zu unterscheiden von „gar nicht angegeben“.
-    zeitraum: b.zeitraum
-      ? { vonMs: b.zeitraum.vonMs, bisMs: b.zeitraum.bisMs }
-      : undefined,
   };
 }
 
@@ -724,21 +713,12 @@ function bereichAusRoh(
     ...farben,
     unschaerfe: zahl((q.anpassung as Record<string, unknown> | undefined)?.unschaerfe, 0, 1, 0),
   };
-  const rz = q.zeitraum as Record<string, unknown> | undefined;
-  const zeitraum =
-    rz && typeof rz === 'object'
-      ? {
-          vonMs: zahl(rz.vonMs, 0, ZEITRAUM_MS_GRENZE, 0),
-          bisMs: rz.bisMs === null ? null : zahl(rz.bisMs, 0, ZEITRAUM_MS_GRENZE, 0),
-        }
-      : undefined;
   return {
     id: text(q.id, 64) || `b${naechsteMarke()}`,
     name: text(q.name, 64) || 'Bereich',
     aktiv: q.aktiv !== false,
     teile,
     anpassung,
-    zeitraum,
   };
 }
 

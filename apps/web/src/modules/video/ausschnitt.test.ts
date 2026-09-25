@@ -247,6 +247,75 @@ describe('filmZeitpunkte', () => {
   });
 });
 
+describe('Die Grenze für gesammelte Gruppen', () => {
+  /*
+   * Drei Abschnitte zu je einer Sekunde bei 10 Bildern je Sekunde; nur der
+   * mittlere trägt eine Maske. Die Speichergrenze von 5 Bildern gilt nur
+   * für ihn – früher kürzte sie den ganzen Film auf 5 Bilder.
+   */
+  const drei = [
+    { vonMs: 0, bisMs: 1000 },
+    { vonMs: 2000, bisMs: 3000 },
+    { vonMs: 4000, bisMs: 5000 },
+  ];
+
+  it('lässt Abschnitte ohne Maske in Ruhe', () => {
+    const plan = filmZeitpunkte(drei, 10, 600, { gruppeJeStueck: [null, 0, null], max: 10 });
+    expect(plan.zeitpunkte).toHaveLength(30);
+    expect(plan.gekuerztMs).toBe(0);
+    expect(plan.gekuerztWegen).toBeUndefined();
+  });
+
+  it('kürzt am Ende der zu langen Gruppe und nicht mitten im Film', () => {
+    const plan = filmZeitpunkte(drei, 10, 600, { gruppeJeStueck: [null, 0, null], max: 5 });
+    // Der erste ganz, vom zweiten fünf Bilder – und danach nichts mehr.
+    expect(plan.zeitpunkte).toHaveLength(15);
+    expect(plan.stueckJeBild.filter((stueck) => stueck === 2)).toHaveLength(0);
+    expect(plan.gekuerztMs).toBeCloseTo(1500, 5);
+    expect(plan.gekuerztWegen).toBe('puffer');
+  });
+
+  it('zählt jede Gruppe für sich', () => {
+    const plan = filmZeitpunkte(drei, 10, 600, { gruppeJeStueck: [0, null, 1], max: 10 });
+    expect(plan.zeitpunkte).toHaveLength(30);
+  });
+
+  it('zählt nahtlose Stücke derselben Gruppe zusammen', () => {
+    const plan = filmZeitpunkte(
+      [
+        { vonMs: 0, bisMs: 600 },
+        { vonMs: 600, bisMs: 1200 },
+      ],
+      10,
+      600,
+      { gruppeJeStueck: [0, 0], max: 10 },
+    );
+    expect(plan.zeitpunkte).toHaveLength(10);
+    expect(plan.gekuerztWegen).toBe('puffer');
+  });
+
+  it('fängt nach einem Schnitt neu an zu zählen', () => {
+    // Derselbe Gruppenname, aber ein Schnitt dazwischen: Beim Bauen sind das
+    // zwei Gruppen, und die Grenze gilt für jede.
+    const plan = filmZeitpunkte(
+      [
+        { vonMs: 0, bisMs: 600 },
+        { vonMs: 3000, bisMs: 3600 },
+      ],
+      10,
+      600,
+      { gruppeJeStueck: [0, 0], max: 10 },
+    );
+    expect(plan.zeitpunkte).toHaveLength(12);
+  });
+
+  it('nennt die Filmgrenze, wenn die gegriffen hat', () => {
+    const plan = filmZeitpunkte(drei, 10, 12, { gruppeJeStueck: [null, 0, null], max: 100 });
+    expect(plan.zeitpunkte).toHaveLength(12);
+    expect(plan.gekuerztWegen).toBe('gesamt');
+  });
+});
+
 describe('abtasten', () => {
   it('kürzt über die Stücke hinweg und nicht in jedem einzeln', () => {
     /*
@@ -388,5 +457,36 @@ describe('kannTeilen', () => {
   it('lehnt eine Stelle ausserhalb des Stücks ab', () => {
     expect(kannTeilen(stueck, 100, 40)).toBe(false);
     expect(kannTeilen(stueck, 900, 40)).toBe(false);
+  });
+});
+
+describe('stueckJeBild', () => {
+  it('ordnet jedes Bild seinem Stück zu – auch über eine nahtlose Grenze hinweg', () => {
+    // Zwei Stücke, das zweite schliesst nahtlos an: kein Schnitt, aber zwei
+    // Stücke mit womöglich verschiedener Bearbeitung.
+    const plan = abtasten({
+      stuecke: [
+        { vonMs: 0, bisMs: 300 },
+        { vonMs: 300, bisMs: 500 },
+        { vonMs: 1000, bisMs: 1200 },
+      ],
+      schrittMs: 100,
+      maxBilder: 100,
+      mitte: true,
+    });
+    expect(plan.schnitte).toEqual([5]);
+    expect(plan.stueckJeBild).toEqual([0, 0, 0, 1, 1, 2, 2]);
+  });
+
+  it('lässt ein Stück aus, das wegen der Obergrenze kein Bild bekam', () => {
+    const plan = abtasten({
+      stuecke: [
+        { vonMs: 0, bisMs: 300 },
+        { vonMs: 1000, bisMs: 1200 },
+      ],
+      schrittMs: 100,
+      maxBilder: 3,
+    });
+    expect(plan.stueckJeBild).toEqual([0, 0, 0]);
   });
 });
