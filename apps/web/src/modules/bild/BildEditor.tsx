@@ -404,6 +404,34 @@ interface BildEditorProps {
   sitzung?: string;
   /** Werkzeuge und Rückgängig ruhen – etwa solange eine Maske mitgenommen wird. */
   gesperrt?: boolean;
+  /**
+   * Wie viele Bereiche dieses Bild höchstens tragen darf – ohne Angabe
+   * `BEREICHE_MAX`.
+   *
+   * Im Videoeditor weniger: Dort zählen auch Masken mit, die an diesem Bild
+   * gerade nicht zu sehen sind (anderer Geltungsbereich, noch nicht
+   * verfolgt), aber einen der Plätze belegen, die die Grafikeinheit je Bild
+   * hat.
+   */
+  bereicheMax?: number;
+  /**
+   * Was statt „＋ Bereich" dasteht, wenn `bereicheMax` erreicht ist, obwohl
+   * weniger Bereiche zu sehen sind. Ein fehlender Knopf ohne Erklärung sähe
+   * nach einem Fehler aus.
+   */
+  bereicheGrund?: string;
+  /**
+   * Den Rückgängig-Verlauf über einen Bildwechsel mitnehmen, statt ihn zu
+   * verwerfen.
+   *
+   * Ohne diese Angabe verwirft der Editor den Verlauf bei einem neuen Bild,
+   * sobald darin etwas steht, das zu EINEM Bild gehört – eine Maske, eine
+   * Form. Im Videoeditor trägt jedes Bild die Masken des Films; der Verlauf
+   * ginge dort bei jedem Loslassen nach dem Wischen verloren, auch für
+   * Belichtung und Zuschnitt. Der Aufrufer baut deshalb jeden Eintrag um:
+   * `eintrag` ist ein alter Stand, `neu` das Dokument des neuen Bildes.
+   */
+  verlaufAnpassen?: (eintrag: BildDoc, neu: BildDoc) => BildDoc;
 }
 
 /** `foto.jpg` → `foto-bearbeitet.webp`. Das Original behält seinen Namen. */
@@ -440,6 +468,9 @@ export function BildEditor({
   unterBuehne,
   sitzung,
   gesperrt = false,
+  bereicheMax = BEREICHE_MAX,
+  bereicheGrund,
+  verlaufAnpassen,
 }: BildEditorProps) {
   useHideNav(true);
 
@@ -946,6 +977,8 @@ export function BildEditor({
    */
   const schliessenRef = useRef(onClose);
   schliessenRef.current = onClose;
+  const verlaufAnpassenRef = useRef(verlaufAnpassen);
+  verlaufAnpassenRef.current = verlaufAnpassen;
   const letzteSitzung = useRef(sitzung);
   /** Zu welchem Bild und welcher Sitzung das Dokument im Editor gerade gehört. */
   const herkunftRef = useRef<{ quelle: Blob; sitzung?: string }>({ quelle, sitzung });
@@ -970,7 +1003,8 @@ export function BildEditor({
         const neueSitzung = letzteSitzung.current !== sitzung;
         letzteSitzung.current = sitzung;
         herkunftRef.current = { quelle, sitzung };
-        if (neueSitzung || [...verlauf.current, ...vor.current].some(haengtAmBild)) {
+        const anpassen = neueSitzung ? undefined : verlaufAnpassenRef.current;
+        if (!anpassen && (neueSitzung || [...verlauf.current, ...vor.current].some(haengtAmBild))) {
           verlauf.current = [];
           vor.current = [];
           setKannZurueck(false);
@@ -1005,6 +1039,12 @@ export function BildEditor({
             geladen.naturalWidth,
             geladen.naturalHeight,
           );
+        }
+        if (anpassen) {
+          // Siehe `verlaufAnpassen`: Jeder alte Stand bekommt die Masken des
+          // neuen Bildes, alles andere bleibt, wie es war.
+          verlauf.current = verlauf.current.map((eintrag) => anpassen(eintrag, frisch));
+          vor.current = vor.current.map((eintrag) => anpassen(eintrag, frisch));
         }
         setDoc(frisch);
 
@@ -2155,9 +2195,10 @@ export function BildEditor({
      * bekam nicht einmal gesagt, warum nichts passiert ist.
      */
     const vorhanden = aktuell.bereiche.find((b) => b.id === bereichRef.current);
-    if (!vorhanden && aktuell.bereiche.length >= BEREICHE_MAX) {
+    if (!vorhanden && aktuell.bereiche.length >= bereicheMax) {
       toast(
-        `Mehr als ${BEREICHE_MAX} Bereiche gehen nicht. Lösch einen, wenn du einen neuen brauchst.`,
+        bereicheGrund ??
+          `Mehr als ${bereicheMax} Bereiche gehen nicht. Lösch einen, wenn du einen neuen brauchst.`,
         'info',
       );
       return;
@@ -2595,9 +2636,10 @@ export function BildEditor({
    */
   function vorhandenOderPlatz(aktuell: BildDoc): boolean {
     if (aktuell.bereiche.some((b) => b.id === bereichRef.current)) return true;
-    if (aktuell.bereiche.length < BEREICHE_MAX) return true;
+    if (aktuell.bereiche.length < bereicheMax) return true;
     toast(
-      `Mehr als ${BEREICHE_MAX} Bereiche gehen nicht. Wähl einen aus, in den die Maske soll, oder lösch einen.`,
+      bereicheGrund ??
+        `Mehr als ${bereicheMax} Bereiche gehen nicht. Wähl einen aus, in den die Maske soll, oder lösch einen.`,
       'info',
     );
     return false;
@@ -2605,7 +2647,7 @@ export function BildEditor({
 
   function bereichAnlegen() {
     const aktuell = docRef.current;
-    if (!aktuell || aktuell.bereiche.length >= BEREICHE_MAX) return;
+    if (!aktuell || aktuell.bereiche.length >= bereicheMax) return;
     merken();
     const neu: Bereich = {
       id: neueId('b'),
@@ -3323,10 +3365,15 @@ export function BildEditor({
                   {bereich.name}
                 </button>
               ))}
-              {doc.bereiche.length < BEREICHE_MAX && (
+              {doc.bereiche.length < bereicheMax ? (
                 <button type="button" className="btn btn-sm" onClick={bereichAnlegen}>
                   ＋ Bereich
                 </button>
+              ) : (
+                bereicheGrund &&
+                doc.bereiche.length < BEREICHE_MAX && (
+                  <span className="bild-hinweis">{bereicheGrund}</span>
+                )
               )}
             </div>
 
