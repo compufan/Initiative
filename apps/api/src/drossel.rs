@@ -98,6 +98,25 @@ impl Drossel {
 
     /// Dasselbe mit vorgegebener Zeit – so lässt es sich prüfen, ohne zu warten.
     pub fn erlaubt_um(&self, schluessel: &str, regel: Regel, jetzt: Instant) -> bool {
+        self.erlaubt_menge_um(schluessel, regel, 1, jetzt)
+    }
+
+    /// Mehrere Versuche auf einmal anmelden – ganz oder gar nicht.
+    ///
+    /// Für Anfragen, deren Kosten mit der Zahl der Betroffenen wachsen (eine
+    /// Einladung legt je Person einen Einzelchat an). Einzeln abgebucht, wäre
+    /// bei einer abgelehnten Anfrage der halbe Vorrat schon weg.
+    pub fn erlaubt_menge(&self, schluessel: &str, regel: Regel, menge: u32) -> bool {
+        self.erlaubt_menge_um(schluessel, regel, menge, Instant::now())
+    }
+
+    pub fn erlaubt_menge_um(
+        &self,
+        schluessel: &str,
+        regel: Regel,
+        menge: u32,
+        jetzt: Instant,
+    ) -> bool {
         if !self.an {
             return true;
         }
@@ -125,10 +144,11 @@ impl Drossel {
             (eintrag.rest + vergangen * regel.pro_sekunde()).min(f64::from(regel.vorrat));
         eintrag.zuletzt = jetzt;
 
-        if eintrag.rest < 1.0 {
+        let verlangt = f64::from(menge);
+        if eintrag.rest < verlangt {
             return false;
         }
-        eintrag.rest -= 1.0;
+        eintrag.rest -= verlangt;
         true
     }
 
@@ -304,6 +324,32 @@ pub mod regeln {
     /// Passwort ändern – angemeldet, aber ein beliebter Weg, das alte Passwort
     /// zu erraten.
     pub const PASSWORT: Regel = Regel::neu(10, Duration::from_secs(600));
+
+    /// Einladungen ändern oder verschicken, gezählt **je Konto**: dreissig je
+    /// Stunde.
+    ///
+    /// Eine Einladung erreicht bis zu 200 Personen und legt für sie Chats an,
+    /// die beim Gegenüber in der Liste auftauchen. Wer damit Fremde
+    /// überschwemmen will, kommt mit dreissig Anfragen nicht weit; wer eine
+    /// Runde plant und mehrmals nachbessert, merkt nichts.
+    pub const EINLADEN: Regel = Regel::neu(30, Duration::from_secs(3600));
+
+    /// Neue Einzelchats, die eine Einladung anlegt: dreihundert je Stunde und
+    /// Konto, gezählt je Chat.
+    ///
+    /// Anders als die Anfragen oben zählt das die Wirkung: Der Direktchat mit
+    /// jedem Konto ist auch sonst möglich, aber erstmals löst eine Einladung
+    /// ihn nebenbei aus. Reicht der Vorrat nicht, wird die Anfrage abgelehnt,
+    /// bevor etwas angelegt ist.
+    pub const EINZELCHATS_NEU: Regel = Regel::neu(300, Duration::from_secs(3600));
+
+    /// Mitteilungen über Änderungen an einem Termin: drei je zehn Minuten und
+    /// Termin.
+    ///
+    /// Wer an Uhrzeit und Ort feilt, soll die Eingeladenen nicht bei jedem
+    /// Tippfehler anklingeln. Weitere Änderungen werden still in die Karten
+    /// geschrieben – nur die Mitteilung entfällt.
+    pub const TERMIN_AENDERUNG_PUSH: Regel = Regel::neu(3, Duration::from_secs(600));
 }
 
 #[cfg(test)]
@@ -362,6 +408,49 @@ mod tests {
         assert!(drossel.erlaubt_um("a", TEST, jetzt));
         assert!(drossel.erlaubt_um("a", TEST, jetzt));
         assert!(!drossel.erlaubt_um("a", TEST, jetzt), "vierter Versuch");
+    }
+
+    #[test]
+    fn eine_menge_geht_ganz_oder_gar_nicht() {
+        let drossel = Drossel::neu(true);
+        let jetzt = Instant::now();
+        assert!(drossel.erlaubt_menge_um("a", TEST, 2, jetzt));
+        // Es ist nur noch einer übrig: Zwei passen nicht, und der eine bleibt
+        // trotz der Absage erhalten.
+        assert!(!drossel.erlaubt_menge_um("a", TEST, 2, jetzt));
+        assert!(drossel.erlaubt_um("a", TEST, jetzt));
+        assert!(!drossel.erlaubt_um("a", TEST, jetzt));
+    }
+
+    #[test]
+    fn eine_menge_ueber_dem_vorrat_geht_nie() {
+        let drossel = Drossel::neu(true);
+        let jetzt = Instant::now();
+        assert!(!drossel.erlaubt_menge_um("a", TEST, 4, jetzt));
+        let viel_spaeter = jetzt + Duration::from_secs(7 * 24 * 3600);
+        assert!(!drossel.erlaubt_menge_um("a", TEST, 4, viel_spaeter));
+    }
+
+    #[test]
+    fn die_einladungsregeln_fuellen_sich_nach_ihrer_zeit() {
+        let drossel = Drossel::neu(true);
+        let jetzt = Instant::now();
+        for _ in 0..3 {
+            assert!(drossel.erlaubt_um("termin:1", regeln::TERMIN_AENDERUNG_PUSH, jetzt));
+        }
+        assert!(!drossel.erlaubt_um("termin:1", regeln::TERMIN_AENDERUNG_PUSH, jetzt));
+        // Ein Drittel der zehn Minuten bringt genau eine Mitteilung zurück.
+        let spaeter = jetzt + Duration::from_secs(200);
+        assert!(drossel.erlaubt_um("termin:1", regeln::TERMIN_AENDERUNG_PUSH, spaeter));
+        assert!(!drossel.erlaubt_um("termin:1", regeln::TERMIN_AENDERUNG_PUSH, spaeter));
+
+        assert!(drossel.erlaubt_menge_um("chats:a", regeln::EINZELCHATS_NEU, 200, jetzt));
+        assert!(!drossel.erlaubt_menge_um("chats:a", regeln::EINZELCHATS_NEU, 200, jetzt));
+        assert!(drossel.erlaubt_menge_um("chats:a", regeln::EINZELCHATS_NEU, 100, jetzt));
+        for _ in 0..30 {
+            assert!(drossel.erlaubt_um("einladen:a", regeln::EINLADEN, jetzt));
+        }
+        assert!(!drossel.erlaubt_um("einladen:a", regeln::EINLADEN, jetzt));
     }
 
     #[test]

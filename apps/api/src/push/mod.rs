@@ -6,6 +6,7 @@
 pub mod ece;
 pub mod vapid;
 
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use sqlx::PgPool;
@@ -15,9 +16,20 @@ use crate::config::Config;
 use crate::db::PushSubscriptionRow;
 use crate::dto::PushPayload;
 
+/// Was ein Mitschnitt festhält: an wen welche Mitteilung gegangen wäre.
+pub type Mitschnitt = Arc<Mutex<Vec<(Uuid, PushPayload)>>>;
+
 pub struct PushService {
     config: std::sync::Arc<Config>,
     http: reqwest::Client,
+    /// Nur für Tests: Ist er gesetzt, wird nicht gesendet, sondern
+    /// mitgeschrieben.
+    ///
+    /// Im Entwicklungsbetrieb fehlen die VAPID-Schlüssel, `enabled()` ist also
+    /// falsch, und niemand sähe, WER eine Mitteilung bekäme. Die Naht erlaubt,
+    /// die Zielbestimmung (eine Mitteilung je Person, Stummschaltung) am
+    /// Ausgang zu prüfen statt am Bildschirm eines Geräts.
+    mitschnitt: OnceLock<Mitschnitt>,
 }
 
 impl PushService {
@@ -28,11 +40,20 @@ impl PushService {
                 .timeout(Duration::from_secs(15))
                 .build()
                 .unwrap_or_default(),
+            mitschnitt: OnceLock::new(),
         }
     }
 
     pub fn enabled(&self) -> bool {
-        self.config.push_enabled()
+        self.mitschnitt.get().is_some() || self.config.push_enabled()
+    }
+
+    /// Schaltet den Mitschnitt ein (nur für Tests) und liefert die Liste,
+    /// in die geschrieben wird. Ab jetzt sendet dieser Dienst nichts mehr.
+    pub fn mitschneiden(&self) -> Mitschnitt {
+        self.mitschnitt
+            .get_or_init(|| Arc::new(Mutex::new(Vec::new())))
+            .clone()
     }
 
     pub fn public_key(&self) -> Option<&str> {
@@ -40,6 +61,29 @@ impl PushService {
             .vapid
             .as_ref()
             .map(|vapid| vapid.public_key.as_str())
+    }
+
+    /// Sendet mehrere Mitteilungen, ohne die Anfrage warten zu lassen.
+    ///
+    /// Jede Person kann eine eigene Nutzlast haben (der Chat, in dem sie
+    /// angesprochen wird, unterscheidet sich). Bei einem Mitschnitt wird sofort
+    /// geschrieben: Es gibt nichts zu warten, und ein Test soll danach lesen
+    /// können, ohne zu raten, wann der Hintergrund fertig ist.
+    pub fn im_hintergrund(self: &Arc<Self>, pool: PgPool, ziele: Vec<(Vec<Uuid>, PushPayload)>) {
+        if let Some(mitschnitt) = self.mitschnitt.get() {
+            if let Ok(mut liste) = mitschnitt.lock() {
+                for (personen, payload) in &ziele {
+                    liste.extend(personen.iter().map(|id| (*id, payload.clone())));
+                }
+            }
+            return;
+        }
+        let dienst = self.clone();
+        tokio::spawn(async move {
+            for (personen, payload) in ziele {
+                dienst.send_to_users(&pool, &personen, &payload).await;
+            }
+        });
     }
 
     /// Sends to every device of the given users. Dead subscriptions (404/410)
@@ -50,6 +94,12 @@ impl PushService {
         user_ids: &[Uuid],
         payload: &PushPayload,
     ) -> usize {
+        if let Some(mitschnitt) = self.mitschnitt.get() {
+            if let Ok(mut liste) = mitschnitt.lock() {
+                liste.extend(user_ids.iter().map(|id| (*id, payload.clone())));
+            }
+            return user_ids.len();
+        }
         let Some(vapid) = self.config.vapid.as_ref() else {
             return 0;
         };
