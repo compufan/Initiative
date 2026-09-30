@@ -973,6 +973,35 @@ curl https://deine-domain.de/
 # { "name": "Initiative API", "version": 1, "runtime": "rust", "modules": [ … ] }
 ```
 
+### Migration 0023 (Einladen)
+
+Sie ändert, **wer einen Termin sieht**: Bisher gab auch die Mitgliedschaft im
+Chat Zugang, jetzt nur noch die Teilnehmerliste. Damit niemand seinen Termin
+verliert, trägt die Migration alle **heutigen** Chatmitglieder als Teilnehmer
+ein (Antwort „offen“) und legt für jede vorhandene Termin-Karte eine Zeile in
+`event_placements` an. Wer **nach** dem Einspielen einer Gruppe beitritt, sieht
+ältere Termine nicht mehr – das ist die neue Regel und ihr Zweck.
+
+Was zu wissen ist:
+
+- Sie ist wiederholbar (`if not exists`, `on conflict do nothing`); ein zweiter
+  Durchlauf ändert nichts. Der Test `tests/einladen_migration.rs` belegt das an
+  einem nachgestellten Altbestand.
+- Das Nachtragen der Karten liest die Tabelle `messages` einmal sequentiell
+  (es gibt keinen Index auf `type`). Bei Millionen Nachrichten sind das einmalig
+  Sekunden; währenddessen läuft die Migration in ihrer Transaktion.
+- Der Fremdschlüssel `calendar_events.conversation_id` wird auf
+  `on delete set null` umgestellt und nimmt dafür kurz eine Sperre auf die
+  Tabelle.
+- Wer die Anwendung auf einen älteren Stand zurückrollt, hat eine lauffähige
+  Datenbank (die alten Spalten sind unverändert) – nur der Chat reisst den
+  Termin nicht mehr mit.
+- Mit `REALTIME_BUS=postgres` wird die Empfängerliste eines Rundrufs in Stücken
+  zu höchstens 100 Personen verschickt, und ein zu grosser Termin-Rundruf wird
+  zu einem `sync.hint` mit der Kennung des Termins. Ohne diese Änderung gingen
+  Live-Zusagen bei mehr als rund 70 Eingeladenen verloren. Mit `memory` tritt
+  das Problem nicht auf.
+
 ### Wenn Migrationen blockieren
 
 sqlx merkt sich zu jeder ausgeführten Migration eine Prüfsumme über den

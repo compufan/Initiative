@@ -119,6 +119,40 @@ kaputte Datei nicht die ganze Warteschlange blockiert. Geprüft in
 `tests/muell.rs`, mit einem Speicher, der absichtlich fehlschlägt – `local`
 schluckt sonst jeden Fehler, und die Prüfung wäre wertlos gewesen.
 
+### 3c. Wer einen Termin sieht
+
+Ein Termin gehört seinen **Eingeladenen**: Sichtbar ist er für den Ersteller und
+für jede Person mit Zeile in `event_attendees` – sonst für niemanden. Die
+Mitgliedschaft in einem Chat, in dem der Termin als Karte steht, verleiht nichts
+(`0023_einladen.sql`). Das gilt einheitlich für Liste, Detail, Zusage, Notizen,
+Unterlagen, Ausgaben am Termin, Kalender-Abo, den Zugriff auf Dateien des Termins
+und den Rundruf; wer nicht eingeladen ist, bekommt `404` und erfährt auch die
+Existenz nicht.
+
+Die Karte im Chat zeigt jedem Betrachter seinen **eigenen** Zustand. Wer nicht
+eingeladen ist (später beigetreten, nicht ausgewählt, ausgeladen), sieht nur
+„Termin nicht verfügbar“ – in der Nachrichtenliste wie im Rundruf fehlen `event`
+**und** `metadata.eventId`. Die Kennung ist mehr als ein Verweis: Mit ihr
+liefert `event.ics` den ganzen Termin, und zwar ohne Anmeldung. Darum legt der
+Server Termin-Karten selbst an; über `POST /conversations/{id}/messages` lassen
+sie sich nicht mehr erzeugen, und der Expander prüft den Betrachter.
+
+Was offen bleibt, und warum:
+
+- `event.ics` ist weiterhin „Kennung als Berechtigung“ (Kalender-Apps können
+  keinen `Authorization`-Kopf senden). Die Kennung gelangt jetzt nur noch an
+  Eingeladene; wer sie einmal kannte, liest den Termin weiter. Ein signierter,
+  ablaufender Link wäre die Härtung – ein eigenes Vorhaben.
+- Die Teilnehmerliste mit allen Antworten sehen alle Eingeladenen. Wer über
+  Einzelchats Fremde einlädt, macht ihnen gegenseitig Namen und Antworten
+  sichtbar; der Editor sagt das vor dem Senden.
+- Eine Einladung legt Einzelchats an, die beim Gegenüber in der Liste
+  auftauchen. Den Direktchat mit jedem Konto gab es schon vorher; neu ist, dass
+  eine Einladung ihn als Nebenwirkung auslöst. Begrenzt wird das durch die
+  Drossel (`EINLADEN`: 30 Anfragen, `EINZELCHATS_NEU`: 300 neue Chats je Stunde
+  und Konto) und die Obergrenze von 200 Eingeladenen. Eine Sperrliste gibt es
+  nicht; `einzelchats_sichern` ist die eine Stelle, an der sie einzuhängen wäre.
+
 ### 4. Die abgelegten Dateien
 
 Mit gesetztem `MEDIA_KEY` liegen Bilder, Videos und Anhänge verschlüsselt auf

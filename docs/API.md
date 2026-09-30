@@ -319,7 +319,7 @@ Gelöschte Nachrichten verschwinden nicht aus der Liste: `deletedAt` ist gesetzt
 | GET     | `/media/{id}`                  | – (Capability) | Header `Range` erlaubt                                         | `200`/`206` Binärdaten oder `302` auf eine signierte URL |
 | GET     | `/media/{id}/bytes`            | – (Capability) | Header `Range` erlaubt                                         | wie oben, aber **nie** als Weiterleitung                 |
 | GET     | `/media/{id}/download`         | – (Capability) | –                                                              | wie oben, mit `Content-Disposition: attachment`          |
-| GET     | `/media/{id}/zugriff`          | Bearer         | –                                                              | Wer diese Datei sieht und warum – nur für den Besitzer    |
+| GET     | `/media/{id}/zugriff`          | Bearer         | –                                                              | Wer diese Datei sieht und warum – nur für den Besitzer   |
 | DELETE  | `/media/{id}`                  | Bearer         | –                                                              | `204` (nur eigene, noch nicht gesendete Anhänge)         |
 | PATCH   | `/media/prioritaet`            | Bearer         | `{ ids: string[], prioritaet }`                                | `200` `{ geaendert, abgelehnt: string[] }`               |
 | POST    | `/media/teilen`                | Bearer         | `{ ids: string[], conversationId, body? }`                     | `200` `Message` – dieselben Dateien, eine neue Nachricht |
@@ -472,20 +472,22 @@ hast – sonst `403`. Anhänge der Art `sticker` dürfen 2 MB groß sein und mü
 
 ## Kalender
 
-| Methode | Pfad                                       | Auth           | Request                                             | Antwort                                              |
-| ------- | ------------------------------------------ | -------------- | --------------------------------------------------- | ---------------------------------------------------- |
-| GET     | `/calendar/events`                         | Bearer         | Query `from?`, `to?`, `conversationId?`             | `200` `{ items: CalendarEvent[] }`                   |
-| POST    | `/calendar/events`                         | Bearer         | siehe unten                                         | `201` `CalendarEvent`                                |
-| GET     | `/calendar/events/{id}`                    | Bearer         | –                                                   | `200` `CalendarEvent`                                |
-| PATCH   | `/calendar/events/{id}`                    | Bearer         | Teilmenge der Anlegen-Felder                        | `200` `CalendarEvent`                                |
-| DELETE  | `/calendar/events/{id}`                    | Bearer         | –                                                   | `204`                                                |
-| POST    | `/calendar/events/{id}/rsvp`               | Bearer         | `{ status: 'yes'\|'no'\|'maybe'\|'pending' }`       | `200` `CalendarEvent`                                |
-| GET     | `/calendar/events/{id}/occurrences`        | Bearer         | Query `from?`, `to?` (Standard: jetzt bis +90 Tage) | `200` `{ items: [{ index, startsAt, endsAt }] }`     |
-| GET     | `/calendar/events/{id}/event.ics`          | – (Capability) | –                                                   | `200` `text/calendar`, einzelner Termin zum Download |
-| GET     | `/calendar/{calendarToken}/feed.ics`       | – (Token)      | –                                                   | `200` `text/calendar`, persönliches Abo              |
-| POST    | `/calendar/planning`                       | Bearer         | `{ conversationId, title, slots[], alsoIn?, … }`    | `201` `CalendarEvent` mit angehängter Terminfindung  |
-| POST    | `/calendar/events/{id}/confirm`            | Bearer         | `{ optionId?, closePoll? }`                         | `200` `CalendarEvent`                                |
-| DELETE  | `/calendar/events/{id}/attendees/{userId}` | Bearer         | –                                                   | `200` `CalendarEvent` – jemanden wieder ausladen     |
+| Methode | Pfad                                           | Auth           | Request                                             | Antwort                                                                                          |
+| ------- | ---------------------------------------------- | -------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| GET     | `/calendar/events`                             | Bearer         | Query `from?`, `to?`, `conversationId?`             | `200` `{ items: CalendarEvent[] }`                                                               |
+| POST    | `/calendar/events`                             | Bearer         | siehe unten                                         | `201` `CalendarEvent` (+ `zustellung`), `200` bei Wiederholung                                   |
+| GET     | `/calendar/events/{id}`                        | Bearer         | –                                                   | `200` `CalendarEvent`                                                                            |
+| PATCH   | `/calendar/events/{id}`                        | Bearer         | Teilmenge der Anlegen-Felder, dazu `status`         | `200` `CalendarEvent` (+ `zustellung`)                                                           |
+| DELETE  | `/calendar/events/{id}`                        | Bearer         | –                                                   | `204`                                                                                            |
+| POST    | `/calendar/events/{id}/rsvp`                   | Bearer         | `{ status: 'yes'\|'no'\|'maybe'\|'pending' }`       | `200` `CalendarEvent`                                                                            |
+| GET     | `/calendar/events/{id}/occurrences`            | Bearer         | Query `from?`, `to?` (Standard: jetzt bis +90 Tage) | `200` `{ items: [{ index, startsAt, endsAt }] }`                                                 |
+| GET     | `/calendar/events/{id}/event.ics`              | – (Capability) | –                                                   | `200` `text/calendar`, einzelner Termin zum Download                                             |
+| GET     | `/calendar/{calendarToken}/feed.ics`           | – (Token)      | –                                                   | `200` `text/calendar`, persönliches Abo                                                          |
+| POST    | `/calendar/planning`                           | Bearer         | `{ conversationId, title, slots[], alsoIn?, … }`    | `201` `CalendarEvent` mit angehängter Terminfindung                                              |
+| POST    | `/calendar/events/{id}/confirm`                | Bearer         | `{ optionId?, closePoll? }`                         | `200` `CalendarEvent`                                                                            |
+| DELETE  | `/calendar/events/{id}/attendees/{userId}`     | Bearer         | –                                                   | `200` `CalendarEvent` – jemanden wieder ausladen (nur Ersteller)                                 |
+| GET     | `/calendar/events/{id}/zustellung`             | Bearer         | –                                                   | `200` `{ gruppen, einzelNutzerIds, ausstehend }` – wo der Termin als Karte steht (nur Ersteller) |
+| POST    | `/calendar/events/{id}/zustellung/nachliefern` | Bearer         | –                                                   | `200` `CalendarEvent` + `zustellung` – holt nicht angekommene Karten nach (nur Ersteller)        |
 
 **Termin anlegen**
 
@@ -513,6 +515,116 @@ serverseitig in `/occurrences` aufgelöst.
 
 `description`, `location`, `rrule` und `color` verstehen im PATCH `null` als
 „löschen"; ein fehlendes Feld bleibt unverändert.
+
+**Einladen: wer, wohin.** Wer den Termin sieht, bestimmt allein die
+Teilnehmerliste (und der Ersteller). Ein Chat, in dem der Termin als Karte
+steht, verleiht **keinen** Zugang: Liste, Detail, Zusage, Notizen, Unterlagen,
+Ausgaben, Kalender-Abo und Rundruf folgen der Teilnehmerzeile; wer nicht
+eingeladen ist, bekommt `404`. Die Karte in einem Chat ist ein _Ort_, an dem der
+Termin angezeigt wird. Sie zeigt jedem Betrachter seinen eigenen Zustand; wer
+nicht eingeladen ist, sieht „Termin nicht verfügbar“ – ohne `event` und ohne
+`metadata.eventId` in der Nachricht.
+
+Mit dem Feld `zustellung` legt der Client ausdrücklich fest, wohin die Einladung
+geht:
+
+```json
+{
+  "title": "Grillen",
+  "startsAt": "…",
+  "endsAt": "…",
+  "attendeeIds": ["018f…", "018f…"],
+  "zustellung": {
+    "senden": true,
+    "einzelchats": true,
+    "gruppenChatIds": ["018f…"]
+  },
+  "clientId": "018f…"
+}
+```
+
+- `attendeeIds` ist dann die **volle** Liste ohne den Ersteller; leer heisst
+  niemand. Der Chat fügt nichts hinzu.
+- `einzelchats` (Vorgabe `true`): Jede eingeladene Person bekommt eine Karte im
+  Einzelchat mit dem Ersteller. Fehlt der Chat, legt ihn der Server an.
+- `gruppenChatIds` (höchstens 10): Gruppenchats, in die die Karte soll – **nur
+  dort, wo alle Mitglieder** (ausser dem Ersteller) eingeladen sind. Sonst
+  steht der Chat unter `ausgelassen` der Antwort. Ein nicht genannter
+  Gruppenchat bekommt nie eine Karte, auch wenn zufällig alle Mitglieder
+  eingeladen sind. `conversationId` neben `zustellung` ist nur erlaubt, wenn er
+  unter `gruppenChatIds` steht; `conversationId` des Termins ist dann der erste
+  Gruppenchat mit Karte, sonst `null`.
+- `senden: false`: niemand bekommt eine Karte oder Benachrichtigung; die
+  Eingeladenen finden den Termin nur im Kalender.
+- `clientId` (höchstens 64 Zeichen): Wiederholungsschutz. Dieselbe Eingabe mit
+  demselben Schlüssel liefert den schon angelegten Termin (`200`), ohne dass
+  Karten oder Benachrichtigungen ein zweites Mal entstehen.
+
+Die Antwort ist der Termin auf oberster Ebene, dazu:
+
+```json
+{
+  "id": "…",
+  "stand": 7,
+  "…": "…",
+  "zustellung": {
+    "gruppen": [{ "conversationId": "018f…", "nachrichtId": "018f…" }],
+    "einzelchats": 2,
+    "neueEinzelchats": 1,
+    "ausgelassen": [{ "conversationId": "018f…", "fehlend": ["018f…"] }],
+    "ausstehend": 0,
+    "benachrichtigt": 2
+  }
+}
+```
+
+`ausstehend` zählt Karten, deren Nachricht nicht angelegt werden konnte
+(Teilausfall): Der Termin steht, `POST …/zustellung/nachliefern` holt sie nach.
+Fehlt `zustellung` im Anfragekörper, gilt der **alte Weg**: `conversationId`
+bestimmt den Chat, alle seine Mitglieder werden eingeladen, eine Karte kommt
+dorthin – wie bisher, ohne `zustellung` in der Antwort.
+
+**Eine Benachrichtigung je Person.** Alle Einladungskarten sind stumm; die
+Einladung meldet sich einmal je Person, über ihren Einzelchat, sonst über den
+ersten Gruppenchat mit Karte – nie über einen stummgeschalteten Chat.
+
+**Ändern und Einladungen.** Im `PATCH` ist `attendeeIds` der Sollzustand der
+Eingeladenen. Hinzugefügte bekommen Einzelkarte und Benachrichtigung (nur sie,
+gesteuert durch `zustellung.senden`/`einzelchats`); Entfernte verlieren sofort
+den Zugang, ihre Einzelkarte wird gelöscht, eine Gruppenkarte bleibt (für sie
+ohne Inhalt). `zustellung.gruppenChatIds` ist der Sollzustand der Gruppenkarten;
+**fehlt es, bleiben sie unverändert.** Einladungen ändern (`attendeeIds`,
+`zustellung`, Ausladen, `…/zustellung`) darf nur der Ersteller (`403`); Inhalt
+ändern und Löschen auch ein Admin eines Gruppenchats, in dem der Termin als
+Karte steht, sofern er selbst eingeladen ist. Änderungen an Zeit oder Ort (nicht
+am Titel) benachrichtigen die Eingeladenen, gedrosselt auf drei je zehn Minuten
+und Termin; Antworten bleiben erhalten.
+
+**Absagen.** `PATCH { "status": "cancelled" }` sagt den Termin ab: Die Karten
+bleiben und zeigen „Abgesagt“, Zusagen sind gesperrt (`409`), alle ausser dem
+Auslöser und denen, die abgesagt haben, werden benachrichtigt.
+`{ "status": "confirmed" }` nimmt ihn wieder auf. Ein Termin in Abstimmung
+(`planning`) lässt sich nicht absagen (`400`).
+**Löschen** entfernt Termin und alle Karten (als gelöschte Nachrichten).
+
+| Fall                                                  | Status | Text                                                                                |
+| ----------------------------------------------------- | ------ | ----------------------------------------------------------------------------------- |
+| mehr als 200 Eingeladene                              | `400`  | Zu viele Eingeladene (höchstens 200).                                               |
+| unbekannte Kennung unter `attendeeIds`                | `400`  | Unbekannte Personen unter den Eingeladenen.                                         |
+| mehr als 10 `gruppenChatIds`                          | `400`  | Zu viele Gruppenchats (höchstens 10).                                               |
+| Einzelchat unter `gruppenChatIds`                     | `400`  | Nur Gruppenchats lassen sich als Ziel wählen.                                       |
+| nicht Mitglied eines gewählten Gruppenchats           | `403`  | Du bist kein Mitglied dieses Chats                                                  |
+| `conversationId` passt nicht zu `gruppenChatIds`      | `400`  | Bei „zustellung“ bestimmen die Gruppenchats den Chat des Termins.                   |
+| Nicht-Ersteller ändert Einladungen                    | `403`  | Nur wer den Termin angelegt hat, kann Einladungen ändern                            |
+| Absage eines Termins in Abstimmung                    | `400`  | Ein Termin in Abstimmung lässt sich nicht absagen – lege zuerst den Zeitpunkt fest. |
+| Zusage bei abgesagtem Termin                          | `409`  | Der Termin ist abgesagt.                                                            |
+| zu viele Einladungen in kurzer Zeit (30 je Stunde)    | `429`  | Zu viele Einladungen in kurzer Zeit. Warte einen Moment.                            |
+| zu viele neue Einzelchats (300 je Stunde)             | `429`  | Zu viele neue Chats in kurzer Zeit. Warte einen Moment.                             |
+| Termin-Karte über `POST /conversations/{id}/messages` | `400`  | Termin-Karten legt nur die Termin-Funktion an.                                      |
+
+Jede Fassung eines Termins trägt einen `stand`, der bei **jeder** Änderung
+hochgezählt wird, auch bei Zu- und Absagen. Zwei Rundrufe können einander
+überholen; wer zwei Fassungen hat, nimmt die mit dem höheren Stand.
 
 **`attendeeIds` ist der Sollzustand, kein Nachtrag.** Wer nicht in der Liste
 steht, wird ausgeladen – nur der Veranstalter bleibt in jedem Fall drin. Wer
@@ -889,29 +1001,29 @@ Verbindung tot und der Client baut sie neu auf.
 
 ### Server → Client
 
-| `type`                 | `payload`                                        | Bedeutung                                                   |
-| ---------------------- | ------------------------------------------------ | ----------------------------------------------------------- |
-| `hello`                | `{ userId, connectionId, serverTime }`           | Erstes Frame nach dem Verbinden                             |
-| `pong`                 | `{ ts }`                                         | Antwort auf `ping`                                          |
-| `message.new`          | `{ message }`                                    | Neue Nachricht in einem deiner Chats                        |
-| `message.updated`      | `{ message }`                                    | Nachricht bearbeitet                                        |
-| `message.deleted`      | `{ conversationId, messageId }`                  | Nachricht gelöscht                                          |
-| `message.reactions`    | `{ conversationId, messageId, reactions }`       | Reaktionen geändert                                         |
-| `conversation.updated` | `{ conversation }`                               | Titel, Bild, Mitglieder, Stummschaltung, Archiv             |
-| `conversation.removed` | `{ conversationId }`                             | Du bist kein Mitglied mehr                                  |
-| `read.updated`         | `{ conversationId, userId, lastReadMessageId }`  | Lesestand eines Mitglieds                                   |
-| `typing`               | `{ conversationId, userId, until }`              | Jemand tippt, läuft nach `until` von selbst ab              |
-| `presence`             | `{ userId, online, lastSeenAt }`                 | Kontakt online oder offline                                 |
-| `poll.updated`         | `{ poll }`                                       | Stimme, neue Option, geschlossen oder geöffnet              |
-| `event.updated`        | `{ event }`                                      | Termin angelegt, geändert, Zu-/Absage                       |
-| `event.deleted`        | `{ eventId, conversationId }`                    | Termin gelöscht                                             |
-| `game.updated`         | `{ session }`                                    | Zug, Beitritt, Ende einer Partie                            |
-| `expense.updated`      | `{ expense }`                                    | Ausgabe angelegt oder geändert                              |
-| `expense.deleted`      | `{ expenseId }`                                  | Ausgabe gelöscht                                            |
-| `expense.settled`      | `{ byUserId, withUserId, amountCents, settled }` | Sammelabrechnung mit einer Person                           |
-| `user.updated`         | `{ user }`                                       | Ein Kontakt hat sein Profil geändert                        |
-| `sync.hint`            | `{ scope, conversationId? }`                     | Nutzlast war zu groß für den Bus – bitte per REST nachladen |
-| `error`                | `{ code, message }`                              | Fehler in einem Client-Ereignis                             |
+| `type`                 | `payload`                                        | Bedeutung                                                                          |
+| ---------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| `hello`                | `{ userId, connectionId, serverTime }`           | Erstes Frame nach dem Verbinden                                                    |
+| `pong`                 | `{ ts }`                                         | Antwort auf `ping`                                                                 |
+| `message.new`          | `{ message }`                                    | Neue Nachricht in einem deiner Chats                                               |
+| `message.updated`      | `{ message }`                                    | Nachricht bearbeitet                                                               |
+| `message.deleted`      | `{ conversationId, messageId }`                  | Nachricht gelöscht                                                                 |
+| `message.reactions`    | `{ conversationId, messageId, reactions }`       | Reaktionen geändert                                                                |
+| `conversation.updated` | `{ conversation }`                               | Titel, Bild, Mitglieder, Stummschaltung, Archiv                                    |
+| `conversation.removed` | `{ conversationId }`                             | Du bist kein Mitglied mehr                                                         |
+| `read.updated`         | `{ conversationId, userId, lastReadMessageId }`  | Lesestand eines Mitglieds                                                          |
+| `typing`               | `{ conversationId, userId, until }`              | Jemand tippt, läuft nach `until` von selbst ab                                     |
+| `presence`             | `{ userId, online, lastSeenAt }`                 | Kontakt online oder offline                                                        |
+| `poll.updated`         | `{ poll }`                                       | Stimme, neue Option, geschlossen oder geöffnet                                     |
+| `event.updated`        | `{ event }`                                      | Termin angelegt, geändert, Zu-/Absage – an die Teilnehmer, mit `stand`             |
+| `event.deleted`        | `{ eventId, conversationId, grund? }`            | Termin gelöscht (`grund: "geloescht"`) oder du wurdest ausgeladen (`"ausgeladen"`) |
+| `game.updated`         | `{ session }`                                    | Zug, Beitritt, Ende einer Partie                                                   |
+| `expense.updated`      | `{ expense }`                                    | Ausgabe angelegt oder geändert                                                     |
+| `expense.deleted`      | `{ expenseId }`                                  | Ausgabe gelöscht                                                                   |
+| `expense.settled`      | `{ byUserId, withUserId, amountCents, settled }` | Sammelabrechnung mit einer Person                                                  |
+| `user.updated`         | `{ user }`                                       | Ein Kontakt hat sein Profil geändert                                               |
+| `sync.hint`            | `{ scope, conversationId?, eventId? }`           | Nutzlast war zu groß für den Bus – bitte per REST nachladen                        |
+| `error`                | `{ code, message }`                              | Fehler in einem Client-Ereignis                                                    |
 
 ### Client → Server
 
@@ -936,7 +1048,10 @@ API-Instanzen, verteilt Postgres `LISTEN/NOTIFY` sie zwischen ihnen
 Postgres, auch wenn Sender und Empfänger derselbe Prozess sind, und ein
 ausgefallener LISTEN-Kanal legt die Echtzeit still. Die Nutzlast von `NOTIFY` ist begrenzt: Ist ein
 Ereignis zu groß, kommt statt der Daten ein `sync.hint` – der Client lädt dann
-per REST nach.
+per REST nach (bei Terminen trägt der Hinweis die `eventId`, bei Nachrichten
+die `conversationId`). Die Empfängerliste wird in Stücken zu höchstens 100
+Personen verschickt: Ein Termin mit vielen Eingeladenen sprengte sie sonst
+allein.
 
 ---
 
