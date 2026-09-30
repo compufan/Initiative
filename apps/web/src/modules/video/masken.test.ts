@@ -16,6 +16,8 @@ import {
   bildDocAn,
   editorAenderung,
   feldArt,
+  filmStandAn,
+  geltungNachTeilen,
   geltungAbHier,
   geltungBisHier,
   geltungLeer,
@@ -26,6 +28,7 @@ import {
   griffLage,
   griffZiehen,
   hoechstJeBild,
+  imFilm,
   jenseitsFuer,
   kettenAuftrag,
   kettenBedarf,
@@ -40,6 +43,7 @@ import {
   stueckeSchnitt,
   teilUnterschied,
   zustandAn,
+  zuvielAn,
   type Anker,
   type Geltung,
   type Gezeigt,
@@ -56,7 +60,7 @@ import {
 } from './masken.js';
 import { filmRaster } from './raster.js';
 import { metaMessen } from './rle.js';
-import type { Abschnitt } from './schnitt.js';
+import { abschnittKuerzen, abschnittTeilen, type Abschnitt } from './schnitt.js';
 
 /**
  * Masken über den ganzen Film: Geltung, Ketten, Zusammensetzen, Bahnen und
@@ -278,6 +282,31 @@ describe('Geltung', () => {
     expect(geltungLeer({ art: 'ganz' }, bezug)).toBe(false);
   });
 
+  it('gilt nach dem Teilen in beiden Hälften, wenn der Aufrufer die Geltung nachführt', () => {
+    const liste = [abschnitt('a', 0, 100), abschnitt('z', 200, 250)];
+    const nur = maske('m', [spur('r', [10, radial('r', 5, 5)])], {
+      geltung: geltungNurAbschnitt('a'),
+      zuletzt: { art: 'abschnitte', ids: ['a'] },
+    });
+    const andere = maske('o', [spur('q', [10, radial('q', 5, 5)])], {
+      geltung: geltungNurAbschnitt('z'),
+    });
+    const geteilt = abschnittTeilen(liste, 0, 50 * S, S, 'neu');
+    if (!geteilt) throw new Error('nicht geteilt');
+    const bezug = { abschnitte: geteilt.abschnitte, s: S };
+    // Ohne Nachführen fehlt die Maske in der Hälfte mit der neuen Kennung.
+    expect([10, 70].map((k) => giltAn(nur.geltung, k, bezug))).toEqual([true, false]);
+    const masken = geltungNachTeilen([nur, andere], 'a', 'neu');
+    expect(masken[0].geltung).toEqual({ art: 'abschnitte', ids: ['a', 'neu'] });
+    expect(masken[0].zuletzt).toEqual({ art: 'abschnitte', ids: ['a', 'neu'] });
+    expect([10, 70].map((k) => giltAn(masken[0].geltung, k, bezug))).toEqual([true, true]);
+    expect(masken[1]).toBe(andere);
+    // Keine betroffen: dieselbe Liste.
+    expect(geltungNachTeilen([andere], 'a', 'neu')).toEqual([andere]);
+    const liste2 = [andere];
+    expect(geltungNachTeilen(liste2, 'a', 'neu')).toBe(liste2);
+  });
+
   it('nimmt „Ab hier" in FILMreihenfolge – auch bei umgestellten Abschnitten', () => {
     // B (Quelle 1500 … 1625) steht vor A (0 … 125); der Kopf steht in B bei 1550.
     const bezug = { abschnitte: [abschnitt('B', 1500, 1625), abschnitt('A', 0, 125)], s: S };
@@ -399,6 +428,46 @@ describe('kettenPlan', () => {
     const knapp = [...alle(0, 20), ...alle(21 + BRUECKE_MAX, 21 + BRUECKE_MAX + 5)];
     expect(kettenPlan(auftrag({ ziele: knapp })).vor.laeufe).toHaveLength(1);
     expect(kettenPlan(auftrag({ ziele: knapp })).vor.ohne).toEqual([]);
+  });
+
+  it('misst einen Szenenschnitt am Film, nicht an der Geltung', () => {
+    /*
+     * „Nur Abschnitt 1 und 3" mit einem langen Abschnitt 2 dazwischen – der
+     * Film läuft dort lückenlos weiter. Gemessen an den Zielen war das ein
+     * Schnitt, und alles in Abschnitt 3 hiess „hier neu antippen".
+     */
+    const ziele = [...alle(0, 49), ...alle(120, 199)];
+    const plan = kettenPlan(auftrag({ ziele, film: alle(0, 199) })).vor;
+    expect(plan.ohne).toEqual([]);
+    expect(plan.laeufe).toHaveLength(1);
+    const [vor] = plan.laeufe;
+    expect(vor.ziele).toEqual([...alle(11, 49), ...alle(120, 199)]);
+    // Die Strecke dazwischen wird geprüft (alle K ab dem Anker), aber nicht abgelegt.
+    for (let k = 50; k < 120; k += 1) {
+      expect(vor.schluessel.includes(k), `Bild ${k}`).toBe((k - 10) % 4 === 0);
+    }
+    // In Laufrichtung, der Start zuerst.
+    expect(vor.schluessel[0]).toBe(10);
+    expect([...vor.schluessel].sort((x, y) => x - y)).toEqual(vor.schluessel);
+    // Ohne Film zählt die Lücke der Ziele – wie bisher ein Schnitt.
+    expect(kettenPlan(auftrag({ ziele })).vor.ohne).toEqual(alle(120, 199));
+    // Fehlen die Bilder dazwischen auch im Film, bleibt es ein Schnitt.
+    const zerschnitten = [...alle(0, 49), ...alle(120, 199)];
+    expect(kettenPlan(auftrag({ ziele, film: zerschnitten })).vor.ohne).toEqual(alle(120, 199));
+  });
+
+  it('prüft eine kurze Strecke im Film ohne Ziel nicht – wie eine Brücke', () => {
+    const ziele = [...alle(0, 20), ...alle(40, 60)];
+    const [vor] = kettenPlan(auftrag({ ziele, film: alle(0, 60) })).vor.laeufe;
+    for (let k = 21; k < 40; k += 1) expect(vor.schluessel).not.toContain(k);
+  });
+
+  it('bleibt nach „Ab hier" hinter dem Anker bei derselben Kette – ohne Schnitt', () => {
+    // Anker bei 5, dann gilt die Maske erst ab 60 – 54 Filmbilder dahinter.
+    const plan = kettenPlan(auftrag({ anker: 5, ziele: alle(60, 119), film: alle(0, 119) })).vor;
+    expect(plan.ohne).toEqual([]);
+    expect(plan.laeufe[0].ziele).toEqual(alle(60, 119));
+    expect(plan.laeufe[0].schluessel).toContain(9);
   });
 
   it('setzt auch an einem Anker ausserhalb des Films an – über eine Brücke', () => {
@@ -821,6 +890,44 @@ describe('bildDocAn', () => {
       expect(z.doc.bereiche[0].teile[1]).toBe(p);
     });
 
+    it('bestellen ihr Ankerbild beim Inhalt – auch wenn es kein Bild des Films mehr ist', () => {
+      /*
+       * Tipp bei 10, Pinsel bei 40, der Film zeigt nur 0 … 29 (gekürzt). Die
+       * Form fragt den Inhalt an 40 – das muss die Kette rechnen, sonst fehlt
+       * die Maske an JEDEM Bild, und der Fortschritt meldete trotzdem fertig.
+       */
+      const t = tipp('t', scheibe(10, 10));
+      const p = pinsel('p', [20, 20, 22, 20]);
+      const m = maske('m', [spur('t', [10, t]), spur('p', [40, p])]);
+      const F = Array.from({ length: 30 }, (_, i) => i);
+      const bezug = { abschnitte: [abschnitt('a', 0, 30)], s: S };
+      const [bedarf] = kettenBedarf(m, F, bezug);
+      expect(bedarf.teil.id).toBe('t');
+      expect(bedarf.ziele).toContain(40);
+      expect(bedarf.ziele.filter((k) => k !== 40)).toEqual(F);
+      // Zwei Anker am Inhalt: Die Kette, deren Bereich 40 enthält, bekommt es.
+      const zwei = maske('m', [spur('t', [10, t], [20, tipp('t', scheibe(12, 10))]), m.teile[1]]);
+      const [erste, zweite] = kettenBedarf(zwei, F, bezug);
+      expect(erste.ziele).not.toContain(40);
+      expect(zweite.ziele).toContain(40);
+
+      // Fortschritt und Filmbau fragen dieselbe Regel.
+      const rahmen = { ...bezug, b: B, h: H };
+      const karten = new Karten();
+      const ankerT = m.teile[0].anker[0];
+      karten.legen(ankerT, 'vor', 20, 'fein', scheibe(14, 10));
+      expect(filmStandAn(m, 20, karten, rahmen)).toBe('offen');
+      expect(() => bildDocAn(null, [m], karten, 20, 'bild', rahmen)).toThrow(/noch nicht fertig/);
+      karten.legen(ankerT, 'vor', 40, 'grob', scheibe(16, 10));
+      expect(filmStandAn(m, 20, karten, rahmen)).toBe('grob');
+      karten.legen(ankerT, 'vor', 40, 'fein', scheibe(16, 10));
+      expect(filmStandAn(m, 20, karten, rahmen)).toBe('fein');
+      const teil = bildDocAn(null, [m], karten, 20, 'bild', rahmen).doc.bereiche[0].teile[1];
+      if (teil.art !== 'pinsel') throw new Error('kein Pinsel');
+      // Der Inhalt wanderte von 16 (bei 40) nach 14 (bei 20): der Pinsel mit.
+      expect(teil.striche[0].punkte[0]).toBeCloseTo(18, 6);
+    });
+
     it('folgen in einer Maske mit Inhalt dem INHALT – und verschwinden mit ihm', () => {
       const t = tipp('t', scheibe(10, 10));
       const p = pinsel('p', [10, 10, 12, 10]);
@@ -879,6 +986,61 @@ describe('bildDocAn', () => {
     const z = bildDocAn(null, masken, new Karten(), 10, 'editor', RAHMEN);
     expect(z.doc.bereiche).toHaveLength(4);
     expect(z.ueberzaehlig).toEqual(['m4']);
+  });
+
+  it('lässt im Filmbau keine fünfte Maske still weg, die ein Verlängern ins Bild holte', () => {
+    /*
+     * Vier Masken bis Bild 49, eine fünfte „nur in Abschnitt b" (ab 60).
+     * Verlängert man b nach vorn bis 30, gilt sie dort mit – eine Änderung
+     * der Geltung, an der `grenzeVerletzt` nicht gefragt war.
+     */
+    const vorher = [abschnitt('a', 0, 50), abschnitt('b', 60, 100)];
+    const vier = Array.from({ length: 4 }, (_, i) =>
+      maske(`v${i}`, [spur(`r${i}`, [10, radial(`r${i}`, 5, 5)])], {
+        geltung: { art: 'stuecke', stuecke: [{ vonK: 0, bisK: 50 }] },
+      }),
+    );
+    const fuenfte = maske('f', [spur('rf', [70, radial('rf', 5, 5)])], {
+      geltung: geltungNurAbschnitt('b'),
+    });
+    const masken = [...vier, fuenfte];
+    expect(grenzeVerletzt(masken, { abschnitte: vorher, s: S })).toBeNull();
+    const nachher = abschnittKuerzen(vorher, 1, 30 * S, 100 * S, 10000, S).abschnitte;
+    const bezug = { abschnitte: nachher, s: S };
+    // Die Prüfung, die nach jedem Kürzen gehört, sieht es …
+    expect(grenzeVerletzt(masken, bezug)).toMatch(/5 Masken/);
+    // … die Bahn kann es zeigen …
+    expect(zuvielAn(masken, bezug)).toEqual([{ vonK: 30, bisK: 50 }]);
+    // … und der Filmbau wirft, statt eine Maske still wegzulassen.
+    const quelle = new Karten();
+    quelle.lageSonst = { stand: 'fein', lage: { s: 1, w: 0, tx: 0, ty: 0, sicher: 9 }, faktor: 1 };
+    const rahmen = { ...bezug, b: B, h: H };
+    expect(() => bildDocAn(null, masken, quelle, 40, 'bild', rahmen)).toThrow(/5 Masken/);
+    expect(bildDocAn(null, masken, quelle, 40, 'editor', rahmen).ueberzaehlig).toEqual(['f']);
+    // Wo es nur vier sind, geht es.
+    expect(bildDocAn(null, masken, quelle, 70, 'bild', rahmen).doc.bereiche).toHaveLength(1);
+    expect(zuvielAn(vier, bezug)).toEqual([]);
+  });
+
+  it('sagt hinter der Obergrenze des Films „nicht im Film" statt „wird noch verfolgt"', () => {
+    const t = tipp('t', scheibe(10, 10));
+    const m = maske('m', [spur('t', [5, t])]);
+    const rahmen: Rahmen = { ...RAHMEN, maxBilder: 60 };
+    expect(imFilm(59, rahmen, 60)).toBe(true);
+    expect(imFilm(60, rahmen, 60)).toBe(false);
+    const quelle = new Karten();
+    const drin = bildDocAn(null, [m], quelle, 50, 'editor', rahmen);
+    expect(drin.fehlend).toEqual(['m']);
+    expect(drin.jenseits).toEqual([]);
+    const draussen = bildDocAn(null, [m], quelle, 70, 'editor', rahmen);
+    expect(draussen.fehlend).toEqual([]);
+    expect(draussen.jenseits).toEqual(['m']);
+    expect(zustandAn(m, 70, null, quelle, rahmen)).toBe(BAHN.jenseits);
+    expect(zustandAn(m, 50, null, quelle, rahmen)).toBe(BAHN.offen);
+    // Umgestellt: Bild 5 steht im Film vorn – drin, auch wenn es hinten noch einmal käme.
+    const umgestellt = { abschnitte: [abschnitt('x', 0, 10), abschnitt('y', 0, 100)], s: S };
+    expect(imFilm(5, umgestellt, 60)).toBe(true);
+    expect(imFilm(55, umgestellt, 60)).toBe(false);
   });
 });
 
@@ -956,6 +1118,57 @@ describe('bahnZustand', () => {
     quelle.legen(t.teile[0].anker[0], 'vor', 3, 'fein', scheibe(12, 10));
     expect(zustandAn(t, 3, null, quelle, RAHMEN)).toBe(BAHN.offen);
     expect(bildDocAn(null, [t], quelle, 3, 'vorschau', RAHMEN).veraltet).toEqual(['t']);
+  });
+
+  it('baut für eine Bahn keine Tiefe und zieht keine Pinselpunkte', () => {
+    /*
+     * Die Bahn wird bei jeder Standmeldung neu gezeichnet. Für jedes Bild die
+     * Tiefenkarte zu ziehen kostete je Bahn eine halbe Sekunde, jeden
+     * Pinselpunkt zu ziehen bei 20 000 Punkten ebenso viel.
+     */
+    const tiefe: Maskenteil = {
+      id: 'd',
+      modus: 'dazu',
+      umkehren: false,
+      art: 'tiefe',
+      breite: B,
+      hoehe: H,
+      karte: new Uint8Array(B * H),
+      fokus: 0.7,
+      spanne: 0.2,
+      marke: filmMarke(),
+    };
+    const punkte: number[] = [];
+    for (let i = 0; i < 20_000; i += 1) punkte.push(5 + (i % 20), 5 + ((i * 7) % 20));
+    const m = maske('m', [spur('d', [0, tiefe])]);
+    const p = maske('p', [spur('p', [0, pinsel('p', punkte)])]);
+    let gebaut = 0;
+    const quelle = new Karten();
+    quelle.lageSonst = { stand: 'fein', lage: { s: 1, w: 0, tx: -1, ty: 0, sicher: 9 }, faktor: 1 };
+    quelle.tiefe = () => ({
+      stand: 'fein',
+      marke: 3,
+      get daten() {
+        gebaut += 1;
+        return { breite: 20, hoehe: 15, werte: new Uint8Array(300) };
+      },
+    });
+    const abschnitte = [abschnitt('a', 0, 600)];
+    const beginn = performance.now();
+    const bahnT = bahnZustand(abschnitte, m, quelle, S, { b: B, h: H }, 300, 600 * S);
+    const bahnP = bahnZustand(abschnitte, p, quelle, S, { b: B, h: H }, 300, 600 * S);
+    const dauer = performance.now() - beginn;
+    expect(gebaut).toBe(0);
+    expect(Math.min(...bahnT)).toBe(BAHN.sichtbar);
+    expect(Math.min(...bahnP)).toBe(BAHN.sichtbar);
+    expect(dauer).toBeLessThan(150);
+    // Der Pinsel wandert trotzdem richtig: 40 Punkte nach rechts geschoben, liegt er ausserhalb.
+    quelle.lageSonst = {
+      stand: 'fein',
+      lage: { s: 1, w: 0, tx: -40, ty: 0, sicher: 9 },
+      faktor: 1,
+    };
+    expect(zustandAn(p, 10, null, quelle, RAHMEN)).toBe(BAHN.leer);
   });
 
   it('markiert, was hinter der Obergrenze des Films liegt', () => {
@@ -1155,6 +1368,89 @@ describe('editorAenderung', () => {
     expect(dort.neuRechnen).toBe(true);
     expect(dort.id).not.toBe(motiv.teile[0].anker[0].id);
     expect(dort.teil).toMatchObject({ toleranz: 60 });
+  });
+
+  it('behält den Anker eines Tipps, wenn danach nur Umkehren und Modus folgen – und ↺ stimmt', () => {
+    /*
+     * Der Normalfall „Motiv antippen, dann Umkehren": verglichen mit dem
+     * AUSGEGEBENEN Teil unterschied sich das zweite lokal und global – ein
+     * neuer Anker, und die Verfolgung begann von vorn.
+     */
+    const { masken, gezeigt, z, motiv } = aufbau();
+    const mit = (teil: Maskenteil) => {
+      const doc = docKopie(z.doc);
+      doc.bereiche[0].teile = [teil];
+      return doc;
+    };
+    const t1 = {
+      ...z.doc.bereiche[0].teile[0],
+      punkte: [{ x: 15, y: 12 }],
+      alpha: scheibe(15, 12),
+      marke: filmMarke(),
+    } as Maskenteil;
+    const e1 = editorAenderung(mit(t1), gezeigt, masken, new Map(), bezug);
+    const hierId = e1.masken[0].teile[0].anker[1].id;
+    const dortId = motiv.teile[0].anker[0].id;
+    const t2 = { ...t1, umkehren: true } as Maskenteil;
+    const e2 = editorAenderung(mit(t2), gezeigt, e1.masken, e1.geloescht, bezug);
+    const t3 = { ...t2, modus: 'weg' } as Maskenteil;
+    const e3 = editorAenderung(mit(t3), gezeigt, e2.masken, e2.geloescht, bezug);
+    for (const erg of [e2, e3]) {
+      const anker = erg.masken[0].teile[0].anker;
+      expect(anker.map((a) => a.id)).toEqual([dortId, hierId]);
+      expect(anker.every((a) => a.teil.umkehren)).toBe(true);
+      expect(anker.some((a) => a.neuRechnen)).toBe(false);
+    }
+    expect(e3.masken[0].teile[0].anker.map((a) => a.teil.modus)).toEqual(['weg', 'weg']);
+    expect(e3.masken[0].teile[0].anker[1].teil).toBe(t3);
+    // Dieselbe Meldung noch einmal: dieselben Objekte.
+    expect(editorAenderung(mit(t3), gezeigt, e3.masken, e3.geloescht, bezug).masken).toBe(
+      e3.masken,
+    );
+    // ↺ Schritt für Schritt: dieselben Kennungen, die Felder von damals.
+    const r2 = editorAenderung(mit(t2), gezeigt, e3.masken, e3.geloescht, bezug);
+    expect(r2.masken[0].teile[0].anker.map((a) => a.id)).toEqual([dortId, hierId]);
+    expect(r2.masken[0].teile[0].anker.map((a) => a.teil.modus)).toEqual(['dazu', 'dazu']);
+    const r1 = editorAenderung(mit(t1), gezeigt, r2.masken, r2.geloescht, bezug);
+    expect(r1.masken[0].teile[0].anker.map((a) => a.id)).toEqual([dortId, hierId]);
+    expect(r1.masken[0].teile[0].anker.some((a) => a.teil.umkehren)).toBe(false);
+    // … bis zum ausgegebenen Teil: die Anker von vor der Sitzung.
+    const r0 = editorAenderung(docKopie(z.doc), gezeigt, r1.masken, r1.geloescht, bezug);
+    expect(r0.masken[0].teile[0]).toBe(motiv.teile[0]);
+    // Ein neuer Tipp danach ist wieder ein neuer Anker – wie es sein soll.
+    const t4 = { ...t3, punkte: [{ x: 16, y: 12 }], marke: filmMarke() } as Maskenteil;
+    const e4 = editorAenderung(mit(t4), gezeigt, e3.masken, e3.geloescht, bezug);
+    expect(e4.masken[0].teile[0].anker[1].id).not.toBe(hierId);
+    // Und ↺ von dort zurück auf den umgekehrten Tipp findet dessen Anker wieder.
+    const zurueckT3 = editorAenderung(mit(t3), gezeigt, e4.masken, e4.geloescht, bezug);
+    expect(zurueckT3.masken[0].teile[0].anker[1].id).toBe(hierId);
+  });
+
+  it('behält auch in einer hier angelegten Maske den Anker bei einer rein globalen Änderung', () => {
+    const { masken, gezeigt, z } = aufbau();
+    const mitNeuer = (teil: Maskenteil) => {
+      const doc = docKopie(z.doc);
+      doc.bereiche.push({
+        id: 'bNeu',
+        name: 'Neu',
+        aktiv: true,
+        teile: [teil],
+        anpassung: { ...BEREICH_NEUTRAL },
+      });
+      return doc;
+    };
+    const r = radial('rNeu', 20, 20);
+    const e1 = editorAenderung(mitNeuer(r), gezeigt, masken, new Map(), bezug);
+    const id = e1.masken.find((m) => m.id === 'bNeu')?.teile[0].anker[0].id;
+    const weicher = { ...r, weichheit: 0.8 } as Maskenteil;
+    const e2 = editorAenderung(mitNeuer(weicher), gezeigt, e1.masken, e1.geloescht, bezug);
+    const anker = e2.masken.find((m) => m.id === 'bNeu')?.teile[0].anker[0];
+    expect(anker?.id).toBe(id);
+    expect(anker?.teil).toBe(weicher);
+    // Eine lokale Änderung dagegen ist ein neuer Anker.
+    const verschoben = { ...weicher, mitte: { x: 22, y: 20 } } as Maskenteil;
+    const e3 = editorAenderung(mitNeuer(verschoben), gezeigt, e2.masken, e2.geloescht, bezug);
+    expect(e3.masken.find((m) => m.id === 'bNeu')?.teile[0].anker[0].id).not.toBe(id);
   });
 
   it('legt einen neuen Bereich als Maske für den ganzen Film an', () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { neuesDoc } from '../bild/doc.js';
 import { filmSchrittMs, filmZeitpunkte, kannTeilen } from './ausschnitt.js';
-import { bildBereich } from './raster.js';
+import { bildBereich, bildMitte } from './raster.js';
 import {
   abschnittDazu,
   abschnittEntfernen,
@@ -311,6 +311,39 @@ describe('Kanten auf dem Raster', () => {
           expect(k1 - k0).toBeGreaterThanOrEqual(1);
           expect(aufRaster(haelfte.vonMs, s) && aufRaster(haelfte.bisMs, s)).toBe(true);
           expect(standDrin(haelfte)).toBe(true);
+        }
+      }
+    },
+  );
+
+  it.each([10, 12, 15, 24, 25, 30, 50, 60])(
+    'lässt bei %i Bildern je Sekunde die Wiedergabestelle in der hinteren Hälfte – mit Kennung, wenn sie am Stellbild steht',
+    (rate) => {
+      /*
+       * Geteilt wird dort, wo die Wiedergabestelle steht, und gewählt ist
+       * danach die hintere Hälfte. Auf die nächste Kante gerundet, lag die
+       * Kante in der Hälfte der Fälle HINTER der Stelle – am Stellbild (einer
+       * Bildmitte) fast immer, und dann behielt die vordere Hälfte Kennung
+       * und Stellbild, obwohl die hintere gewählt war.
+       */
+      const s = filmSchrittMs(rate);
+      const k0 = 30;
+      const k1 = 60;
+      for (let k = k0 + 1; k < k1 - 1; k += 1) {
+        for (const bei of [bildMitte(k, s), k * s + 0.2 * s, Math.round(k * s + 0.9 * s)]) {
+          if (!kannTeilen(abschnitt('a', k0 * s, k1 * s, 0), bei, Math.max(1, Math.round(s)))) {
+            continue;
+          }
+          const alt = abschnitt('a', k0 * s, k1 * s, bildMitte(k, s));
+          const erg = abschnittTeilen([alt], 0, bei, s, 'neu');
+          const [, hinten] = erg?.abschnitte ?? [];
+          expect(hinten.vonMs, `${rate}/s bei ${bei}`).toBeLessThanOrEqual(bei + 1e-6);
+          expect(bei).toBeLessThan(hinten.bisMs);
+          // Die Stelle am Stellbild: Die hintere Hälfte behält es und die Kennung.
+          if (bei === bildMitte(k, s)) {
+            expect(hinten.id, `${rate}/s bei ${bei}`).toBe('a');
+            expect(hinten.standMs).toBe(alt.standMs);
+          }
         }
       }
     },

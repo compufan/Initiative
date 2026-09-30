@@ -122,9 +122,15 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
       const erg = abschnittTeilen(liste.current, nummer, beiMs, schrittMs);
       if (!erg) return false;
       setAbschnitte(verlegungVermerken(erg.abschnitte, erg.verlegung));
-      // Gewählt bleibt die Hälfte, in der die Wiedergabestelle jetzt steht –
-      // die hintere, denn geteilt wird genau dort, wo sie steht.
-      setAktivRoh(nummer + 1);
+      /*
+       * Gewählt bleibt die Hälfte, in der die Wiedergabestelle jetzt steht.
+       * Fast immer die hintere – geteilt wird am Anfang des Bildes unter ihr
+       * (siehe `abschnittTeilen`). Nur wo die Kante dafür ein Bild nach innen
+       * rücken musste, steht sie in der vorderen; gefragt wird deshalb die
+       * Kante selbst.
+       */
+      const kante = erg.abschnitte[nummer + 1].vonMs;
+      setAktivRoh(beiMs >= kante - 1e-6 ? nummer + 1 : nummer);
       return true;
     },
     [schrittMs],
