@@ -11,9 +11,10 @@ import {
   abschnittKuerzen,
   abschnittTeilen,
   abschnittVerschieben,
+  ersterAbschnitt,
   haengtAmBild,
   mussVerlegen,
-  standImRaster,
+  rasterNeu,
   verlegungVermerken,
   type Abschnitt,
 } from './schnitt.js';
@@ -81,21 +82,40 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
     setAktivRoh(Math.max(0, Math.min(nummer, liste.current.length - 1)));
   }, []);
 
-  const anfangen = useCallback(
-    (bisMs: number) => {
-      const stueck = { vonMs: 0, bisMs };
-      setAbschnitte([
-        {
-          ...stueck,
-          id: abschnittKennung(),
-          doc: null,
-          standMs: standImRaster(stueck, 0, schrittMs),
-        },
-      ]);
-      setAktivRoh(0);
-    },
-    [schrittMs],
-  );
+  /*
+   * Die Schrittweite über eine Referenz: Das Blatt ruft `anfangen` aus einem
+   * Effekt, der nur am Video hängt, und hält damit die Fassung vom ersten
+   * Zeichnen fest. Wählt jemand die Bildrate, bevor das Video gelesen ist,
+   * lägen die Kanten des ersten Abschnitts sonst auf dem ALTEN Raster – und
+   * das Umrastern unten wäre dann schon gelaufen, auf einer leeren Liste.
+   */
+  const schrittRef = useRef(schrittMs);
+  schrittRef.current = schrittMs;
+  const anfangen = useCallback((bisMs: number) => {
+    setAbschnitte([ersterAbschnitt(bisMs, schrittRef.current, abschnittKennung())]);
+    setAktivRoh(0);
+  }, []);
+
+  /*
+   * Eine neue Bildrate legt alle Kanten auf IHR Raster – siehe `raster.ts`.
+   *
+   * Hier und nicht im Blatt, das die Bildrate wählt: Dort hinge es an jedem
+   * Knopf, der sie ändert, und ein vergessener liesse Kanten auf dem alten
+   * Raster zurück. Die Länge der Quelle kommt über eine Referenz herein – sie
+   * zu einer Abhängigkeit zu machen, rasterte bei jedem Laden neu, obwohl
+   * sich nur das Raster ändern kann.
+   */
+  const quelleRef = useRef(quelleMs);
+  quelleRef.current = quelleMs;
+  useEffect(() => {
+    setAbschnitte((alt) => {
+      const erg = rasterNeu(alt, schrittMs, quelleRef.current);
+      return erg.verlegungen.reduce(
+        (liste, verlegung) => verlegungVermerken(liste, verlegung),
+        erg.abschnitte,
+      );
+    });
+  }, [schrittMs]);
 
   const teilen = useCallback(
     (nummer: number, beiMs: number) => {

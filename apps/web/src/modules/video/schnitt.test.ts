@@ -1,13 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import { neuesDoc } from '../bild/doc.js';
-import { filmZeitpunkte } from './ausschnitt.js';
+import { filmSchrittMs, filmZeitpunkte, kannTeilen } from './ausschnitt.js';
+import { bildBereich } from './raster.js';
 import {
   abschnittDazu,
   abschnittEntfernen,
   abschnittKuerzen,
   abschnittTeilen,
   abschnittVerschieben,
+  ersterAbschnitt,
   filmAnfangMs,
   filmDauerMs,
   filmZuQuelle,
@@ -15,6 +17,7 @@ import {
   hatInhaltsTeile,
   mussVerlegen,
   quelleZuFilm,
+  rasterNeu,
   standDrin,
   standImRaster,
   verlegungVermerken,
@@ -269,5 +272,111 @@ describe('Formen hängen am Bild wie Masken', () => {
     const liste: Abschnitt[] = [{ ...abschnitt('a', 0, 1000, 700), doc: mitVerlauf, teileMs: 100 }];
     const erg = abschnittDazu(liste, 0, 10_000, 40, 'neu');
     expect(erg.verlegung?.vonMs).toBe(100);
+  });
+});
+
+describe('Kanten auf dem Raster', () => {
+  /** Liegt `ms` auf einer Kante des Rasters – bis auf Gleitkommareste? */
+  function aufRaster(ms: number, s: number): boolean {
+    return Math.abs(ms / s - Math.round(ms / s)) < 1e-9;
+  }
+
+  it('teilt auf einer Rasterkante, auch bei 24 Bildern je Sekunde', () => {
+    const s = filmSchrittMs(24);
+    const alt = abschnitt('a', 24 * s, 72 * s, 50 * s);
+    // 1043 ms ist 1 ms mehr als die gerundete Mindestweite von der Kante bei
+    // 1000 ms – gerundet landet die Stelle genau ein Bild daneben.
+    const erg = abschnittTeilen([alt], 0, 1043, s, 'neu');
+    expect(erg).not.toBeNull();
+    const [vorn, hinten] = erg?.abschnitte ?? [];
+    expect(vorn.bisMs).toBeCloseTo(25 * s, 9);
+    expect(hinten.vonMs).toBe(vorn.bisMs);
+    expect(aufRaster(vorn.bisMs, s)).toBe(true);
+  });
+
+  it.each([10, 15, 24, 25, 30, 50, 60])(
+    'teilt bei %i Bildern je Sekunde überall dort, wo die Zeitleiste ✂ anbietet',
+    (rate) => {
+      // Die Zeitleiste gibt den Knopf mit `kannTeilen` und einem GERUNDETEN
+      // Bild Abstand frei. Täte das Teilen danach nichts, wäre der Knopf eine
+      // Falle – siehe `abschnittTeilen`.
+      const s = filmSchrittMs(rate);
+      const alt = abschnitt('a', 30 * s, 45 * s, 31 * s);
+      for (let bei = alt.vonMs; bei <= alt.bisMs; bei += 0.5) {
+        if (!kannTeilen(alt, bei, Math.max(1, Math.round(s)))) continue;
+        const erg = abschnittTeilen([alt], 0, bei, s, 'neu');
+        expect(erg, `bei ${bei}`).not.toBeNull();
+        for (const haelfte of erg?.abschnitte ?? []) {
+          const { k0, k1 } = bildBereich(haelfte, s);
+          expect(k1 - k0).toBeGreaterThanOrEqual(1);
+          expect(aufRaster(haelfte.vonMs, s) && aufRaster(haelfte.bisMs, s)).toBe(true);
+          expect(standDrin(haelfte)).toBe(true);
+        }
+      }
+    },
+  );
+
+  it('kürzt auf das Raster und nie über das letzte ganze Bild hinaus', () => {
+    const s = filmSchrittMs(30);
+    const liste = [abschnitt('a', 30 * s, 60 * s, 45 * s)];
+    const erg = abschnittKuerzen(liste, 0, 1013, 1987, 5020, s);
+    expect(erg.abschnitte[0].vonMs).toBeCloseTo(30 * s, 9);
+    expect(erg.abschnitte[0].bisMs).toBeCloseTo(60 * s, 9);
+    // 5020 ms bei 25 Bildern je Sekunde: 125 ganze Bilder, das Ende bei 5000.
+    const ende = abschnittKuerzen([abschnitt('a', 0, 1000, 500)], 0, 0, 99_000, 5020, 40);
+    expect(ende.abschnitte[0].bisMs).toBe(5000);
+    const hinten = abschnittKuerzen([abschnitt('a', 0, 1000, 500)], 0, 5010, 5030, 5020, 40);
+    expect(hinten.abschnitte[0]).toMatchObject({ vonMs: 4960, bisMs: 5000 });
+  });
+
+  it('legt einen neuen Abschnitt auf das Raster', () => {
+    const s = filmSchrittMs(30);
+    const erg = abschnittDazu([abschnitt('a', 0, 1010, 500)], 0, 10_000, s, 'neu');
+    const neu = erg.abschnitte[1];
+    expect(aufRaster(neu.vonMs, s) && aufRaster(neu.bisMs, s)).toBe(true);
+    expect(neu.vonMs).toBeCloseTo(30 * s, 9);
+    expect(neu.bisMs).toBeCloseTo(90 * s, 9);
+    expect(standDrin(neu)).toBe(true);
+  });
+
+  it('fängt einen Film auf dem Raster an – mit abgerundetem Ende', () => {
+    const s24 = filmSchrittMs(24);
+    const erst = ersterAbschnitt(5000, s24, 'a');
+    expect(erst.vonMs).toBe(0);
+    expect(erst.bisMs).toBeCloseTo(120 * s24, 9);
+    expect(erst.standMs).toBeCloseTo(s24 / 2, 9);
+    expect(ersterAbschnitt(3010, 40, 'a').bisMs).toBe(3000);
+    // Kürzer als ein Bild: trotzdem eines.
+    expect(ersterAbschnitt(10, 40, 'a').bisMs).toBe(40);
+  });
+
+  it('rastert bei einer neuen Bildrate alle Kanten neu – und lässt Fertiges stehen', () => {
+    const liste = [abschnitt('a', 0, 1000, 500), abschnitt('b', 2000, 3000, 2500)];
+    expect(rasterNeu(liste, 40, 10_000).abschnitte).toBe(liste);
+    const s = filmSchrittMs(30);
+    const erg = rasterNeu(liste, s, 10_000);
+    expect(erg.verlegungen).toEqual([]);
+    for (const neu of erg.abschnitte) {
+      expect(aufRaster(neu.vonMs, s) && aufRaster(neu.bisMs, s)).toBe(true);
+    }
+    expect(erg.abschnitte[0].bisMs).toBeCloseTo(30 * s, 9);
+    // Ein Abschnitt, der schon auf dem neuen Raster liegt, bleibt dasselbe Objekt.
+    expect(rasterNeu([liste[0]], s, 10_000).abschnitte[0]).toBe(liste[0]);
+  });
+
+  it('hält beim Umrastern jeden Abschnitt mindestens ein Bild lang und in der Quelle', () => {
+    const s = filmSchrittMs(10);
+    const erg = rasterNeu(
+      [abschnitt('a', 20, 40, 30), abschnitt('b', 4990, 5010, 5000), abschnitt('c', 150, 450, 160)],
+      s,
+      5020,
+    );
+    const [a, b, c] = erg.abschnitte;
+    expect(a).toMatchObject({ vonMs: 0, bisMs: 100 });
+    expect(b).toMatchObject({ vonMs: 4900, bisMs: 5000 });
+    expect(c).toMatchObject({ vonMs: 200, bisMs: 500 });
+    // Das Stellbild von c lag danach draussen und wurde an das nächste Bild verlegt.
+    expect(erg.verlegungen).toEqual([{ id: 'c', vonMs: 160, nachMs: 250 }]);
+    expect(standDrin(a) && standDrin(b) && standDrin(c)).toBe(true);
   });
 });

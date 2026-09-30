@@ -1,6 +1,7 @@
 import type { BildDoc } from '../bild/doc.js';
 import { kannTeilen, type Stueck } from './ausschnitt.js';
 import { istFormTeil, istInhaltsTeil } from './bildweise.js';
+import { quellBilder } from './raster.js';
 
 /**
  * Die Abschnitte eines Films – jeder mit seiner EIGENEN Bearbeitung.
@@ -33,6 +34,18 @@ import { istFormTeil, istInhaltsTeil } from './bildweise.js';
  * Kürzen heraus, meldet die Funktion hier eine `Verlegung`: Die Masken
  * müssen an ein Bild im Abschnitt mitgenommen werden, und das rechnet
  * `verlegen.ts` – nicht diese Datei, die bleibt reine Arithmetik.
+ *
+ * # Die Kanten liegen auf dem Raster
+ *
+ * Jede Kante, die hier entsteht, ist ein Vielfaches der Schrittweite `s` –
+ * beim Teilen, Kürzen, Hinzufügen und nach einem Wechsel der Bildrate
+ * (`rasterNeu`). Warum, steht in `raster.ts`: Nur dann ist Bild i eines
+ * Abschnitts genau Rasterbild `von/s + i`, und Editor, Vorschau, Verfolgung
+ * und Filmbau sehen an derselben Stelle dasselbe Bild.
+ *
+ * Gerechnet wird dafür in ganzen Bildern und erst am Ende mal `s`. So ist
+ * eine Kante immer genau `k · s` – auch bei 41,666… ms, wo eine Rechnung in
+ * Millisekunden (`a · s − b · s`) um ein paar Billionstel danebenläge.
  */
 
 export interface Abschnitt extends Stueck {
@@ -216,6 +229,17 @@ export function standDrin(abschnitt: Abschnitt): boolean {
  * (das entscheidet der Aufrufer).
  *
  * `null`, wenn die Stelle nicht echt dazwischen liegt – siehe `kannTeilen`.
+ *
+ * # Geprüft wird die Stelle, geteilt wird auf dem Raster
+ *
+ * Die Prüfung ist dieselbe wie die, mit der die Zeitleiste den Knopf ✂
+ * freigibt (`kannTeilen` mit einem gerundeten Bild Abstand) – und zwar mit
+ * der UNgerundeten Stelle. Erst danach wird auf die nächste Rasterkante
+ * gerundet und, falls die zu nah an einer Kante läge, um ein Bild nach innen
+ * gerückt. Prüfte man die gerundete Stelle, wäre der Knopf an einer Stelle
+ * frei, an der das Teilen dann nichts täte (bei 24 Bildern je Sekunde
+ * rundet 1043 ms auf 1041,67 ms – ein Bild von einer Kante bei 1000 ms, aber
+ * weniger als die gerundeten 42 ms).
  */
 export function abschnittTeilen(
   abschnitte: readonly Abschnitt[],
@@ -227,14 +251,21 @@ export function abschnittTeilen(
   const alt = abschnitte[nummer];
   const mindest = Math.max(1, Math.round(schrittMs));
   if (!alt || !kannTeilen(alt, beiMs, mindest)) return null;
+  const s = schrittMs;
+  // Mindestens ein ganzes Bild auf jeder Seite – auch bei Kanten, die (nach
+  // einem Wechsel der Bildrate) noch nicht auf dem Raster liegen.
+  const kMin = Math.ceil((alt.vonMs + s) / s - 1e-6);
+  const kMax = Math.floor((alt.bisMs - s) / s + 1e-6);
+  if (kMin > kMax) return null;
+  const bei = Math.min(kMax, Math.max(kMin, Math.round(beiMs / s))) * s;
   /*
    * Die Kennung bleibt bei der Hälfte mit dem Stellbild. Daran hängt im
    * Editor, ob er neu aufgebaut wird – wer dort teilt, arbeitet an genau
    * dieser Hälfte weiter und soll seinen Rückgängig-Verlauf behalten.
    */
-  const vorneBleibt = alt.standMs < beiMs;
-  const vorn: Abschnitt = { ...alt, id: vorneBleibt ? alt.id : neueId, bisMs: beiMs };
-  const hinten: Abschnitt = { ...alt, id: vorneBleibt ? neueId : alt.id, vonMs: beiMs };
+  const vorneBleibt = alt.standMs < bei;
+  const vorn: Abschnitt = { ...alt, id: vorneBleibt ? alt.id : neueId, bisMs: bei };
+  const hinten: Abschnitt = { ...alt, id: vorneBleibt ? neueId : alt.id, vonMs: bei };
   let verlegung: Verlegung;
   let neuVorn = vorn;
   let neuHinten = hinten;
@@ -264,6 +295,11 @@ export function abschnittTeilen(
  * Mindestens ein Bild lang und nie über das Quellvideo hinaus. Fällt das
  * Stellbild dabei heraus, rückt es an das nächste Bild im Abschnitt, und
  * die Verlegung sagt, von wo nach wo.
+ *
+ * Beide Kanten landen auf dem Raster. Das Ende höchstens bei
+ * `quellBilder · s` – ABgerundet, siehe `quellBilder`: Auf die nächste Kante
+ * gerundet, läge es bis zu einem halben Bild hinter dem Ende der Quelle, und
+ * die Mitte des letzten Bildes genau auf dem Ende.
  */
 export function abschnittKuerzen(
   abschnitte: readonly Abschnitt[],
@@ -275,11 +311,11 @@ export function abschnittKuerzen(
 ): { abschnitte: readonly Abschnitt[]; verlegung: Verlegung | null } {
   const alt = abschnitte[nummer];
   if (!alt) return { abschnitte, verlegung: null };
-  const mindest = Math.max(1, Math.round(schrittMs));
-  const obergrenze = Math.max(mindest, quelleMs);
-  const von = Math.max(0, Math.min(Math.round(vonMs), obergrenze - mindest));
-  const bis = Math.min(obergrenze, Math.max(Math.round(bisMs), von + mindest));
-  let neu: Abschnitt = { ...alt, vonMs: von, bisMs: bis };
+  const s = schrittMs;
+  const kEnde = quellBilder(quelleMs, s);
+  const kVon = Math.max(0, Math.min(Math.round(vonMs / s), kEnde - 1));
+  const kBis = Math.min(kEnde, Math.max(Math.round(bisMs / s), kVon + 1));
+  let neu: Abschnitt = { ...alt, vonMs: kVon * s, bisMs: kBis * s };
   let verlegung: Verlegung | null = null;
   if (!standDrin(neu)) {
     const stand = standImRaster(neu, alt.standMs, schrittMs);
@@ -290,6 +326,48 @@ export function abschnittKuerzen(
     abschnitte: abschnitte.map((eintrag, i) => (i === nummer ? neu : eintrag)),
     verlegung,
   };
+}
+
+/**
+ * Alle Kanten auf das Raster einer (neuen) Bildrate legen.
+ *
+ * Für den Wechsel der Bildrate: Die Kanten lagen auf dem alten Raster und
+ * rücken auf das nächste des neuen – höchstens ein halbes Bild. Jeder
+ * Abschnitt bleibt mindestens ein Bild lang und im Quellvideo. Unveränderte
+ * Abschnitte bleiben dieselben Objekte, und ohne jede Änderung kommt
+ * dieselbe Liste zurück – sonst rechnete alles, was an ihr hängt, für nichts
+ * neu.
+ *
+ * Das Stellbild bleibt, wo es ist, solange es im Abschnitt liegt. Fällt es
+ * durch das Rücken heraus, wandert es an das nächste Bild – mit einer
+ * Verlegung wie beim Kürzen.
+ */
+export function rasterNeu(
+  abschnitte: readonly Abschnitt[],
+  schrittMs: number,
+  quelleMs: number,
+): { abschnitte: readonly Abschnitt[]; verlegungen: readonly Verlegung[] } {
+  const s = schrittMs;
+  // Ohne bekannte Länge (noch nicht geladen) wird nur gerastert, nicht geklemmt.
+  const kEnde = quelleMs > 0 ? quellBilder(quelleMs, s) : Number.POSITIVE_INFINITY;
+  const verlegungen: Verlegung[] = [];
+  let geaendert = false;
+  const neu = abschnitte.map((alt) => {
+    const kVon = Math.max(0, Math.min(Math.round(alt.vonMs / s), kEnde - 1));
+    const kBis = Math.min(kEnde, Math.max(Math.round(alt.bisMs / s), kVon + 1));
+    // Schon auf dem Raster, bis auf Gleitkommareste: `30 · (1000/30)` ist
+    // nicht genau 1000, und 1000 bleibt deshalb 1000.
+    if (Math.abs(alt.vonMs - kVon * s) < 1e-6 && Math.abs(alt.bisMs - kBis * s) < 1e-6) return alt;
+    geaendert = true;
+    let eintrag: Abschnitt = { ...alt, vonMs: kVon * s, bisMs: kBis * s };
+    if (!standDrin(eintrag)) {
+      const stand = standImRaster(eintrag, alt.standMs, s);
+      verlegungen.push({ id: alt.id, vonMs: alt.standMs, nachMs: stand });
+      eintrag = { ...eintrag, standMs: stand };
+    }
+    return eintrag;
+  });
+  return { abschnitte: geaendert ? neu : abschnitte, verlegungen };
 }
 
 /** Einen Abschnitt um eine Stelle nach vorn (−1) oder hinten (+1) schieben. */
@@ -323,6 +401,10 @@ export function abschnittEntfernen(
  * will, will fast immer die Stelle DANACH – und übernimmt dessen
  * Bearbeitung. Seine Masken gehören zu einem anderen Bild; das meldet die
  * Verlegung.
+ *
+ * Rund zwei Sekunden lang, mindestens eine Sekunde Platz vor dem Ende der
+ * Quelle – gerechnet in ganzen Bildern, damit beide Kanten auf dem Raster
+ * liegen.
  */
 export function abschnittDazu(
   abschnitte: readonly Abschnitt[],
@@ -332,12 +414,13 @@ export function abschnittDazu(
   neueId = abschnittKennung(),
 ): { abschnitte: readonly Abschnitt[]; neu: number; verlegung: Verlegung | null } {
   const vorlage = abschnitte[nummer] ?? abschnitte[abschnitte.length - 1];
-  const mindest = Math.max(1, Math.round(schrittMs));
-  const ende = Math.max(mindest, quelleMs);
-  const von = Math.max(0, Math.min(vorlage?.bisMs ?? 0, ende - Math.max(mindest, 1000)));
-  const bis = Math.min(ende, von + 2000);
-  const stueck = { vonMs: von, bisMs: Math.max(bis, von + mindest) };
-  const standMs = standImRaster(stueck, von, schrittMs);
+  const s = schrittMs;
+  const kEnde = quellBilder(quelleMs, s);
+  const kPlatz = Math.max(1, Math.round(1000 / s));
+  const kVon = Math.max(0, Math.min(Math.round((vorlage?.bisMs ?? 0) / s), kEnde - kPlatz));
+  const kBis = Math.max(kVon + 1, Math.min(kEnde, kVon + Math.round(2000 / s)));
+  const stueck = { vonMs: kVon * s, bisMs: kBis * s };
+  const standMs = standImRaster(stueck, stueck.vonMs, schrittMs);
   const neu: Abschnitt = { ...stueck, id: neueId, doc: vorlage?.doc ?? null, standMs };
   const stelle = Math.min(abschnitte.length, Math.max(0, nummer + 1));
   return {
@@ -351,4 +434,23 @@ export function abschnittDazu(
       ? { id: neueId, vonMs: vorlage.teileMs ?? vorlage.standMs, nachMs: standMs }
       : null,
   };
+}
+
+/**
+ * Der erste Abschnitt eines neuen Films: die Quelle von vorn bis `bisMs`,
+ * auf dem Raster.
+ *
+ * Das Ende wird ABgerundet – `bisMs` ist schon auf die Länge der Quelle
+ * begrenzt (`min(dauer, 5000)`), und aufgerundet läge die Kante bis zu einem
+ * halben Bild dahinter; siehe `quellBilder`. Die Länge der Quelle selbst
+ * steht hier bewusst NICHT: Das Blatt ruft das im selben Zug, in dem es sie
+ * erst setzt, und bekäme sonst noch die alte (null).
+ */
+export function ersterAbschnitt(
+  bisMs: number,
+  schrittMs: number,
+  neueId = abschnittKennung(),
+): Abschnitt {
+  const stueck = { vonMs: 0, bisMs: quellBilder(bisMs, schrittMs) * schrittMs };
+  return { ...stueck, id: neueId, doc: null, standMs: standImRaster(stueck, 0, schrittMs) };
 }
