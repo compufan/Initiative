@@ -202,6 +202,10 @@ pub struct CalendarEventRow {
     pub poll_id: Option<Uuid>,
     /// Die Sammlung mit den Dateien zu diesem Termin.
     pub collection_id: Option<Uuid>,
+    /// Zählt jede Änderung hoch, auch Zu- und Absagen (`migrations/0023_einladen.sql`).
+    pub stand: i64,
+    /// Wiederholungsschutz beim Anlegen: derselbe Schlüssel, derselbe Termin.
+    pub client_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
@@ -213,6 +217,25 @@ pub struct EventAttendeeRow {
     pub user_id: Uuid,
     pub status: String,
     pub responded_at: Option<DateTime<Utc>>,
+    /// Wann diese Person eingeladen wurde – Bezugspunkt fürs Erinnern.
+    pub eingeladen_am: DateTime<Utc>,
+}
+
+/// Wo ein Termin als Karte steht (`migrations/0023_einladen.sql`).
+///
+/// `art` ist `gruppe` (Karte im Gruppenchat) oder `einzel` (Karte im
+/// Einzelchat zwischen Ersteller und `user_id`). `message_id` ist leer, solange
+/// die Nachricht noch nicht angelegt ist.
+#[derive(Debug, Clone, FromRow)]
+pub struct EventPlacementRow {
+    pub id: Uuid,
+    pub event_id: Uuid,
+    pub conversation_id: Uuid,
+    pub message_id: Option<Uuid>,
+    pub art: String,
+    pub user_id: Option<Uuid>,
+    pub created_by: Option<Uuid>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, FromRow)]

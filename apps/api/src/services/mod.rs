@@ -2,6 +2,7 @@ pub mod attachments;
 pub mod auslagern;
 pub mod calendar;
 pub mod conversations;
+pub mod einladen;
 pub mod events;
 pub mod expanders;
 pub mod expenses;

@@ -156,6 +156,16 @@ async fn send_message(
     assert_membership(&state.pool, id, user.id()).await?;
 
     let metadata = input.metadata.unwrap_or_else(|| json!({}));
+    // Termin-Karten legt nur die Termin-Funktion an. Über diesen Weg ließe sich
+    // die Kennung eines fremden Termins in einen Chat legen, und die Karte
+    // lieferte dann Titel, Ort und Teilnehmerliste – sie gehört ohnehin zu einer
+    // Einladung (`event_placements`), und eine Karte ohne sie wäre eine, die
+    // niemand nachführt.
+    if input.r#type == "event" || metadata.get("eventId").is_some() {
+        return Err(AppError::bad_request(
+            "Termin-Karten legt nur die Termin-Funktion an.",
+        ));
+    }
     let has_entity = ["stickerId", "pollId", "eventId", "gameSessionId"]
         .iter()
         .any(|key| metadata.get(*key).is_some());

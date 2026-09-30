@@ -1,0 +1,121 @@
+{
+  "hinweis": "Gemeinsame Testfälle für die Zustellungs-Planung. Die Rust-Fassung (apps/api/src/services/einladen.rs, `planen`) und die TypeScript-Fassung (src/util/zustellung.ts, `zustellungPlanen`) lesen dieselbe Datei – so gehen Vorschau im Editor und Server nicht auseinander. Namen stehen für Kennungen; `ich` ist der Ersteller. Die Reihenfolge der Listen zählt: Einzelkarten folgen der Eingabe, Gruppen der Auswahlreihenfolge, Fehlende der Mitgliederliste.",
+  "faelle": [
+    {
+      "name": "sind alle eingeladen, kommt die Gruppenkarte und es gibt Einzelkarten",
+      "ersteller": "ich",
+      "personen": ["anna", "ben", "cora"],
+      "wunsch": { "senden": true, "einzelchats": true, "gruppen": ["G"] },
+      "mitglieder": { "G": ["ich", "anna", "ben", "cora"] },
+      "erwartet": { "gruppen": ["G"], "ausgelassen": [], "einzel": ["anna", "ben", "cora"] }
+    },
+    {
+      "name": "fehlt eine Person, wird die Gruppe ausgelassen und die Einzelkarten bleiben",
+      "ersteller": "ich",
+      "personen": ["anna", "ben"],
+      "wunsch": { "senden": true, "einzelchats": true, "gruppen": ["G"] },
+      "mitglieder": { "G": ["ich", "anna", "ben", "cora"] },
+      "erwartet": {
+        "gruppen": [],
+        "ausgelassen": [{ "chat": "G", "fehlend": ["cora"] }],
+        "einzel": ["anna", "ben"]
+      }
+    },
+    {
+      "name": "mehrere Fehlende stehen in der Reihenfolge der Mitgliederliste",
+      "ersteller": "ich",
+      "personen": ["anna"],
+      "wunsch": { "senden": true, "einzelchats": true, "gruppen": ["G"] },
+      "mitglieder": { "G": ["ich", "dora", "anna", "cora"] },
+      "erwartet": {
+        "gruppen": [],
+        "ausgelassen": [{ "chat": "G", "fehlend": ["dora", "cora"] }],
+        "einzel": ["anna"]
+      }
+    },
+    {
+      "name": "eine nicht gewählte Gruppe bekommt nie eine Karte, auch wenn alle ihre Mitglieder eingeladen sind",
+      "ersteller": "ich",
+      "personen": ["anna", "ben"],
+      "wunsch": { "senden": true, "einzelchats": true, "gruppen": [] },
+      "mitglieder": { "G": ["ich", "anna", "ben"] },
+      "erwartet": { "gruppen": [], "ausgelassen": [], "einzel": ["anna", "ben"] }
+    },
+    {
+      "name": "senden aus heisst: nichts",
+      "ersteller": "ich",
+      "personen": ["anna", "ben"],
+      "wunsch": { "senden": false, "einzelchats": true, "gruppen": ["G"] },
+      "mitglieder": { "G": ["ich", "anna", "ben"] },
+      "erwartet": { "gruppen": [], "ausgelassen": [], "einzel": [] }
+    },
+    {
+      "name": "ohne Einzelchats bleiben nur die Gruppen",
+      "ersteller": "ich",
+      "personen": ["anna", "ben"],
+      "wunsch": { "senden": true, "einzelchats": false, "gruppen": ["G"] },
+      "mitglieder": { "G": ["ich", "anna", "ben"] },
+      "erwartet": { "gruppen": ["G"], "ausgelassen": [], "einzel": [] }
+    },
+    {
+      "name": "mehrere Gruppen werden einzeln beurteilt, in Auswahlreihenfolge",
+      "ersteller": "ich",
+      "personen": ["anna", "ben"],
+      "wunsch": { "senden": true, "einzelchats": true, "gruppen": ["G3", "G2", "G1"] },
+      "mitglieder": {
+        "G1": ["ich", "anna", "ben"],
+        "G2": ["ich", "ben", "eva"],
+        "G3": ["ich", "anna"]
+      },
+      "erwartet": {
+        "gruppen": ["G3", "G1"],
+        "ausgelassen": [{ "chat": "G2", "fehlend": ["eva"] }],
+        "einzel": ["anna", "ben"]
+      }
+    },
+    {
+      "name": "eine Gruppe nur mit dem Ersteller zählt als vollständig",
+      "ersteller": "ich",
+      "personen": [],
+      "wunsch": { "senden": true, "einzelchats": true, "gruppen": ["G"] },
+      "mitglieder": { "G": ["ich"] },
+      "erwartet": { "gruppen": ["G"], "ausgelassen": [], "einzel": [] }
+    },
+    {
+      "name": "der Ersteller in der Liste wird ignoriert, Doppelte werden zusammengeführt",
+      "ersteller": "ich",
+      "personen": ["ich", "anna", "anna"],
+      "wunsch": { "senden": true, "einzelchats": true, "gruppen": ["G", "G"] },
+      "mitglieder": { "G": ["ich", "anna"] },
+      "erwartet": { "gruppen": ["G"], "ausgelassen": [], "einzel": ["anna"] }
+    },
+    {
+      "name": "eine Person in zwei Gruppen ist kein Problem",
+      "ersteller": "ich",
+      "personen": ["anna", "ben", "cora"],
+      "wunsch": { "senden": true, "einzelchats": true, "gruppen": ["G1", "G2"] },
+      "mitglieder": { "G1": ["ich", "anna", "ben"], "G2": ["ich", "ben", "cora"] },
+      "erwartet": { "gruppen": ["G1", "G2"], "ausgelassen": [], "einzel": ["anna", "ben", "cora"] }
+    },
+    {
+      "name": "niemand eingeladen: keine Einzelkarten, die Gruppe fehlt komplett",
+      "ersteller": "ich",
+      "personen": [],
+      "wunsch": { "senden": true, "einzelchats": true, "gruppen": ["G"] },
+      "mitglieder": { "G": ["ich", "anna"] },
+      "erwartet": {
+        "gruppen": [],
+        "ausgelassen": [{ "chat": "G", "fehlend": ["anna"] }],
+        "einzel": []
+      }
+    },
+    {
+      "name": "die Einzelkarten folgen der Reihenfolge der Eingabe",
+      "ersteller": "ich",
+      "personen": ["cora", "anna", "ben"],
+      "wunsch": { "senden": true, "einzelchats": true, "gruppen": [] },
+      "mitglieder": {},
+      "erwartet": { "gruppen": [], "ausgelassen": [], "einzel": ["cora", "anna", "ben"] }
+    }
+  ]
+}

@@ -405,6 +405,8 @@ async fn create_event_from_poll(
             attendee_ids: attendee_statuses.keys().copied().collect(),
             attendee_statuses,
             announce: Some(true),
+            zustellung: None,
+            client_id: None,
         },
     )
     .await?;

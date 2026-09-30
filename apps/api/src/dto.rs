@@ -297,8 +297,70 @@ pub struct CalendarEventDto {
     pub collection_id: Option<Uuid>,
     pub attendees: Vec<EventAttendeeDto>,
     pub reminder_minutes: Vec<i32>,
+    /// Zählt jede Änderung hoch, auch Zu- und Absagen. Wer zwei Fassungen
+    /// desselben Termins hat, nimmt die mit dem höheren Stand: Rundrufe können
+    /// einander überholen.
+    pub stand: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// Die Antwort auf Anlegen und Ändern eines Termins mit ausdrücklicher
+/// Zustellung: der Termin selbst, dazu was daraus geworden ist.
+///
+/// Der Termin steht auf oberster Ebene (`flatten`), damit ältere App-Stände
+/// dieselbe Antwort lesen wie bisher und den Rest ignorieren.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminAntwort {
+    #[serde(flatten)]
+    pub termin: CalendarEventDto,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zustellung: Option<ZustellungDto>,
+}
+
+/// Was aus einer Einladung geworden ist.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZustellungDto {
+    /// Die Gruppenchats, in denen jetzt eine Karte steht.
+    pub gruppen: Vec<GruppenKarteDto>,
+    /// Karten in Einzelchats – ohne die schon früher zugestellten.
+    pub einzelchats: i64,
+    /// Davon Einzelchats, die dafür neu angelegt wurden.
+    pub neue_einzelchats: i64,
+    /// Gewünschte Gruppenchats, in denen nicht alle Mitglieder eingeladen sind.
+    pub ausgelassen: Vec<AusgelassenDto>,
+    /// Karten, die (noch) nicht zugestellt sind. `…/zustellung/nachliefern` holt sie nach.
+    pub ausstehend: i64,
+    /// Personen, die eine Benachrichtigung bekommen.
+    pub benachrichtigt: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GruppenKarteDto {
+    pub conversation_id: Uuid,
+    /// Leer, solange die Nachricht noch nicht angelegt ist.
+    pub nachricht_id: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AusgelassenDto {
+    pub conversation_id: Uuid,
+    /// Wer im Gruppenchat nicht eingeladen ist – höchstens fünf.
+    pub fehlend: Vec<Uuid>,
+}
+
+/// Wo ein Termin steht: Grundlage für den Editor beim Bearbeiten.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZustellungStandDto {
+    pub gruppen: Vec<GruppenKarteDto>,
+    /// Wer schon eine Karte im Einzelchat hat.
+    pub einzel_nutzer_ids: Vec<Uuid>,
+    pub ausstehend: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

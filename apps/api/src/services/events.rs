@@ -22,6 +22,12 @@ pub const CHECK_SCOPES: &[&str] = &["nobody", "author", "members", "listed"];
 ///
 /// Auch der Ersteller zählt dazu, selbst wenn er sich selbst nie als
 /// Teilnehmer eingetragen hat.
+///
+/// Mehr gibt es nicht: Die Teilnehmerzeile ist die **einzige** Quelle. Früher
+/// gehörte ein Termin an einem Chat auch allen, die darin saßen – damit konnte
+/// niemand aus einer Gruppe „nicht eingeladen“ sein, und wer abgewählt wurde,
+/// sah Notizen und Unterlagen weiter. Ein Chat ist jetzt nur ein Ort, an dem
+/// eine Karte steht, und verleiht keinen Zugang (`migrations/0023_einladen.sql`).
 pub async fn is_attendee(
     pool: &PgPool,
     event: &CalendarEventRow,
@@ -37,24 +43,7 @@ pub async fn is_attendee(
     .bind(user_id)
     .fetch_one(pool)
     .await?;
-    if dabei {
-        return Ok(true);
-    }
-    // Ein Termin an einem Chat gehört allen im Chat, auch wenn jemand erst
-    // später dazugekommen ist.
-    if let Some(conversation_id) = event.conversation_id {
-        let mitglied: bool = sqlx::query_scalar(
-            "select exists (
-               select 1 from conversation_members where conversation_id = $1 and user_id = $2
-             )",
-        )
-        .bind(conversation_id)
-        .bind(user_id)
-        .fetch_one(pool)
-        .await?;
-        return Ok(mitglied);
-    }
-    Ok(false)
+    Ok(dabei)
 }
 
 /// Wirft, wenn die Person mit dem Termin nichts zu tun hat.
@@ -181,25 +170,17 @@ pub async fn may_check_item(
 ///
 /// Bewusst jedes Mal frisch gezählt und nicht am Punkt festgeschrieben:
 /// „Alle“ soll mitwachsen. Wer morgen eingeladen wird, muss ebenfalls abhaken.
+///
+/// Gezählt wird die Teilnehmerliste und nichts sonst. Der Rückfall auf die
+/// Mitglieder des Chats ist entfallen, seit der Chat niemanden mehr einlädt;
+/// ein Termin ohne Zeile hat mindestens den, der ihn angelegt hat.
 pub async fn attendee_count(pool: &PgPool, event: &CalendarEventRow) -> AppResult<i64> {
     let am_termin: i64 =
         sqlx::query_scalar("select count(*) from event_attendees where event_id = $1")
             .bind(event.id)
             .fetch_one(pool)
             .await?;
-    if am_termin > 0 {
-        return Ok(am_termin);
-    }
-    // Ohne eigene Teilnehmerliste sind es alle im Chat des Termins.
-    match event.conversation_id {
-        Some(conversation_id) => Ok(sqlx::query_scalar(
-            "select count(*) from conversation_members where conversation_id = $1",
-        )
-        .bind(conversation_id)
-        .fetch_one(pool)
-        .await?),
-        None => Ok(1),
-    }
+    Ok(am_termin.max(1))
 }
 
 /// Die Punkte einer Liste, samt Haken.

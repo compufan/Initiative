@@ -384,3 +384,41 @@ pub async fn empfaenger_fuer_nachricht(pool: &PgPool, message_id: Uuid) -> AppRe
     .await?;
     Ok(ids)
 }
+
+/// Dasselbe für viele Nachrichten auf einmal: je Nachricht ihr Gespräch und
+/// wer sie sehen darf.
+///
+/// Für Stellen, die eine Reihe von Nachrichten auf einen Schlag löschen (alle
+/// Karten eines Termins) und jedem Empfänger nur das melden wollen, was ihn
+/// betrifft. Eine Abfrage statt einer je Nachricht.
+pub async fn empfaenger_fuer_nachrichten<'e, E>(
+    executor: E,
+    message_ids: &[Uuid],
+) -> AppResult<Vec<(Uuid, Uuid, Vec<Uuid>)>>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    if message_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let zeilen: Vec<(Uuid, Uuid, Uuid)> = sqlx::query_as(
+        "select m.id, m.conversation_id, cm.user_id
+           from messages m
+           join conversation_members cm on cm.conversation_id = m.conversation_id
+          where m.id = any($1)
+            and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
+          order by m.id",
+    )
+    .bind(message_ids)
+    .fetch_all(executor)
+    .await?;
+
+    let mut ergebnis: Vec<(Uuid, Uuid, Vec<Uuid>)> = Vec::new();
+    for (nachricht, gespraech, person) in zeilen {
+        match ergebnis.last_mut() {
+            Some((letzte, _, personen)) if *letzte == nachricht => personen.push(person),
+            _ => ergebnis.push((nachricht, gespraech, vec![person])),
+        }
+    }
+    Ok(ergebnis)
+}

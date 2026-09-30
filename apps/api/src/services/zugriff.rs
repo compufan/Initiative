@@ -194,10 +194,10 @@ select art, bezug from (
     from event_attachments ea
     join calendar_events e on e.id = ea.event_id
    where ea.attachment_id = $1
+     -- Nur wer eingeladen ist. Ein Chat, in dem der Termin als Karte steht,
+     -- verleiht keinen Zugang (`migrations/0023_einladen.sql`).
      and (
        e.created_by = $2
-       or exists (select 1 from conversation_members cm
-                   where cm.conversation_id = e.conversation_id and cm.user_id = $2)
        or exists (select 1 from event_attendees t
                    where t.event_id = e.id and t.user_id = $2)
      )
@@ -321,11 +321,6 @@ select person, art, bezug from (
   select e.created_by, 'termin', e.id, 9
     from event_attachments ea join calendar_events e on e.id = ea.event_id
    where ea.attachment_id = $1 and e.created_by is not null
-  union all
-  select cm.user_id, 'termin', e.id, 9
-    from event_attachments ea join calendar_events e on e.id = ea.event_id
-    join conversation_members cm on cm.conversation_id = e.conversation_id
-   where ea.attachment_id = $1
   union all
   select t.user_id, 'termin', e.id, 9
     from event_attachments ea join calendar_events e on e.id = ea.event_id

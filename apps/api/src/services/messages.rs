@@ -164,6 +164,15 @@ pub async fn hydrate_messages(
                     dto.game = expansion.game;
                     dto.sticker = expansion.sticker;
                 }
+                // Eine Termin-Karte, zu der der Betrachter keinen Termin
+                // sehen darf (nicht eingeladen, gelöscht, fremde Kennung),
+                // verrät auch die Kennung nicht: Mit ihr liefert `event.ics`
+                // den ganzen Termin, und zwar ohne Anmeldung. Die Blase zeigt
+                // dann „Termin nicht verfügbar“. Das gilt auch, wenn der
+                // Expander scheitert – im Zweifel zu.
+                if row.r#type == "event" && dto.event.is_none() {
+                    dto.metadata = json!({});
+                }
             }
             dto.reply_to = row.reply_to_id.and_then(|id| replies.get(&id).cloned());
             dto.reactions = reactions_by_message
@@ -240,6 +249,31 @@ impl NewMessage {
                 "system": { "kind": kind, "actorId": actor_id, "targetIds": targets }
             }),
             silent: true,
+        }
+    }
+
+    /// Die Karte einer Termin-Einladung.
+    ///
+    /// Immer **stumm**: Eine Einladung steht oft in mehreren Chats (Gruppe und
+    /// Einzelchat), und jede Karte würde sonst ihre eigene Mitteilung auslösen.
+    /// Die Einladung meldet sich stattdessen genau einmal je Person
+    /// (`notify::benachrichtige_einladung`).
+    ///
+    /// Der feste `client_id` macht das Zustellen wiederholbar: Bricht es ab,
+    /// liefert ein zweiter Anlauf dieselbe Nachricht zurück statt einer
+    /// zweiten Karte. Er hängt an der Platzierung und nicht an Termin und
+    /// Chat, damit eine nach dem Ausladen neu angelegte Karte nicht die
+    /// gelöschte Nachricht zurückbekommt.
+    pub fn einladung(
+        conversation_id: Uuid,
+        sender_id: Uuid,
+        event_id: Uuid,
+        platzierung_id: Uuid,
+    ) -> Self {
+        Self {
+            client_id: Some(format!("karte:{platzierung_id}")),
+            silent: true,
+            ..Self::entity(conversation_id, sender_id, "event", "eventId", event_id)
         }
     }
 
@@ -379,13 +413,13 @@ pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<Me
 /// das Zitat mit – die Absicherung im Zitat lief ins Leere, weil sie für den
 /// falschen Betrachter gegriffen hatte.
 ///
-/// # Warum zwei Fassungen genügen
+/// # Warum wenige Fassungen genügen
 ///
-/// Am Zitat hängt die einzige Grenze, die sich zwischen den Empfängern
-/// unterscheidet. Je Empfänger neu zu hydrieren hiesse, in einer Gruppe mit
+/// Am Zitat und am Termin hängen die Grenzen, die sich zwischen den Empfängern
+/// unterscheiden. Je Empfänger neu zu hydrieren hiesse, in einer Gruppe mit
 /// zweihundert Leuten zweihundertmal dieselbe Nachricht zu laden. Stattdessen
-/// wird einmal geladen und für die, denen das Zitat nicht zusteht, gekürzt –
-/// dieselbe Blase, die auch eine gelöschte Nachricht zeigt.
+/// wird einmal geladen und für die, denen das Zitat oder der Termin nicht
+/// zusteht, gekürzt – dieselbe Blase, die auch eine gelöschte Nachricht zeigt.
 async fn ausspielen(
     state: &AppState,
     message: &MessageDto,
@@ -397,34 +431,54 @@ async fn ausspielen(
         return Ok(empfaenger);
     }
 
-    let zitat = match (message.reply_to.as_ref(), message.reply_to_id) {
-        (Some(_), Some(id)) => id,
-        _ => {
-            state
-                .hub
-                .publish(empfaenger.clone(), ereignis(message))
-                .await;
-            return Ok(empfaenger);
-        }
-    };
+    let darf_zitat: Option<std::collections::HashSet<Uuid>> =
+        match (message.reply_to.as_ref(), message.reply_to_id) {
+            (Some(_), Some(id)) => Some(
+                crate::services::verlauf::empfaenger_fuer_nachricht(&state.pool, id)
+                    .await?
+                    .into_iter()
+                    .collect(),
+            ),
+            _ => None,
+        };
 
-    let darf_zitat: std::collections::HashSet<Uuid> =
-        crate::services::verlauf::empfaenger_fuer_nachricht(&state.pool, zitat)
-            .await?
-            .into_iter()
-            .collect();
-    let (mit, ohne): (Vec<Uuid>, Vec<Uuid>) = empfaenger
-        .iter()
-        .copied()
-        .partition(|id| darf_zitat.contains(id));
+    // Dasselbe beim Termin: `message.event` ist die Fassung des Absenders, und
+    // wer nicht eingeladen ist, bekommt sie nicht – weder Titel und
+    // Teilnehmerliste noch die Kennung. Ein Nicht-Eingeladener im Chat (später
+    // beigetreten, nicht ausgewählt) sieht nur „Termin nicht verfügbar“.
+    let darf_termin: Option<std::collections::HashSet<Uuid>> =
+        message.event.as_ref().map(|termin| {
+            termin
+                .attendees
+                .iter()
+                .map(|teilnehmer| teilnehmer.user_id)
+                .chain(termin.created_by)
+                .collect()
+        });
 
-    if !mit.is_empty() {
-        state.hub.publish(mit, ereignis(message)).await;
+    // Zwei Merkmale, höchstens vier Fassungen: einmal laden, dann kürzen –
+    // nicht je Empfänger neu hydrieren.
+    let mut gruppen: std::collections::HashMap<(bool, bool), Vec<Uuid>> =
+        std::collections::HashMap::new();
+    for id in &empfaenger {
+        let zitat = darf_zitat.as_ref().is_none_or(|kreis| kreis.contains(id));
+        let termin = darf_termin.as_ref().is_none_or(|kreis| kreis.contains(id));
+        gruppen.entry((zitat, termin)).or_default().push(*id);
     }
-    if !ohne.is_empty() {
+    for ((zitat, termin), ids) in gruppen {
+        if zitat && termin {
+            state.hub.publish(ids, ereignis(message)).await;
+            continue;
+        }
         let mut gekuerzt = message.clone();
-        gekuerzt.reply_to = None;
-        state.hub.publish(ohne, ereignis(&gekuerzt)).await;
+        if !zitat {
+            gekuerzt.reply_to = None;
+        }
+        if !termin {
+            gekuerzt.event = None;
+            gekuerzt.metadata = json!({});
+        }
+        state.hub.publish(ids, ereignis(&gekuerzt)).await;
     }
     Ok(empfaenger)
 }

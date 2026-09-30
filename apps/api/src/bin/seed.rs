@@ -138,6 +138,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             attendee_ids: vec![ben, clara],
             attendee_statuses: HashMap::new(),
             announce: Some(true),
+            zustellung: None,
+            client_id: None,
         },
     )
     .await?;

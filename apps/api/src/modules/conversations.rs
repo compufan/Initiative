@@ -13,7 +13,7 @@ use crate::error::{AppError, AppResult};
 use crate::realtime::Event;
 use crate::services::attachments::require_eigener_anhang;
 use crate::services::conversations::{
-    assert_can_moderate, assert_membership, broadcast_conversation, find_direct_conversation,
+    assert_can_moderate, assert_membership, broadcast_conversation, einzelchats_sichern,
     load_conversation_dto, load_conversation_dtos, member_ids, require_conversation, ListOptions,
 };
 use crate::services::messages::{create_message, NewMessage};
@@ -122,12 +122,23 @@ async fn create(
                 "Chat mit sich selbst ist nicht möglich",
             ));
         }
-        if let Some(existing) =
-            find_direct_conversation(&state.pool, user.id(), counterpart).await?
-        {
-            let dto = load_conversation_dto(&state, user.id(), existing).await?;
+        // Finden oder anlegen: derselbe Dienst wie bei Einladungen, die
+        // Einzelchats im Dutzend brauchen. Dort sitzt auch die Sperre gegen
+        // zwei gleichzeitig angelegte Chats desselben Paares.
+        let mut tx = state.pool.begin().await?;
+        let gesichert = einzelchats_sichern(&mut tx, user.id(), &[counterpart]).await?;
+        tx.commit().await?;
+        let chat = *gesichert
+            .chat_von
+            .get(&counterpart)
+            .ok_or_else(|| AppError::internal("Einzelchat konnte nicht angelegt werden"))?;
+        if gesichert.neu.is_empty() {
+            let dto = load_conversation_dto(&state, user.id(), chat).await?;
             return Ok((StatusCode::OK, Json(dto)));
         }
+        broadcast_conversation(&state, chat, Some(members)).await?;
+        let dto = load_conversation_dto(&state, user.id(), chat).await?;
+        return Ok((StatusCode::CREATED, Json(dto)));
     }
 
     let conversation_id = Uuid::now_v7();

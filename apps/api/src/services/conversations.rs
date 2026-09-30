@@ -395,6 +395,10 @@ pub async fn broadcast_conversation(
 }
 
 /// Existing 1:1 chat between two users, if any.
+///
+/// Gibt es mehrere (zwei gleichzeitige Anlegevorgänge), gilt der **älteste** –
+/// dieselbe Regel wie in [`einzelchats_sichern`], damit Handler und Dienst
+/// denselben Chat meinen.
 pub async fn find_direct_conversation(
     pool: &PgPool,
     user_a: Uuid,
@@ -406,6 +410,7 @@ pub async fn find_direct_conversation(
          join conversation_members a on a.conversation_id = c.id and a.user_id = $1
          join conversation_members b on b.conversation_id = c.id and b.user_id = $2
          where c.type = 'direct'
+         order by c.created_at, c.id
          limit 1",
     )
     .bind(user_a)
@@ -413,4 +418,160 @@ pub async fn find_direct_conversation(
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|(id,)| id))
+}
+
+/// Die Einzelchats des Erstellers mit diesen Personen: Person → Chat.
+///
+/// Je Person der älteste. Ein Einzelchat, den eine Seite verlassen hat, zählt
+/// nicht – er hätte nur ein Mitglied und träfe die Bedingung „beide sind
+/// Mitglied“ nicht.
+pub async fn vorhandene_einzelchats<'e, E>(
+    executor: E,
+    ersteller: Uuid,
+    personen: &[Uuid],
+) -> AppResult<HashMap<Uuid, Uuid>>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    if personen.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let zeilen: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "select distinct on (b.user_id) b.user_id, c.id
+           from conversations c
+           join conversation_members a on a.conversation_id = c.id and a.user_id = $1
+           join conversation_members b on b.conversation_id = c.id and b.user_id = any($2)
+          where c.type = 'direct'
+          order by b.user_id, c.created_at, c.id",
+    )
+    .bind(ersteller)
+    .bind(personen)
+    .fetch_all(executor)
+    .await?;
+    Ok(zeilen.into_iter().collect())
+}
+
+/// Was [`einzelchats_sichern`] gefunden oder angelegt hat.
+#[derive(Debug, Default)]
+pub struct Einzelchats {
+    /// Person → ihr Einzelchat mit dem Ersteller.
+    pub chat_von: HashMap<Uuid, Uuid>,
+    /// Die Chats, die dabei neu angelegt wurden.
+    pub neu: Vec<Uuid>,
+}
+
+/// Findet die Einzelchats zwischen dem Ersteller und diesen Personen – und legt
+/// die fehlenden an.
+///
+/// # Warum das hier steht und nicht im Handler
+///
+/// Erst legte nur `POST /conversations` Einzelchats an. Eine Einladung braucht
+/// sie im Dutzend, in **einer** Transaktion mit dem Termin: bricht etwas ab,
+/// soll kein halber Termin und kein leerer Chat übrig bleiben. Der Handler
+/// nutzt für den Direktfall jetzt denselben Dienst.
+///
+/// Die Prüfung, ob man mit dieser Person einen Chat anlegen darf, sitzt
+/// ebenfalls nur hier: Heute gilt „Person existiert“ und nicht „mit sich
+/// selbst“ – eine Sperrliste gibt es nicht. Käme eine, hängte sie sich an
+/// dieser einen Stelle ein, statt an drei.
+///
+/// # Gleichzeitiges Anlegen
+///
+/// Für das Paar gibt es keinen Eindeutigkeits-Index (er wäre nicht einfach
+/// auszudrücken: Mitglieder stehen in einer eigenen Tabelle). Stattdessen
+/// sperrt die Transaktion jedes Paar, sortiert, damit zwei Einladungen
+/// einander nicht in die Quere kommen. Wer als Zweiter sperrt, findet danach
+/// den Chat des Ersten.
+pub async fn einzelchats_sichern(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ersteller: Uuid,
+    personen: &[Uuid],
+) -> AppResult<Einzelchats> {
+    let mut personen: Vec<Uuid> = personen
+        .iter()
+        .copied()
+        .filter(|person| *person != ersteller)
+        .collect();
+    personen.sort();
+    personen.dedup();
+    if personen.is_empty() {
+        return Ok(Einzelchats::default());
+    }
+
+    // Sortiert sperren: Zwei Einladungen, die dieselben Paare in anderer
+    // Reihenfolge anfassen, würden einander sonst ewig warten lassen.
+    sqlx::query(
+        "select pg_advisory_xact_lock(
+                  hashtextextended('einzelchat:' || least($1::uuid, p)::text
+                                   || ':' || greatest($1::uuid, p)::text, 0))
+           from (select p from unnest($2::uuid[]) as p order by p) sortiert",
+    )
+    .bind(ersteller)
+    .bind(&personen)
+    .execute(&mut **tx)
+    .await?;
+
+    let mut chat_von = vorhandene_einzelchats(&mut **tx, ersteller, &personen).await?;
+    let fehlend: Vec<Uuid> = personen
+        .iter()
+        .copied()
+        .filter(|person| !chat_von.contains_key(person))
+        .collect();
+    if fehlend.is_empty() {
+        return Ok(Einzelchats {
+            chat_von,
+            neu: Vec::new(),
+        });
+    }
+
+    let neue_ids: Vec<Uuid> = fehlend.iter().map(|_| Uuid::now_v7()).collect();
+    sqlx::query(
+        "insert into conversations (id, type, created_by)
+         select id, 'direct', $2 from unnest($1::uuid[]) as id",
+    )
+    .bind(&neue_ids)
+    .bind(ersteller)
+    .execute(&mut **tx)
+    .await?;
+
+    // Beide Seiten mit `sieht_ab`: Die Regel lautet überall „du siehst ab
+    // jetzt“, und für die Gründenden ist das die Geburt des Gesprächs – wie im
+    // Handler, der bisher allein Chats anlegte.
+    sqlx::query(
+        "insert into conversation_members (conversation_id, user_id, role, sieht_ab)
+         select t.chat, $3, 'owner', now() from unnest($1::uuid[]) as t(chat)
+         union all
+         select t.chat, t.person, 'member', now()
+           from unnest($1::uuid[], $2::uuid[]) as t(chat, person)",
+    )
+    .bind(&neue_ids)
+    .bind(&fehlend)
+    .bind(ersteller)
+    .execute(&mut **tx)
+    .await?;
+
+    for (person, chat) in fehlend.iter().zip(&neue_ids) {
+        chat_von.insert(*person, *chat);
+    }
+    Ok(Einzelchats {
+        chat_von,
+        neu: neue_ids,
+    })
+}
+
+/// Meldet neue Einzelchats den Beteiligten – nach dem Commit.
+///
+/// Jeder bekommt seine eigene Fassung (Chat-Nutzlasten sind betrachterabhängig),
+/// darum je Chat zwei Ladevorgänge; begrenzt parallel, damit eine Einladung an
+/// zweihundert Leute den Verbindungsvorrat nicht leerzieht.
+pub async fn neue_chats_melden(state: &AppState, neu: &[Uuid]) {
+    use futures_util::stream::{self, StreamExt};
+
+    stream::iter(neu.iter().copied())
+        .for_each_concurrent(crate::constants::EINLADUNG_PARALLEL, |chat| async move {
+            if let Err(fehler) = broadcast_conversation(state, chat, None).await {
+                tracing::warn!(%fehler, %chat, "neuen Einzelchat melden gescheitert");
+            }
+        })
+        .await;
 }

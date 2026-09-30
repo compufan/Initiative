@@ -34,6 +34,17 @@ pub const POLL_OPTION_MAX: usize = 120;
 pub const POLL_OPTIONS_MAX: usize = 30;
 pub const EVENT_TITLE_MAX: usize = 160;
 pub const EVENT_DESCRIPTION_MAX: usize = 4000;
+/// Wie lang der Wiederholungsschutz-Schlüssel beim Anlegen eines Termins sein darf.
+pub const EVENT_CLIENT_ID_MAX: usize = 64;
+/// Wie viele Personen ein Termin höchstens einlädt. Muss mit `EINLADUNGEN_MAX`
+/// im gemeinsamen Paket übereinstimmen – der Client prüft vorab, der Server
+/// entscheidet.
+pub const EINLADUNGEN_MAX: usize = 200;
+/// In wie viele Gruppenchats eine Einladung höchstens als Karte gestellt wird.
+pub const EINLADUNG_GRUPPEN_MAX: usize = 10;
+/// Wie viele Karten einer Einladung gleichzeitig zugestellt werden. Der
+/// Verbindungsvorrat ist begrenzt, und andere Anfragen brauchen Luft.
+pub const EINLADUNG_PARALLEL: usize = 4;
 pub const STICKER_PACK_NAME_MAX: usize = 60;
 
 /**
