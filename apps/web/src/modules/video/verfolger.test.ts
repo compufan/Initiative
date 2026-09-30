@@ -385,6 +385,34 @@ describe('Verfolger – fertig und nicht fertig', () => {
     expect(v.zaehler.laeufe).toBe(0);
   });
 
+  it('zeigt nach einem neuen Anker die alte Kette als veraltet, bis die neue da ist', async () => {
+    // Neue Anker warten 300 ms – so lange gibt es von ihnen sicher noch nichts.
+    const { v } = verfolger({ entprellMs: 300 });
+    const film = [abschnitt('a', 0, 30)];
+    const alt = spur('t', 5, netz(5));
+    v.setzen([maske('A', [alt])], film);
+    await v.spurenFertig();
+    const neu = spur('t', 5, netz(5));
+    v.setzen([maske('A', [neu])], film);
+    const bild = v.kette(neu.anker[0], 'vor', 20);
+    expect(bild.stand).toBe('veraltet');
+    const vorher = v.kette(alt.anker[0], 'vor', 20);
+    if (bild.stand === 'veraltet' && vorher.stand === 'fein') expect(bild.marke).toBe(vorher.marke);
+    expect(v.maske(neu.anker[0], 'vor', 20)).not.toBeNull();
+    // Und der Filmbau wartet auf die neue.
+    await v.spurenFertig();
+    expect(v.kette(neu.anker[0], 'vor', 20).stand).toBe('fein');
+  });
+
+  it('lässt eine Form hinter einem Szenenschnitt vorläufig an ihrem Anker', async () => {
+    const { v } = verfolger();
+    const form = maske('F', [spur('f', 5, radial())]);
+    v.setzen([form], [abschnitt('a', 0, 10), abschnitt('b', 100, 110)]);
+    await v.spurenFertig();
+    expect(v.lage(5, 8).stand).toBe('fein');
+    expect(v.lage(5, 105).stand).toBe('vorlaeufig');
+  });
+
   it('meldet den Stand über `abonnieren` – und derselbe Stand bleibt dasselbe Objekt', async () => {
     const { v } = verfolger({ meldenMs: 30 });
     let meldungen = 0;
