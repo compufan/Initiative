@@ -4,6 +4,8 @@ import { AbbruchError } from '../stickers/engines/index.js';
 import type { Lesung, LeseOptionen } from './leserDienst.js';
 import { kettenPlan, type Lauf } from './masken.js';
 import {
+  RAUSCHEN_AB,
+  ablegbar,
   fensterRechnen,
   inhaltFensterSuchen,
   kameraFensterSuchen,
@@ -412,5 +414,23 @@ describe('Kamera und Tiefe', () => {
     expect(karte?.daten.werte[0]).toBe(8);
     // Gelesen voll nur an den Schlüsselbildern.
     expect(leser.voll.sort((a, b) => a - b)).toEqual([4, 8, 12, 28, 32]);
+  });
+});
+
+describe('ablegbar', () => {
+  it('lässt eine ordentliche Maske Bit für Bit – und stuft nur eine verrauschte gröber', () => {
+    const sauber = scheibe(30, 20);
+    expect(ablegbar(sauber).maske).toBe(sauber);
+    // Rauschen über das ganze Bild: jeder Punkt ein neuer Lauf.
+    const gross = new Uint8Array(640 * 480);
+    let z = 7;
+    for (let i = 0; i < gross.length; i += 1) {
+      z = (z * 1103515245 + 12345) & 0x7fffffff;
+      gross[i] = i % 640 < 320 ? 235 + (z % 21) : z % 13;
+    }
+    const abgelegt = ablegbar(gross);
+    expect(abgelegt.rle.length).toBeLessThanOrEqual(RAUSCHEN_AB);
+    expect(abgelegt.maske[5]).toBe(255);
+    expect(abgelegt.maske[600]).toBe(0);
   });
 });

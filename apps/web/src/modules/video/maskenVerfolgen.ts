@@ -63,6 +63,44 @@ import {
 /** So lange darf ein Gegenstand fehlen und wird dort wiedergefunden, wo er zu erwarten ist. */
 export const WIEDER_MS = 2000;
 
+/** Ab so vielen Bytes Lauflängen gilt eine Maske als verrauscht – siehe `ablegbar`. */
+export const RAUSCHEN_AB = 48 * 1024;
+
+/**
+ * Eine Maske so, wie sie abgelegt wird: als Lauflängen – und, wenn sie sich
+ * so nicht klein machen lässt, vorher gröber gestuft.
+ *
+ * # Warum
+ *
+ * Nachgemessen bei 960 × 540 (`messung.test.ts`): Eine weiche Scheibe kommt
+ * mit der Rundung aus `rle.ts` (ab 250 → 255, bis 5 → 0) auf 6,6 KB. Eine
+ * Zuversichtsmaske, wie ein Freisteller sie liefern kann – innen 235 … 255,
+ * aussen 0 … 12, beides verrauscht –, bleibt bei 497 KB, fast ihrer vollen
+ * Grösse: Jeder Punkt beginnt einen neuen Lauf. Sechshundert Filmbilder
+ * davon wären 290 MB, das Doppelte des ganzen Budgets.
+ *
+ * Nur für SOLCHE Masken wird gröber gestuft: bis 16 → 0, ab 232 → 255,
+ * dazwischen auf Achtel. Das ist höchstens ein Zehntel der Wirkung am
+ * äussersten Saum und im Innern – und im Innern ist es Rauschen, das im Film
+ * ohnehin nur flimmerte. Dieselbe verrauschte Maske, geglättet und so
+ * gestuft: 9,7 KB, und die Verfolgung kostet je Bild 20 statt 47 ms, weil
+ * das Packen nicht mehr jeden Punkt einzeln schreibt. Eine Maske, die sich
+ * ordentlich packen lässt, bleibt Bit für Bit, wie sie war.
+ */
+export function ablegbar(maske: Uint8Array): {
+  readonly rle: Uint8Array;
+  readonly maske: Uint8Array;
+} {
+  const rle = rleKodieren(maske);
+  if (rle.length <= RAUSCHEN_AB) return { rle, maske };
+  const grob = new Uint8Array(maske.length);
+  for (let i = 0; i < maske.length; i += 1) {
+    const wert = maske[i];
+    grob[i] = wert <= 16 ? 0 : wert >= 232 ? 255 : (wert + 4) & ~7;
+  }
+  return { rle: rleKodieren(grob), maske: grob };
+}
+
 /** Was ein Fenster vom Leser braucht – der `Leserdienst`, in den Prüfungen ein Ersatz. */
 export interface FensterLeser {
   holen(ms: number, prioritaet: Prioritaet, optionen?: LeseOptionen): Promise<Lesung>;
@@ -399,15 +437,18 @@ async function inhaltRechnen(f: InhaltsFenster, u: Umgebung): Promise<Fenstererg
         tipp = { liste, mx: m?.x ?? 0, my: m?.y ?? 0 };
       }
     }
-    const eintrag: KettenEintrag = verloren
-      ? { verloren: true, guete: f.pass }
-      : {
-          rle: rleKodieren(glatt),
-          meta: metaMessen(glatt, b, h),
-          marke: filmMarke(),
-          guete: f.pass,
-          ...(tipp ? { punkte: tipp } : {}),
-        };
+    let eintrag: KettenEintrag;
+    if (verloren) eintrag = { verloren: true, guete: f.pass };
+    else {
+      const abgelegt = ablegbar(glatt);
+      eintrag = {
+        rle: abgelegt.rle,
+        meta: metaMessen(abgelegt.maske, b, h),
+        marke: filmMarke(),
+        guete: f.pass,
+        ...(tipp ? { punkte: tipp } : {}),
+      };
+    }
     if (f.kette.ablegen(k, eintrag)) gespeichert += 1;
     zwischen.delete(k - 2);
     await luft();
@@ -425,13 +466,13 @@ async function inhaltRechnen(f: InhaltsFenster, u: Umgebung): Promise<Fenstererg
       f.kette.randAblegen(f.richtung, f.pass, {
         k: endeK,
         rand: stand,
-        roh: rleKodieren(spur.maskeAn(letzter)),
+        roh: ablegbar(spur.maskeAn(letzter)).rle,
         mitte: endeMitte ? { x: endeMitte.x, y: endeMitte.y } : null,
         punkte: spur.punkteAn(letzter),
         innen: innenGilt
           ? {
               k: innenK,
-              roh: rleKodieren(rohAn(innenK).maske),
+              roh: ablegbar(rohAn(innenK).maske).rle,
               mitte: rohAn(innenK).mitte,
             }
           : null,

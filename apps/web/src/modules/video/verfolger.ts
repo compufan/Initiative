@@ -1230,7 +1230,20 @@ export class Verfolger implements SpurQuelle {
       const da = this.vorrat.netz.holen(teil.netz, k, laenge);
       if (da) return da;
     }
-    if (!bild) throw new Error(`Für Bild ${k} fehlt das Bild`);
+    /*
+     * Ohne Bild kommt nur, wessen Ergebnis beim Lesen noch im Netzvorrat lag.
+     * Hat das Budget es seitdem verdrängt, wird das Bild eben jetzt gelesen –
+     * ausser der Reihe, aber besser als ein Fehler an der Kette.
+     */
+    if (!bild) {
+      const lesung = await this.optionen.leser.holen(bildMitte(k, this.s), 'hinten', {
+        voll: true,
+        abbruch,
+      });
+      this.zaehler.lesen += 1;
+      bild = lesung.voll;
+      if (!bild) throw new Error(`Für Bild ${k} fehlt das Bild`);
+    }
     const maske = this.optionen.rechnen
       ? await this.optionen.rechnen(teil, bild, punkte, abbruch)
       : (
