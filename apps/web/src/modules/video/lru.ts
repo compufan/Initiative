@@ -58,6 +58,19 @@ export class BytesLru<S, W> {
     }
   }
 
+  /**
+   * Das am längsten nicht Gebrauchte verdrängen, bis höchstens `bytes`
+   * übrig sind – wenn der Platz woanders gebraucht wird.
+   */
+  begrenzen(bytes: number): void {
+    for (const [alt, eintrag] of this.eintraege) {
+      if (this.summe <= bytes) break;
+      this.eintraege.delete(alt);
+      this.summe -= eintrag.bytes;
+      this.verdraengt?.(alt, eintrag.wert);
+    }
+  }
+
   loeschen(schluessel: S): void {
     const eintrag = this.eintraege.get(schluessel);
     if (!eintrag) return;
