@@ -1,3 +1,5 @@
+import { getEventListeners } from 'node:events';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AbbruchError } from '../stickers/engines/index.js';
@@ -166,6 +168,30 @@ describe('leserDienst', () => {
     expect(e.geschlossen).toBe(1);
     // Und danach geht es weiter – der Dienst gehört der Sitzung.
     expect((await dienst.holen(80, 'vorn')).voll).not.toBeNull();
+    dienst.schliessen();
+  });
+
+  it('lässt nach einer Lesung keinen Horcher zurück – weder an der Sitzung noch am Auftrag', async () => {
+    /*
+     * Die Verfolgung reicht bei jeder Lesung ihr Fenstersignal herein. Ohne
+     * Abmelden hing je Lesung ein Horcher mehr am Signal der Sitzung, das so
+     * lange lebt wie das Blatt – nach tausenden Lesungen Megabyte, und jede
+     * neue Anmeldung langsamer.
+     */
+    const e = ersatz();
+    let sitzung: AbortSignal | undefined;
+    const oeffnen: typeof e.oeffnen = async (...argumente: unknown[]) => {
+      sitzung = (argumente[1] as { abbruch?: AbortSignal }).abbruch;
+      return e.oeffnen();
+    };
+    const dienst = leserDienst(DATEI, 96, 40, { oeffnen });
+    const fenster = new AbortController();
+    for (let i = 0; i < 300; i += 1) {
+      await dienst.holen(i * 40, 'hinten', { grau: true, abbruch: fenster.signal });
+    }
+    expect(sitzung).toBeDefined();
+    expect(getEventListeners(sitzung as AbortSignal, 'abort')).toHaveLength(0);
+    expect(getEventListeners(fenster.signal, 'abort')).toHaveLength(0);
     dienst.schliessen();
   });
 

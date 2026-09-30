@@ -95,7 +95,7 @@ describe('Vorrat', () => {
     // alt1 wird noch einmal gebraucht (die Vorschau zeigt es als veraltet) – alt2 geht zuerst.
     expect(vorrat.holen('alt1')).toBe(alt1);
     neu.ablegen(2, schwer(6000));
-    expect(vorrat.aufraeumen()).toEqual([]);
+    expect(vorrat.aufraeumen()).toBe(false);
     expect(vorrat.holen('alt2')).toBeUndefined();
     expect(vorrat.holen('alt1')).toBe(alt1);
     expect(vorrat.holen('neu')).toBe(neu);
@@ -111,21 +111,30 @@ describe('Vorrat', () => {
     const a = vorrat.kette('a', 0);
     a.ablegen(1, schwer(8000));
     vorrat.aktuellSetzen(['a']);
-    expect(vorrat.aufraeumen()).toEqual([]);
+    expect(vorrat.aufraeumen()).toBe(false);
     expect(vorrat.netz.bytes).toBe(0);
     expect(vorrat.holen('a')).toBe(a);
 
-    // Jetzt reichen die gebrauchten Ketten allein nicht: Die am wenigsten fertige hält an.
+    // Jetzt reichen die gebrauchten Ketten allein nicht: Es bleibt zu viel.
     const b = vorrat.kette('b', 0);
     b.ablegen(1, schwer(15_000));
     vorrat.aktuellSetzen(['a', 'b']);
-    const fertig = new Map([
-      ['a', 0.9],
-      ['b', 0.2],
-    ]);
-    expect(vorrat.aufraeumen((s) => fertig.get(s) ?? 0)).toEqual(['b']);
-    // Angehalten, nicht gelöscht: Was sie hat, bleibt.
+    expect(vorrat.aufraeumen()).toBe(true);
+    expect(vorrat.voll).toBe(true);
+    // Gebrauchte Ketten werden nie verdrängt: Was sie haben, bleibt.
     expect(vorrat.holen('b')?.bild(1)).toBeDefined();
+    expect(vorrat.holen('a')?.bild(1)).toBeDefined();
+  });
+
+  it('vergisst Tiefenkarten, die niemand mehr braucht – vor dem Netzvorrat', () => {
+    const vorrat = new Vorrat(30_000, 16, 1_000_000);
+    const karte = () => ({ breite: 100, hoehe: 100, werte: new Uint8Array(10_000) });
+    vorrat.tiefe.ablegen(0, karte());
+    vorrat.tiefe.ablegen(4, karte());
+    vorrat.tiefe.ablegen(8, karte());
+    vorrat.tiefe.ablegen(12, karte());
+    expect(vorrat.aufraeumen((k) => k >= 8)).toBe(false);
+    expect([0, 4, 8, 12].map((k) => vorrat.tiefe.hat(k))).toEqual([false, false, true, true]);
   });
 
   it('zählt alles zusammen', () => {
@@ -141,8 +150,28 @@ describe('Vorrat', () => {
 });
 
 describe('Netzvorrat', () => {
+  it('packt verrauschte Masken wie die Ketten – und gibt zurück, was ab jetzt gilt', () => {
+    const netz = new Netzvorrat(1_000_000);
+    // Innen verrauscht 240 … 252: Die Rundung der Lauflängen allein hilft da nicht.
+    const laut = new Uint8Array(B * H * 30).map((_, i) => 240 + ((i * 7) % 13));
+    const gilt = netz.ablegen('object', 1, laut);
+    expect(netz.bytes).toBeLessThan(laut.length / 100);
+    expect(Array.from(netz.holen('object', 1, laut.length) ?? [])).toEqual(Array.from(gilt));
+  });
+
+  it('lässt grobe Ergebnisse nicht von feinen verdrängen', () => {
+    // Wie Grob- und Feinpass: erst alle groben, dann viele feine.
+    // Je Eintrag rund 4 KB: im Topf für grobe vier, im feinen vierzehn.
+    const netz = new Netzvorrat(80_000);
+    const laut = (k: number) => new Uint8Array(4000).map((_, i) => ((i * (k + 3)) % 97) + 30);
+    for (let k = 0; k < 4; k += 1) netz.ablegen('object', k * 24, laut(k), 'grob');
+    for (let k = 1; k < 60; k += 1) if (k % 24 !== 0) netz.ablegen('object', k, laut(k), 'fein');
+    for (let k = 0; k < 4; k += 1) expect(netz.hat('object', k * 24), `grob ${k * 24}`).toBe(true);
+    expect(netz.hat('object', 1)).toBe(false);
+  });
+
   it('liefert, was abgelegt wurde, und vergisst nach Bytes', () => {
-    const netz = new Netzvorrat(3300);
+    const netz = new Netzvorrat(4400);
     const a = scheibe(20, 20, 10);
     netz.ablegen('object', 7, a);
     expect(netz.hat('object', 7)).toBe(true);

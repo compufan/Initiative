@@ -268,3 +268,44 @@ export function metaMessen(alpha: Uint8Array, breite: number, hoehe: number): Ma
 export function metaLeer(meta: MaskenMeta): boolean {
   return meta.flaeche < 1;
 }
+
+/** Ab so vielen Bytes Lauflängen gilt eine Maske als verrauscht – siehe `ablegbar`. */
+export const RAUSCHEN_AB = 48 * 1024;
+
+/**
+ * Eine Maske so, wie sie abgelegt wird: als Lauflängen – und, wenn sie sich
+ * so nicht klein machen lässt, vorher gröber gestuft.
+ *
+ * # Warum
+ *
+ * Nachgemessen bei 960 × 540 (`messung.test.ts`): Eine weiche Scheibe kommt
+ * mit der Rundung aus `rleKodieren` (ab 250 → 255, bis 5 → 0) auf 6,6 KB. Eine
+ * Zuversichtsmaske, wie ein Freisteller sie liefern kann – innen 235 … 255,
+ * aussen 0 … 12, beides verrauscht –, bleibt bei 497 KB, fast ihrer vollen
+ * Grösse: Jeder Punkt beginnt einen neuen Lauf. Sechshundert Filmbilder
+ * davon wären 290 MB, das Doppelte des ganzen Budgets.
+ *
+ * Nur für SOLCHE Masken wird gröber gestuft: bis 16 → 0, ab 232 → 255,
+ * dazwischen auf Achtel. Das ist höchstens ein Zehntel der Wirkung am
+ * äussersten Saum und im Innern – und im Innern ist es Rauschen, das im Film
+ * ohnehin nur flimmerte. Dieselbe verrauschte Maske, geglättet und so
+ * gestuft: 9,7 KB, und die Verfolgung kostet je Bild 20 statt 47 ms, weil
+ * das Packen nicht mehr jeden Punkt einzeln schreibt. Eine Maske, die sich
+ * ordentlich packen lässt, bleibt Bit für Bit, wie sie war.
+ *
+ * Für die Ketten der Verfolgung (`maskenVerfolgen.ts`) und für die rohen
+ * Ergebnisse der Freisteller im Netzvorrat (`spurVorrat.ts`).
+ */
+export function ablegbar(maske: Uint8Array): {
+  readonly rle: Uint8Array;
+  readonly maske: Uint8Array;
+} {
+  const rle = rleKodieren(maske);
+  if (rle.length <= RAUSCHEN_AB) return { rle, maske };
+  const grob = new Uint8Array(maske.length);
+  for (let i = 0; i < maske.length; i += 1) {
+    const wert = maske[i];
+    grob[i] = wert <= 16 ? 0 : wert >= 232 ? 255 : (wert + 4) & ~7;
+  }
+  return { rle: rleKodieren(grob), maske: grob };
+}

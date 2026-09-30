@@ -16,7 +16,7 @@ import { einrasten, type Punkt } from './objektFolge.js';
 import { bildBereich, bildIndex, bildMitte, filmZuBild } from './raster.js';
 import { META_LEER, metaLeer, metaMessen, type MaskenMeta } from './rle.js';
 import type { Abschnitt } from './schnitt.js';
-import type { Lage } from './verfolgung.js';
+import { punktVor, type Lage } from './verfolgung.js';
 
 /**
  * Masken für den ganzen Film – als Spuren über die Quellbilder, nicht als
@@ -49,10 +49,16 @@ import type { Lage } from './verfolgung.js';
  *
  * Zusammensetzen (Editor, Vorschau, Filmbau)
  * - `bildDocAn(clipDoc, masken, quelle, k, art, rahmen, speicher?)` →
- *   `Zusammensetzung` { doc, k, enthalten, fehlend, veraltet, grob,
- *   ueberzaehlig }. `art`: `'editor'` (Anker, fein, grob; Tipps mit
+ *   `Zusammensetzung` { doc, k, enthalten, fehlend, jenseits, veraltet,
+ *   grob, ueberzaehlig }. `art`: `'editor'` (Anker, fein, grob; Tipps mit
  *   Punkten) | `'vorschau'` (dazu Veraltetes und Ersatz) | `'bild'`
- *   (Filmbau: nur fertig, sonst Fehler; abgeschaltete Masken fehlen).
+ *   (Filmbau: nur fertig, sonst Fehler – auch bei mehr als `BEREICHE_MAX`
+ *   Masken; abgeschaltete Masken fehlen). `jenseits`: Masken ohne Daten an
+ *   einem Bild hinter der Obergrenze des Films (`imFilm`) – dort wird nie
+ *   verfolgt.
+ * - `filmStandAn(maske, k, quelle, rahmen)` → `'fein' | 'grob' | 'offen'`:
+ *   dieselbe Regel wie `'bild'`, ohne zu bauen – für Fortschritt und
+ *   `spurenFertig`.
  * - `Kompositspeicher` – nach Bytes begrenzter Merkzettel für die Teile;
  *   derselbe Stand gibt dasselbe Feld zurück (wichtig für den
  *   Maskenzwischenspeicher im Renderer).
@@ -69,11 +75,16 @@ import type { Lage } from './verfolgung.js';
  * - `giltAn(geltung, k, bezug)`, `geltungStuecke`, `geltungLeer`,
  *   `geltungAbHier`, `geltungBisHier`, `geltungNurAbschnitt`, `griffLage`,
  *   `griffZiehen`, `grenzeVerletzt` (höchstens `BEREICHE_MAX` je Bild,
- *   `MASKEN_MAX` im Film), `maskeTrennen`, `ankerEntfernen`.
+ *   `MASKEN_MAX` im Film – auch nach Kürzen, Verlängern, Hinzufügen von
+ *   Abschnitten zu fragen), `zuvielAn` (wo es doch mehr sind),
+ *   `maskeTrennen`, `ankerEntfernen`.
+ * - `geltungNachTeilen(masken, altId, neueId)` – nach ✂ PFLICHT: „Nur
+ *   Abschnitt n" gilt danach in beiden Hälften.
  *
  * Bahnen
  * - `bahnZustand(abschnitte, maske, quelle, s, mass, px, umfangMs)` → ein
  *   `BAHN`-Wert je Bildpunktspalte; `zustandAn`, `sichtbarAn` je Bild.
+ *   Baut dafür keine Masken, Tiefen oder Formen (billig je Neuzeichnen).
  *
  * Verfolgung (für `verfolger.ts`)
  * - `kettenBedarf(maske, F, bezug)` → je Kette `Kettenbedarf`;
@@ -212,6 +223,8 @@ export interface Bezug {
 export interface Rahmen extends Bezug {
   readonly b: number;
   readonly h: number;
+  /** Die Obergrenze des Films in Bildern – ohne Angabe `MAX_BILDER_FILM`. */
+  readonly maxBilder?: number;
 }
 
 /* ---------- Kennungen ---------- */
@@ -379,7 +392,61 @@ export function geltungNurAbschnitt(id: string): Geltung {
   return { art: 'abschnitte', ids: [id] };
 }
 
+/**
+ * Nach dem Teilen eines Abschnitts (✂): Wo eine Maske in `altId` galt, gilt
+ * sie danach auch in `neueId` – der Hälfte, die `abschnittTeilen` die neue
+ * Kennung gab. Dieselbe Liste, wenn keine Maske betroffen ist.
+ *
+ * # Warum das der Aufrufer tun muss
+ *
+ * Weil „Nur Abschnitt 2" nach Kennung auflöst und eine der beiden Hälften
+ * eine neue bekommt (welche, hängt am Stellbild). Ohne diesen Schritt galt
+ * die Maske nach dem Teilen nur noch in der einen Hälfte – ohne Hinweis und
+ * auch im Film. Vorher, mit Masken je Abschnitt, behielten beide Hälften
+ * sie; und eine Geltung, die dem Abschnitt folgt, soll ihm auch durch das
+ * Teilen folgen. `useSchnitt.teilen` ruft das mit derselben Kennung, die es
+ * `abschnittTeilen` gibt.
+ */
+export function geltungNachTeilen(
+  masken: readonly Maske[],
+  altId: string,
+  neueId: string,
+): readonly Maske[] {
+  const dazu = <G extends Geltung>(g: G): G =>
+    g.art === 'abschnitte' && g.ids.includes(altId) && !g.ids.includes(neueId)
+      ? ({ ...g, ids: [...g.ids, neueId] } as G)
+      : g;
+  let geaendert = false;
+  const neu = masken.map((maske) => {
+    const geltung = dazu(maske.geltung);
+    const zuletzt = maske.zuletzt ? dazu(maske.zuletzt) : undefined;
+    if (geltung === maske.geltung && zuletzt === maske.zuletzt) return maske;
+    geaendert = true;
+    return { ...maske, geltung, ...(zuletzt ? { zuletzt } : {}) };
+  });
+  return geaendert ? neu : masken;
+}
+
 /* ---------- Stellen im Film ---------- */
+
+/**
+ * Zeigt der Film Quellbild k – an einer Stelle vor seiner Obergrenze? Genau
+ * die Bilder, die `F` enthält (`filmRaster(…).menge`), ohne F zu bauen.
+ *
+ * Wo nicht, wird auch nie verfolgt: Eine Maske, der dort Daten fehlen, wird
+ * nicht „noch verfolgt" – sie ist dort „nicht im Film" (siehe
+ * `Zusammensetzung.jenseits`).
+ */
+export function imFilm(k: number, bezug: Bezug, maxBilder = MAX_BILDER_FILM): boolean {
+  let stelle = 0;
+  for (const abschnitt of bezug.abschnitte) {
+    if (stelle >= maxBilder) return false;
+    const { k0, k1 } = bildBereich(abschnitt, bezug.s);
+    if (k >= k0 && k < k1 && stelle + (k - k0) < maxBilder) return true;
+    stelle += k1 - k0;
+  }
+  return false;
+}
 
 /**
  * Die Bilder des Films durchgezählt: Abschnitt n zeigt die Stellen
@@ -493,8 +560,15 @@ export function geltungBisHier(geltung: Geltung, bezug: Bezug, filmMs: number): 
  * eingeschalteten liesse einen Haken zu, der dann nicht wirken dürfte.
  *
  * Gezählt wird über alle Quellbilder, nicht nur über die des Films: Wer
- * einen Abschnitt später verlängert, holte sonst eine fünfte Maske ins Bild,
- * und das Kürzen abzulehnen, weil irgendwo Masken hängen, wäre schlimmer.
+ * einen Abschnitt später verlängert, holte sonst über eine Maske mit
+ * `ganz` oder `stuecke` eine fünfte ins Bild.
+ *
+ * Für `abschnitte` hilft das nicht: Diese Geltung WÄCHST mit ihrem
+ * Abschnitt, und ein Verlängern ist für solche Masken eine Änderung der
+ * Geltung. `grenzeVerletzt` gehört deshalb auch hinter jedes Kürzen,
+ * Verlängern und Hinzufügen von Abschnitten (siehe `masken-api.md`) – und
+ * `bildDocAn` wirft im Filmbau, falls es doch einmal mehr als
+ * `BEREICHE_MAX` wären, statt still eine wegzulassen.
  */
 export function hoechstJeBild(
   masken: readonly Maske[],
@@ -542,6 +616,33 @@ export function grenzeVerletzt(masken: readonly Maske[], bezug: Bezug): string |
 }
 
 /**
+ * Wo mehr als `BEREICHE_MAX` Masken zugleich gelten – als Quellbereiche,
+ * sortiert. Für die Bahn: Dort fehlt dem Editor und dem Film eine Maske,
+ * und das soll man sehen, bevor der Filmbau daran scheitert.
+ */
+export function zuvielAn(masken: readonly Maske[], bezug: Bezug): KBereich[] {
+  const ereignisse: [number, number][] = [];
+  for (const maske of masken) {
+    for (const st of geltungStuecke(maske.geltung, bezug)) {
+      ereignisse.push([st.vonK, 1], [st.bisK, -1]);
+    }
+  }
+  ereignisse.sort((a, b) => (a[0] === b[0] ? a[1] - b[1] : a[0] < b[0] ? -1 : 1));
+  const raus: KBereich[] = [];
+  let jetzt = 0;
+  let seit: number | null = null;
+  for (const [stelle, schritt] of ereignisse) {
+    jetzt += schritt;
+    if (jetzt > BEREICHE_MAX && seit === null) seit = stelle;
+    else if (jetzt <= BEREICHE_MAX && seit !== null) {
+      if (stelle > seit) raus.push({ vonK: seit, bisK: stelle });
+      seit = null;
+    }
+  }
+  return stueckeNormal(raus);
+}
+
+/**
  * Wie viele Bereiche der Editor an diesem Bild haben darf – `bereicheMax`
  * – und, wenn keiner mehr dazukommen darf, warum (`bereicheGrund`).
  *
@@ -574,11 +675,15 @@ export function bereichePlatz(
     z.fehlend.length > 0
       ? `${z.fehlend.length === 1 ? 'Eine Maske wirkt' : `${z.fehlend.length} Masken wirken`} hier noch nicht – sie werden verfolgt. `
       : '';
+  const draussen =
+    z.jenseits.length > 0
+      ? `${z.jenseits.length === 1 ? 'Eine Maske fehlt' : `${z.jenseits.length} Masken fehlen`} hier – das Bild liegt hinter dem Ende des Films. `
+      : '';
   const grund =
     imFilm <= 0
       ? `${MASKEN_MAX} Masken im Film – mehr gehen nicht. In der Zeitleiste eine löschen.`
       : `An einer Stelle im Film wirken schon ${BEREICHE_MAX} Masken – eine neue gälte auch dort. In der Zeitleiste eine eingrenzen oder löschen.`;
-  return { max: imEditor, grund: warten + grund };
+  return { max: imEditor, grund: warten + draussen + grund };
 }
 
 /* ---------- Ketten: was die Verfolgung rechnet ---------- */
@@ -669,29 +774,55 @@ export interface Kettenbedarf {
  *   `SpurQuelle.tiefe`).
  * - Formen in einer Maske mit Inhalt: Sie folgen dem Inhalt, und dessen
  *   Kette wird ohnehin gerechnet (siehe `formAufloesen`).
+ *
+ * # Die Ankerbilder der Formen sind Ziele des Leitteils
+ *
+ * Eine Form in einer Maske mit Inhalt fragt den Inhalt an ZWEI Bildern: an
+ * k, und am Bild, an dem sie gemalt wurde – um den Weg des Schwerpunkts
+ * dazwischen. Das zweite liegt oft nicht in `Z`: Der Abschnitt wurde danach
+ * gekürzt, die Geltung eingegrenzt, oder der Inhalt wurde zwischen seinem
+ * Anker und dem der Form neu angetippt, und die neue Kette hatte das Bild
+ * nie als Ziel. Ohne es fehlte die ganze Maske an JEDEM Bild – und der
+ * Fortschritt, der Formen in solchen Masken nicht fragte, meldete trotzdem
+ * „fertig", bis der Filmbau scheiterte. Deshalb stehen diese Bilder in den
+ * Zielen der Kette, die sie abdeckt: gerechnet und abgelegt, nur gezeigt
+ * werden sie nie (sie sind kein Bild des Films).
  */
 export function kettenBedarf(maske: Maske, F: readonly number[], bezug: Bezug): Kettenbedarf[] {
   const ziele = maskenZiele(maske, F, bezug);
-  const mitInhalt = leitTeil(maske) !== null;
+  const leit = leitTeil(maske);
   const raus: Kettenbedarf[] = [];
   for (const teil of maske.teile) {
     const basis = teil.anker[0].teil;
     const jenseits = jenseitsFuer(basis);
     if (!jenseits) continue;
     const art = basis.art === 'netz' || basis.art === 'tipp' ? 'inhalt' : 'kamera';
-    if (art === 'kamera' && mitInhalt) continue;
+    if (art === 'kamera' && leit) continue;
+    const teilZiele = teil === leit ? formAnkerDazu(maske, ziele) : ziele;
     for (const grenze of ankerKetten(teil)) {
       raus.push({
         maske,
         teil,
         grenze,
         art,
-        ziele: ziele.filter((k) => k >= grenze.lo && k <= grenze.hi),
+        ziele: teilZiele.filter((k) => k >= grenze.lo && k <= grenze.hi),
         jenseits,
       });
     }
   }
   return raus;
+}
+
+/** `ziele` samt den Ankerbildern aller Formteile der Maske – aufsteigend, ohne Doppelte. */
+function formAnkerDazu(maske: Maske, ziele: readonly number[]): readonly number[] {
+  const dazu: number[] = [];
+  for (const teil of maske.teile) {
+    const art = teil.anker[0].teil.art;
+    if (art !== 'verlauf' && art !== 'radial' && art !== 'pinsel') continue;
+    for (const anker of teil.anker) dazu.push(anker.k);
+  }
+  if (dazu.length === 0) return ziele;
+  return [...new Set([...ziele, ...dazu])].sort((a, b) => a - b);
 }
 
 /** Ein Stück Pfad, das in einem Zug gerechnet wird: `pfad[von] … pfad[bis]`. */
@@ -723,7 +854,9 @@ export interface Lauf {
   readonly ziele: readonly number[];
   /**
    * Die Schlüsselbilder im Feinpass, in Laufrichtung, der Start zuerst. Am
-   * Start läuft ein Modell nur mit `startRechnen`.
+   * Start läuft ein Modell nur mit `startRechnen`. Meist Ziele; dazu
+   * Prüfbilder in langen Filmstrecken ohne Ziel (siehe `kettenPlan`), die
+   * nicht abgelegt werden.
    */
   readonly schluessel: readonly number[];
   /** Die im Grobpass – eine Teilmenge von `schluessel`. Leer ohne Grobpass. */
@@ -756,6 +889,11 @@ export interface KettenAuftrag {
   readonly hi?: number;
   /** `Z`: aufsteigend, ohne Doppelte. */
   readonly ziele: readonly number[];
+  /**
+   * `F`: die Bilder des Films, aufsteigend – woran ein Szenenschnitt gemessen
+   * wird (siehe `kettenPlan`). Ohne Angabe gelten die Ziele als Film.
+   */
+  readonly film?: readonly number[];
   readonly K: number;
   /** `K_grob` – ohne Angabe kein Grobpass. */
   readonly kGrob?: number;
@@ -773,7 +911,13 @@ export interface KettenAuftrag {
  */
 export function kettenAuftrag(
   bedarf: Kettenbedarf,
-  schritte: { readonly K: number; readonly fenster: number; readonly kGrob?: number },
+  schritte: {
+    readonly K: number;
+    readonly fenster: number;
+    readonly kGrob?: number;
+    /** `F` – siehe `KettenAuftrag.film`. */
+    readonly film?: readonly number[];
+  },
 ): KettenAuftrag {
   const { grenze } = bedarf;
   return {
@@ -782,6 +926,7 @@ export function kettenAuftrag(
     ...(Number.isFinite(grenze.lo) ? { lo: grenze.lo } : {}),
     ...(Number.isFinite(grenze.hi) ? { hi: grenze.hi } : {}),
     ziele: bedarf.ziele,
+    ...(schritte.film ? { film: schritte.film } : {}),
     K: schritte.K,
     ...(schritte.kGrob ? { kGrob: schritte.kGrob } : {}),
     fenster: schritte.fenster,
@@ -803,8 +948,23 @@ export function kettenAuftrag(
  * jedes zusammenhängenden Laufs von Zielen (dort beginnt oder endet eine
  * Brücke, und die Maske dort soll geprüft sein) und der Start selbst.
  *
- * Eine Brücke über `BRUECKE_MAX` Bilder ist ein Szenenschnitt: Die Kette
- * endet davor, und was dahinter liegt, bestimmt `jenseits`.
+ * Eine Lücke im FILM über `BRUECKE_MAX` Bilder ist ein Szenenschnitt: Die
+ * Kette endet davor, und was dahinter liegt, bestimmt `jenseits`.
+ *
+ * # Gemessen am Film, nicht an den Zielen
+ *
+ * Ein Szenenschnitt ist, wo der Film einen Sprung in der Quelle macht –
+ * dort kann dahinter alles anders aussehen. Bilder, die der Film zeigt, an
+ * denen die Maske aber nicht gilt, sind kein Sprung: Die Quelle läuft dort
+ * so weiter, wie der Anwender sie sieht. Gemessen an den Zielen war schon
+ * ein „Ab hier" zwei Sekunden hinter dem Anker ein Schnitt – und alles schon
+ * Gerechnete dahinter hiess auf einmal „hier neu antippen".
+ *
+ * Über eine lange solche Strecke (mehr als `BRUECKE_MAX`) schiebt die Spur
+ * die Maske aber nicht blind: Dort liegen Prüfbilder im Abstand `K` (im
+ * Grobpass `K_grob`) – Schlüsselbilder mit Modellauf, die nicht abgelegt
+ * werden. Anders als eine Brücke durch Herausgeschnittenes KANN man sie
+ * prüfen, und über eine Minute ohne Prüfung glitte die Maske weg.
  */
 export function kettenPlan(auftrag: KettenAuftrag): KettenPlan {
   const lo = auftrag.lo ?? Number.NEGATIVE_INFINITY;
@@ -813,11 +973,40 @@ export function kettenPlan(auftrag: KettenAuftrag): KettenPlan {
   const ankerIstZiel = auftrag.ziele.includes(a);
   const vor = auftrag.ziele.filter((k) => k > a && k <= hi);
   const rueck = auftrag.ziele.filter((k) => k < a && k >= lo).reverse();
+  const film = auftrag.film ?? auftrag.ziele;
   return {
     anker: a,
-    vor: richtungPlanen(auftrag, vor, 1, ankerIstZiel),
-    rueck: richtungPlanen(auftrag, rueck, -1, ankerIstZiel),
+    vor: richtungPlanen(auftrag, vor, 1, ankerIstZiel, film),
+    rueck: richtungPlanen(auftrag, rueck, -1, ankerIstZiel, film),
   };
+}
+
+/** Die erste Stelle in der aufsteigenden Liste mit einem Wert ≥ `k`. */
+function untereGrenze(liste: readonly number[], k: number): number {
+  let lo = 0;
+  let hi = liste.length;
+  while (lo < hi) {
+    const mitte = (lo + hi) >> 1;
+    if (liste[mitte] < k) lo = mitte + 1;
+    else hi = mitte;
+  }
+  return lo;
+}
+
+/**
+ * Die längste Folge von Bildern echt zwischen `a` und `b`, die NICHT im Film
+ * sind – über Filmbilder hinweg wird nicht gezählt.
+ */
+function laengsteFilmluecke(a: number, b: number, film: readonly number[]): number {
+  const von = Math.min(a, b);
+  const bis = Math.max(a, b);
+  let vorher = von;
+  let laengste = 0;
+  for (let i = untereGrenze(film, von + 1); i < film.length && film[i] < bis; i += 1) {
+    laengste = Math.max(laengste, film[i] - vorher - 1);
+    vorher = film[i];
+  }
+  return Math.max(laengste, bis - vorher - 1);
 }
 
 function richtungPlanen(
@@ -825,6 +1014,7 @@ function richtungPlanen(
   ziele: readonly number[],
   d: 1 | -1,
   ankerIstZiel: boolean,
+  film: readonly number[],
 ): Richtungsplan {
   const laeufe: Lauf[] = [];
   const ohne: number[] = [];
@@ -842,7 +1032,7 @@ function richtungPlanen(
   let abgerissen = false;
   const abschliessen = () => {
     if (gesammelt.length > 0) {
-      laeufe.push(laufBauen(auftrag, start, neustart, startIstZiel, gesammelt, d));
+      laeufe.push(laufBauen(auftrag, start, neustart, startIstZiel, gesammelt, d, film));
     }
     gesammelt = [];
   };
@@ -851,7 +1041,7 @@ function richtungPlanen(
       ohne.push(ziel);
       continue;
     }
-    if (Math.abs(ziel - vorher) - 1 > BRUECKE_MAX) {
+    if (laengsteFilmluecke(vorher, ziel, film) > BRUECKE_MAX) {
       abschliessen();
       if (auftrag.jenseits === 'neustart') {
         start = ziel;
@@ -879,6 +1069,7 @@ function laufBauen(
   startIstZiel: boolean,
   ziele: readonly number[],
   d: 1 | -1,
+  film: readonly number[],
 ): Lauf {
   const letztes = ziele[ziele.length - 1];
   const pfad: number[] = [];
@@ -886,13 +1077,30 @@ function laufBauen(
   const zielMenge = new Set(ziele);
   const istZiel = (k: number) => zielMenge.has(k) || (k === start && startIstZiel);
   const randBild = (k: number) => !istZiel(k - d) || !istZiel(k + d);
+  /*
+   * Filmbilder in einer langen Strecke ohne Ziel – dort wird geprüft, nicht
+   * abgelegt (siehe `kettenPlan`). In Laufrichtung, wie der Pfad.
+   */
+  const filmMenge = new Set(film);
+  const pruefbar: number[] = [];
+  let strecke: number[] = [];
+  const streckeZu = () => {
+    if (strecke.length > BRUECKE_MAX) pruefbar.push(...strecke.filter((k) => filmMenge.has(k)));
+    strecke = [];
+  };
+  for (const k of pfad) {
+    if (istZiel(k)) streckeZu();
+    else strecke.push(k);
+  }
+  streckeZu();
   const schluesselFuer = (abstand: number) => {
     const raus = [start];
     for (const k of ziele) {
       if (k === start) continue;
       if (Math.abs(k - start) % abstand === 0 || randBild(k)) raus.push(k);
     }
-    return raus;
+    for (const k of pruefbar) if (Math.abs(k - start) % abstand === 0) raus.push(k);
+    return raus.sort((x, y) => (x - y) * d);
   };
   const schluessel = schluesselFuer(auftrag.K);
   const grob = auftrag.kGrob ? schluesselFuer(auftrag.kGrob) : [];
@@ -1072,11 +1280,23 @@ export interface Zusammensetzung {
   readonly enthalten: ReadonlyMap<string, readonly Maskenteil[]>;
   /** Masken, die hier gelten, deren Daten aber noch fehlen – sie fehlen im Dokument. */
   readonly fehlend: readonly string[];
+  /**
+   * Masken, denen hier Daten fehlen, die aber auch nie kommen: Das Bild liegt
+   * hinter der Obergrenze des Films (`imFilm`), dort wird nicht verfolgt.
+   * Sie fehlen im Dokument wie die aus `fehlend`, aber „wird noch verfolgt"
+   * wäre gelogen – die Zeile sagt „nicht im Film".
+   */
+  readonly jenseits: readonly string[];
   /** Masken, die mit veralteten Daten im Dokument stehen (nur Vorschau). */
   readonly veraltet: readonly string[];
   /** Masken, die hier erst grob verfolgt sind. */
   readonly grob: readonly string[];
-  /** Masken jenseits von `BEREICHE_MAX` an diesem Bild – sollte nie vorkommen. */
+  /**
+   * Masken jenseits von `BEREICHE_MAX` an diesem Bild – nach Maskenreihenfolge
+   * die hinteren. Kommt nur vor, wenn eine Geltung `abschnitte` mit ihrem
+   * Abschnitt gewachsen ist, ohne dass `grenzeVerletzt` gefragt wurde; im
+   * Filmbau ein Fehler (siehe `bildDocAn`), für die Bahn `zuvielAn`.
+   */
   readonly ueberzaehlig: readonly string[];
 }
 
@@ -1190,6 +1410,11 @@ interface Aufloesung {
   readonly zeichen: string;
   /** Nur Inhaltsteile: die Messwerte der Maske an k. */
   readonly meta?: MaskenMeta;
+  /**
+   * Nur Formteile: wo sie an k etwas bewirken – billig, OHNE das Teil zu
+   * bauen (siehe `formKastenAn`). `null`: nirgends.
+   */
+  readonly kasten?: () => Kasten | null;
   readonly bauen: () => { teil: Maskenteil; bytes: number };
 }
 
@@ -1518,6 +1743,7 @@ function formAufloesen(maske: Maske, teil: SpurTeil, kx: Kontext): Aufloesung {
     return {
       stand: 'anker',
       zeichen: `${teil.id}=A${objektNummer(hier.teil)}`,
+      kasten: () => formKastenAn(hier.teil, null, 1),
       bauen: () => ({ teil: teilMitId(hier.teil, teil.id), bytes: 0 }),
     };
   }
@@ -1526,6 +1752,7 @@ function formAufloesen(maske: Maske, teil: SpurTeil, kx: Kontext): Aufloesung {
   const amAnker = (stand: Teilstand): Aufloesung => ({
     stand,
     zeichen: `${teil.id}=R${nummer}`,
+    kasten: () => formKastenAn(anker.teil, null, 1),
     bauen: () => ({ teil: teilMitId(anker.teil, teil.id), bytes: 0 }),
   });
 
@@ -1549,6 +1776,7 @@ function formAufloesen(maske: Maske, teil: SpurTeil, kx: Kontext): Aufloesung {
       return {
         stand,
         zeichen: `${teil.id}=W${nummer}`,
+        kasten: () => null,
         bauen: () => ({ teil: { ...weg, id: teil.id }, bytes: 0 }),
       };
     }
@@ -1558,6 +1786,7 @@ function formAufloesen(maske: Maske, teil: SpurTeil, kx: Kontext): Aufloesung {
     return {
       stand,
       zeichen: `${teil.id}=V${nummer}:${dx},${dy}`,
+      kasten: () => formKastenAn(anker.teil, lage, 1),
       bauen: () => ({ teil: { ...formTeilZiehen(anker.teil, lage, 1), id: teil.id }, bytes: 0 }),
     };
   }
@@ -1569,6 +1798,7 @@ function formAufloesen(maske: Maske, teil: SpurTeil, kx: Kontext): Aufloesung {
   return {
     stand: 'fein',
     zeichen: `${teil.id}=K${nummer}:${lage.s},${lage.w},${lage.tx},${lage.ty},${faktor}`,
+    kasten: () => formKastenAn(anker.teil, lage, faktor),
     bauen: () => ({ teil: { ...formTeilZiehen(anker.teil, lage, faktor), id: teil.id }, bytes: 0 }),
   };
 }
@@ -1590,8 +1820,13 @@ function quellZeitText(ms: number): string {
  * - Eine Maske steht nur ganz im Dokument oder gar nicht: Fehlt einem ihrer
  *   Teile etwas, das `art` nicht nimmt, landet sie in `fehlend` (beim
  *   Filmbau: Fehler). Eine halbe Maske sähe aus wie eine falsche.
- * - Höchstens `BEREICHE_MAX` Masken; `grenzeVerletzt` sorgt dafür, dass es
- *   nie mehr gibt, und falls doch, fallen die hinteren weg (`ueberzaehlig`).
+ * - Höchstens `BEREICHE_MAX` Masken. Gelten doch mehr (eine Geltung
+ *   `abschnitte` wuchs mit ihrem Abschnitt), fallen in Editor und Vorschau
+ *   die hinteren weg (`ueberzaehlig`); der Filmbau WIRFT – ein Film, dem
+ *   still eine Maske fehlt, die die Bahn als geltend zeigt, wäre schlimmer
+ *   als eine Meldung.
+ * - Fehlen einer Maske Daten an einem Bild, das der Film gar nicht zeigt
+ *   (hinter seiner Obergrenze), steht sie in `jenseits` statt in `fehlend`.
  * - Abgeschaltete Masken stehen im Dokument (der Haken im Editor soll gehen);
  *   nur beim Filmbau fehlen sie – dort wirken sie ohnehin nicht, und ihre
  *   Verfolgung wird nicht abgewartet.
@@ -1609,13 +1844,22 @@ export function bildDocAn(
   const bereiche: Bereich[] = [];
   const enthalten = new Map<string, readonly Maskenteil[]>();
   const fehlend: string[] = [];
+  const jenseits: string[] = [];
   const veraltet: string[] = [];
   const grob: string[] = [];
   const ueberzaehlig: string[] = [];
+  let drin: boolean | null = null;
   for (const maske of masken) {
     if (art === 'bild' && !maske.aktiv) continue;
     if (!giltAn(maske.geltung, k, rahmen)) continue;
     if (bereiche.length >= BEREICHE_MAX) {
+      if (art === 'bild') {
+        const anzahl = masken.filter((m) => m.aktiv && giltAn(m.geltung, k, rahmen)).length;
+        throw new Error(
+          `Bei ${quellZeitText(bildMitte(k, rahmen.s))} wirken ${anzahl} Masken – an einem Bild ` +
+            `gehen höchstens ${BEREICHE_MAX}. Grenz eine in der Zeitleiste ein oder lösch sie.`,
+        );
+      }
       ueberzaehlig.push(maske.id);
       continue;
     }
@@ -1629,7 +1873,8 @@ export function bildDocAn(
       );
     }
     if (fehlt) {
-      fehlend.push(maske.id);
+      drin ??= imFilm(k, rahmen, rahmen.maxBilder);
+      (drin ? fehlend : jenseits).push(maske.id);
       continue;
     }
     if (staende.includes('veraltet')) veraltet.push(maske.id);
@@ -1660,6 +1905,7 @@ export function bildDocAn(
     k,
     enthalten,
     fehlend,
+    jenseits,
     veraltet,
     grob,
     ueberzaehlig,
@@ -1711,6 +1957,43 @@ function kastenImZuschnitt(kasten: Kasten | null, zuschnitt: Zuschnitt): boolean
     kasten.y0 < zuschnitt.y + zuschnitt.h &&
     kasten.y1 >= zuschnitt.y
   );
+}
+
+const kastenJeTeil = new WeakMap<Maskenteil, { kasten: Kasten | null }>();
+
+/**
+ * Wo ein Formteil an Bild k etwas bewirkt: sein Kasten am Anker – EINMAL je
+ * Teilobjekt gemessen –, mit der Lage dorthin gezogen.
+ *
+ * # Warum nicht das Teil bauen und messen
+ *
+ * Weil die Bahn das für jedes Filmbild fragt, bei jedem Neuzeichnen. Ein
+ * Pinsel mit 20 000 Punkten zu ziehen und zu vermessen kostete je Bahn eine
+ * halbe Sekunde; seine vier Ecken zu ziehen kostet nichts. Für einen
+ * gedrehten Kasten ist das Ergebnis etwas grösser als der wahre – für „trifft
+ * er den Zuschnitt?" eine Näherung auf der sicheren Seite.
+ */
+function formKastenAn(teil: Maskenteil, lage: Lage | null, faktor: number): Kasten | null {
+  let gemerkt = kastenJeTeil.get(teil);
+  if (!gemerkt) {
+    gemerkt = { kasten: formKasten(teil) };
+    kastenJeTeil.set(teil, gemerkt);
+  }
+  const k = gemerkt.kasten;
+  if (!k || !lage) return k;
+  if (teil.art === 'radial') return formKasten(formTeilZiehen(teil, lage, faktor));
+  const ecken = [
+    punktVor(lage, faktor, k.x0, k.y0),
+    punktVor(lage, faktor, k.x1, k.y0),
+    punktVor(lage, faktor, k.x0, k.y1),
+    punktVor(lage, faktor, k.x1, k.y1),
+  ];
+  return {
+    x0: Math.min(...ecken.map((p) => p.x)),
+    y0: Math.min(...ecken.map((p) => p.y)),
+    x1: Math.max(...ecken.map((p) => p.x)),
+    y1: Math.max(...ecken.map((p) => p.y)),
+  };
 }
 
 function formKasten(teil: Maskenteil): Kasten | null {
@@ -1767,7 +2050,10 @@ export function zustandAn(
   if (!giltAn(maske.geltung, k, rahmen)) return BAHN.aus;
   const kx: Kontext = { quelle, art: 'bahn', rahmen, k, leit: new Map() };
   const teile = maske.teile.map((teil) => teilAufloesen(maske, teil, kx));
-  if (teile.some((teil) => !nimmt('bahn', teil.stand))) return BAHN.offen;
+  if (teile.some((teil) => !nimmt('bahn', teil.stand))) {
+    // Hinter der Obergrenze wird nie verfolgt – „offen" hiesse dort: für immer.
+    return imFilm(k, rahmen, rahmen.maxBilder) ? BAHN.offen : BAHN.jenseits;
+  }
   const zuschnitt = wirksamerZuschnitt(clipDoc ?? neuesDoc(rahmen.b, rahmen.h), rahmen.b, rahmen.h);
   const mindest = SICHTBAR_AB * rahmen.b * rahmen.h;
   let sichtbar = false;
@@ -1785,7 +2071,7 @@ export function zustandAn(
       const meta = aufl.meta ?? META_LEER;
       sichtbar = meta.flaeche >= mindest && kastenImZuschnitt(meta, zuschnitt);
     } else if (aufl.stand !== 'verloren') {
-      sichtbar = kastenImZuschnitt(formKasten(aufl.bauen().teil), zuschnitt);
+      sichtbar = kastenImZuschnitt(aufl.kasten ? aufl.kasten() : null, zuschnitt);
     }
   }
   if (sichtbar) {
@@ -1795,6 +2081,31 @@ export function zustandAn(
     return BAHN.sichtbar;
   }
   return verloren ? BAHN.verloren : BAHN.leer;
+}
+
+/**
+ * Wie weit eine Maske an Bild k für den FILMBAU ist: `fein` (dort geht
+ * `bildDocAn(…, 'bild')`), `grob` (erst grob) oder `offen`.
+ *
+ * Für den Fortschritt des Verfolgers und `spurenFertig`. Dieselbe Auflösung
+ * wie beim Zusammensetzen, nur ohne etwas zu bauen – eine eigene Regel im
+ * Verfolger war genau das Problem: Sie fragte Formen in Masken mit Inhalt
+ * nicht, meldete „fertig", und danach warf der Filmbau an jedem Bild.
+ */
+export function filmStandAn(
+  maske: Maske,
+  k: number,
+  quelle: SpurQuelle,
+  rahmen: Rahmen,
+): 'fein' | 'grob' | 'offen' {
+  const kx: Kontext = { quelle, art: 'bild', rahmen, k, leit: new Map() };
+  let raus: 'fein' | 'grob' | 'offen' = 'fein';
+  for (const teil of maske.teile) {
+    const stand = teilAufloesen(maske, teil, kx).stand;
+    if (stand === 'offen' || stand === 'veraltet') return 'offen';
+    if (stand === 'grob') raus = 'grob';
+  }
+  return raus;
 }
 
 /** Ist die Maske an Bild k im Abschnitt zu sehen – gleich wie fertig? */
@@ -1831,7 +2142,7 @@ export function bahnZustand(
   const spalten = Math.max(0, Math.floor(px));
   const raus = new Uint8Array(spalten);
   if (spalten === 0 || umfangMs <= 0) return raus;
-  const rahmen: Rahmen = { abschnitte, s, b: mass.b, h: mass.h };
+  const rahmen: Rahmen = { abschnitte, s, b: mass.b, h: mass.h, maxBilder };
   const msJeSpalte = umfangMs / spalten;
   let stelle = 0;
   let filmStart = 0;
@@ -2057,6 +2368,12 @@ function feldUebernehmen(anker: Anker, von: Maskenteil, art: 'global' | 'neu' | 
   let zu: Anker;
   if (art === 'hier') {
     zu = { ...anker, teil: von };
+    /*
+     * Auch für `ankerFuer` merken: Kommt dasselbe Teilobjekt später wieder
+     * (ein Rückgängig im Editor, nachdem hier noch einmal lokal geändert
+     * wurde), ist es derselbe Anker – mit derselben Kennung und Kette.
+     */
+    if (!ankerJeTeil.has(von)) ankerJeTeil.set(von, zu);
   } else {
     const quelle = von as unknown as Record<string, unknown>;
     const teil = { ...anker.teil } as unknown as Record<string, unknown>;
@@ -2184,15 +2501,25 @@ export function editorAenderung(
       if (!aktuell.has(bereich.id)) ohnePlatz.add(bereich.id);
       neuGeloescht.delete(bereich.id);
       const vorTeile = new Map((vorher.get(bereich.id) ?? basis).teile.map((t) => [t.id, t]));
+      const jetztTeile = new Map(basis.teile.map((t) => [t.id, t]));
       const teile =
         bereich.teile === ausgegeben
           ? (vorher.get(bereich.id) ?? basis).teile
-          : bereich.teile.map((teil) => teilRouten(teil, ausgegeben, vorTeile, k));
+          : bereich.teile.map((teil) => teilRouten(teil, ausgegeben, vorTeile, jetztTeile, k));
       geordnet.push(maskeFortschreiben(basis, bereich, teile, [...aktuell.values(), ...geordnet]));
     } else if (aktuell.has(bereich.id) && besessen(aktuell.get(bereich.id) as Maske)) {
-      // In dieser Sitzung angelegt: Die Anker hängen am Teilobjekt, bleiben also stabil.
+      /*
+       * In dieser Sitzung angelegt: Die Anker hängen am Teilobjekt, bleiben
+       * also stabil – und eine rein globale Änderung (Umkehren, Modus)
+       * behält den Anker, den das Teil schon hat, samt seiner Kette.
+       */
       const basis = aktuell.get(bereich.id) as Maske;
-      const teile = bereich.teile.map((teil) => ({ id: teil.id, anker: [ankerFuer(k, teil)] }));
+      const jetztTeile = new Map(basis.teile.map((t) => [t.id, t]));
+      const teile = bereich.teile.map((teil) => {
+        const jetzt = jetztTeile.get(teil.id);
+        const global = jetzt ? nurGlobal(jetzt, teil, k) : null;
+        return global ?? { id: teil.id, anker: [ankerFuer(k, teil)] };
+      });
       geordnet.push(maskeFortschreiben(basis, bereich, teile, [...aktuell.values(), ...geordnet]));
     } else if (geloescht.has(bereich.id) && !aktuell.has(bereich.id)) {
       const alt = geloescht.get(bereich.id) as Maske;
@@ -2281,17 +2608,55 @@ export function editorAenderung(
   };
 }
 
+/**
+ * Unterscheidet sich `teil` vom Anker, den das Spurteil JETZT an Bild k hat,
+ * nur in globalen Feldern? Dann das Spurteil mit diesem Anker (gleiche
+ * Kennung, das Teil des Editors) und den globalen Feldern in allen anderen –
+ * sonst `null`.
+ *
+ * # Warum gegen den Anker von jetzt und nicht gegen das Ausgegebene
+ *
+ * Weil in einer Sitzung eine Änderung auf die andere folgt. Wer ein Motiv
+ * antippt (ein Anker hier) und danach „Umkehren" drückt, schickt ein Teil,
+ * das sich vom AUSGEGEBENEN lokal UND global unterscheidet – verglichen damit
+ * wäre es ein neuer Anker, und die ganze Verfolgung begänne von vorn, für
+ * einen Schalter, der nichts neu rechnet. Vom Anker, den der Tipp gesetzt
+ * hat, unterscheidet es sich nur im Schalter.
+ */
+function nurGlobal(jetzt: SpurTeil, teil: Maskenteil, k: number): SpurTeil | null {
+  const hier = jetzt.anker.find((a) => a.k === k);
+  if (!hier) return null;
+  const unterschied = teilUnterschied(hier.teil, teil);
+  if (unterschied.lokal || unterschied.neu) return null;
+  // Dasselbe wie der Anker hier (vielleicht als Kopie): nichts zu tun.
+  if (!unterschied.global) return jetzt;
+  return {
+    id: teil.id,
+    anker: jetzt.anker.map((a) =>
+      a === hier ? feldUebernehmen(a, teil, 'hier') : feldUebernehmen(a, teil, 'global'),
+    ),
+  };
+}
+
 /** Ein Teil aus dem Editor auf sein Spurteil abbilden – siehe `editorAenderung`. */
 function teilRouten(
   teil: Maskenteil,
   ausgegeben: readonly Maskenteil[],
   vorTeile: ReadonlyMap<string, SpurTeil>,
+  jetztTeile: ReadonlyMap<string, SpurTeil>,
   k: number,
 ): SpurTeil {
   const damals = ausgegeben.find((t) => t.id === teil.id);
   const spur = vorTeile.get(teil.id);
-  if (!damals || !spur) return { id: teil.id, anker: [ankerFuer(k, teil)] };
+  if (!damals || !spur) {
+    const jetzt = jetztTeile.get(teil.id);
+    return (jetzt && nurGlobal(jetzt, teil, k)) ?? { id: teil.id, anker: [ankerFuer(k, teil)] };
+  }
   if (damals === teil) return spur;
+  // Schon ein Anker hier (aus dieser Sitzung oder von vorher): siehe `nurGlobal`.
+  const jetzt = jetztTeile.get(teil.id);
+  const global = jetzt ? nurGlobal(jetzt, teil, k) : null;
+  if (global) return global;
   const unterschied = teilUnterschied(damals, teil);
   if (!unterschied.lokal && !unterschied.global && !unterschied.neu) return spur;
   let anker = spur.anker;

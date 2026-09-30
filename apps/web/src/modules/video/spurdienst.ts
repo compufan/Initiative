@@ -72,16 +72,15 @@ export interface SpurAuftrag {
  * Der Dienst für dieses Video: ein `Verfolger` – oder, solange die
  * Rechengrösse noch nicht bekannt ist, der leere.
  *
- * Der Verfolger kennt drei Ruhegründe; `'bau'` ruht hier wie die
- * Wiedergabe (beide brauchen den Dekodierer), `'finger'` wie ein Zug an der
- * Leiste. Getrennt gezählt, damit das Ende des einen nicht den anderen
- * aufhebt.
+ * `'bau'` ist der Grund `'bauen'` des Verfolgers; `'finger'` ruht hier wie
+ * ein Zug an der Leiste – getrennt gezählt, damit das Loslassen der Leiste
+ * nicht die Ruhe für den Pinselstrich aufhebt.
  */
 export function spurdienstFuer(auftrag: SpurAuftrag): Spurdienst {
   const { leser, s, mass } = auftrag;
   if (!mass) return leereSpuren();
   const verfolger = new Verfolger({ leser, s, mass });
-  const ruht = { wiedergabe: false, bau: false, zug: false, finger: false };
+  const ruht = { zug: false, finger: false };
   return {
     kette: (anker, richtung, k) => verfolger.kette(anker, richtung, k),
     maske: (anker, richtung, k) => verfolger.maske(anker, richtung, k),
@@ -92,9 +91,8 @@ export function spurdienstFuer(auftrag: SpurAuftrag): Spurdienst {
     stand: verfolger.stand,
     vorziehen: (k) => verfolger.vorziehen(k),
     verfolgungRuhen: (grund, an) => {
-      if (grund === 'wiedergabe' || grund === 'bau') {
-        ruht[grund] = an;
-        verfolger.verfolgungRuhen('wiedergabe', ruht.wiedergabe || ruht.bau);
+      if (grund === 'bau') {
+        verfolger.verfolgungRuhen('bauen', an);
         return;
       }
       if (grund === 'zug' || grund === 'finger') {

@@ -707,6 +707,101 @@ describe('Die Spur in Fenstern und beim Verschwinden', () => {
       const ohne = await verfolgen(film, 121);
       expect(flaecheVon(ohne[120])).toBeGreaterThan(400);
     });
+
+    /*
+     * Echte Freisteller liefern ausserhalb des Gegenstands selten genau null.
+     * Mit einem Dunst über dem Grund war der Kasten der Vorhersage das ganze
+     * Bild, jede Komponente traf, und der Filter wirkte nicht mehr: Ab dem
+     * Austritt lag die Maske auf dem Fremden (613 von 615 Kernpunkten).
+     */
+    describe('mit Dunst im Grund, wie ihn Freisteller liefern', () => {
+      /** Die Scheibe(n) wie `modell`, aber der Grund ist `grund(i, n)` statt null. */
+      function modellMitGrund(film: Film, grund: (i: number, n: number) => number) {
+        return async (n: number) => {
+          const f = film.fremd && n >= film.fremd.ab ? film.fremd : null;
+          const maske = scheibenMaske([film.scheibe(n), f]);
+          for (let i = 0; i < maske.length; i += 1) if (maske[i] === 0) maske[i] = grund(i, n);
+          return maske;
+        };
+      }
+
+      async function mitGrund(film: Film, anzahl: number, grund: (i: number, n: number) => number) {
+        const grau = Array.from({ length: anzahl }, (_, n) => grauBild(n, film));
+        const rechnen = modellMitGrund(film, grund);
+        const spur = new Spur({
+          grau,
+          breite: W,
+          hoehe: H,
+          von: 0,
+          bis: anzahl - 1,
+          anker: 0,
+          schluessel: schluesselBis(anzahl - 1),
+          punkte: null,
+          // Der Anker kommt aus dem Editor – mit demselben Dunst.
+          ankerMaske: await rechnen(0),
+          wiederBilder: 50,
+          rechnen,
+        });
+        await laufen(spur);
+        return spur.ergebnis().masken;
+      }
+
+      /** Wie `messung.test.ts`: aussen 0 … 12, verrauscht. */
+      const rauschen = (i: number, n: number) => ((i * 2654435761 + n * 40503) >>> 0) % 13;
+      const faelle: [string, (i: number, n: number) => number][] = [
+        ['gleichmässig 3', () => 3],
+        ['gleichmässig 8', () => 8],
+        ['verrauscht 0 … 12', rauschen],
+        ['ein einziger Punkt in der Ecke', (i) => (i === 0 ? 20 : 0)],
+      ];
+      for (const [name, grund] of faelle) {
+        it(`${name}: kein Sprung auf einen Fremden, der während des Austritts da ist`, async () => {
+          const film: Film = { scheibe: hinaus, fremd: { x: 80, y: 60, ab: 8 } };
+          const mit = await mitGrund(film, 48, grund);
+          const auf = mit.map((m) => aufDemFremden(m, film));
+          expect(Math.max(...auf), auf.join(' ')).toBe(0);
+          expect(Math.max(...mit.slice(18).map(flaecheVon))).toBe(0);
+          for (let n = 0; n < 12; n += 1) {
+            expect(deckung(mit[n], scheibenMaske([hinaus(n)])), `Bild ${n}`).toBeGreaterThan(0.8);
+          }
+        });
+        it(`${name}: kein Sprung auf einen kleinen Fremden nach dem Austritt`, async () => {
+          const film: Film = { scheibe: hinaus, fremd: { x: 80, y: 60, ab: 22, r: 8 } };
+          const mit = await mitGrund(film, 48, grund);
+          expect(Math.max(...mit.slice(18).map(flaecheVon))).toBe(0);
+        });
+      }
+
+      it('springt nicht auf ein Zweitobjekt, das das Modell nur halb sah, solange die Scheibe da war', async () => {
+        const film: Film = { scheibe: hinaus, fremd: { x: 80, y: 60, ab: 0 } };
+        const anzahl = 48;
+        const grau = Array.from({ length: anzahl }, (_, n) => grauBild(n, film));
+        const halb = (n: number) => {
+          const maske = scheibenMaske([film.scheibe(n)]);
+          const fremd = scheibenMaske([film.fremd ?? null]);
+          const stufe = film.scheibe(n) ? 40 : 255;
+          for (let i = 0; i < maske.length; i += 1)
+            if (fremd[i]) maske[i] = Math.max(maske[i], stufe);
+          return maske;
+        };
+        const spur = new Spur({
+          grau,
+          breite: W,
+          hoehe: H,
+          von: 0,
+          bis: anzahl - 1,
+          anker: 0,
+          schluessel: schluesselBis(anzahl - 1),
+          punkte: null,
+          ankerMaske: halb(0),
+          wiederBilder: 50,
+          rechnen: async (n) => halb(n),
+        });
+        await laufen(spur);
+        const masken = spur.ergebnis().masken;
+        expect(Math.max(...masken.slice(18).map((m) => aufDemFremden(m, film)))).toBe(0);
+      });
+    });
   });
 });
 
@@ -735,6 +830,22 @@ describe('komponentenFiltern', () => {
   it('gibt die Maske selbst zurück, wenn alles bleibt', () => {
     const maske = feld([mitte]);
     expect(komponentenFiltern(maske, B, H, [mitte], false)).toBe(maske);
+  });
+
+  it('wirft Blasses weit weg vom Behaltenen weg – auch wenn jede Komponente trifft', () => {
+    // Ein Dunst über das ganze Bild und ein halb gesehener zweiter Gegenstand.
+    const maske = feld([mitte]);
+    for (let i = 0; i < maske.length; i += 1) if (maske[i] === 0) maske[i] = 3;
+    for (let y = links.y0; y <= links.y1; y += 1)
+      for (let x = links.x0; x <= links.x1; x += 1) maske[y * B + x] = 90;
+    const raus = komponentenFiltern(maske, B, H, [mitte], false);
+    expect(raus).not.toBe(maske);
+    // Der Kern bleibt, der Dunst nah an ihm auch, alles andere geht.
+    expect(raus[13 * B + 20]).toBe(255);
+    expect(raus[13 * B + 15]).toBe(3);
+    expect(raus[13 * B + 4]).toBe(0);
+    expect(raus[0]).toBe(0);
+    expect(raus[29 * B + 39]).toBe(0);
   });
 
   it('behält mit `randErlaubt`, was den Bildrand berührt', () => {

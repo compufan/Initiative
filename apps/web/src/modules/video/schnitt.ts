@@ -1,7 +1,7 @@
 import type { BildDoc } from '../bild/doc.js';
 import { kannTeilen, type Stueck } from './ausschnitt.js';
 import { istFormTeil, istInhaltsTeil } from './bildweise.js';
-import { quellBilder } from './raster.js';
+import { bildIndex, quellBilder } from './raster.js';
 
 /**
  * Die Abschnitte eines Films – jeder mit seiner EIGENEN Bearbeitung.
@@ -234,12 +234,23 @@ export function standDrin(abschnitt: Abschnitt): boolean {
  *
  * Die Prüfung ist dieselbe wie die, mit der die Zeitleiste den Knopf ✂
  * freigibt (`kannTeilen` mit einem gerundeten Bild Abstand) – und zwar mit
- * der UNgerundeten Stelle. Erst danach wird auf die nächste Rasterkante
- * gerundet und, falls die zu nah an einer Kante läge, um ein Bild nach innen
- * gerückt. Prüfte man die gerundete Stelle, wäre der Knopf an einer Stelle
- * frei, an der das Teilen dann nichts täte (bei 24 Bildern je Sekunde
- * rundet 1043 ms auf 1041,67 ms – ein Bild von einer Kante bei 1000 ms, aber
- * weniger als die gerundeten 42 ms).
+ * der UNgerundeten Stelle. Erst danach kommt die Stelle aufs Raster und,
+ * falls sie zu nah an einer Kante läge, um ein Bild nach innen. Prüfte man
+ * die gerundete Stelle, wäre der Knopf an einer Stelle frei, an der das
+ * Teilen dann nichts täte (bei 24 Bildern je Sekunde liegt 1043 ms im Bild
+ * ab 1041,67 ms – ein Bild von einer Kante bei 1000 ms, aber weniger als die
+ * gerundeten 42 ms).
+ *
+ * # Aufs Raster: an den ANFANG des Bildes, in dem die Stelle liegt
+ *
+ * Nicht an die nächste Kante. Die Stelle ist die Wiedergabestelle, und die
+ * steht fast immer mitten in einem Bild – beim Öffnen des Editors genau auf
+ * der Mitte des Stellbilds. Auf die nächste Kante gerundet, lag der Schnitt
+ * in der Hälfte der Fälle HINTER ihr: Die Wiedergabestelle stand danach in
+ * der vorderen Hälfte, gewählt wurde aber die hintere, und am Stellbild
+ * geteilt behielt die falsche Hälfte Kennung und Stellbild. Am Anfang des
+ * Bildes unter ihr beginnt dieses Bild die hintere Hälfte – wie vor dem
+ * Raster, als genau an der Stelle geteilt wurde.
  */
 export function abschnittTeilen(
   abschnitte: readonly Abschnitt[],
@@ -257,7 +268,7 @@ export function abschnittTeilen(
   const kMin = Math.ceil((alt.vonMs + s) / s - 1e-6);
   const kMax = Math.floor((alt.bisMs - s) / s + 1e-6);
   if (kMin > kMax) return null;
-  const bei = Math.min(kMax, Math.max(kMin, Math.round(beiMs / s))) * s;
+  const bei = Math.min(kMax, Math.max(kMin, bildIndex(beiMs, s))) * s;
   /*
    * Die Kennung bleibt bei der Hälfte mit dem Stellbild. Daran hängt im
    * Editor, ob er neu aufgebaut wird – wer dort teilt, arbeitet an genau

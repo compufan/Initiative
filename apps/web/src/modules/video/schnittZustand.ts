@@ -9,6 +9,7 @@ import {
   ankerEntfernen as ankerEntfernenRein,
   bereicheUmwandeln,
   editorAenderung,
+  geltungNachTeilen,
   grenzeVerletzt,
   maskeTrennen as maskeTrennenRein,
   maskenUmrastern,
@@ -284,25 +285,62 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
     });
   }, [schrittMs]);
 
-  const teilen = useCallback(
-    (nummer: number, beiMs: number) => {
-      const erg = abschnittTeilen(liste.current, nummer, beiMs, schrittMs);
-      if (!erg) return false;
-      setAbschnitte(verlegungVermerken(erg.abschnitte, erg.verlegung));
-      // Gewählt bleibt die Hälfte, in der die Wiedergabestelle jetzt steht –
-      // die hintere, denn geteilt wird genau dort, wo sie steht.
-      setAktivRoh(nummer + 1);
+  /*
+   * Eine Änderung an den Abschnitten, nach der an einem Bild mehr als vier
+   * Masken wirkten, wird nicht übernommen: Kürzen, Verlängern und Anhängen
+   * holen Bilder in den Film, an denen schon andere Masken gelten, und der
+   * Filmbau könnte sie dort nicht alle zeichnen. Nur wenn es VORHER in
+   * Ordnung war – sonst liesse sich gar nicht mehr schneiden.
+   */
+  const zuVielePruefen = useCallback(
+    (masken: readonly Maske[], neu: readonly Abschnitt[]): boolean => {
+      if (masken.length === 0) return false;
+      const vorher = grenzeVerletzt(masken, { abschnitte: liste.current, s: schrittMs });
+      if (vorher) return false;
+      const nachher = grenzeVerletzt(masken, { abschnitte: neu, s: schrittMs });
+      if (!nachher) return false;
+      toast(nachher, 'info');
       return true;
     },
     [schrittMs],
   );
 
+  const teilen = useCallback(
+    (nummer: number, beiMs: number) => {
+      const alt = liste.current[nummer];
+      const neueId = abschnittKennung();
+      const erg = abschnittTeilen(liste.current, nummer, beiMs, schrittMs, neueId);
+      if (!erg || !alt) return false;
+      /*
+       * „Nur Abschnitt 2" folgt dem Abschnitt – auch durch das Teilen: Die
+       * Hälfte mit der neuen Kennung gehört dazu. Ohne das galt die Maske
+       * danach nur noch in einer Hälfte.
+       */
+      const masken = geltungNachTeilen(maskenRef.current, alt.id, neueId);
+      if (zuVielePruefen(masken, erg.abschnitte)) return false;
+      setMasken(masken);
+      setAbschnitte(verlegungVermerken(erg.abschnitte, erg.verlegung));
+      /*
+       * Gewählt bleibt die Hälfte, in der die Wiedergabestelle jetzt steht.
+       * Fast immer die hintere – geteilt wird am Anfang des Bildes unter ihr
+       * (siehe `abschnittTeilen`). Nur wo die Kante dafür ein Bild nach innen
+       * rücken musste, steht sie in der vorderen; gefragt wird deshalb die
+       * Kante selbst.
+       */
+      const kante = erg.abschnitte[nummer + 1].vonMs;
+      setAktivRoh(beiMs >= kante - 1e-6 ? nummer + 1 : nummer);
+      return true;
+    },
+    [schrittMs, setMasken, zuVielePruefen],
+  );
+
   const kuerzen = useCallback(
     (nummer: number, vonMs: number, bisMs: number) => {
       const erg = abschnittKuerzen(liste.current, nummer, vonMs, bisMs, quelleMs, schrittMs);
+      if (zuVielePruefen(maskenRef.current, erg.abschnitte)) return;
       setAbschnitte(verlegungVermerken(erg.abschnitte, erg.verlegung));
     },
-    [quelleMs, schrittMs],
+    [quelleMs, schrittMs, zuVielePruefen],
   );
 
   const verschieben = useCallback(
@@ -324,9 +362,10 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
 
   const dazu = useCallback(() => {
     const erg = abschnittDazu(liste.current, aktiv, quelleMs, schrittMs);
+    if (zuVielePruefen(maskenRef.current, erg.abschnitte)) return;
     setAbschnitte(verlegungVermerken(erg.abschnitte, erg.verlegung));
     setAktivRoh(erg.neu);
-  }, [aktiv, quelleMs, schrittMs]);
+  }, [aktiv, quelleMs, schrittMs, zuVielePruefen]);
 
   /*
    * Über eine Referenz: `routen` hält `docSetzen` fest, und das erste

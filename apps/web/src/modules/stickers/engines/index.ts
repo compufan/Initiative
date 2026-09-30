@@ -245,8 +245,28 @@ interface Reihenplatz {
 const reihe: Reihenplatz[] = [];
 let laufenVorn = 0;
 let laufenHinten = 0;
-/** Welche Verfahren gerade rechnen – eine Sitzung in Gebrauch wird nie freigegeben. */
+/**
+ * Welche Verfahren gerade rechnen ODER in der Reihe warten – eine Sitzung in
+ * Gebrauch wird nie freigegeben.
+ *
+ * # Warum auch die Wartenden
+ *
+ * Weil ein wartender Auftrag seine Sitzung schon in der Hand hat: Die
+ * Verfolgung holt ihre Tiefensitzung und reiht erst DANN `karteFuer` ein.
+ * Zählten nur die laufenden, gab ein Editor-Lauf eines anderen schweren
+ * Verfahrens (oder der Zeitgeber nach 20 s) die Sitzung frei, während ihr
+ * Auftrag noch wartete – und der rechnete danach auf einer geschlossenen
+ * Sitzung („invalid session id"), und die Tiefe war für die Sitzung
+ * verloren.
+ */
 const inGebrauch = new Map<EngineKey, number>();
+
+/**
+ * Verfahren, deren Sitzung ein Einzelstück je Modul ist – Editor und
+ * Verfolgung rechnen auf DERSELBEN. Die Tiefe gehört nicht dazu: Sie hat
+ * eine Sitzung je Aufrufer (`bild/tiefeNetz.ts`).
+ */
+const GETEILTE_SITZUNG: ReadonlySet<EngineKey> = new Set(['object', 'birefnet', 'tippen']);
 /**
  * Die schwere Sitzung, die die Verfolgung zuletzt geöffnet hat, samt dem
  * Zeitgeber, der sie nach `FREIGABE_NACH_MS` wieder schliesst.
@@ -311,8 +331,13 @@ function nachDemLauf(platz: Reihenplatz): void {
      * Der Anwender benutzt dieselbe Sitzung: Ab jetzt gehört sie dem
      * Editor, und wann sie geht, entscheidet er (`releaseEngines`) – wie
      * vor der Verfolgung.
+     *
+     * Nur für Einzelstücke je Modul. Ein Tiefenlauf des Editors rechnet auf
+     * SEINER Sitzung; die der Verfolgung blieb sonst verwaist offen – ohne
+     * Zeitgeber, und kein Wechsel gab sie mehr frei: zwei schwere Sitzungen,
+     * 230 MB davon für nichts.
      */
-    if (hintenSchwer?.verfahren === verfahren) {
+    if (hintenSchwer?.verfahren === verfahren && GETEILTE_SITZUNG.has(verfahren)) {
       if (hintenSchwer.zeitgeber) clearTimeout(hintenSchwer.zeitgeber);
       hintenSchwer = null;
     }
@@ -323,12 +348,22 @@ function nachDemLauf(platz: Reihenplatz): void {
     verfahren,
     zeitgeber: null,
   };
-  eintrag.zeitgeber = setTimeout(() => {
+  const pruefen = () => {
     if (hintenSchwer !== eintrag) return;
-    if ((inGebrauch.get(verfahren) ?? 0) > 0) return;
+    /*
+     * Noch in Gebrauch (ein Auftrag wartet in der Reihe): später noch
+     * einmal fragen. Nicht einfach aufgeben – wird der Wartende
+     * abgebrochen, bevor er rechnet, käme sonst nie wieder jemand, und die
+     * Sitzung bliebe offen.
+     */
+    if ((inGebrauch.get(verfahren) ?? 0) > 0) {
+      eintrag.zeitgeber = setTimeout(pruefen, FREIGABE_NACH_MS);
+      return;
+    }
     hintenSchwer = null;
     void freigeben(verfahren);
-  }, FREIGABE_NACH_MS);
+  };
+  eintrag.zeitgeber = setTimeout(pruefen, FREIGABE_NACH_MS);
   hintenSchwer = eintrag;
 }
 
@@ -382,10 +417,14 @@ export function modellReihe<T>(
   const { verfahren, abbruch } = optionen;
   if (abbruch?.aborted) return Promise.reject(new AbbruchError());
   return new Promise<T>((erfuellen, ablehnen) => {
+    const freiMelden = () => {
+      if (verfahren) inGebrauch.set(verfahren, (inGebrauch.get(verfahren) ?? 1) - 1);
+    };
     const aufgeben = () => {
       const stelle = reihe.indexOf(platz);
       if (stelle < 0) return;
       reihe.splice(stelle, 1);
+      freiMelden();
       ablehnen(new AbbruchError());
       pumpen();
     };
@@ -396,7 +435,6 @@ export function modellReihe<T>(
         abbruch?.removeEventListener('abort', aufgeben);
         if (vorrang === 'vorn') laufenVorn += 1;
         else laufenHinten += 1;
-        if (verfahren) inGebrauch.set(verfahren, (inGebrauch.get(verfahren) ?? 0) + 1);
         void (async () => {
           try {
             await schwereWechseln(verfahren);
@@ -406,7 +444,7 @@ export function modellReihe<T>(
           } finally {
             if (vorrang === 'vorn') laufenVorn -= 1;
             else laufenHinten -= 1;
-            if (verfahren) inGebrauch.set(verfahren, (inGebrauch.get(verfahren) ?? 1) - 1);
+            freiMelden();
             nachDemLauf(platz);
             pumpen();
           }
@@ -414,6 +452,8 @@ export function modellReihe<T>(
       },
     };
     abbruch?.addEventListener('abort', aufgeben, { once: true });
+    // Schon beim Einreihen in Gebrauch – siehe `inGebrauch`.
+    if (verfahren) inGebrauch.set(verfahren, (inGebrauch.get(verfahren) ?? 0) + 1);
     reihe.push(platz);
     pumpen();
   });

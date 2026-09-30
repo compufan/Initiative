@@ -12,7 +12,7 @@ import { useVorschauDoc } from './filmDoc.js';
 import { springenZu, useFilmWiedergabe } from './filmWiedergabe.js';
 import { restText, type MaskenLeiste } from './Maskenbahnen.js';
 import { bereichePlatz, bildDocAn, type Gezeigt } from './masken.js';
-import { bildIndex, bildMitte, filmRaster } from './raster.js';
+import { bildIndex, bildMitte } from './raster.js';
 import { MAX_BILDER_FILM } from './einstellungen.js';
 import { filmZuQuelle, standImRaster } from './schnitt.js';
 import type { SchnittZustand } from './schnittZustand.js';
@@ -483,13 +483,6 @@ export function SchnittEditor({
    * Was über die Masken an DIESEM Bild zu sagen ist – eine Zeile über der
    * Zeitleiste, solange der Editor zu sehen ist.
    */
-  const imFilm = useMemo(
-    () =>
-      gezeigt
-        ? filmRaster(abschnitte, schrittMs, MAX_BILDER_FILM).menge.includes(gezeigt.stand.k)
-        : true,
-    [abschnitte, gezeigt, schrittMs],
-  );
   const maskenLage = (() => {
     if (!gezeigt || ueberlagert) return null;
     const { z } = gezeigt.stand;
@@ -533,7 +526,7 @@ export function SchnittEditor({
         </p>
       );
     }
-    if (fehlendAlle.length > 0 && !imFilm) {
+    if (z.jenseits.length > 0 && fehlendAlle.length === 0) {
       return (
         <p className="mb-lage" role="status">
           Dieses Bild liegt hinter dem Ende des fertigen Films (höchstens {MAX_BILDER_FILM} Bilder)
