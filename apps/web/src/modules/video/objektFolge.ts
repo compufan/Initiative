@@ -105,6 +105,12 @@ import { PRUEFMASS, maskePasst, maskeVerschieben, type Grau } from './verfolgung
  * Nachgeben nach zwei Ablehnungen. Nur für Motiv und BiRefNet: Eine andere
  * Person ist immer noch „Person", und ein Tipp hat nach dem Austritt keine
  * Punkte mehr.
+ *
+ * Gemessen wird dabei am KERN (Deckung ab der Hälfte), nicht an allem über
+ * null: Freisteller legen einen Dunst über das ganze Bild, und ein Kasten um
+ * alles über null war das ganze Bild – dann traf jeder Gegenstand die
+ * Vorhersage. Aus demselben Grund geht Blasses weit weg von jedem
+ * behaltenen Kern immer, auch aus der Anfangsmaske.
  */
 
 export interface Punkt {
@@ -148,7 +154,10 @@ export interface SpurRand {
    * an der der Gegenstand verschwand.
    */
   readonly abwesendSeit: number | null;
-  /** Wo er zuletzt bestätigt wurde: der Kasten dieser Maske. */
+  /**
+   * Wo er zuletzt bestätigt wurde: der Kasten des KERNS dieser Maske
+   * (`Vermessung.kern`) – nicht ihres Dunstes.
+   */
   readonly letzterKasten: Kasten | null;
   /** Und wie schnell er dort war – daraus, wo er jetzt sein müsste. */
   readonly letztesTempo: Punkt | null;
@@ -223,6 +232,21 @@ interface Vermessung {
   readonly mitte: Mitte | null;
   /** Wo überhaupt etwas ist (Deckung über null) – `null` für eine leere Maske. */
   readonly kasten: Kasten | null;
+  /**
+   * Wo der KERN ist (Deckung ab `KERN_AB`) – `null`, wenn es keinen gibt.
+   *
+   * # Warum nicht `kasten`
+   *
+   * Für alles, was nach dem GEGENSTAND fragt (die Vorhersage des
+   * Komponentenfilters, `letzterKasten`), taugt `kasten` nicht: Ein
+   * Freisteller liefert ausserhalb des Gegenstands selten genau null, sondern
+   * einen Dunst von ein paar Stufen über das ganze Bild. Ein einziger solcher
+   * Bildpunkt in der Ecke dehnte `kasten` über das Bild – dann traf jede
+   * Komponente die Vorhersage, und der Filter liess den nächsten Gegenstand
+   * durch, sobald der verfolgte ging. Nachgestellt mit Dunst 1 … 12:
+   * Ab dem Austritt lag die Maske ganz auf dem Fremden.
+   */
+  readonly kern: Kasten | null;
   /** An welchen Rändern die Maske (ab halber Deckung) anstösst. */
   readonly rand: { links: boolean; rechts: boolean; oben: boolean; unten: boolean };
 }
@@ -383,10 +407,28 @@ export class Spur {
     if (!this.anfang) {
       const { breite, hoehe } = auftrag;
       const vorgabe = auftrag.ankerMaske;
-      const maske =
+      const roh =
         vorgabe && vorgabe.length === breite * hoehe
           ? vorgabe
           : await auftrag.rechnen(auftrag.anker, auftrag.punkte, { x: 0, y: 0 });
+      /*
+       * Mit `wiederBilder` auch die Anfangsmaske ohne ihren Dunst: Jeder Kern
+       * bleibt (der Anwender hat sie so angenommen), aber ein Hauch über dem
+       * ganzen Bild zöge den Schwerpunkt zur Bildmitte – mit Dunst 3 bei
+       * 320 × 120 um 17 Punkte, mehr als der Halbmesser der verfolgten
+       * Scheibe –, und die Bilder bis zum ersten Schlüsselbild würden
+       * dorthin überblendet.
+       */
+      const maske =
+        auftrag.wiederBilder !== undefined
+          ? komponentenFiltern(
+              roh,
+              breite,
+              hoehe,
+              [{ x0: 0, y0: 0, x1: breite - 1, y1: hoehe - 1 }],
+              false,
+            )
+          : roh;
       const mass = vermessen(maske, breite, hoehe);
       /*
        * Eine Fortsetzung bringt den Stand mit, den die vorige Spur an diesem
@@ -405,7 +447,7 @@ export class Spur {
         drift: f ? f.drift : { x: 0, y: 0 },
         vomAnker: f ? f.vomAnker : { x: 0, y: 0 },
         abwesendSeit: f ? f.abwesendSeit : mass.mitte ? null : 0,
-        letzterKasten: f ? f.letzterKasten : mass.mitte ? mass.kasten : null,
+        letzterKasten: f ? f.letzterKasten : mass.mitte ? gegenstandKasten(mass) : null,
         letztesTempo: f ? f.letztesTempo : null,
       };
       this.merken(auftrag.anker, this.anfang);
@@ -513,20 +555,24 @@ export class Spur {
     const ohnePunkte = punkte !== null && punkte.length === 0;
     const schritteGesamt = Math.abs(ziel - alt.bild);
     const filtern = this.auftrag.wiederBilder !== undefined;
-    // Wo die Vorhersage liegt – verschoben wie `maskeVerschieben`, auf das Bild beschnitten.
-    const erwartetKasten =
-      filtern && alt.mass.kasten
-        ? kastenImBild(
-            {
-              x0: alt.mass.kasten.x0 + Math.round(gesamt.x),
-              y0: alt.mass.kasten.y0 + Math.round(gesamt.y),
-              x1: alt.mass.kasten.x1 + Math.round(gesamt.x),
-              y1: alt.mass.kasten.y1 + Math.round(gesamt.y),
-            },
-            breite,
-            hoehe,
-          )
-        : null;
+    /*
+     * Wo die Vorhersage liegt – verschoben wie `maskeVerschieben`, auf das
+     * Bild beschnitten. Der Kasten des KERNS, nicht der ganzen Maske: siehe
+     * `Vermessung.kern`.
+     */
+    const altKasten = filtern ? gegenstandKasten(alt.mass) : null;
+    const erwartetKasten = altKasten
+      ? kastenImBild(
+          {
+            x0: altKasten.x0 + Math.round(gesamt.x),
+            y0: altKasten.y0 + Math.round(gesamt.y),
+            x1: altKasten.x1 + Math.round(gesamt.x),
+            y1: altKasten.y1 + Math.round(gesamt.y),
+          },
+          breite,
+          hoehe,
+        )
+      : null;
     let frisch = ohnePunkte
       ? new Uint8Array(breite * hoehe)
       : await this.auftrag.rechnen(ziel, punkte, {
@@ -684,7 +730,7 @@ export class Spur {
         : alt.abwesendSeit === null
           ? schritteGesamt
           : alt.abwesendSeit + schritteGesamt,
-      letzterKasten: bestaetigt ? mass.kasten : alt.letzterKasten,
+      letzterKasten: bestaetigt ? gegenstandKasten(mass) : alt.letzterKasten,
       letztesTempo: bestaetigt ? tempo : alt.letztesTempo,
     };
   }
@@ -888,6 +934,9 @@ export class Spur {
 
 /* ---------- Messen ---------- */
 
+/** Ab dieser Deckung gehört ein Bildpunkt zum KERN einer Komponente (und von `Vermessung.kern`). */
+const KERN_AB = 128;
+
 function vermessen(maske: Uint8Array, breite: number, hoehe: number): Vermessung {
   let summe = 0;
   let sx = 0;
@@ -896,6 +945,10 @@ function vermessen(maske: Uint8Array, breite: number, hoehe: number): Vermessung
   let y0 = hoehe;
   let x1 = -1;
   let y1 = -1;
+  let kx0 = breite;
+  let ky0 = hoehe;
+  let kx1 = -1;
+  let ky1 = -1;
   let links = false;
   let rechts = false;
   let oben = false;
@@ -912,7 +965,11 @@ function vermessen(maske: Uint8Array, breite: number, hoehe: number): Vermessung
       if (x > x1) x1 = x;
       if (y < y0) y0 = y;
       if (y > y1) y1 = y;
-      if (a >= 128) {
+      if (a >= KERN_AB) {
+        if (x < kx0) kx0 = x;
+        if (x > kx1) kx1 = x;
+        if (y < ky0) ky0 = y;
+        if (y > ky1) ky1 = y;
         if (x === 0) links = true;
         if (x === breite - 1) rechts = true;
         if (y === 0) oben = true;
@@ -924,8 +981,18 @@ function vermessen(maske: Uint8Array, breite: number, hoehe: number): Vermessung
   return {
     mitte: flaeche < 1 ? null : { x: sx / summe, y: sy / summe, flaeche },
     kasten: x1 < 0 ? null : { x0, y0, x1, y1 },
+    kern: kx1 < 0 ? null : { x0: kx0, y0: ky0, x1: kx1, y1: ky1 },
     rand: { links, rechts, oben, unten },
   };
+}
+
+/**
+ * Wo der Gegenstand einer Maske steht: der Kasten ihres Kerns – und nur,
+ * wenn sie keinen hat (eine durchweg blasse Maske, etwa ein Anker aus dem
+ * Editor), der ganze.
+ */
+function gegenstandKasten(mass: Vermessung): Kasten | null {
+  return mass.kern ?? mass.kasten;
 }
 
 function randIrgendwo(mass: Vermessung): boolean {
@@ -949,9 +1016,6 @@ function kastenImBild(k: Kasten, breite: number, hoehe: number): Kasten | null {
   return x0 > x1 || y0 > y1 ? null : { x0, y0, x1, y1 };
 }
 
-/** Ab dieser Deckung gehört ein Bildpunkt zum KERN einer Komponente. */
-const KERN_AB = 128;
-
 /**
  * Eine Maske auf die Zusammenhangskomponenten zurückschneiden, die eine der
  * `stellen` treffen – oder, mit `randErlaubt`, den Bildrand berühren.
@@ -961,7 +1025,18 @@ const KERN_AB = 128;
  * Freisteller legt zwischen zwei nahe Gegenstände oft einen Hauch von
  * Zuversicht, und über den verbunden wären sie eine einzige Komponente. Der
  * Saum einer behaltenen Komponente bleibt, soweit er in ihrem etwas
- * gedehnten Kasten liegt.
+ * gedehnten Kasten liegt – alles Blasse ausserhalb davon geht, AUCH wenn
+ * jede Komponente trifft.
+ *
+ * # Warum auch dann
+ *
+ * Weil Freisteller ausserhalb des Gegenstands selten genau null liefern:
+ * ein Dunst von ein paar Stufen über das ganze Bild, oder ein zweiter
+ * Gegenstand, den das Modell nur halb sieht, solange der erste da ist.
+ * Blieb das stehen, weil der eine Kern traf, stand es in der angenommenen
+ * Maske – und ging der Gegenstand, war der Dunst das Letzte, was von ihm
+ * „bestätigt" war, über das ganze Bild. Nachgestellt: Mit einem halb
+ * gesehenen Zweitobjekt sprang die Maske beim Austritt auf dieses.
  *
  * Gibt die Maske selbst zurück, wenn alles bleibt, und eine leere, wenn
  * nichts bleibt.
@@ -1063,20 +1138,14 @@ export function komponentenFiltern(
       }
     }
   }
-  let alle = true;
   let keine = true;
   for (let w = 1; w < anzahl; w += 1) {
-    if (eltern[w] !== w) continue;
-    if (trifft[w]) keine = false;
-    else alle = false;
+    if (eltern[w] === w && trifft[w]) keine = false;
   }
-  if (alle) return maske;
-  const raus = new Uint8Array(n);
-  if (keine) return raus;
-  for (let p = 0; p < n; p += 1) {
-    if (nummer[p] !== 0 && trifft[nummer[p]]) raus[p] = maske[p];
-  }
-  // Der Saum der behaltenen Komponenten – in ihrem Kasten, um ein Zehntel gedehnt.
+  if (keine) return new Uint8Array(n);
+
+  // Wo Blasses bleiben darf: im Kasten jeder behaltenen Komponente, um ein Zehntel gedehnt.
+  const imSaum = new Uint8Array(n);
   for (let w = 1; w < anzahl; w += 1) {
     if (eltern[w] !== w || !trifft[w]) continue;
     const saum = Math.max(4, Math.round(0.1 * Math.max(kx1[w] - kx0[w], ky1[w] - ky0[w])));
@@ -1084,12 +1153,22 @@ export function komponentenFiltern(
     const x1 = Math.min(breite - 1, kx1[w] + saum);
     const y0 = Math.max(0, ky0[w] - saum);
     const y1 = Math.min(hoehe - 1, ky1[w] + saum);
-    for (let y = y0; y <= y1; y += 1) {
-      for (let p = y * breite + x0, ende = y * breite + x1; p <= ende; p += 1) {
-        const a = maske[p];
-        if (a > 0 && a < KERN_AB) raus[p] = a;
-      }
+    for (let y = y0; y <= y1; y += 1) imSaum.fill(1, y * breite + x0, y * breite + x1 + 1);
+  }
+  // Erst nachsehen, ob überhaupt etwas geht – sonst bleibt es dieselbe Maske.
+  const bleibt = (p: number): boolean =>
+    nummer[p] !== 0 ? trifft[nummer[p]] === 1 : imSaum[p] === 1;
+  let etwasGeht = false;
+  for (let p = 0; p < n; p += 1) {
+    if (maske[p] !== 0 && !bleibt(p)) {
+      etwasGeht = true;
+      break;
     }
+  }
+  if (!etwasGeht) return maske;
+  const raus = new Uint8Array(n);
+  for (let p = 0; p < n; p += 1) {
+    if (maske[p] !== 0 && bleibt(p)) raus[p] = maske[p];
   }
   return raus;
 }
