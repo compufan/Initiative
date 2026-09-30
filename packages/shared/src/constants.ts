@@ -62,6 +62,15 @@ export const LIMITS = {
   pollOptionsMax: 30,
   eventTitleMax: 160,
   eventDescriptionMax: 4000,
+  /** Länge des Wiederholungsschutz-Schlüssels beim Anlegen eines Termins. */
+  eventClientIdMax: 64,
+  /**
+   * Wie viele Personen ein Termin höchstens einlädt – `EINLADUNGEN_MAX` in
+   * `apps/api/src/constants.rs`. Der Client prüft vorab, der Server entscheidet.
+   */
+  einladungenMax: 200,
+  /** In wie viele Gruppenchats eine Einladung höchstens als Karte kommt. */
+  einladungGruppenMax: 10,
   stickerPackNameMax: 60,
   /**
    * Wie lang die Tonspur eines Stickers hoechstens sein darf.

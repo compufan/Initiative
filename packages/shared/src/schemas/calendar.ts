@@ -47,8 +47,51 @@ export interface CalendarEventDto {
   collectionId: string | null;
   attendees: EventAttendeeDto[];
   reminderMinutes: number[];
+  /**
+   * Zählt jede Änderung hoch, auch Zu- und Absagen. Wer zwei Fassungen
+   * desselben Termins hat, nimmt die mit dem höheren Stand: Rundrufe können
+   * einander überholen.
+   */
+  stand: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Eine Gruppenkarte: der Chat und die Nachricht darin. */
+export interface GruppenKarteDto {
+  conversationId: string;
+  /** Leer, solange die Nachricht noch nicht angelegt ist. */
+  nachrichtId: string | null;
+}
+
+/** Was aus einer Einladung geworden ist – die Antwort auf Anlegen und Ändern. */
+export interface ZustellungDto {
+  /** Die Gruppenchats, in denen jetzt eine Karte steht. */
+  gruppen: GruppenKarteDto[];
+  /** Karten in Einzelchats, die diese Anfrage zugestellt hat. */
+  einzelchats: number;
+  /** Davon Einzelchats, die dafür neu angelegt wurden. */
+  neueEinzelchats: number;
+  /** Gewünschte Gruppenchats, in denen nicht alle Mitglieder eingeladen sind (höchstens fünf Fehlende je Chat). */
+  ausgelassen: { conversationId: string; fehlend: string[] }[];
+  /** Karten, die (noch) nicht zugestellt sind; `nachliefern` holt sie nach. */
+  ausstehend: number;
+  /** Personen, die eine Benachrichtigung bekommen haben. */
+  benachrichtigt: number;
+}
+
+/**
+ * Anlegen und Ändern liefern den Termin auf oberster Ebene, dazu – wenn
+ * `zustellung` oder `attendeeIds` gesendet wurde – was daraus geworden ist.
+ */
+export type TerminAntwort = CalendarEventDto & { zustellung?: ZustellungDto };
+
+/** Wo ein Termin als Karte steht: `GET /calendar/events/{id}/zustellung`. */
+export interface ZustellungStandDto {
+  gruppen: GruppenKarteDto[];
+  /** Wer schon eine Karte im Einzelchat hat. */
+  einzelNutzerIds: string[];
+  ausstehend: number;
 }
 
 /** A single materialised occurrence of a (possibly recurring) event. */
@@ -59,6 +102,35 @@ export interface EventOccurrence {
   /** Index of this occurrence in the recurrence series (0 = first). */
   index: number;
 }
+
+/**
+ * Wie eine Einladung zugestellt wird. Fehlt das Feld beim Anlegen, gilt der alte
+ * Weg: `conversationId` bestimmt den Chat, alle seine Mitglieder werden
+ * eingeladen, eine Karte kommt dorthin. Mit dem Feld ist `attendeeIds` die
+ * **volle** Liste (ohne den Ersteller), und leer heisst: niemand.
+ */
+export const zustellungSchema = z.object({
+  /** `false`: niemand bekommt eine Karte oder Benachrichtigung; nur Kalender. */
+  senden: z.boolean().default(true),
+  /** Karte in die Einzelchats. */
+  einzelchats: z.boolean().default(true),
+  /** Gruppenchats, in die die Karte soll – nur dort, wo alle Mitglieder eingeladen sind. */
+  gruppenChatIds: z.array(z.string().uuid()).max(LIMITS.einladungGruppenMax).default([]),
+});
+export type ZustellungInput = z.infer<typeof zustellungSchema>;
+
+/**
+ * Beim Ändern gelten `senden` und `einzelchats` für die **neu Hinzugefügten**
+ * dieser Anfrage. `gruppenChatIds` ist der Sollzustand der Gruppenkarten;
+ * **fehlt es, bleibt alles unverändert** – der Editor schickt es erst, wenn er
+ * die bestehenden Karten kennt, sonst wählte er sie versehentlich ab.
+ */
+export const zustellungAendernSchema = z.object({
+  senden: z.boolean().optional(),
+  einzelchats: z.boolean().optional(),
+  gruppenChatIds: z.array(z.string().uuid()).max(LIMITS.einladungGruppenMax).optional(),
+});
+export type ZustellungAendernInput = z.infer<typeof zustellungAendernSchema>;
 
 export const createEventSchema = z
   .object({
@@ -81,10 +153,19 @@ export const createEventSchema = z
       )
       .max(5)
       .optional(),
-    /** Invite these users; conversation members are invited automatically. */
-    attendeeIds: z.array(z.string().uuid()).max(200).optional(),
+    /**
+     * Invite these users. Ohne `zustellung` kommen alle Mitglieder des Chats
+     * automatisch dazu; mit `zustellung` ist es die volle Liste.
+     */
+    attendeeIds: z.array(z.string().uuid()).max(LIMITS.einladungenMax).optional(),
     /** Post an event card into the conversation (default true for group events). */
     announce: z.boolean().optional(),
+    zustellung: zustellungSchema.optional(),
+    /**
+     * Wiederholungsschutz: Wer denselben Schlüssel noch einmal schickt
+     * (Funkloch, Doppeltipp), bekommt den schon angelegten Termin zurück.
+     */
+    clientId: z.string().min(1).max(LIMITS.eventClientIdMax).optional(),
   })
   .refine((v) => new Date(v.endsAt).getTime() >= new Date(v.startsAt).getTime(), {
     message: 'endsAt must not be before startsAt',
@@ -95,7 +176,12 @@ export type CreateEventInput = z.infer<typeof createEventSchema>;
 export const updateEventSchema = createEventSchema
   .innerType()
   .partial()
-  .omit({ conversationId: true });
+  .omit({ conversationId: true, zustellung: true, clientId: true, announce: true })
+  .extend({
+    zustellung: zustellungAendernSchema.optional(),
+    /** Absagen und Wiederaufnehmen; nicht aus oder nach `planning`. */
+    status: z.enum(['confirmed', 'cancelled']).optional(),
+  });
 export type UpdateEventInput = z.infer<typeof updateEventSchema>;
 
 export const listEventsSchema = z.object({

@@ -42,7 +42,18 @@ export type ServerEvent =
   | { type: 'presence'; payload: { userId: string; online: boolean; lastSeenAt: string | null } }
   | { type: 'poll.updated'; payload: { poll: PollDto } }
   | { type: 'event.updated'; payload: { event: CalendarEventDto } }
-  | { type: 'event.deleted'; payload: { eventId: string; conversationId: string | null } }
+  | {
+      type: 'event.deleted';
+      payload: {
+        eventId: string;
+        conversationId: string | null;
+        /**
+         * `geloescht`: der Termin ist weg. `ausgeladen`: er besteht weiter, nur
+         * nicht mehr für den Empfänger. Ältere Server senden nichts.
+         */
+        grund?: 'geloescht' | 'ausgeladen';
+      };
+    }
   | { type: 'game.updated'; payload: { session: GameSessionDto } }
   /**
    * Eine Ausgabe hat sich geändert.
@@ -72,7 +83,15 @@ export type ServerEvent =
   | { type: 'verlauf.antrag'; payload: { conversationId: string } }
   | { type: 'user.updated'; payload: { user: UserDto } }
   /** Payload too large for the broadcast bus – clients should refetch. */
-  | { type: 'sync.hint'; payload: { conversationId?: string; scope: string } }
+  | {
+      type: 'sync.hint';
+      payload: {
+        conversationId?: string;
+        /** Bei einem zu grossen Termin-Rundruf: Welchen Termin es nachzuladen gilt. */
+        eventId?: string;
+        scope: string;
+      };
+    }
   | { type: 'error'; payload: { code: string; message: string } };
 
 export type ServerEventType = ServerEvent['type'];
