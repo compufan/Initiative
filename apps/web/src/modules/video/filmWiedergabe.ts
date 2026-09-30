@@ -29,6 +29,62 @@ export interface FilmWiedergabe {
   setzen(filmMs: number): void;
 }
 
+/**
+ * Wohin ein Element als Nächstes springen soll, solange es noch mit einem
+ * Sprung beschäftigt ist.
+ */
+const naechsterSprung = new WeakMap<HTMLVideoElement, number>();
+
+/**
+ * Das Video an eine Stelle setzen – beim Wischen so oft, wie man will.
+ *
+ * # Warum nicht einfach `currentTime` setzen
+ *
+ * Weil dann beim Wischen gar nichts zu sehen ist. Jede Fingerbewegung setzte
+ * `currentTime` neu, und ein neuer Sprung bricht den laufenden ab. Ein
+ * Sprung mitten zwischen zwei Schlüsselbilder braucht auf einem Telefon aber
+ * leicht hundert Millisekunden oder mehr – der Finger ist jedes Mal
+ * schneller. Das Video zeigte also erst etwas, wenn der Finger stillstand:
+ * „es springt nur bei einzelnen Tipps an die richtige Stelle".
+ *
+ * Deshalb läuft immer nur EIN Sprung. Was währenddessen verlangt wird, merkt
+ * sich nur das Neueste; ist der Sprung fertig (`seeked`), geht es sofort
+ * dorthin weiter. So kommt jedes Bild, das der Dekoder schafft, auch auf den
+ * Schirm, und das Video läuft dem Finger hinterher statt stillzustehen.
+ */
+export function springenZu(element: HTMLVideoElement, sekunden: number): void {
+  if (naechsterSprung.has(element) && element.seeking) {
+    naechsterSprung.set(element, sekunden);
+    return;
+  }
+  naechsterSprung.set(element, sekunden);
+  const weiter = () => {
+    const ziel = naechsterSprung.get(element);
+    if (ziel === undefined) return;
+    if (Math.abs(element.currentTime - ziel) < 0.0005 && !element.seeking) {
+      naechsterSprung.delete(element);
+      return;
+    }
+    element.addEventListener('seeked', weiter, { once: true });
+    element.currentTime = ziel;
+    // Ohne Kopfdaten gibt es keinen Sprung und kein `seeked`: Das Element
+    // merkt sich die Stelle selbst und fängt dort an, sobald es geladen hat.
+    if (!element.seeking) {
+      element.removeEventListener('seeked', weiter);
+      naechsterSprung.delete(element);
+    }
+  };
+  weiter();
+}
+
+/**
+ * Einen noch ausstehenden Sprung vergessen – vor dem Abspielen. Käme er
+ * danach noch an, zöge er die laufende Wiedergabe an eine alte Stelle zurück.
+ */
+export function sprungVergessen(element: HTMLVideoElement): void {
+  naechsterSprung.delete(element);
+}
+
 export function useFilmWiedergabe(
   videoRef: RefObject<HTMLVideoElement | null>,
   abschnitte: readonly Stueck[],
@@ -58,7 +114,7 @@ export function useFilmWiedergabe(
       const element = videoRef.current;
       if (element) {
         element.pause();
-        if (ort) element.currentTime = ort.quelleMs / 1000;
+        if (ort) springenZu(element, ort.quelleMs / 1000);
       }
       if (ort) nummerSetzen(ort.nummer);
       setSpielt(false);
@@ -77,6 +133,7 @@ export function useFilmWiedergabe(
     const ort = filmZuQuelle(liste.current, start);
     if (!ort) return;
     nummerSetzen(ort.nummer);
+    sprungVergessen(element);
     element.currentTime = ort.quelleMs / 1000;
     setSpielkopfMs(start);
     setSpielt(true);

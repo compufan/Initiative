@@ -8,7 +8,7 @@ import type { BildDoc } from '../bild/doc.js';
 import { errorMessage } from '../media/helpers.js';
 import { AbbruchError } from '../stickers/engines/index.js';
 import { videoLeserOeffnen, type VideoLeser } from './bilderLesen.js';
-import { useFilmWiedergabe } from './filmWiedergabe.js';
+import { springenZu, useFilmWiedergabe } from './filmWiedergabe.js';
 import { filmZuQuelle, haengtAmBild, quelleZuFilm, standImRaster } from './schnitt.js';
 import type { SchnittZustand } from './schnittZustand.js';
 import { Zeitleiste, stellbildImFilm, zeitText } from './Zeitleiste.js';
@@ -358,7 +358,7 @@ export function SchnittEditor({
           // Beim Ziehen zeigt das Video die Kante, an der man gerade ist.
           setZieht(true);
           const alt = abschnitte[nummer];
-          if (element && alt) element.currentTime = (vonMs !== alt.vonMs ? vonMs : bisMs) / 1000;
+          if (element && alt) springenZu(element, (vonMs !== alt.vonMs ? vonMs : bisMs) / 1000);
           return;
         }
         setZieht(false);

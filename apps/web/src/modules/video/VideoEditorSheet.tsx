@@ -18,7 +18,7 @@ import {
   filmDauerSchaetzenMs,
   maxBilderFuer,
 } from './einstellungen.js';
-import { useFilmWiedergabe } from './filmWiedergabe.js';
+import { springenZu, useFilmWiedergabe } from './filmWiedergabe.js';
 import { SchnittEditor } from './SchnittEditor.js';
 import { filmZuQuelle } from './schnitt.js';
 import { nochOffen, useSchnitt } from './schnittZustand.js';
@@ -519,7 +519,7 @@ export function VideoEditorSheet({
                     const element = videoRef.current;
                     const alt = abschnitte[nummer];
                     if (element && alt) {
-                      element.currentTime = (vonMs !== alt.vonMs ? vonMs : bisMs) / 1000;
+                      springenZu(element, (vonMs !== alt.vonMs ? vonMs : bisMs) / 1000);
                     }
                     return;
                   }

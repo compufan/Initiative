@@ -1128,3 +1128,90 @@ test('ein Zug an der Leiste, während der Editor aufgeht, bleibt nicht hängen',
   await page.waitForTimeout(300);
   await expect(editor.locator('.zl-zeit')).toHaveText(vorher ?? '');
 });
+
+test('beim Wischen läuft das Video mit, statt erst am Ende zu springen', async ({ page }) => {
+  /*
+   * Die Beschwerde: „Wenn man in der Zeitleiste wischt, sollte das Video live
+   * aktualisieren und nicht nur bei einzelnen Tipps auf die richtige Stelle
+   * springen." Jede Fingerbewegung setzte `currentTime` neu und brach damit
+   * den laufenden Sprung ab – auf einem langsamen Gerät kam mitten im Zug
+   * über Sekunden kein Bild an.
+   *
+   * Nachgestellt mit einem Video, dessen Schlüsselbilder vier Sekunden
+   * auseinanderliegen (jeder Sprung muss weit zurück dekodieren), und
+   * sechsfach gedrosselter Rechenleistung. Gemessen wird, wie weit zwei
+   * Bilder, die beim Ziehen wirklich angezeigt wurden, im Video
+   * auseinanderliegen. Vorher: über drei Sekunden. Jetzt: unter einer.
+   */
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 412, height: 880 });
+  await page.goto('/');
+  await page.waitForLoadState('networkidle');
+  const bereit = await page.evaluate(async () => {
+    const schreibenPfad = '/src/modules/video/schreiben.ts';
+    const buehnePfad = '/e2e/buehne.ts';
+    const schreiben = (await import(
+      /* @vite-ignore */ schreibenPfad
+    )) as typeof import('../src/modules/video/schreiben.js');
+    if (!(await schreiben.videoTauglich(1280, 720)).moeglich) return false;
+    const leinwand = document.createElement('canvas');
+    leinwand.width = 1280;
+    leinwand.height = 720;
+    const ctx = leinwand.getContext('2d') as CanvasRenderingContext2D;
+    const datei = await schreiben.videoSchreiben(
+      200,
+      (n) => {
+        // Viel Bewegung überall, damit jedes Zwischenbild teuer zu dekodieren ist.
+        ctx.fillStyle = `hsl(${n * 3},70%,40%)`;
+        ctx.fillRect(0, 0, 1280, 720);
+        for (let k = 0; k < 40; k += 1) {
+          ctx.fillStyle = `hsl(${(n * 7 + k * 31) % 360},80%,60%)`;
+          ctx.fillRect((k * 97 + n * 13) % 1200, (k * 53 + n * 5) % 660, 80, 60);
+        }
+        return leinwand;
+      },
+      { breite: 1280, hoehe: 720, bildrate: 25, schluesselAbstand: 100 },
+    );
+    const buehne = (await import(/* @vite-ignore */ buehnePfad)) as typeof import('./buehne.js');
+    buehne.videoBlattZeigen(datei);
+    return true;
+  });
+  if (!bereit) {
+    test.skip(true, 'Kein Videokodierer in diesem Browser');
+    return;
+  }
+  await expect(page.getByRole('button', { name: /Bearbeiten und schneiden/ })).toBeEnabled({
+    timeout: 60_000,
+  });
+
+  await page.evaluate(() => {
+    const video = document.querySelector('video.vg-quelle') as HTMLVideoElement;
+    const w = window as unknown as { gezeigt: number[] };
+    w.gezeigt = [];
+    video.addEventListener('seeked', () => w.gezeigt.push(video.currentTime * 1000));
+  });
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 });
+
+  const bahn = (await page.locator('.zl-bahn').first().boundingBox())!;
+  const y = bahn.y + bahn.height / 2;
+  await page.mouse.move(bahn.x + 5, y);
+  await page.mouse.down();
+  for (let i = 0; i <= 60; i += 1) {
+    await page.mouse.move(bahn.x + 5 + (bahn.width * 0.7 * i) / 60, y);
+    await page.waitForTimeout(16);
+  }
+  const gezeigt = await page.evaluate(() => (window as unknown as { gezeigt: number[] }).gezeigt);
+  await page.mouse.up();
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+
+  // Ein Zug über gut fünf Sekunden Video: Es müssen viele Bilder ankommen,
+  // und keine Lücke darf grösser als anderthalb Sekunden Video sein.
+  const sortiert = [...gezeigt].sort((a, b) => a - b);
+  let luecke = 0;
+  for (let i = 1; i < sortiert.length; i += 1) {
+    luecke = Math.max(luecke, sortiert[i] - sortiert[i - 1]);
+  }
+  expect(sortiert.length, `angezeigt: ${sortiert.join(', ')}`).toBeGreaterThanOrEqual(15);
+  expect(luecke, `angezeigt: ${sortiert.join(', ')}`).toBeLessThan(1500);
+});
