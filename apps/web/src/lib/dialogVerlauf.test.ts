@@ -13,7 +13,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * Dialog, nicht nur für diesen einen.
  */
 
-type Hoerer = (ereignis: { key: string; defaultPrevented?: boolean }) => void;
+interface Tastendruck {
+  key: string;
+  defaultPrevented: boolean;
+  preventDefault: () => void;
+}
+
+type Hoerer = (ereignis: Tastendruck) => void;
+
+/** Ein Tastendruck, so weit die Buchführung ihn braucht – samt `preventDefault`. */
+function druck(key: string, schonVerbraucht = false): Tastendruck {
+  const ereignis: Tastendruck = {
+    key,
+    defaultPrevented: schonVerbraucht,
+    preventDefault: () => {
+      ereignis.defaultPrevented = true;
+    },
+  };
+  return ereignis;
+}
 
 let hoerer: Map<string, Hoerer[]>;
 let modul: typeof import('./dialogVerlauf.js');
@@ -38,8 +56,10 @@ async function fensterStellen() {
   modul = await import('./dialogVerlauf.js');
 }
 
-function escDruecken() {
-  for (const fn of hoerer.get('keydown') ?? []) fn({ key: 'Escape' });
+function escDruecken(): Tastendruck {
+  const ereignis = druck('Escape');
+  for (const fn of hoerer.get('keydown') ?? []) fn(ereignis);
+  return ereignis;
 }
 
 beforeEach(fensterStellen);
@@ -91,8 +111,25 @@ describe('Esc über dem Stapel', () => {
     // `preventDefault`. Danach darf nicht zusätzlich ein Blatt zugehen.
     const gerufen: string[] = [];
     modul.dialogAnmelden(() => gerufen.push('oben'));
-    for (const fn of hoerer.get('keydown') ?? []) fn({ key: 'Escape', defaultPrevented: true });
+    for (const fn of hoerer.get('keydown') ?? []) fn(druck('Escape', true));
     expect(gerufen).toEqual([]);
+  });
+
+  /*
+   * Der Dateibetrachter meldet sich hier nicht an und schliesst selbst auf
+   * Esc – aber nur, wenn `dialogeOffen()` null ist. Bei einem echten
+   * Tastendruck rendert React zwischen zwei Hörern; das gerade geschlossene
+   * Blatt hatte sich bis dahin abgemeldet, der Betrachter sah einen leeren
+   * Stapel und ging mit zu. An `defaultPrevented` erkennt er jetzt, dass
+   * dieser Esc vergeben ist.
+   */
+  it('markiert einen Esc, der ein Blatt geschlossen hat, als verbraucht', () => {
+    modul.dialogAnmelden(() => {});
+    expect(escDruecken().defaultPrevented).toBe(true);
+  });
+
+  it('lässt einen Esc ohne offenes Blatt unverbraucht – für den Betrachter darunter', () => {
+    expect(escDruecken().defaultPrevented).toBe(false);
   });
 
   it('zählt die offenen Dialoge', () => {

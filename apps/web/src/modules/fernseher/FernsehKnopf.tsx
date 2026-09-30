@@ -3,6 +3,7 @@ import type { AttachmentDto } from '@initiative/shared';
 import { toast } from '../../state/ui.js';
 import { FernsehWahl } from './FernsehWahl.js';
 import {
+  KARTE_GEWECHSELT,
   KARTE_IM_TELEFON_MS,
   geraeteBeobachten,
   geraeteWaehlen,
@@ -11,6 +12,7 @@ import {
   karteEntfernen,
   streamFehler,
   verbindungBeobachten,
+  vorbereitetSeit,
   type Verfuegbarkeit,
 } from './streamen.js';
 
@@ -47,8 +49,25 @@ import {
  * Abspielen kaputt. Also: nach fünf Stunden die alte Adresse zurück (und,
  * wenn noch ein Fernseher da ist, gleich eine frische Karte). Läuft gerade
  * etwas auf dem Fernseher, wird nicht getauscht – das würde es abreissen.
+ *
+ * # Warum er je Datei neu entsteht
+ *
+ * Im Dateibetrachter kann dasselbe `<video>` beim Blättern bleiben und nur
+ * seine Adresse wechseln. Der Zustand dieses Knopfs – „Karte eingesetzt um",
+ * „war im Bild", „ist gescheitert" – gehörte dann noch zur vorigen Datei: Die
+ * neue bekam keine Karte, obwohl ein Fernseher gemeldet war, und Chromes bzw.
+ * Safaris eigener Knopf schickte wieder eine Adresse ohne Karte (401). Der
+ * Schlüssel `anhang.id` legt den Zustand je Datei frisch an.
  */
-export function FernsehKnopf({
+export function FernsehKnopf(eigenschaften: {
+  video: HTMLVideoElement | null;
+  anhang: AttachmentDto;
+  className?: string;
+}) {
+  return <FernsehKnopfFuerDatei key={eigenschaften.anhang.id} {...eigenschaften} />;
+}
+
+function FernsehKnopfFuerDatei({
   video,
   anhang,
   className,
@@ -61,8 +80,16 @@ export function FernsehKnopf({
   const [verbunden, setVerbunden] = useState(false);
   const verbundenJetzt = useRef(false);
   verbundenJetzt.current = verbunden;
-  /** Wann die Karte eingesetzt wurde – `null`: keine im Element. */
-  const [vorbereitetUm, setVorbereitetUm] = useState<number | null>(null);
+  /**
+   * Wann die Karte eingesetzt wurde – `null`: keine im Element.
+   *
+   * Gelesen aus `streamen.ts`, nicht selbst gesetzt: Die Karte kann auch das
+   * Blatt „Auf den Fernseher" einsetzen, und zwar noch, nachdem es schon zu
+   * ist. Dann lief hier nie eine Uhr, und die Karte blieb über ihre sechs
+   * Stunden hinaus in der Seite. Massgeblich ist der Zeitpunkt, zu dem sie
+   * WIRKLICH ins Element kam – nicht der, zu dem jemand hier davon erfuhr.
+   */
+  const [vorbereitetUm, setVorbereitetUm] = useState<number | null>(() => vorbereitetSeit(video));
   /** Nach einem Ladefehler mit Karte nicht von selbst wieder einsetzen. */
   const gescheitert = useRef(false);
   const [nochmal, setNochmal] = useState(0);
@@ -104,12 +131,22 @@ export function FernsehKnopf({
     return verbindungBeobachten(video, setVerbunden);
   }, [video]);
 
+  useEffect(() => {
+    if (!video) return undefined;
+    const abgleichen = () => {
+      const seit = vorbereitetSeit(video);
+      // Eine frisch eingesetzte Karte ist ein neuer Versuch – das Scheitern davor zählt nicht mehr.
+      if (seit !== null) gescheitert.current = false;
+      setVorbereitetUm(seit);
+    };
+    abgleichen();
+    video.addEventListener(KARTE_GEWECHSELT, abgleichen);
+    return () => video.removeEventListener(KARTE_GEWECHSELT, abgleichen);
+  }, [video]);
+
   const vorbereiten = useCallback(() => {
     if (!video) return;
-    karteEinsetzen(video, anhang.id).then(
-      () => setVorbereitetUm(Date.now()),
-      () => undefined,
-    );
+    karteEinsetzen(video, anhang.id).catch(() => undefined);
   }, [video, anhang.id]);
 
   /*
@@ -137,7 +174,6 @@ export function FernsehKnopf({
           return;
         }
         karteEntfernen(video);
-        setVorbereitetUm(null);
       },
       Math.max(bis, nochmal > 0 ? 10 * 60_000 : 0),
     );
@@ -155,7 +191,6 @@ export function FernsehKnopf({
       if (!istVorbereitet(video) || verbundenJetzt.current) return;
       gescheitert.current = true;
       karteEntfernen(video);
-      setVorbereitetUm(null);
     };
     video.addEventListener('error', beiFehler);
     return () => video.removeEventListener('error', beiFehler);
@@ -214,10 +249,6 @@ export function FernsehKnopf({
           anhang={anhang}
           geraet={geraet}
           meldungVorher={meldung}
-          onVorbereitet={() => {
-            gescheitert.current = false;
-            setVorbereitetUm(Date.now());
-          }}
         />
       )}
     </>

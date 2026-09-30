@@ -47,7 +47,6 @@ export function FernsehWahl({
   anhang,
   geraet,
   meldungVorher = '',
-  onVorbereitet,
 }: {
   open: boolean;
   onClose: () => void;
@@ -56,8 +55,6 @@ export function FernsehWahl({
   geraet: Verfuegbarkeit;
   /** Was ein Tipp auf den 📺 eben ergeben hat – steht dann oben. */
   meldungVorher?: string;
-  /** Wenn die Karte eingesetzt ist – der Knopf an der Blase führt Buch. */
-  onVorbereitet?: () => void;
 }) {
   const weg = wegFuer(video);
   const kurz = kurzesVideoInChrome(video, anhang.durationMs);
@@ -75,11 +72,15 @@ export function FernsehWahl({
       return undefined;
     }
     let gilt = true;
+    /*
+     * Buch über die Karte führt `streamen.ts` selbst (Zeitpunkt, Ereignis am
+     * Element) – der Knopf an der Blase erfährt es von dort, auch wenn dieses
+     * Blatt schon zu ist, wenn die Karte ankommt. Hier geht es nur um den
+     * Knopf „Fernseher wählen".
+     */
     karteEinsetzen(video, anhang.id).then(
       () => {
-        if (!gilt) return;
-        setBereit(true);
-        onVorbereitet?.();
+        if (gilt) setBereit(istVorbereitet(video));
       },
       (fehler: unknown) => {
         if (gilt)
@@ -89,8 +90,6 @@ export function FernsehWahl({
     return () => {
       gilt = false;
     };
-    // `onVorbereitet` ist bei jedem Rendern eine neue Funktion – nicht warten.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, video, weg, kurz, anhang.id]);
 
   /** Die Geräteliste – synchron im Klick, die Karte steht schon im Element. */

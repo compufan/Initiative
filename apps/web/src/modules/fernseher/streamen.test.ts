@@ -10,6 +10,7 @@ vi.mock('../../lib/api.js', () => ({
 }));
 
 const {
+  KARTE_GEWECHSELT,
   STILLER_ABBRUCH_MS,
   geraeteWaehlen,
   istVorbereitet,
@@ -17,6 +18,7 @@ const {
   karteEntfernen,
   kurzFuerChrome,
   streamFehler,
+  vorbereitetSeit,
 } = await import('./streamen.js');
 
 /** Ein Videoelement, so weit es hier gebraucht wird – ohne Browser. */
@@ -43,6 +45,10 @@ class FalschesVideo {
     const liste = this.hoerer[art] ?? [];
     this.hoerer[art] = [];
     liste.forEach((h) => h());
+  }
+  dispatchEvent(ereignis: Event) {
+    (this.hoerer[ereignis.type] ?? []).forEach((h) => h());
+    return true;
   }
 }
 
@@ -139,6 +145,69 @@ describe('karteEinsetzen – vor dem Tipp', () => {
       karteEinsetzen(alsVideo(video), 'abc'),
     ]);
     expect(ticket).toHaveBeenCalledTimes(1);
+  });
+
+  /*
+   * Der Dateibetrachter behielt beim Blättern dasselbe `<video>` und tauschte
+   * nur die Adresse. Der Eintrag von Datei A blieb am Element hängen: B bekam
+   * keine Karte, und das Zurücktauschen (Ladefehler, Fünf-Stunden-Uhr) setzte
+   * A wieder ein – der Betrachter hiess „b-video.webm" und spielte A.
+   */
+  it('vergisst die Karte von Datei A, wenn das Element inzwischen B zeigt', async () => {
+    const video = chromeVideo();
+    await karteEinsetzen(alsVideo(video), 'abc');
+    expect(video.src).toContain('tv=KARTE');
+
+    // „Weiter ›" – dasselbe Element, eine andere Datei.
+    video.src = 'http://app.test/api/v1/media/b';
+    video.currentSrc = video.src;
+    expect(istVorbereitet(alsVideo(video))).toBe(false);
+
+    ticket.mockResolvedValueOnce({ url: 'http://api.test/api/v1/media/b?tv=B' });
+    await karteEinsetzen(alsVideo(video), 'b');
+    expect(ticket).toHaveBeenLastCalledWith('b');
+    expect(video.src).toBe('http://api.test/api/v1/media/b?tv=B');
+
+    karteEntfernen(alsVideo(video));
+    expect(video.src, 'nach dem Zurücktauschen stand wieder Datei A im Element').toBe(
+      'http://app.test/api/v1/media/b',
+    );
+  });
+
+  it('setzt eine Karte nicht mehr ein, wenn das Element unterwegs eine andere Datei bekam', async () => {
+    const video = chromeVideo();
+    let freigeben: (karte: { url: string }) => void = () => undefined;
+    ticket.mockReturnValueOnce(new Promise((fertig) => (freigeben = fertig)));
+    const unterwegs = karteEinsetzen(alsVideo(video), 'abc');
+    video.src = 'http://app.test/api/v1/media/b';
+    freigeben({ url: 'http://api.test/api/v1/media/abc?tv=A' });
+    await unterwegs;
+    expect(video.src).toBe('http://app.test/api/v1/media/b');
+    expect(istVorbereitet(alsVideo(video))).toBe(false);
+  });
+
+  /*
+   * Das Blatt „Auf den Fernseher" bestellt die Karte, wird geschlossen, und
+   * die Karte kommt danach. Der Knopf an der Blase erfuhr davon nichts – keine
+   * Uhr nahm sie nach fünf Stunden wieder heraus. Jetzt steht der Zeitpunkt
+   * hier, und das Element meldet jeden Wechsel.
+   */
+  it('merkt sich, WANN die Karte eingesetzt wurde, und meldet es am Element', async () => {
+    const video = chromeVideo();
+    const gemeldet = vi.fn();
+    video.addEventListener(KARTE_GEWECHSELT, gemeldet);
+    expect(vorbereitetSeit(alsVideo(video))).toBeNull();
+
+    const vorher = Date.now();
+    await karteEinsetzen(alsVideo(video), 'abc');
+    const seit = vorbereitetSeit(alsVideo(video));
+    expect(seit).not.toBeNull();
+    expect(seit!).toBeGreaterThanOrEqual(vorher);
+    expect(gemeldet).toHaveBeenCalledTimes(1);
+
+    karteEntfernen(alsVideo(video));
+    expect(vorbereitetSeit(alsVideo(video))).toBeNull();
+    expect(gemeldet).toHaveBeenCalledTimes(2);
   });
 
   it('lässt das Element in Ruhe, wenn die Karte nicht kommt', async () => {

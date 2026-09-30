@@ -66,7 +66,19 @@ if (typeof window !== 'undefined') {
   window.addEventListener('keydown', (ereignis) => {
     if (ereignis.key !== 'Escape' || ereignis.defaultPrevented) return;
     const oben = stapel[stapel.length - 1];
-    if (oben) oben();
+    if (!oben) return;
+    oben();
+    /*
+     * Verbraucht – und das markieren.
+     *
+     * Ansichten, die sich hier nicht anmelden (der Dateibetrachter), fragen
+     * `dialogeOffen()`, bevor sie selbst auf Esc schliessen. Das kam zu spät:
+     * Bei einem echten Tastendruck rendert React zwischen zwei Hörern, das
+     * gerade geschlossene Blatt hat sich bis dahin abgemeldet, und der
+     * Betrachter sah einen leeren Stapel und schloss sich mit. An
+     * `defaultPrevented` erkennt er jetzt, dass dieser Esc schon vergeben ist.
+     */
+    ereignis.preventDefault();
   });
 }
 

@@ -225,7 +225,52 @@ interface Vorbereitung {
   alteQuelle: string;
   /** Die Adresse mit Karte, sobald sie eingesetzt ist. */
   kartenQuelle: string | null;
+  /**
+   * Wann die Karte eingesetzt wurde – `null`, solange sie noch unterwegs ist.
+   *
+   * Steht HIER und nicht beim Knopf, der sie bestellt hat. Das Blatt „Auf den
+   * Fernseher" bestellt sie auch, und wurde es geschlossen, bevor die Karte
+   * kam, erfuhr der Knopf nie davon: Die Karte stand im Element, aber keine
+   * Uhr nahm sie nach fünf Stunden wieder heraus. Jetzt fragt der Knopf hier
+   * nach (`vorbereitetSeit`) und hört auf `KARTE_GEWECHSELT`.
+   */
+  eingesetztUm: number | null;
   versprechen: Promise<void>;
+}
+
+/**
+ * Dieses Ereignis feuert am Element, wenn eine Karte eingesetzt oder
+ * herausgenommen wurde – egal, wer sie bestellt hat.
+ */
+export const KARTE_GEWECHSELT = 'fernsehkarte';
+
+function wechselMelden(video: HTMLVideoElement): void {
+  if (typeof video.dispatchEvent === 'function') video.dispatchEvent(new Event(KARTE_GEWECHSELT));
+}
+
+/**
+ * Gehört dieser Eintrag noch zu dem, was im Element steht?
+ *
+ * Nicht mehr, sobald das Element eine andere Adresse bekommen hat – im
+ * Dateibetrachter etwa, wo „Weiter ›" dasselbe `<video>` behalten und nur
+ * seine Adresse tauschen kann. Der Eintrag von Datei A blieb dann an dem
+ * Element hängen, das inzwischen Datei B zeigte: B bekam keine Karte, und
+ * ein späteres Zurücktauschen setzte A wieder ein – der Betrachter hiess
+ * „b-video.webm" und spielte A.
+ */
+function giltNoch(eintrag: Vorbereitung, video: HTMLVideoElement): boolean {
+  return eintrag.kartenQuelle === null
+    ? adresse(video) === eintrag.alteQuelle
+    : video.src === eintrag.kartenQuelle;
+}
+
+/**
+ * Was das Element gerade zeigen soll. `src` vor `currentSrc`, weil `src` das
+ * ist, was die Blase gesetzt hat – `currentSrc` hinkt nach einem Wechsel
+ * hinterher, bis der Browser lädt.
+ */
+function adresse(video: HTMLVideoElement): string {
+  return video.src || video.currentSrc;
 }
 
 /*
@@ -242,18 +287,30 @@ const vorbereitungen = new WeakMap<HTMLVideoElement, Vorbereitung>();
  */
 export function karteEinsetzen(video: HTMLVideoElement, attachmentId: string): Promise<void> {
   const da = vorbereitungen.get(video);
-  if (da && (da.kartenQuelle === null || video.src === da.kartenQuelle)) return da.versprechen;
+  if (da && giltNoch(da, video)) return da.versprechen;
 
+  /*
+   * Die alte Adresse kommt IMMER aus dem Element, nie aus einem vorigen
+   * Eintrag: Der kann zu einer anderen Datei gehören (siehe `giltNoch`).
+   */
   const eintrag: Vorbereitung = {
-    alteQuelle: da?.alteQuelle ?? (video.currentSrc || video.src),
+    alteQuelle: adresse(video),
     kartenQuelle: null,
+    eingesetztUm: null,
     versprechen: Promise.resolve(),
   };
   eintrag.versprechen = api.media.fernsehticket(attachmentId).then((karte) => {
     // Überholt – jemand hat inzwischen zurückgetauscht oder neu angefangen.
     if (vorbereitungen.get(video) !== eintrag) return;
+    // Das Element zeigt inzwischen eine andere Datei – die Karte gehört nicht mehr dazu.
+    if (adresse(video) !== eintrag.alteQuelle) {
+      vorbereitungen.delete(video);
+      return;
+    }
     quelleTauschen(video, karte.url);
     eintrag.kartenQuelle = video.src;
+    eintrag.eingesetztUm = Date.now();
+    wechselMelden(video);
   });
   eintrag.versprechen.catch(() => {
     if (vorbereitungen.get(video) === eintrag) vorbereitungen.delete(video);
@@ -269,6 +326,12 @@ export function istVorbereitet(video: HTMLVideoElement | null | undefined): bool
   return Boolean(eintrag?.kartenQuelle && video.src === eintrag.kartenQuelle);
 }
 
+/** Seit wann die Karte im Element steht – `null`, wenn keine drin ist. */
+export function vorbereitetSeit(video: HTMLVideoElement | null | undefined): number | null {
+  if (!video || !istVorbereitet(video)) return null;
+  return vorbereitungen.get(video)?.eingesetztUm ?? null;
+}
+
 /** Die alte Adresse zurück – ohne Karte, wie vor dem Vorbereiten. */
 export function karteEntfernen(video: HTMLVideoElement): void {
   const eintrag = vorbereitungen.get(video);
@@ -276,6 +339,7 @@ export function karteEntfernen(video: HTMLVideoElement): void {
   vorbereitungen.delete(video);
   if (eintrag.kartenQuelle && video.src === eintrag.kartenQuelle && eintrag.alteQuelle) {
     quelleTauschen(video, eintrag.alteQuelle);
+    wechselMelden(video);
   }
 }
 
