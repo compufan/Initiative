@@ -44,9 +44,18 @@
         />
         <p class="klein">Diashow und Videos aus deinen Sammlungen</p>
         <h1 id="code" class="code">…</h1>
+        <!--
+          Die Beschriftung, die es in der App wirklich gibt.
+
+          Hier stand nur „Code am Fernseher" – so heisst der Knopf aber allein
+          in einer Sammlung. Im Chat und am Video heisst der Weg „Auf den
+          Fernseher", und erst darin steht der Code. Wer vor dem Fernseher
+          sitzt und den Knopf sucht, sucht nach dem Wort, das hier steht.
+        -->
         <p class="anweisung">
-          Öffne die App auf dem Telefon, öffne ein Foto oder eine Sammlung, tippe auf
-          <strong>Code am Fernseher</strong> und gib diesen Code ein.
+          Öffne in der App ein Foto, ein Video oder eine Sammlung, tippe auf
+          <strong>Auf den Fernseher</strong> bzw. <strong>Code am Fernseher</strong> und gib diesen
+          Code ein.
         </p>
         <p id="fehler" class="fehler" hidden></p>
       </section>
@@ -74,6 +83,12 @@
         <img id="bildB" class="bild" alt="" />
         <video id="film" class="film" playsinline hidden></video>
         <div id="hinweis" class="hinweis" hidden></div>
+        <!--
+          Der Weg zum Ton. Videos beginnen stumm, weil kein Browser ohne
+          Tastendruck Ton abspielt; ein Druck auf OK ist dieser Tastendruck.
+          Ohne diesen Satz wüsste niemand, dass es ihn gibt.
+        -->
+        <div id="ton" class="ton" hidden>🔇 OK drücken für Ton</div>
       </section>
     </main>
     <script type="module" src="/src/tv/tv.ts"></script>

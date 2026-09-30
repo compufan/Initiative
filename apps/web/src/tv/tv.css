@@ -13,6 +13,19 @@
  *     weisse Bildpunkt wirklich.
  *   * Ein Sicherheitsrand. Etliche Fernseher schneiden bis zu fünf Prozent des
  *     Bildes ab („Overscan"). Der Code säse sonst halb ausserhalb.
+ *
+ * # Und: nichts, was ein Fernseher von 2019 nicht kennt
+ *
+ * `inset: 0` stand hier für Bühne, Bild und Film. Das versteht Chromium erst
+ * ab 87 – ein Samsung von 2021 (Chromium 76) verwirft die Zeile, und die Bühne
+ * hat dann die Grösse null: Fotos und Videos laufen, aber unsichtbar. Deshalb
+ * stehen hier die vier Einzelwerte. Der Verkleinerer im Bau fasst sie für
+ * neuere Ziele wieder zu `inset` zusammen; `scripts/fernsehblatt.ts` senkt
+ * das Ergebnis für dieses Blatt deshalb noch einmal ab.
+ *
+ * Aus demselben Grund steht vor jedem `min()` (Chromium 79) ein fester Wert,
+ * vor `overflow-wrap: anywhere` (80) ein `word-break`, und Abstände zwischen
+ * Flex-Kindern stehen als Rand statt als `gap` (für Flex erst ab 84).
  */
 
 :root {
@@ -72,15 +85,26 @@ body {
 
 .mitte {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2vh;
   /* Der Sicherheitsrand gegen Overscan. */
   padding: 5vh 5vw;
   text-align: center;
+}
+
+/*
+ * Der Abstand zwischen den Zeilen des Wartebilds – als Rand, nicht als `gap`
+ * (siehe oben). Die Kennung davor ist Absicht: Jede Zeile setzt selbst
+ * `margin: 0`, und ohne das höhere Gewicht gewönne ihre Regel.
+ */
+#blatt .mitte > * + * {
+  margin-top: 2vh;
 }
 
 .klein {
@@ -121,7 +145,10 @@ body {
 
 .buehne {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   background: #000;
 }
 
@@ -134,7 +161,10 @@ body {
  */
 .bild {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -148,7 +178,10 @@ body {
 
 .film {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -163,6 +196,24 @@ body {
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.6);
   font-size: 1.6vw;
+}
+
+/*
+ * „OK drücken für Ton" – oben rechts, gegenüber dem Hinweis unten links.
+ *
+ * Gross genug für vier Meter, aber nicht mitten im Bild: Es steht über einem
+ * laufenden Video, und wer den Ton gar nicht will, soll das Video trotzdem
+ * sehen.
+ */
+.ton {
+  position: absolute;
+  right: 5vw;
+  top: 5vh;
+  padding: 1.2vh 2.2vw;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.7);
+  font-size: 2vw;
+  font-weight: 600;
 }
 
 /*
@@ -187,6 +238,7 @@ body {
  * Ausprobieren öffnet, eben nicht.
  */
 .mitte .marke {
+  width: 22vw;
   width: min(22vw, 30vh);
   max-width: 340px;
   height: auto;
@@ -215,7 +267,10 @@ body {
  */
 .verlauf {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   display: flex;
   flex-direction: column;
   /* Der Sicherheitsrand gegen Overscan – wie bei `.mitte`. */
@@ -226,7 +281,6 @@ body {
 .verlauf-kopf {
   display: flex;
   align-items: center;
-  gap: 1.5vw;
   padding-bottom: 1.6vh;
   margin-bottom: 1.6vh;
   border-bottom: 1px solid rgba(255, 255, 255, 0.14);
@@ -244,6 +298,7 @@ body {
   max-width: 72px;
   height: auto;
   flex: 0 0 auto;
+  margin-right: 1.5vw;
 }
 
 .verlauf-titel {
@@ -258,6 +313,7 @@ body {
 }
 
 .verlauf-seite {
+  margin-left: 1.5vw;
   font-size: 1.5vw;
   opacity: 0.6;
   flex: 0 0 auto;
@@ -271,7 +327,6 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  gap: 1.4vh;
   /*
    * Überlaufen statt schrumpfen.
    *
@@ -289,6 +344,10 @@ body {
   max-width: 78%;
 }
 
+.verlauf-zeile + .verlauf-zeile {
+  margin-top: 1.4vh;
+}
+
 /* Eigene Nachrichten rechts – wie in der App, damit es sich gleich liest. */
 .verlauf-zeile.ist-eigen {
   align-self: flex-end;
@@ -298,7 +357,6 @@ body {
 .verlauf-wer {
   display: flex;
   align-items: baseline;
-  gap: 0.8vw;
   margin-bottom: 0.4vh;
   font-size: 1.25vw;
 }
@@ -306,6 +364,10 @@ body {
 .verlauf-name {
   font-weight: 600;
   opacity: 0.9;
+}
+
+.verlauf-wer > * + * {
+  margin-left: 0.8vw;
 }
 
 .verlauf-zeit {
@@ -334,6 +396,7 @@ body {
    * hinaus – und ein Fernseher hat keinen waagerechten Rollbalken, mit dem
    * man ihr folgen könnte.
    */
+  word-break: break-word;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }

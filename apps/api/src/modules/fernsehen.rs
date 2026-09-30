@@ -22,8 +22,11 @@
 //!    er nie).
 //! 2. Am Telefon: Sammlung öffnen, „Auf den Fernseher", Code eintippen. Damit
 //!    gehört die Sitzung dieser Person, und die Liste steht.
-//! 3. Der Fernseher fragt im Sekundentakt nach der Fassungsnummer und holt
-//!    die Liste, wenn sie sich bewegt hat.
+//! 3. Der Fernseher fragt alle zwei Sekunden nach dem Stand und holt die
+//!    Liste nur, wenn sich ihr INHALT bewegt hat (siehe `stand`). Blättert er
+//!    selbst weiter – Standzeit um, Video zu Ende –, meldet er die neue
+//!    Stelle zurück (`stelle_melden`); sonst rechnete die Fernbedienung am
+//!    Telefon von einer Stelle aus, die längst vorbei ist.
 //!
 //! # Warum zwei Stücke und nicht nur der Code
 //!
@@ -65,6 +68,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/tv/sitzungen/{code}/programm",
             get(programm).post(einstellen),
+        )
+        .route(
+            "/tv/sitzungen/{code}/stelle",
+            axum::routing::put(stelle_melden),
         )
         .route(
             "/tv/sitzungen/{code}",
@@ -350,12 +357,25 @@ async fn sitzung_anlegen(
 }
 
 /**
- * Wie weit ist es – die kleine Auskunft, die im Sekundentakt abgefragt wird.
+ * Wie weit ist es – die kleine Auskunft, die alle zwei Sekunden abgefragt wird.
  *
  * Bewusst ohne die Liste. Eine Diashow kann tausend Stücke haben; jedes mit
  * Adresse und Vorschaubild sind ein paar hundert Kilobyte, und die alle zwei
  * Sekunden über eine Fernsehverbindung zu schicken wäre absurd. Hier steht nur
  * die Fassungsnummer – bewegt sie sich, holt der Fernseher die Liste.
+ *
+ * # Warum hier auch Stelle, Pause und Saat stehen
+ *
+ * Weil die meisten Griffe an die Fernbedienung die Liste gar nicht ändern.
+ * „Pause" und „Weiter" bewegen nur Stelle und Pause; holte der Fernseher
+ * dafür jedes Mal die ganze Liste neu, bekäme er für jedes Stück eine neue
+ * Adresse (frische Karte) – und ein Video, dessen Adresse sich ändert, fängt
+ * von vorn an. Genau so war es: Pause zeigte das Video wieder ab null.
+ *
+ * Mit der Saat daneben kann der Fernseher selbst entscheiden: Gleiche Saat,
+ * gleiche Stückzahl, gleiche Reihenfolge heisst gleiche Liste – dann genügen
+ * Stelle und Pause von hier. Die Saat ändert sich bei jedem Einstellen und
+ * beim Wechsel auf „Gemischt", also genau dann, wenn die Liste neu ist.
  */
 async fn stand(
     State(state): State<AppState>,
@@ -431,6 +451,7 @@ async fn stand(
         "pausiert": row.pausiert,
         "modus": row.modus,
         "sekunden": row.sekunden,
+        "saat": row.saat,
     })))
 }
 
@@ -441,6 +462,13 @@ async fn stand(
  * Stunden, eine Sitzung zwölf. Würden sie beim Einstellen ausgestellt, stünde
  * die Diashow nach sechs Stunden still. So bekommt der Fernseher bei jedem
  * Holen frische.
+ *
+ * „Bei jedem Holen" allein reichte aber nicht: Der Fernseher holt die Liste
+ * nur, wenn sich etwas geändert hat, und eine Diashow, die niemand anfasst,
+ * ändert sich nie. Sie lief nach sechs Stunden in lauter 401. Deshalb holt
+ * das Blatt die Liste nach spätestens fünf Stunden von sich aus neu
+ * (`KARTEN_ERNEUERN_MS` in `src/tv/ablauf.ts`) – eine Stunde Luft vor dem
+ * Ablauf, für ein Video, das gerade noch mit der alten Karte läuft.
  */
 async fn programm(
     State(state): State<AppState>,
@@ -865,17 +893,35 @@ async fn einstellen(
      * Dies ist die einzige Stelle, an der ein Code geraten werden kann: Alles
      * andere verlangt das Geheimnis, und das hat 256 Bit. Ohne Bremse liesse
      * sich der Coderaum in Stunden durchprobieren.
+     *
+     * # Warum der Besitzer NICHT gezählt wird
+     *
+     * Wer auf SEINEM laufenden Fernseher etwas anderes zeigt („Stattdessen
+     * dies zeigen"), rät keinen Code – er hat ihn, und der Server weiss es:
+     * `besitzer_id` ist er selbst. Gezählt wurde er trotzdem, und an einem
+     * Fotoabend, an dem Stück für Stück gezeigt wird, stand nach zwanzig
+     * Bildern „Zu viele Versuche" da.
+     *
+     * Die Bremse bleibt für alle anderen vollständig: Jeder Versuch, der
+     * nicht der eigene laufende Fernseher ist, zählt – auch einer auf einen
+     * Code, den es gar nicht gibt. Dafür wird die Sitzung jetzt VOR der Bremse
+     * nachgeschlagen; eine Datenbankabfrage mehr für einen Rater, und nur für
+     * angemeldete Konten (die Route verlangt eines).
      */
-    if !state.drossel.erlaubt(
-        &format!("tv-verbinden:{absender}"),
-        regeln::FERNSEHER_VERBINDEN,
-    ) {
+    let gefunden = sitzung(&state, &code).await;
+    let eigene = matches!(&gefunden, Ok(zeile) if zeile.besitzer_id == Some(user.id()));
+    if !eigene
+        && !state.drossel.erlaubt(
+            &format!("tv-verbinden:{absender}"),
+            regeln::FERNSEHER_VERBINDEN,
+        )
+    {
         return Err(AppError::too_many(
             "Zu viele Versuche. Bitte gleich noch einmal.",
         ));
     }
 
-    let row = sitzung(&state, &code).await?;
+    let row = gefunden?;
     if let Some(besitzer) = row.besitzer_id {
         if besitzer != user.id() {
             // Nicht verraten, dass es diese Sitzung gibt.
@@ -1054,6 +1100,21 @@ fn zeigbar(row: &AttachmentRow) -> bool {
 #[serde(rename_all = "camelCase")]
 struct SteuernInput {
     stelle: Option<i32>,
+    /**
+     * „Eins weiter" bzw. „eins zurück" – gerechnet von der Stelle, die HIER
+     * steht, nicht von der, die das Telefon zuletzt gesehen hat.
+     *
+     * # Warum es das neben `stelle` braucht
+     *
+     * Die Fernbedienung schickte `stelle + 1` aus ihrem eigenen Gedächtnis.
+     * Das stimmte nur, solange niemand sonst die Stelle bewegte – aber der
+     * Fernseher blättert eine Diashow selbst weiter. Nach zehn Minuten Schau
+     * stand das Telefon noch bei Bild 1, und ein Druck auf „Weiter" sprang
+     * zurück an den Anfang. Seit der Fernseher seine Stelle meldet
+     * (`stelle_melden`), weiss der Server sie; das Telefon sagt nur noch die
+     * Richtung. Hat es beides geschickt, gilt der Schritt.
+     */
+    schritt: Option<i32>,
     pausiert: Option<bool>,
     modus: Option<String>,
     sekunden: Option<i32>,
@@ -1097,8 +1158,12 @@ async fn steuern(
             }
             _ => 0,
         };
+        // `saturating_add`: Ein Schritt von i32::MAX darf die Rechnung nicht
+        // zum Überlaufen bringen – im Debug-Bau wäre das ein Absturz.
         let stelle = input
-            .stelle
+            .schritt
+            .map(|schritt| row.stelle.saturating_add(schritt))
+            .or(input.stelle)
             .unwrap_or(row.stelle)
             .clamp(0, seiten.min(CHAT_SEITEN_MAX));
         sqlx::query(
@@ -1125,7 +1190,11 @@ async fn steuern(
      * letzten Bild stehen bleibt, sieht aus wie ein Absturz. `rem_euclid`,
      * nicht `%`: Bei „zurück" auf Stelle null ist der Rest in Rust negativ.
      */
-    let stelle = match input.stelle {
+    let gewuenscht = input
+        .schritt
+        .map(|schritt| row.stelle.saturating_add(schritt))
+        .or(input.stelle);
+    let stelle = match gewuenscht {
         Some(wert) if anzahl > 0 => wert.rem_euclid(anzahl),
         Some(_) => 0,
         None => row.stelle,
@@ -1165,6 +1234,70 @@ async fn steuern(
     .await?;
 
     Ok(Json(json!({ "stelle": stelle, "modus": modus })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StelleMeldung {
+    /// Die Stelle in der Reihenfolge, die der Fernseher gerade zeigt.
+    stelle: i32,
+    /// Hat jemand am Fernseher selbst angehalten (OK auf der Fernbedienung)?
+    pausiert: Option<bool>,
+}
+
+/**
+ * Der Fernseher meldet, wo die Diashow gerade steht.
+ *
+ * # Warum es diese Meldung braucht
+ *
+ * Der Fernseher taktet die Diashow selbst – Standzeit um, nächstes Bild;
+ * Video zu Ende, nächstes Stück. Der Server erfuhr davon nichts. Die
+ * Fernbedienung am Telefon rechnete „weiter" deshalb von der Stelle aus, die
+ * beim Einstellen galt, und nach ein paar Minuten Schau sprang ein Druck auf
+ * „Weiter" zurück an den Anfang.
+ *
+ * # Warum sie die Fassung NICHT erhöht
+ *
+ * Die Fassung ist das Zeichen „hier hat jemand etwas geändert, hol es ab".
+ * Erhöhte die eigene Meldung des Fernsehers sie, sähe er beim nächsten Takt
+ * seine eigene Änderung als fremde – und holte bei jedem Bild die Liste neu.
+ * Die Stelle ist hier nur eine AUSKUNFT für die Fernbedienung, kein Befehl.
+ *
+ * # Warum das Geheimnis reicht und keine Bremse davor sitzt
+ *
+ * Wer das Geheimnis hat, IST der Fernseher; einen Code zu raten hilft hier
+ * nicht. Und mehr als eine Meldung je Bild – bei höchstens einem Bild alle
+ * zwei Sekunden – schickt das Blatt nicht.
+ */
+async fn stelle_melden(
+    State(state): State<AppState>,
+    Path(code): Path<String>,
+    Query(frage): Query<GeheimFrage>,
+    Json(meldung): Json<StelleMeldung>,
+) -> AppResult<StatusCode> {
+    let row = sitzung_mit_geheimnis(&state, &code, &frage.geheim).await?;
+    /*
+     * Nur eine laufende Diashow hat eine Stelle, die der Fernseher bewegt.
+     * Beim Chat blättert allein das Telefon; eine Meldung von dort wäre ein
+     * veraltetes Echo und würde dessen Seite überschreiben.
+     */
+    let anzahl = row.stuecke.as_array().map(|a| a.len()).unwrap_or(0) as i32;
+    if row.art != "diashow" || row.besitzer_id.is_none() || anzahl == 0 {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    sqlx::query(
+        "update fernsehsitzungen
+            set stelle = $2,
+                pausiert = coalesce($3, pausiert),
+                gesehen_at = now()
+          where code = $1",
+    )
+    .bind(&row.code)
+    .bind(meldung.stelle.rem_euclid(anzahl))
+    .bind(meldung.pausiert)
+    .execute(&state.pool)
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Schluss – der Fernseher zeigt wieder seinen Code.

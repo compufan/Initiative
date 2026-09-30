@@ -1413,3 +1413,238 @@ async fn nach_einem_chat_laeuft_wieder_eine_diashow() {
         "nach dem Umstellen standen noch Nachrichten im Programm: {programm}"
     );
 }
+
+/* ==========================================================================
+ * Die Stelle, die der Fernseher selbst bewegt – und das Umstellen ohne Bremse.
+ * ========================================================================== */
+
+#[tokio::test(flavor = "multi_thread")]
+async fn der_fernseher_meldet_seine_stelle_und_die_fernbedienung_rechnet_davon() {
+    /*
+     * Der Fehler, um den es geht: Der Fernseher blättert eine Diashow selbst
+     * weiter, aber der Server erfuhr es nie. Die Fernbedienung rechnete
+     * „weiter" von der Stelle beim Einstellen aus – nach ein paar Minuten
+     * Schau sprang ein Druck auf „Weiter" zurück an den Anfang.
+     */
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL fehlt – übersprungen");
+        return;
+    };
+    let token = probe.anmelden("stelle").await;
+    let (code, geheim) = probe.fernseher().await;
+    let eins = probe.hochladen_bild(&token, "eins.jpg").await;
+    let zwei = probe.hochladen_bild(&token, "zwei.jpg").await;
+    let drei = probe.hochladen_bild(&token, "drei.jpg").await;
+
+    let (status, antwort) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/tv/sitzungen/{code}/programm"),
+            Some(&token),
+            Some(json!({ "attachmentIds": [eins, zwei, drei], "modus": "linear" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+
+    let (_, programm) = probe
+        .ohne_konto(
+            "GET",
+            &format!("/api/v1/tv/sitzungen/{code}/programm?geheim={geheim}"),
+        )
+        .await;
+    let saat = programm["saat"].clone();
+    let fassung = programm["fassung"].as_i64().expect("Fassung");
+
+    /*
+     * Die Saat steht im Stand – daran erkennt der Fernseher, dass „Pause"
+     * die Liste nicht geändert hat und er sie nicht neu holen muss. Holte er
+     * sie doch, bekäme das laufende Video eine neue Adresse und finge von
+     * vorn an.
+     */
+    let stand_pfad = format!("/api/v1/tv/sitzungen/{code}/stand?geheim={geheim}");
+    let (_, stand) = probe.ohne_konto("GET", &stand_pfad).await;
+    assert_eq!(stand["saat"], saat, "die Saat fehlt im Stand: {stand}");
+
+    // Ohne das Geheimnis meldet niemand eine Stelle – der Code allein reicht nicht.
+    let (status, _) = probe
+        .call(
+            "PUT",
+            &format!("/api/v1/tv/sitzungen/{code}/stelle?geheim=falsch"),
+            None,
+            Some(json!({ "stelle": 2 })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let melden = |stelle: i32, pausiert: Option<bool>| {
+        let mut koerper = json!({ "stelle": stelle });
+        if let Some(p) = pausiert {
+            koerper["pausiert"] = json!(p);
+        }
+        koerper
+    };
+    let (status, _) = probe
+        .call(
+            "PUT",
+            &format!("/api/v1/tv/sitzungen/{code}/stelle?geheim={geheim}"),
+            None,
+            Some(melden(2, None)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, stand) = probe.ohne_konto("GET", &stand_pfad).await;
+    assert_eq!(
+        stand["stelle"],
+        json!(2),
+        "die gemeldete Stelle fehlt: {stand}"
+    );
+    /*
+     * Die eigene Meldung ist keine fremde Änderung. Stiege die Fassung, sähe
+     * der Fernseher beim nächsten Takt sein eigenes Weiterblättern als Befehl
+     * und holte bei jedem Bild die Liste neu.
+     */
+    assert_eq!(
+        stand["fassung"].as_i64(),
+        Some(fassung),
+        "die Meldung des Fernsehers hat die Fassung erhöht"
+    );
+
+    // --- Die Fernbedienung rechnet von der ECHTEN Stelle aus -------------
+    let steuern = |koerper: Value| {
+        let pfad = format!("/api/v1/tv/sitzungen/{code}");
+        let token = token.clone();
+        let probe = &probe;
+        async move {
+            probe
+                .call("PATCH", &pfad, Some(&token), Some(koerper))
+                .await
+        }
+    };
+    let (status, antwort) = steuern(json!({ "schritt": 1 })).await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+    assert_eq!(
+        antwort["stelle"],
+        json!(0),
+        "„Weiter“ nach Bild 3 muss wieder bei Bild 1 landen, nicht bei Bild 2: {antwort}"
+    );
+
+    let (_, antwort) = steuern(json!({ "schritt": -1 })).await;
+    assert_eq!(
+        antwort["stelle"],
+        json!(2),
+        "zurück vom Anfang geht ans Ende"
+    );
+
+    // Hält jemand am Fernseher selbst an, steht das ebenfalls hier.
+    let (status, _) = probe
+        .call(
+            "PUT",
+            &format!("/api/v1/tv/sitzungen/{code}/stelle?geheim={geheim}"),
+            None,
+            Some(melden(1, Some(true))),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, stand) = probe.ohne_konto("GET", &stand_pfad).await;
+    assert_eq!(stand["stelle"], json!(1));
+    assert_eq!(stand["pausiert"], json!(true));
+
+    /*
+     * Und „Pause" am Telefon ändert die Liste nicht: gleiche Saat, gleiche
+     * Stelle – nur die Fassung steigt, damit der Fernseher es merkt.
+     */
+    let vorher = stand["fassung"].as_i64().expect("Fassung");
+    let (status, _) = steuern(json!({ "pausiert": false })).await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, stand) = probe.ohne_konto("GET", &stand_pfad).await;
+    assert_eq!(stand["stelle"], json!(1));
+    assert_eq!(stand["pausiert"], json!(false));
+    assert_eq!(
+        stand["saat"], saat,
+        "„Pause“ hat eine neue Mischung ausgelöst"
+    );
+    assert!(stand["fassung"].as_i64().expect("Fassung") > vorher);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn der_besitzer_stellt_beliebig_oft_um_ein_fremder_wird_gebremst() {
+    /*
+     * „Stattdessen dies zeigen": An einem Fotoabend schickt man Stück für
+     * Stück auf DENSELBEN laufenden Fernseher. Das ging schon immer ohne
+     * neuen Code – aber jedes Mal zählte gegen die Bremse von zwanzig je
+     * Stunde, und nach zwanzig Bildern stand „Zu viele Versuche" da.
+     *
+     * Die Bremse schützt vor dem Raten eines Codes. Wer die Sitzung besitzt,
+     * rät nicht. Gezählt wird deshalb nur, wer nicht der Besitzer ist – und
+     * DAS muss weiter greifen, sonst wäre der Coderaum wieder offen.
+     */
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL fehlt – übersprungen");
+        return;
+    };
+    let token = probe.anmelden("umstellen").await;
+    let (code, geheim) = probe.fernseher().await;
+    let bild = probe.hochladen_bild(&token, "abend.jpg").await;
+
+    for runde in 0..25 {
+        let (status, antwort) = probe
+            .call(
+                "POST",
+                &format!("/api/v1/tv/sitzungen/{code}/programm"),
+                Some(&token),
+                Some(json!({ "attachmentIds": [bild] })),
+            )
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "Runde {runde}: der Besitzer wird beim Umstellen gebremst: {antwort}"
+        );
+    }
+    let (_, stand) = probe
+        .ohne_konto(
+            "GET",
+            &format!("/api/v1/tv/sitzungen/{code}/stand?geheim={geheim}"),
+        )
+        .await;
+    assert_eq!(stand["verbunden"], json!(true));
+
+    // Ein Fremder, der Codes rät, wird weiter gebremst – auch bei Codes, die
+    // es gar nicht gibt.
+    let fremder = probe.anmelden("umstellenfremd").await;
+    let mut abgewiesen = 0;
+    let mut gebremst = false;
+    for _ in 0..25 {
+        let (status, _) = probe
+            .call(
+                "POST",
+                "/api/v1/tv/sitzungen/AAAA-AAAA/programm",
+                Some(&fremder),
+                Some(json!({ "attachmentIds": [bild] })),
+            )
+            .await;
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            gebremst = true;
+            break;
+        }
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        abgewiesen += 1;
+    }
+    assert!(gebremst, "ein Fremder kann Codes ungebremst durchprobieren");
+    assert!(abgewiesen <= 20, "die Bremse greift zu spät: {abgewiesen}");
+
+    // Und die fremde Sitzung übernimmt er erst recht nicht.
+    let (status, _) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/tv/sitzungen/{code}/programm"),
+            Some(&fremder),
+            Some(json!({ "attachmentIds": [bild] })),
+        )
+        .await;
+    assert!(
+        status == StatusCode::NOT_FOUND || status == StatusCode::TOO_MANY_REQUESTS,
+        "ein Fremder kommt an die laufende Sitzung: {status}"
+    );
+}

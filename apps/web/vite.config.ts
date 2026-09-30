@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { fernsehblattFuerAlteGeraete } from './scripts/fernsehblatt.js';
 
 /**
  * Die Adressen der App-Symbole – mit Inhaltskennung im Namen.
@@ -230,6 +231,12 @@ export default defineConfig(({ mode }) => {
     plugins: [
       react(),
       markeAdressen(symbole, mitKarte),
+      /*
+       * Das Blatt für den Fernseher bekommt nach dem Bau ein älteres Ziel als
+       * die App – `build.target` oben gilt für beide Einstiege zugleich. Die
+       * Gründe und warum das der kleinste Eingriff ist, stehen im Stück selbst.
+       */
+      fernsehblattFuerAlteGeraete(),
       VitePWA({
         // A custom service worker so we can handle Web Push and notification
         // clicks ourselves; Workbox still injects the precache manifest.

@@ -160,6 +160,18 @@ export function seitentext(stelle: number, anzahl: number, proSeite: number): st
   return `${seiten - stelle} von ${seiten}`;
 }
 
+/**
+ * Alle Kinder eines Elements entfernen – ohne `replaceChildren`.
+ *
+ * `replaceChildren` wäre die kürzere Zeile, aber es kam erst mit Chromium 86.
+ * Ein Samsung-Fernseher von 2021 hat Chromium 76, und dort bricht das ganze
+ * Blatt an dieser Stelle mit einem TypeError ab. Der Bau kann eine SCHREIBWEISE
+ * absenken (siehe `scripts/fernsehblatt.ts`), eine fehlende Methode nicht.
+ */
+export function leeren(element: Node): void {
+  while (element.firstChild) element.removeChild(element.firstChild);
+}
+
 /** Den Verlauf in die Liste schreiben. */
 export function verlaufZeichnen(
   liste: HTMLElement,
@@ -169,7 +181,8 @@ export function verlaufZeichnen(
 ): void {
   titelFeld.textContent = programm.titel;
   seiteFeld.textContent = seitentext(programm.stelle, programm.anzahl, programm.proSeite);
-  liste.replaceChildren(...programm.nachrichten.map(zeileBauen));
+  leeren(liste);
+  for (const nachricht of programm.nachrichten) liste.appendChild(zeileBauen(nachricht));
   /*
    * Ans Ende springen.
    *
