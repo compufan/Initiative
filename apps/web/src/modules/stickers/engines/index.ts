@@ -48,6 +48,12 @@ export interface MaskRequest {
    * Oberfläche zu schreiben, die längst weitergezogen ist.
    */
   abbruch?: AbortSignal;
+  /**
+   * Wer rechnen lässt – siehe `modellReihe`. Ohne Angabe `'vorn'`: der
+   * Anwender wartet. `'hinten'` ist die Verfolgung von Masken im
+   * Hintergrund; sie lässt jedem Aufruf aus dem Editor den Vortritt.
+   */
+  vorrang?: Vorrang;
 }
 
 /** Wurde abgebrochen? Dann keine Fehlermeldung, sondern Stille. */
@@ -138,7 +144,10 @@ export async function runEngine(key: EngineKey, request: MaskRequest): Promise<U
   abbruchPruefen(request.abbruch);
 
   try {
-    const maske = await rechnen(key, request);
+    const maske = await modellReihe(request.vorrang ?? 'vorn', () => rechnen(key, request), {
+      verfahren: key,
+      abbruch: request.abbruch,
+    });
     /*
      * Nach dem Lauf noch einmal fragen.
      *
@@ -201,4 +210,211 @@ export async function releaseEngines(): Promise<void> {
     import('./tippen.js').then((m) => m.releaseTippen()).catch(() => {}),
     import('./birefnet.js').then((m) => m.releaseBirefnet()).catch(() => {}),
   ]);
+}
+
+/* ---------- Die Reihe: wer wann ein Modell rechnen lässt ---------- */
+
+/**
+ * Wer rechnen lässt: `'vorn'` der Anwender, der auf das Ergebnis wartet,
+ * `'hinten'` die Verfolgung von Masken im Hintergrund (`video/verfolger.ts`).
+ */
+export type Vorrang = 'vorn' | 'hinten';
+
+/**
+ * Die Verfahren mit einer SCHWEREN Sitzung: ein Modell von zweistelligen
+ * Megabyte im Speicher, dazu die Laufzeit – BiRefNet auf der Grafikeinheit,
+ * die Tiefe mit 230 MB je Sitzung. Zwei davon zugleich sind auf einem
+ * Telefon der Unterschied, bei dem Safari den Reiter neu lädt.
+ */
+export const SCHWERE_VERFAHREN: ReadonlySet<EngineKey> = new Set([
+  'object',
+  'birefnet',
+  'tippen',
+  'tiefe',
+]);
+
+/** So lange darf eine schwere Sitzung der Verfolgung ungenutzt offen bleiben. */
+export const FREIGABE_NACH_MS = 20_000;
+
+interface Reihenplatz {
+  readonly vorrang: Vorrang;
+  readonly verfahren?: EngineKey;
+  readonly starten: () => void;
+}
+
+const reihe: Reihenplatz[] = [];
+let laufenVorn = 0;
+let laufenHinten = 0;
+/** Welche Verfahren gerade rechnen – eine Sitzung in Gebrauch wird nie freigegeben. */
+const inGebrauch = new Map<EngineKey, number>();
+/**
+ * Die schwere Sitzung, die die Verfolgung zuletzt geöffnet hat, samt dem
+ * Zeitgeber, der sie nach `FREIGABE_NACH_MS` wieder schliesst.
+ */
+let hintenSchwer: { verfahren: EngineKey; zeitgeber: ReturnType<typeof setTimeout> | null } | null =
+  null;
+/** Wie eine Sitzung freigegeben wird – je Verfahren, siehe `sitzungFreigeberSetzen`. */
+const freigeber = new Map<EngineKey, () => Promise<void> | void>([
+  ['object', () => import('./object.js').then((m) => m.releaseObject())],
+  ['birefnet', () => import('./birefnet.js').then((m) => m.releaseBirefnet())],
+  ['tippen', () => import('./tippen.js').then((m) => m.releaseTippen())],
+]);
+
+/**
+ * Wie die Sitzung eines Verfahrens freigegeben wird, das nicht als
+ * Modul-Einzelstück lebt – die Tiefe hat eine Sitzung je Aufrufer
+ * (`bild/tiefeNetz.ts`). Die Verfolgung meldet ihre hier an, solange sie
+ * offen ist, und mit `null` wieder ab.
+ */
+export function sitzungFreigeberSetzen(
+  verfahren: EngineKey,
+  freigabe: (() => Promise<void> | void) | null,
+): void {
+  if (freigabe) freigeber.set(verfahren, freigabe);
+  else freigeber.delete(verfahren);
+}
+
+/** Was in der Reihe los ist – für die Prüfungen und die Anzeige. */
+export function modellReiheStand(): { vorn: number; hinten: number; wartend: number } {
+  return { vorn: laufenVorn, hinten: laufenHinten, wartend: reihe.length };
+}
+
+async function freigeben(verfahren: EngineKey): Promise<void> {
+  try {
+    await freigeber.get(verfahren)?.();
+  } catch {
+    // Freigeben ist Aufräumen – ein Fehler dabei hält niemanden auf.
+  }
+}
+
+/**
+ * Die Sitzung der Verfolgung freigeben, wenn jetzt ein ANDERES schweres
+ * Verfahren an die Reihe kommt – höchstens eine schwere Sitzung zugleich.
+ * Nie eine, mit der gerade gerechnet wird.
+ */
+async function schwereWechseln(verfahren: EngineKey | undefined): Promise<void> {
+  const alt = hintenSchwer;
+  if (!alt || !verfahren || !SCHWERE_VERFAHREN.has(verfahren) || alt.verfahren === verfahren) {
+    return;
+  }
+  if ((inGebrauch.get(alt.verfahren) ?? 0) > 0) return;
+  if (alt.zeitgeber) clearTimeout(alt.zeitgeber);
+  hintenSchwer = null;
+  await freigeben(alt.verfahren);
+}
+
+function nachDemLauf(platz: Reihenplatz): void {
+  const verfahren = platz.verfahren;
+  if (!verfahren || !SCHWERE_VERFAHREN.has(verfahren)) return;
+  if (platz.vorrang === 'vorn') {
+    /*
+     * Der Anwender benutzt dieselbe Sitzung: Ab jetzt gehört sie dem
+     * Editor, und wann sie geht, entscheidet er (`releaseEngines`) – wie
+     * vor der Verfolgung.
+     */
+    if (hintenSchwer?.verfahren === verfahren) {
+      if (hintenSchwer.zeitgeber) clearTimeout(hintenSchwer.zeitgeber);
+      hintenSchwer = null;
+    }
+    return;
+  }
+  if (hintenSchwer?.zeitgeber) clearTimeout(hintenSchwer.zeitgeber);
+  const eintrag: { verfahren: EngineKey; zeitgeber: ReturnType<typeof setTimeout> | null } = {
+    verfahren,
+    zeitgeber: null,
+  };
+  eintrag.zeitgeber = setTimeout(() => {
+    if (hintenSchwer !== eintrag) return;
+    if ((inGebrauch.get(verfahren) ?? 0) > 0) return;
+    hintenSchwer = null;
+    void freigeben(verfahren);
+  }, FREIGABE_NACH_MS);
+  hintenSchwer = eintrag;
+}
+
+function pumpen(): void {
+  for (;;) {
+    const vorn = reihe.findIndex((platz) => platz.vorrang === 'vorn');
+    if (vorn >= 0) {
+      // Der Editor wartet höchstens auf EINEN laufenden Lauf der Verfolgung.
+      if (laufenHinten > 0) return;
+      reihe.splice(vorn, 1)[0].starten();
+      continue;
+    }
+    if (reihe.length === 0 || laufenVorn > 0 || laufenHinten > 0) return;
+    (reihe.shift() as Reihenplatz).starten();
+    return;
+  }
+}
+
+/**
+ * Ein Modell rechnen lassen – eingereiht.
+ *
+ * # Warum eine Reihe
+ *
+ * Weil die Sitzungen Einzelstücke je Modul sind (`object.ts`, `person.ts`,
+ * die ORT-Laufzeit) und `runEngine` bisher nichts ordnete. Solange nur der
+ * Anwender rechnen liess, war das gleichgültig. Mit der Verfolgung im
+ * Hintergrund liefen sonst zwei Modelläufe auf derselben Sitzung
+ * gegeneinander, und ein Tipp im Editor wartete hinter einer Minute
+ * Verfolgung.
+ *
+ * # Die Regeln
+ *
+ * - `'hinten'` rechnet allein: nur, wenn gerade nichts rechnet und kein
+ *   `'vorn'` wartet. Einer zur Zeit.
+ * - `'vorn'` überholt jedes wartende `'hinten'` und wartet höchstens auf
+ *   den EINEN Lauf der Verfolgung, der schon rechnet (ein laufender
+ *   Modellauf lässt sich nicht anhalten; bei BiRefNet rund zwei Sekunden).
+ *   Mehrere `'vorn'` laufen nebeneinander wie bisher – die Reihe ordnet nur
+ *   die Verfolgung ein und ändert am Editor nichts.
+ * - Höchstens EINE schwere Sitzung der Verfolgung: Kommt ein anderes
+ *   schweres Verfahren an die Reihe, wird die bisherige zuerst
+ *   freigegeben, und nach `FREIGABE_NACH_MS` ohne Lauf ohnehin.
+ *
+ * Ein Abbruch, solange der Auftrag noch wartet, nimmt ihn aus der Reihe.
+ */
+export function modellReihe<T>(
+  vorrang: Vorrang,
+  arbeit: () => Promise<T>,
+  optionen: { readonly verfahren?: EngineKey; readonly abbruch?: AbortSignal } = {},
+): Promise<T> {
+  const { verfahren, abbruch } = optionen;
+  if (abbruch?.aborted) return Promise.reject(new AbbruchError());
+  return new Promise<T>((erfuellen, ablehnen) => {
+    const aufgeben = () => {
+      const stelle = reihe.indexOf(platz);
+      if (stelle < 0) return;
+      reihe.splice(stelle, 1);
+      ablehnen(new AbbruchError());
+      pumpen();
+    };
+    const platz: Reihenplatz = {
+      vorrang,
+      verfahren,
+      starten: () => {
+        abbruch?.removeEventListener('abort', aufgeben);
+        if (vorrang === 'vorn') laufenVorn += 1;
+        else laufenHinten += 1;
+        if (verfahren) inGebrauch.set(verfahren, (inGebrauch.get(verfahren) ?? 0) + 1);
+        void (async () => {
+          try {
+            await schwereWechseln(verfahren);
+            erfuellen(await arbeit());
+          } catch (fehler) {
+            ablehnen(fehler);
+          } finally {
+            if (vorrang === 'vorn') laufenVorn -= 1;
+            else laufenHinten -= 1;
+            if (verfahren) inGebrauch.set(verfahren, (inGebrauch.get(verfahren) ?? 1) - 1);
+            nachDemLauf(platz);
+            pumpen();
+          }
+        })();
+      },
+    };
+    abbruch?.addEventListener('abort', aufgeben, { once: true });
+    reihe.push(platz);
+    pumpen();
+  });
 }

@@ -44,6 +44,7 @@ import {
   NichtsGefunden,
   engineAvailable,
   runEngine,
+  type Vorrang,
 } from '../stickers/engines/index.js';
 import { flutmaske } from '../stickers/engines/flutung.js';
 import { maskeTraegt, vorlageAus } from '../stickers/engines/prepare.js';
@@ -157,6 +158,8 @@ export async function tippTeilRechnen(
      * alle Punkte zusammen einen einzigen Durchgang.
      */
     vorher?: { punkte: readonly Tipp[]; alpha: Uint8Array } | null;
+    /** Für das Netz: wer rechnen lässt – siehe `modellReihe`. Ohne Angabe der Editor. */
+    vorrang?: Vorrang;
   },
   melden?: (text: string) => void,
 ): Promise<Maskenteil | null> {
@@ -193,6 +196,7 @@ export async function tippTeilRechnen(
         // Immer `dazu: true`: Das Netz soll den Gegenstand FINDEN. Ob er
         // dazukommt oder wegfällt, entscheidet `modus` am Teil.
         seeds: [{ x: punkte[i].x, y: punkte[i].y, dazu: true }],
+        vorrang: wahl.vorrang,
         fortschritt: (_anteil, text) =>
           melden?.(offen > 1 ? `${text} (${nummer} von ${offen})` : text),
       });

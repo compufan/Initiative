@@ -67,11 +67,91 @@ import { PRUEFMASS, maskePasst, maskeVerschieben, type Grau } from './verfolgung
  * Eine Spur kann in beide Richtungen laufen: Angetippt wird an einem
  * beliebigen Bild (dem ANKER), verfolgt wird von dort rückwärts bis zum
  * Anfang und vorwärts bis zum Ende ihres Laufs.
+ *
+ * # In Fenstern (die Verfolgung im Hintergrund, `maskenVerfolgen.ts`)
+ *
+ * Eine Spur über sechshundert Bilder hielte alle ihre Masken zugleich. Die
+ * Verfolgung im Hintergrund rechnet deshalb in FENSTERN von rund zwanzig
+ * Bildern, und jedes setzt dort an, wo das vorige aufhörte:
+ *
+ * - `randAn(schlüsselbild)` gibt den Stand der Spur an einem gerechneten
+ *   Schlüsselbild heraus – Geschwindigkeit, Ablehnungen, die letzte Fläche,
+ *   die Drift, seit wann der Gegenstand fehlt.
+ * - `fortsetzung` setzt die nächste Spur mit genau diesem Stand an, statt
+ *   mit den Vorgaben eines Ankers. Ohne sie begänne jedes Fenster mit der
+ *   Fläche, die gerade zu sehen ist – nach einer leeren Maske also mit null,
+ *   und jedes Leck wäre willkommen.
+ * - `maskeBild(i)` liefert das Ergebnis Bild für Bild, damit der Aufrufer
+ *   zwischen zwei Bildern die Seite zu Wort kommen lassen kann und für
+ *   Brückenbilder gar keine Maske baut.
+ *
+ * # Wenn der Gegenstand geht, geht die Maske mit (`wiederBilder`)
+ *
+ * Nachgestellt an einem Freisteller, der immer „das Auffälligste" liefert
+ * (u²-Net, BiRefNet): Verlässt der verfolgte Gegenstand das Bild, liefert er
+ * nie eine leere Maske, sondern den NÄCHSTEN Gegenstand. Der kam auf zwei
+ * Wegen durch: Lag die Vorhersage schon ganz ausserhalb, liess
+ * `maskePasst` alles gelten; lag sie halb drin, galt das Fremde nach zwei
+ * Ablehnungen. Die Maske sprang auf einen anderen Gegenstand – genau das,
+ * was der Anwender nicht will.
+ *
+ * Mit `wiederBilder` wird deshalb jede frische Maske VOR jeder Prüfung auf
+ * ihre Zusammenhangskomponenten zurückgeschnitten (`komponentenFiltern`):
+ * Es bleibt nur, was die um die Hälfte gedehnte Vorhersage trifft – oder,
+ * solange der Gegenstand fehlt, was vom Bildrand hereinkommt oder dort
+ * auftaucht, wo er nach seiner letzten Geschwindigkeit sein müsste, und das
+ * höchstens `wiederBilder` Bilder lang. Bleibt nichts, ist die Maske leer.
+ * Das gilt für jeden Weg, auf dem eine Maske angenommen wird, auch für das
+ * Nachgeben nach zwei Ablehnungen. Nur für Motiv und BiRefNet: Eine andere
+ * Person ist immer noch „Person", und ein Tipp hat nach dem Austritt keine
+ * Punkte mehr.
  */
 
 export interface Punkt {
   readonly x: number;
   readonly y: number;
+}
+
+/** Das Rechteck, in dem eine Maske überhaupt etwas hat – einschliesslich. */
+export interface Kasten {
+  readonly x0: number;
+  readonly y0: number;
+  readonly x1: number;
+  readonly y1: number;
+}
+
+/**
+ * Der Stand einer Spur an einem gerechneten Schlüsselbild – alles, was die
+ * nächste Spur braucht, um dort weiterzumachen, als liefe sie ohne Pause.
+ *
+ * Die Maske selbst steht nicht darin: Die kommt als `ankerMaske` (roh, so wie
+ * die Spur sie an diesem Bild angenommen hat), die Punkte als `punkte`.
+ * Alles hier ist unabhängig davon, an welcher Stelle eines Fensters das Bild
+ * steht – deshalb `abwesendSeit` als Abstand und nicht als Bildnummer.
+ */
+export interface SpurRand {
+  /** Weg je Bild in Laufrichtung, gemessen an den angenommenen Masken. */
+  readonly tempo: Punkt | null;
+  readonly abgelehnt: number;
+  /** Die Fläche der letzten nicht leeren Maske – gegen ein Leck nach einer leeren. */
+  readonly flaeche: number;
+  readonly drift: Punkt;
+  readonly vomAnker: Punkt;
+  /**
+   * Vor wie vielen Bildern ein Modell den Gegenstand zuletzt BESTÄTIGT hat –
+   * `null`, wenn es das an diesem Bild tat.
+   *
+   * Bestätigt heisst: eine frische Maske, nicht leer, angenommen. Eine
+   * Vorhersage, die nach einer Ablehnung weiterläuft, zählt nicht: Während
+   * einer Verdeckung sieht die Suche den Verdecker oder den Grund, meldet
+   * „steht still", und eine Vorhersage daraus bliebe an der Stelle stehen,
+   * an der der Gegenstand verschwand.
+   */
+  readonly abwesendSeit: number | null;
+  /** Wo er zuletzt bestätigt wurde: der Kasten dieser Maske. */
+  readonly letzterKasten: Kasten | null;
+  /** Und wie schnell er dort war – daraus, wo er jetzt sein müsste. */
+  readonly letztesTempo: Punkt | null;
 }
 
 export interface SpurAuftrag {
@@ -94,6 +174,17 @@ export interface SpurAuftrag {
    * gesehen hat.
    */
   readonly ankerMaske?: Uint8Array;
+  /**
+   * Der Stand, mit dem die Spur am Anker ansetzt – aus `randAn` einer
+   * vorigen Spur. Ohne Angabe gelten die Vorgaben eines echten Ankers.
+   */
+  readonly fortsetzung?: SpurRand;
+  /**
+   * Wie viele Bilder ein Gegenstand fehlen darf und trotzdem dort
+   * wiedergefunden wird, wo er zu erwarten ist – und zugleich der Schalter
+   * für den Komponentenfilter (siehe Kopf). Ohne Angabe: wie bisher.
+   */
+  readonly wiederBilder?: number;
   /**
    * Rechnet die frische Maske an einem Schlüsselbild.
    *
@@ -122,16 +213,8 @@ interface Ort {
   readonly y: number;
 }
 
-interface Mitte extends Ort {
+export interface Mitte extends Ort {
   readonly flaeche: number;
-}
-
-/** Das Rechteck, in dem eine Maske überhaupt etwas hat – einschliesslich. */
-interface Kasten {
-  readonly x0: number;
-  readonly y0: number;
-  readonly x1: number;
-  readonly y1: number;
 }
 
 /** Was an einer Maske gebraucht wird, in EINEM Durchgang gemessen. */
@@ -158,6 +241,21 @@ interface Stand {
   drift: Ort;
   /** Wie weit der Gegenstand seit dem Anker gewandert ist. */
   vomAnker: Ort;
+  /** Siehe `SpurRand`. */
+  abwesendSeit: number | null;
+  letzterKasten: Kasten | null;
+  letztesTempo: Ort | null;
+}
+
+/** Was zwischen zwei Schlüsselbildern gebraucht wird – einmal je Strecke gemessen. */
+interface Strecke {
+  readonly a: number;
+  readonly b: number;
+  readonly ma: Vermessung;
+  readonly mb: Vermessung;
+  readonly massstab: number;
+  readonly nurA: boolean;
+  readonly nurB: boolean;
 }
 
 /** Ein Zwischenbild: wo der Gegenstand steht, gemessen ab beiden Enden seines Abschnitts. */
@@ -198,6 +296,10 @@ export class Spur {
   private readonly messungen = new Map<number, Vermessung>();
   private readonly punkteJe = new Map<number, Punkt[] | null>();
   private readonly zwischen = new Map<number, Zwischen>();
+  /** Der Stand an jedem gerechneten Schlüsselbild – für `randAn`. */
+  private readonly staende = new Map<number, Stand>();
+  private readonly strecken = new Map<number, Strecke>();
+  private leerFeld: Uint8Array | null = null;
   private anfang: Stand | null = null;
   private readonly rueck: number[];
   private readonly vor: number[];
@@ -255,6 +357,26 @@ export class Spur {
     return this.punkteJe.get(bild) ?? null;
   }
 
+  /**
+   * Der Stand an einem schon gerechneten Schlüsselbild – `null` an jedem
+   * anderen Bild. Zusammen mit `maskeAn` und `punkteAn` genau das, was eine
+   * nächste Spur als `fortsetzung` braucht, um dort weiterzumachen.
+   */
+  randAn(bild: number): SpurRand | null {
+    const stand = this.staende.get(bild);
+    if (!stand) return null;
+    return {
+      tempo: stand.tempo,
+      abgelehnt: stand.abgelehnt,
+      flaeche: stand.flaeche,
+      drift: stand.drift,
+      vomAnker: stand.vomAnker,
+      abwesendSeit: stand.abwesendSeit,
+      letzterKasten: stand.letzterKasten,
+      letztesTempo: stand.letztesTempo,
+    };
+  }
+
   /** Das nächste Schlüsselbild rechnen. */
   async schritt(): Promise<void> {
     const { auftrag } = this;
@@ -266,18 +388,27 @@ export class Spur {
           ? vorgabe
           : await auftrag.rechnen(auftrag.anker, auftrag.punkte, { x: 0, y: 0 });
       const mass = vermessen(maske, breite, hoehe);
-      this.merken(auftrag.anker, maske, mass, auftrag.punkte ? [...auftrag.punkte] : null);
+      /*
+       * Eine Fortsetzung bringt den Stand mit, den die vorige Spur an diesem
+       * Bild hatte. Ein echter Anker beginnt bei null – ausser bei der
+       * Fläche: Die eines Ankers ist die, die er zeigt.
+       */
+      const f = auftrag.fortsetzung;
       this.anfang = {
         bild: auftrag.anker,
         maske,
         mass,
         punkte: auftrag.punkte ? [...auftrag.punkte] : null,
-        tempo: null,
-        abgelehnt: 0,
-        flaeche: mass.mitte?.flaeche ?? 0,
-        drift: { x: 0, y: 0 },
-        vomAnker: { x: 0, y: 0 },
+        tempo: f ? f.tempo : null,
+        abgelehnt: f ? f.abgelehnt : 0,
+        flaeche: f ? f.flaeche : (mass.mitte?.flaeche ?? 0),
+        drift: f ? f.drift : { x: 0, y: 0 },
+        vomAnker: f ? f.vomAnker : { x: 0, y: 0 },
+        abwesendSeit: f ? f.abwesendSeit : mass.mitte ? null : 0,
+        letzterKasten: f ? f.letzterKasten : mass.mitte ? mass.kasten : null,
+        letztesTempo: f ? f.letztesTempo : null,
       };
+      this.merken(auftrag.anker, this.anfang);
       this.stand = { ...this.anfang };
       this.richtung = this.rueck.length > 0 ? -1 : 1;
       return;
@@ -291,13 +422,67 @@ export class Spur {
     }
     const ziel = (rueckwaerts ? this.rueck : this.vor).shift() as number;
     this.stand = await this.weiter(this.stand as Stand, ziel);
-    this.merken(ziel, this.stand.maske, this.stand.mass, this.stand.punkte);
+    this.merken(ziel, this.stand);
   }
 
-  private merken(bild: number, maske: Uint8Array, mass: Vermessung, punkte: Punkt[] | null) {
-    this.masken.set(bild, maske);
-    this.messungen.set(bild, mass);
-    this.punkteJe.set(bild, punkte ? [...punkte] : null);
+  private merken(bild: number, stand: Stand) {
+    this.masken.set(bild, stand.maske);
+    this.messungen.set(bild, stand.mass);
+    this.punkteJe.set(bild, stand.punkte ? [...stand.punkte] : null);
+    this.staende.set(bild, stand);
+  }
+
+  /**
+   * Die frische Maske auf das zurückschneiden, was zum verfolgten Gegenstand
+   * gehören kann – siehe den Kopf der Datei.
+   *
+   * - Ist er da: was die um die Hälfte gedehnte Vorhersage trifft. Ein
+   *   Gegenstand, der vom Rand hereinkommt, während der verfolgte noch im
+   *   Bild ist, ist ein ANDERER.
+   * - Fehlt er: was vom Bildrand hereinkommt (er kommt zurück), oder was
+   *   dort auftaucht, wo er nach seiner letzten Geschwindigkeit sein müsste
+   *   – das aber nur `wiederBilder` Bilder lang. Eine Verdeckung von einer
+   *   Sekunde übersteht die Maske so, ein Gegenstand, der drei Sekunden
+   *   später irgendwo in der Mitte steht, ist ein anderer.
+   * - War nie etwas zu sehen, gibt es nichts, woran zu messen wäre: Die
+   *   Maske bleibt, wie sie ist.
+   */
+  private filtern(
+    frisch: Uint8Array,
+    alt: Stand,
+    erwartetKasten: Kasten | null,
+    schritte: number,
+  ): Uint8Array {
+    const { breite, hoehe } = this.auftrag;
+    const wiederBilder = this.auftrag.wiederBilder ?? 0;
+    if (alt.mass.mitte) {
+      return komponentenFiltern(
+        frisch,
+        breite,
+        hoehe,
+        erwartetKasten ? [kastenDehnen(erwartetKasten, 0.5)] : [],
+        false,
+      );
+    }
+    if (!alt.letzterKasten) return frisch;
+    const seit = (alt.abwesendSeit ?? 0) + schritte;
+    const stellen: Kasten[] = [];
+    if (seit <= wiederBilder) {
+      const tempo = alt.letztesTempo ?? { x: 0, y: 0 };
+      const k = alt.letzterKasten;
+      stellen.push(
+        kastenDehnen(
+          {
+            x0: k.x0 + tempo.x * seit,
+            y0: k.y0 + tempo.y * seit,
+            x1: k.x1 + tempo.x * seit,
+            y1: k.y1 + tempo.y * seit,
+          },
+          0.5,
+        ),
+      );
+    }
+    return komponentenFiltern(frisch, breite, hoehe, stellen, true);
   }
 
   private async weiter(alt: Stand, ziel: number): Promise<Stand> {
@@ -326,12 +511,34 @@ export class Spur {
     }
     // Alle Punkte draussen: Der Gegenstand ist es auch. Nichts zu fluten.
     const ohnePunkte = punkte !== null && punkte.length === 0;
-    const frisch = ohnePunkte
+    const schritteGesamt = Math.abs(ziel - alt.bild);
+    const filtern = this.auftrag.wiederBilder !== undefined;
+    // Wo die Vorhersage liegt – verschoben wie `maskeVerschieben`, auf das Bild beschnitten.
+    const erwartetKasten =
+      filtern && alt.mass.kasten
+        ? kastenImBild(
+            {
+              x0: alt.mass.kasten.x0 + Math.round(gesamt.x),
+              y0: alt.mass.kasten.y0 + Math.round(gesamt.y),
+              x1: alt.mass.kasten.x1 + Math.round(gesamt.x),
+              y1: alt.mass.kasten.y1 + Math.round(gesamt.y),
+            },
+            breite,
+            hoehe,
+          )
+        : null;
+    let frisch = ohnePunkte
       ? new Uint8Array(breite * hoehe)
       : await this.auftrag.rechnen(ziel, punkte, {
           x: alt.vomAnker.x + gesamt.x,
           y: alt.vomAnker.y + gesamt.y,
         });
+    /*
+     * VOR jeder Prüfung, damit jeder Weg zur Annahme – auch das Nachgeben
+     * nach zwei Ablehnungen – nur noch sieht, was zum Gegenstand gehören
+     * kann. Siehe den Kopf der Datei.
+     */
+    if (filtern && !ohnePunkte) frisch = this.filtern(frisch, alt, erwartetKasten, schritteGesamt);
     const frischMass = vermessen(frisch, breite, hoehe);
     const frischMitte = frischMass.mitte;
 
@@ -352,7 +559,17 @@ export class Spur {
       // Am Rand und in Laufrichtung verschwunden: Er ist hinausgelaufen.
       annehmen = true;
     } else {
-      const befund = maskePasst(frisch, erwartet);
+      /*
+       * Liegt die Vorhersage ganz ausserhalb, liesse `maskePasst` alles
+       * gelten („nichts zu vergleichen"). Hier gibt es aber etwas: Der
+       * Gegenstand WAR da und müsste jetzt draussen sein. Was trotzdem im
+       * Bild auftaucht, ist ein anderer – es hält nicht, und auch Warten
+       * macht es nicht passend.
+       */
+      const befund =
+        filtern && !erwartetKasten && frischMitte
+          ? { haelt: false, verhaeltnis: Infinity, deckung: 0 }
+          : maskePasst(frisch, erwartet);
       /*
        * Die Drift zählt auch dann, wenn die frische Maske ohnehin nicht
        * passt: Sonst nähme das Nachgeben unten nach zwei Ablehnungen genau
@@ -385,6 +602,8 @@ export class Spur {
     const maske = annehmen ? frisch : erwartet;
     const mass = annehmen ? frischMass : vermessen(erwartet, breite, hoehe);
     const mitte = mass.mitte;
+    // Ein Modell hat den Gegenstand hier gesehen – siehe `SpurRand.abwesendSeit`.
+    const bestaetigt = annehmen && mitte !== null;
     if (!annehmen) {
       this.verworfen += 1;
       neuDrift = alt.drift;
@@ -447,9 +666,26 @@ export class Spur {
         : null,
       tempo,
       abgelehnt: annehmen ? 0 : alt.abgelehnt + 1,
-      flaeche: mitte?.flaeche ?? alt.flaeche,
+      /*
+       * Mit `wiederBilder` zählt die Fläche einer am Rand angeschnittenen
+       * Maske nicht als Mass: Beim Hinauslaufen bliebe sonst der letzte
+       * Streifen stehen, und ein Gegenstand, der zurückkommt, wäre schon
+       * nach wenigen Bildern „mehr als dreimal so gross" wie er.
+       */
+      flaeche: mitte
+        ? filtern && randIrgendwo(mass) && alt.flaeche > 0
+          ? Math.max(alt.flaeche, mitte.flaeche)
+          : mitte.flaeche
+        : alt.flaeche,
       drift: neuDrift,
       vomAnker: { x: alt.vomAnker.x + gesamt.x + k.x, y: alt.vomAnker.y + gesamt.y + k.y },
+      abwesendSeit: bestaetigt
+        ? null
+        : alt.abwesendSeit === null
+          ? schritteGesamt
+          : alt.abwesendSeit + schritteGesamt,
+      letzterKasten: bestaetigt ? mass.kasten : alt.letzterKasten,
+      letztesTempo: bestaetigt ? tempo : alt.letztesTempo,
     };
   }
 
@@ -489,105 +725,13 @@ export class Spur {
 
   /** Alle Bilder des Laufs: die Schlüsselbilder und dazwischen überblendet. */
   ergebnis(): SpurErgebnis {
-    const { von, bis, breite, hoehe } = this.auftrag;
+    const { von, bis } = this.auftrag;
     const masken: Uint8Array[] = new Array(bis - von + 1);
     const mitten: (Ort | null)[] = new Array(bis - von + 1).fill(null);
-    const leer = new Uint8Array(breite * hoehe);
-    for (const k of this.schluessel) {
-      masken[k - von] = this.masken.get(k) ?? leer;
-      mitten[k - von] = this.messungen.get(k)?.mitte ?? null;
-    }
-    for (let n = 0; n + 1 < this.schluessel.length; n += 1) {
-      const a = this.schluessel[n];
-      const b = this.schluessel[n + 1];
-      const ma = this.messungen.get(a) ?? vermessen(masken[a - von], breite, hoehe);
-      const mb = this.messungen.get(b) ?? vermessen(masken[b - von], breite, hoehe);
-      /*
-       * Der Massstab nur zwischen zwei ganzen Masken: Stösst eine an den
-       * Rand, misst ihre Fläche den Anschnitt und nicht die Grösse – und
-       * die andere würde grundlos geschrumpft.
-       */
-      const massstab =
-        ma.mitte && mb.mitte && !randIrgendwo(ma) && !randIrgendwo(mb)
-          ? Math.min(2, Math.max(0.5, Math.sqrt(mb.mitte.flaeche / ma.mitte.flaeche)))
-          : 1;
-      /*
-       * Ist nur EINE der beiden Masken angeschnitten, gilt die ganze allein,
-       * geschoben: Sie weiss, wie gross der Gegenstand ist, und der Bildrand
-       * schneidet sie von selbst richtig ab. Gemischt kam beim Hinauslaufen
-       * ein Viertel der ganzen und drei Viertel des Rests heraus – die
-       * Hälfte der sichtbaren Fläche.
-       */
-      const nurA = randIrgendwo(mb) && !randIrgendwo(ma);
-      const nurB = randIrgendwo(ma) && !randIrgendwo(mb);
-      for (let i = a + 1; i < b; i += 1) {
-        const anteil = (i - a) / (b - a);
-        const t = nurA ? 0 : nurB ? 1 : anteil;
-        const z = this.zwischen.get(i);
-        /*
-         * Verschwindet der Gegenstand (oder taucht er auf), gilt bis zur
-         * Hälfte die nähere Maske – aber nicht mehr stillstehend: Ist ihr
-         * Weg bekannt, wandert sie ihn, und am Rand schneidet das Bild sie
-         * von selbst ab. Über die Hälfte hinaus nicht: Die Suche sieht einen
-         * Gegenstand, der gerade hinausgeht, kaum noch wandern, und ein Rest
-         * bliebe am Rand kleben.
-         */
-        const allein =
-          z && ma.mitte && ma.kasten && !mb.mitte && anteil < 0.5
-            ? {
-                maske: masken[a - von],
-                mitte: ma.mitte,
-                kasten: ma.kasten,
-                weg: z.start === a ? z.vomStart : z.vomEnde,
-              }
-            : z && mb.mitte && mb.kasten && !ma.mitte && anteil > 0.5
-              ? {
-                  maske: masken[b - von],
-                  mitte: mb.mitte,
-                  kasten: mb.kasten,
-                  weg: z.start === a ? z.vomEnde : z.vomStart,
-                }
-              : null;
-        if (allein) {
-          const eine = { ...allein, massstab: 1 };
-          const gezogen = ueberblenden(eine, eine, 0, breite, hoehe);
-          masken[i - von] = gezogen.maske;
-          mitten[i - von] = gezogen.mitte;
-          continue;
-        }
-        if (!ma.mitte || !mb.mitte || !ma.kasten || !mb.kasten || !z) {
-          // Der Gegenstand taucht auf oder verschwindet: Es gilt die nähere
-          // der beiden Masken. Eine halb durchsichtige wäre eine halbe
-          // Wirkung, und die gibt es nicht.
-          const naeher = anteil < 0.5 ? a : b;
-          masken[i - von] = masken[naeher - von];
-          mitten[i - von] = (naeher === a ? ma : mb).mitte;
-          continue;
-        }
-        const ausA = z.start === a ? z.vomStart : z.vomEnde;
-        const ausB = z.start === a ? z.vomEnde : z.vomStart;
-        const gemischt = ueberblenden(
-          {
-            maske: masken[a - von],
-            mitte: ma.mitte,
-            kasten: ma.kasten,
-            weg: ausA,
-            massstab: Math.pow(massstab, anteil),
-          },
-          {
-            maske: masken[b - von],
-            mitte: mb.mitte,
-            kasten: mb.kasten,
-            weg: ausB,
-            massstab: Math.pow(massstab, anteil - 1),
-          },
-          t,
-          breite,
-          hoehe,
-        );
-        masken[i - von] = gemischt.maske;
-        mitten[i - von] = gemischt.mitte;
-      }
+    for (let i = von; i <= bis; i += 1) {
+      const bild = this.maskeBild(i);
+      masken[i - von] = bild.maske;
+      mitten[i - von] = bild.mitte;
     }
     // Der Weg je Bild aus den schon bekannten Mitten – kein weiterer
     // Durchgang über hundertfünfzig volle Masken.
@@ -598,6 +742,147 @@ export class Spur {
       if (vorher && jetzt) versatz[i] = { x: jetzt.x - vorher.x, y: jetzt.y - vorher.y };
     }
     return { masken, versatz, verworfen: this.verworfen };
+  }
+
+  /**
+   * Die Maske an EINEM Bild des Laufs, samt Schwerpunkt: ein Schlüsselbild
+   * so, wie es angenommen wurde, dazwischen überblendet.
+   *
+   * # Warum einzeln
+   *
+   * `ergebnis()` baut alle Bilder auf einmal – bei einem Fenster mit einer
+   * Brücke von achtundvierzig Bildern sechzig volle Masken, dazu die
+   * geglätteten, und das am Stück, ohne dass die Seite dazwischen zu Wort
+   * kommt. Einzeln kann der Aufrufer nach jedem Bild Luft holen, und für ein
+   * Brückenbild, das niemand zeigt, baut er gar keine.
+   *
+   * Gilt für Bilder zwischen zwei schon gerechneten Schlüsselbildern; ein
+   * noch fehlendes Schlüsselbild zählt als leer, wie in `ergebnis()`.
+   */
+  maskeBild(i: number): { maske: Uint8Array; mitte: Mitte | null } {
+    const { breite, hoehe } = this.auftrag;
+    const leer = this.leer();
+    const liste = this.schluessel;
+    // Das letzte Schlüsselbild bis einschliesslich i.
+    let lo = 0;
+    let hi = liste.length - 1;
+    while (lo < hi) {
+      const m = (lo + hi + 1) >> 1;
+      if (liste[m] <= i) lo = m;
+      else hi = m - 1;
+    }
+    if (liste[lo] === i) {
+      return { maske: this.masken.get(i) ?? leer, mitte: this.messungen.get(i)?.mitte ?? null };
+    }
+    if (liste[lo] > i || lo + 1 >= liste.length) return { maske: leer, mitte: null };
+
+    const { a, b, ma, mb, massstab, nurA, nurB } = this.strecke(lo);
+    const maskeA = this.masken.get(a) ?? leer;
+    const maskeB = this.masken.get(b) ?? leer;
+    const anteil = (i - a) / (b - a);
+    const t = nurA ? 0 : nurB ? 1 : anteil;
+    const z = this.zwischen.get(i);
+    /*
+     * Verschwindet der Gegenstand (oder taucht er auf), gilt bis zur
+     * Hälfte die nähere Maske – aber nicht mehr stillstehend: Ist ihr
+     * Weg bekannt, wandert sie ihn, und am Rand schneidet das Bild sie
+     * von selbst ab. Über die Hälfte hinaus nicht: Die Suche sieht einen
+     * Gegenstand, der gerade hinausgeht, kaum noch wandern, und ein Rest
+     * bliebe am Rand kleben.
+     */
+    const allein =
+      z && ma.mitte && ma.kasten && !mb.mitte && anteil < 0.5
+        ? {
+            maske: maskeA,
+            mitte: ma.mitte,
+            kasten: ma.kasten,
+            weg: z.start === a ? z.vomStart : z.vomEnde,
+          }
+        : z && mb.mitte && mb.kasten && !ma.mitte && anteil > 0.5
+          ? {
+              maske: maskeB,
+              mitte: mb.mitte,
+              kasten: mb.kasten,
+              weg: z.start === a ? z.vomEnde : z.vomStart,
+            }
+          : null;
+    if (allein) {
+      const eine = { ...allein, massstab: 1 };
+      return ueberblenden(eine, eine, 0, breite, hoehe);
+    }
+    if (!ma.mitte || !mb.mitte || !ma.kasten || !mb.kasten || !z) {
+      // Der Gegenstand taucht auf oder verschwindet: Es gilt die nähere
+      // der beiden Masken. Eine halb durchsichtige wäre eine halbe
+      // Wirkung, und die gibt es nicht.
+      return anteil < 0.5 ? { maske: maskeA, mitte: ma.mitte } : { maske: maskeB, mitte: mb.mitte };
+    }
+    const ausA = z.start === a ? z.vomStart : z.vomEnde;
+    const ausB = z.start === a ? z.vomEnde : z.vomStart;
+    return ueberblenden(
+      {
+        maske: maskeA,
+        mitte: ma.mitte,
+        kasten: ma.kasten,
+        weg: ausA,
+        massstab: Math.pow(massstab, anteil),
+      },
+      {
+        maske: maskeB,
+        mitte: mb.mitte,
+        kasten: mb.kasten,
+        weg: ausB,
+        massstab: Math.pow(massstab, anteil - 1),
+      },
+      t,
+      breite,
+      hoehe,
+    );
+  }
+
+  /** Die Strecke zwischen dem n-ten und dem nächsten Schlüsselbild. */
+  private strecke(n: number): Strecke {
+    const da = this.strecken.get(n);
+    if (da) return da;
+    const { breite, hoehe } = this.auftrag;
+    const a = this.schluessel[n];
+    const b = this.schluessel[n + 1];
+    const leer = this.leer();
+    const ma = this.messungen.get(a) ?? vermessen(this.masken.get(a) ?? leer, breite, hoehe);
+    const mb = this.messungen.get(b) ?? vermessen(this.masken.get(b) ?? leer, breite, hoehe);
+    /*
+     * Der Massstab nur zwischen zwei ganzen Masken: Stösst eine an den
+     * Rand, misst ihre Fläche den Anschnitt und nicht die Grösse – und
+     * die andere würde grundlos geschrumpft.
+     */
+    const massstab =
+      ma.mitte && mb.mitte && !randIrgendwo(ma) && !randIrgendwo(mb)
+        ? Math.min(2, Math.max(0.5, Math.sqrt(mb.mitte.flaeche / ma.mitte.flaeche)))
+        : 1;
+    /*
+     * Ist nur EINE der beiden Masken angeschnitten, gilt die ganze allein,
+     * geschoben: Sie weiss, wie gross der Gegenstand ist, und der Bildrand
+     * schneidet sie von selbst richtig ab. Gemischt kam beim Hinauslaufen
+     * ein Viertel der ganzen und drei Viertel des Rests heraus – die
+     * Hälfte der sichtbaren Fläche.
+     */
+    const strecke: Strecke = {
+      a,
+      b,
+      ma,
+      mb,
+      massstab,
+      nurA: randIrgendwo(mb) && !randIrgendwo(ma),
+      nurB: randIrgendwo(ma) && !randIrgendwo(mb),
+    };
+    // Erst gemerkt, wenn beide Enden gerechnet sind – ein Zwischenstand gälte sonst für immer.
+    if (this.masken.has(a) && this.masken.has(b)) this.strecken.set(n, strecke);
+    return strecke;
+  }
+
+  /** Eine leere Maske – eine je Spur, sie wird nie beschrieben. */
+  private leer(): Uint8Array {
+    if (!this.leerFeld) this.leerFeld = new Uint8Array(this.auftrag.breite * this.auftrag.hoehe);
+    return this.leerFeld;
   }
 }
 
@@ -646,6 +931,167 @@ function vermessen(maske: Uint8Array, breite: number, hoehe: number): Vermessung
 function randIrgendwo(mass: Vermessung): boolean {
   const { links, rechts, oben, unten } = mass.rand;
   return links || rechts || oben || unten;
+}
+
+/** Ein Kasten, um `anteil` seiner Breite und Höhe je Seite grösser. */
+function kastenDehnen(k: Kasten, anteil: number): Kasten {
+  const dx = (k.x1 - k.x0 + 1) * anteil;
+  const dy = (k.y1 - k.y0 + 1) * anteil;
+  return { x0: k.x0 - dx, y0: k.y0 - dy, x1: k.x1 + dx, y1: k.y1 + dy };
+}
+
+/** Ein Kasten auf das Bild beschnitten – `null`, wenn nichts davon im Bild liegt. */
+function kastenImBild(k: Kasten, breite: number, hoehe: number): Kasten | null {
+  const x0 = Math.max(0, k.x0);
+  const y0 = Math.max(0, k.y0);
+  const x1 = Math.min(breite - 1, k.x1);
+  const y1 = Math.min(hoehe - 1, k.y1);
+  return x0 > x1 || y0 > y1 ? null : { x0, y0, x1, y1 };
+}
+
+/** Ab dieser Deckung gehört ein Bildpunkt zum KERN einer Komponente. */
+const KERN_AB = 128;
+
+/**
+ * Eine Maske auf die Zusammenhangskomponenten zurückschneiden, die eine der
+ * `stellen` treffen – oder, mit `randErlaubt`, den Bildrand berühren.
+ *
+ * Komponenten sind die zusammenhängenden Kerne (Deckung ab der Hälfte, über
+ * Ecken verbunden). Der weiche Saum darunter zählt nicht mit: Ein
+ * Freisteller legt zwischen zwei nahe Gegenstände oft einen Hauch von
+ * Zuversicht, und über den verbunden wären sie eine einzige Komponente. Der
+ * Saum einer behaltenen Komponente bleibt, soweit er in ihrem etwas
+ * gedehnten Kasten liegt.
+ *
+ * Gibt die Maske selbst zurück, wenn alles bleibt, und eine leere, wenn
+ * nichts bleibt.
+ *
+ * Nachgemessen bei 960 × 540 mit zwei Gegenständen und Rauschen im Grund:
+ * 6,4 ms je Schlüsselbild in Node auf dem Rechner (auf dem Telefon rund das
+ * Dreifache) – gegen zwei Sekunden für den Freisteller, der die Maske
+ * geliefert hat.
+ */
+export function komponentenFiltern(
+  maske: Uint8Array,
+  breite: number,
+  hoehe: number,
+  stellen: readonly Kasten[],
+  randErlaubt: boolean,
+): Uint8Array {
+  const n = breite * hoehe;
+  const nummer = new Int32Array(n);
+  const eltern: number[] = [0];
+  const wurzel = (a: number): number => {
+    let w = a;
+    while (eltern[w] !== w) w = eltern[w];
+    // Den Weg verkürzen, damit die nächste Suche nicht wieder so weit läuft.
+    while (eltern[a] !== w) {
+      const naechster = eltern[a];
+      eltern[a] = w;
+      a = naechster;
+    }
+    return w;
+  };
+  const vereinen = (a: number, b: number) => {
+    const wa = wurzel(a);
+    const wb = wurzel(b);
+    if (wa !== wb) eltern[Math.max(wa, wb)] = Math.min(wa, wb);
+  };
+
+  // Erster Durchgang: vorläufige Nummern, Nachbarn links, links oben, oben, rechts oben.
+  for (let y = 0; y < hoehe; y += 1) {
+    const zeile = y * breite;
+    for (let x = 0; x < breite; x += 1) {
+      const p = zeile + x;
+      if (maske[p] < KERN_AB) continue;
+      let kleinste = x > 0 ? nummer[p - 1] : 0;
+      if (y > 0) {
+        const oben = p - breite;
+        for (
+          let q = x > 0 ? oben - 1 : oben, ende = x + 1 < breite ? oben + 1 : oben;
+          q <= ende;
+          q += 1
+        ) {
+          const m = nummer[q];
+          if (m === 0) continue;
+          if (kleinste === 0) kleinste = m;
+          else if (m !== kleinste) vereinen(m, kleinste);
+        }
+      }
+      if (kleinste === 0) {
+        kleinste = eltern.length;
+        eltern.push(kleinste);
+      }
+      nummer[p] = kleinste;
+    }
+  }
+  if (eltern.length === 1) return new Uint8Array(n);
+
+  // Je vorläufiger Nummer ihre Wurzel – einmal aufgelöst statt je Bildpunkt.
+  const anzahl = eltern.length;
+  const wurzeln = new Int32Array(anzahl);
+  for (let m = 1; m < anzahl; m += 1) wurzeln[m] = wurzel(m);
+
+  // Zweiter Durchgang: je Komponente, ob sie trifft, und ihr Kasten.
+  const trifft = new Uint8Array(anzahl);
+  const kx0 = new Int32Array(anzahl).fill(breite);
+  const ky0 = new Int32Array(anzahl).fill(hoehe);
+  const kx1 = new Int32Array(anzahl).fill(-1);
+  const ky1 = new Int32Array(anzahl).fill(-1);
+  for (let y = 0; y < hoehe; y += 1) {
+    const zeile = y * breite;
+    const amRand = y === 0 || y === hoehe - 1;
+    for (let x = 0; x < breite; x += 1) {
+      const p = zeile + x;
+      if (nummer[p] === 0) continue;
+      const w = wurzeln[nummer[p]];
+      nummer[p] = w;
+      if (x < kx0[w]) kx0[w] = x;
+      if (x > kx1[w]) kx1[w] = x;
+      if (y < ky0[w]) ky0[w] = y;
+      if (y > ky1[w]) ky1[w] = y;
+      if (trifft[w]) continue;
+      if (randErlaubt && (amRand || x === 0 || x === breite - 1)) {
+        trifft[w] = 1;
+        continue;
+      }
+      for (const s of stellen) {
+        if (x >= s.x0 && x <= s.x1 && y >= s.y0 && y <= s.y1) {
+          trifft[w] = 1;
+          break;
+        }
+      }
+    }
+  }
+  let alle = true;
+  let keine = true;
+  for (let w = 1; w < anzahl; w += 1) {
+    if (eltern[w] !== w) continue;
+    if (trifft[w]) keine = false;
+    else alle = false;
+  }
+  if (alle) return maske;
+  const raus = new Uint8Array(n);
+  if (keine) return raus;
+  for (let p = 0; p < n; p += 1) {
+    if (nummer[p] !== 0 && trifft[nummer[p]]) raus[p] = maske[p];
+  }
+  // Der Saum der behaltenen Komponenten – in ihrem Kasten, um ein Zehntel gedehnt.
+  for (let w = 1; w < anzahl; w += 1) {
+    if (eltern[w] !== w || !trifft[w]) continue;
+    const saum = Math.max(4, Math.round(0.1 * Math.max(kx1[w] - kx0[w], ky1[w] - ky0[w])));
+    const x0 = Math.max(0, kx0[w] - saum);
+    const x1 = Math.min(breite - 1, kx1[w] + saum);
+    const y0 = Math.max(0, ky0[w] - saum);
+    const y1 = Math.min(hoehe - 1, ky1[w] + saum);
+    for (let y = y0; y <= y1; y += 1) {
+      for (let p = y * breite + x0, ende = y * breite + x1; p <= ende; p += 1) {
+        const a = maske[p];
+        if (a > 0 && a < KERN_AB) raus[p] = a;
+      }
+    }
+  }
+  return raus;
 }
 
 /**
@@ -865,8 +1311,12 @@ function maskeSuchen(
  * Gesucht wird in wachsenden Quadraten bis zur halben Kantenlänge der Maske
  * (aus ihrer schon bekannten Fläche); findet sich nichts, bleibt der Punkt,
  * wo er ist.
+ *
+ * Auch für den Editor an einem Bild ohne Anker (`masken.ts`): Die Punkte des
+ * letzten Schlüsselbildes, mit der Maske verschoben, landen so IN ihr – und
+ * ein weiterer Tipp dort rechnet mit Punkten, die auf dem Gegenstand liegen.
  */
-function einrasten(
+export function einrasten(
   punkt: Punkt,
   maske: Uint8Array,
   breite: number,
