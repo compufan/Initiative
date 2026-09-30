@@ -140,7 +140,13 @@ export const ANLEITUNGEN: readonly Anleitung[] = [
     id: 'iphone',
     titel: 'iPhone und iPad – „Bildschirmsynchronisierung"',
     schritte: [
-      'Das Kontrollzentrum öffnen (oben rechts nach unten wischen).',
+      /*
+       * Beide Gesten, weil es beide Geräte gibt: Oben rechts gilt nur für
+       * iPhones mit Face ID und für jedes iPad. Auf einem iPhone mit
+       * Home-Taste – das SE bekommt weiter aktuelle Systeme – öffnet dieselbe
+       * Geste die Mitteilungszentrale, und der Schritt führte ins Leere.
+       */
+      'Das Kontrollzentrum öffnen: oben rechts nach unten wischen – bei einem iPhone mit Home-Taste vom unteren Rand nach oben.',
       'Auf „Bildschirmsynchronisierung" tippen (zwei übereinanderliegende Rechtecke).',
       'Apple TV oder den Fernseher wählen. Erscheint dort ein Code, ihn auf dem iPhone eingeben.',
       'Die Ausrichtungssperre ausschalten und das Gerät quer halten.',

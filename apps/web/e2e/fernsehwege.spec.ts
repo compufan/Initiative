@@ -5,7 +5,9 @@ import {
   test,
   type APIRequestContext,
   type Browser,
+  type BrowserContextOptions,
   type Page,
+  type Route,
 } from '@playwright/test';
 
 /**
@@ -136,31 +138,43 @@ function bildHochladen(
  * dreissig Sekunden Test. Dreissig und nicht fünf, weil Chrome bei Videos bis
  * 15 Sekunden gar keinen Fernseher anbietet – geprüft werden soll der Fall,
  * in dem es das tut.
+ *
+ * Wo es um das ENDE eines Videos geht, sind es wenige Sekunden, und die Breite
+ * unterscheidet die Videos: Am Fernseher lässt sich an `videoWidth` ablesen,
+ * welches gerade läuft.
  */
-async function videoErzeugen(seite: Page, wurzel: string): Promise<Buffer | null> {
+async function videoErzeugen(
+  seite: Page,
+  wurzel: string,
+  masse: { breite: number; hoehe: number; sekunden: number } = {
+    breite: 160,
+    hoehe: 120,
+    sekunden: 30,
+  },
+): Promise<Buffer | null> {
   await seite.goto(wurzel);
-  const roh = await seite.evaluate(async () => {
+  const roh = await seite.evaluate(async ({ breite, hoehe, sekunden }) => {
     const pfad = '/src/modules/video/schreiben.ts';
     const modul = (await import(
       /* @vite-ignore */ pfad
     )) as typeof import('../src/modules/video/schreiben.js');
-    const tauglich = await modul.videoTauglich(160, 120);
+    const tauglich = await modul.videoTauglich(breite, hoehe);
     if (!tauglich.moeglich) return null;
     const leinwand = document.createElement('canvas');
-    leinwand.width = 160;
-    leinwand.height = 120;
+    leinwand.width = breite;
+    leinwand.height = hoehe;
     const ctx = leinwand.getContext('2d')!;
     const datei = await modul.videoSchreiben(
-      30,
+      sekunden,
       (nummer) => {
         ctx.fillStyle = nummer % 2 === 0 ? '#e02020' : '#2040e0';
-        ctx.fillRect(0, 0, 160, 120);
+        ctx.fillRect(0, 0, breite, hoehe);
         return leinwand;
       },
-      { breite: 160, hoehe: 120, bildrate: 1 },
+      { breite, hoehe, bildrate: 1 },
     );
     return Array.from(new Uint8Array(await datei.arrayBuffer()));
-  });
+  }, masse);
   return roh ? Buffer.from(roh) : null;
 }
 
@@ -178,9 +192,11 @@ async function seiteFuer(
   sitzung: Sitzung,
   wurzel: string,
   vorher?: string,
+  einrichten?: (page: Page) => Promise<void>,
 ): Promise<Page> {
   const page = await (await browser.newContext()).newPage();
   if (vorher) await page.addInitScript(vorher);
+  if (einrichten) await einrichten(page);
   await page.goto(wurzel);
   await page.evaluate(async (anmeldung) => {
     const antwort = await fetch('/api/v1/auth/login', {
@@ -207,8 +223,9 @@ async function seiteFuer(
 async function fernseherOeffnen(
   browser: Browser,
   wurzel: string,
+  geraet?: BrowserContextOptions,
 ): Promise<{ tv: Page; code: string }> {
-  const tv = await (await browser.newContext()).newPage();
+  const tv = await (await browser.newContext(geraet)).newPage();
   await tv.goto(`${wurzel}/tv`);
   const codeFeld = tv.locator('#code');
   await expect(codeFeld).not.toHaveText('…', { timeout: 20_000 });
@@ -484,6 +501,12 @@ test('Code-Weg: „Stattdessen dies zeigen" – ohne Beenden und ohne neuen Code
   await langAntippen(telefon, 'Das zweite Bild');
   await telefon.getByText('Auf den Fernseher').click();
   await expect(telefon.locator('.tv-code-eingabe')).toHaveCount(0);
+  /*
+   * Und der dritte Weg steht auch hier. Er fehlte, solange eine Sitzung lief –
+   * wer am zweiten Fernseher spiegeln wollte, musste die Diashow am ersten
+   * erst beenden.
+   */
+  await expect(telefon.getByRole('button', { name: /Telefon spiegeln/ })).toBeVisible();
   await telefon.getByRole('button', { name: /Stattdessen dies zeigen/ }).click();
   await expect
     .poll(() => stehendesBild(tv), {
@@ -501,19 +524,19 @@ test('Code-Weg: „Stattdessen dies zeigen" – ohne Beenden und ohne neuen Code
  * Ein Tipp – an der Videoblase
  * ======================================================================== */
 
-async function chatMitVideo(browser: Browser, wurzel: string, prefix: string) {
+async function chatMitVideo(browser: Browser, wurzel: string, prefix: string, sekunden = 30) {
   const http = await request.newContext();
   const anna = await registrieren(http, prefix);
   const ben = await registrieren(http, `${prefix}b`);
   const kopf = { authorization: `Bearer ${anna.accessToken}` };
   const werkbank = await (await browser.newContext()).newPage();
-  const bytes = await videoErzeugen(werkbank, wurzel);
+  const bytes = await videoErzeugen(werkbank, wurzel, { breite: 160, hoehe: 120, sekunden });
   await werkbank.context().close();
   if (!bytes) return null;
   const video = await hochladen(http, kopf, 'video', 'video/webm', 'urlaub.webm', bytes, {
     width: 160,
     height: 120,
-    durationMs: 30_000,
+    durationMs: sekunden * 1000,
   });
   const chat = await gespraechMit(http, kopf, ben.user.id);
   await schicken(http, kopf, chat, 'video', 'Das Video vom Berg', [video]);
@@ -715,5 +738,542 @@ test('Fernsehansicht: aus dem Nachrichtenmenü, mit Warnung vorab – blättert 
   ).toBe(false);
 
   await http.dispose();
+  await telefon.context().close();
+});
+
+/* ======================================================================== *
+ * Code-Weg – was die Prüfer danach noch gefunden haben
+ * ======================================================================== */
+
+/**
+ * Die nächste Meldung des Fernsehers festhalten, bis `freigeben` sie losschickt.
+ *
+ * So entsteht das Rennen, das sonst nur manchmal auftritt: Der Befehl vom
+ * Telefon landet NACH der letzten Abfrage des Fernsehers und VOR seiner
+ * eigenen Meldung. `passt` wählt die Meldung aus; alle anderen gehen durch.
+ */
+async function meldungFesthalten(
+  tv: Page,
+  passt: (koerper: { stelle?: number }) => boolean = () => true,
+): Promise<() => Promise<void>> {
+  const istMeldung = (adresse: URL) => adresse.pathname.endsWith('/stelle');
+  let schonGefangen = false;
+  return await new Promise((gefangen) => {
+    const fang = async (route: Route) => {
+      const koerper = (route.request().postDataJSON() ?? {}) as { stelle?: number };
+      if (schonGefangen || !passt(koerper)) {
+        await route.continue();
+        return;
+      }
+      schonGefangen = true;
+      gefangen(async () => {
+        await route.continue();
+        await tv.unroute(istMeldung, fang);
+      });
+    };
+    void tv.route(istMeldung, fang);
+  });
+}
+
+test('Code-Weg: Die Meldung des Fernsehers überschreibt keinen Befehl vom Telefon', async ({
+  browser,
+  baseURL,
+}) => {
+  const wurzel = baseURL ?? 'http://localhost:5173';
+  const http = await request.newContext();
+  const person = await registrieren(http, 'tvrennen');
+  const kopf = { authorization: `Bearer ${person.accessToken}` };
+  const alt = [
+    await bildHochladen(http, kopf, 'a8.png', 8, [220, 40, 40]),
+    await bildHochladen(http, kopf, 'a12.png', 12, [40, 200, 40]),
+    await bildHochladen(http, kopf, 'a16.png', 16, [40, 80, 220]),
+  ];
+  const neu = [
+    await bildHochladen(http, kopf, 'n20.png', 20, [200, 200, 40]),
+    await bildHochladen(http, kopf, 'n28.png', 28, [200, 40, 200]),
+    await bildHochladen(http, kopf, 'n36.png', 36, [40, 200, 200]),
+    await bildHochladen(http, kopf, 'n44.png', 44, [120, 120, 120]),
+  ];
+
+  const { tv, code } = await fernseherOeffnen(browser, wurzel);
+  const sitzung = `${API}/tv/sitzungen/${encodeURIComponent(code)}`;
+  const ein = await http.post(`${sitzung}/programm`, {
+    headers: kopf,
+    data: { attachmentIds: alt, sekunden: 2 },
+  });
+  expect(ein.ok()).toBeTruthy();
+  await expect.poll(() => stehendesBild(tv), { timeout: 25_000 }).toBe(8);
+  const geheim = await tv.evaluate(
+    () => (JSON.parse(sessionStorage.getItem('tv-sitzung') ?? '{}') as { geheim?: string }).geheim,
+  );
+  const stand = async () =>
+    (await (
+      await http.get(`${sitzung}/stand?geheim=${encodeURIComponent(geheim ?? '')}`)
+    ).json()) as { stelle: number; pausiert: boolean };
+
+  // ---- 1. „Pause" vom Telefon, während der Fernseher weiterblättert -------
+  let freigeben = await meldungFesthalten(tv);
+  expect(
+    (await http.patch(sitzung, { headers: kopf, data: { pausiert: true } })).ok(),
+  ).toBeTruthy();
+  await freigeben();
+  /*
+   * Vorher schickte der Fernseher mit jedem eigenen Bild `pausiert: false`,
+   * und die Meldung kam nach dem Befehl an: Die Pause war weg, die Schau lief
+   * weiter.
+   */
+  await tv.waitForTimeout(3_000);
+  expect((await stand()).pausiert, 'die Meldung des Fernsehers hat die Pause aufgehoben').toBe(
+    true,
+  );
+  const angehalten = await stehendesBild(tv);
+  await tv.waitForTimeout(3_000);
+  expect(await stehendesBild(tv), 'die Schau lief trotz Pause weiter').toBe(angehalten);
+
+  // ---- 2. „Stattdessen dies zeigen", während eine alte Meldung unterwegs ist
+  expect(
+    (await http.patch(sitzung, { headers: kopf, data: { pausiert: false } })).ok(),
+  ).toBeTruthy();
+  // Eine Meldung aus dem alten Programm, die NICHT auf Stelle 0 zeigt – sonst
+  // fiele sie mit dem Anfang des neuen zusammen und bewiese nichts.
+  freigeben = await meldungFesthalten(tv, (koerper) => (koerper.stelle ?? 0) > 0);
+  const um = await http.post(`${sitzung}/programm`, {
+    headers: kopf,
+    data: { attachmentIds: neu, sekunden: 30 },
+  });
+  expect(um.ok()).toBeTruthy();
+  await freigeben();
+  await expect
+    .poll(() => stehendesBild(tv), {
+      timeout: 15_000,
+      message: 'das neue Programm kam nicht an',
+    })
+    .toBeGreaterThanOrEqual(20);
+  /*
+   * Das neue Programm beginnt vorn. Vorher setzte die späte Meldung die Stelle
+   * aus dem ALTEN Programm, und es fing beim zweiten oder dritten Stück an.
+   */
+  expect(await stehendesBild(tv), 'das neue Programm begann mitten drin').toBe(20);
+  expect((await stand()).stelle).toBe(0);
+
+  await http.dispose();
+  await tv.context().close();
+});
+
+test('Code-Weg: Ohne Tastatur gibt ein Tipp den Ton frei, und die Ränder blättern', async ({
+  browser,
+  baseURL,
+}) => {
+  const wurzel = baseURL ?? 'http://localhost:5173';
+  const http = await request.newContext();
+  const person = await registrieren(http, 'tvtipp');
+  const kopf = { authorization: `Bearer ${person.accessToken}` };
+  const werkbank = await (await browser.newContext()).newPage();
+  const bytes = await videoErzeugen(werkbank, wurzel);
+  await werkbank.context().close();
+  if (!bytes) {
+    test.skip(true, 'Kein Videokodierer in diesem Browser');
+    return;
+  }
+  const video = await hochladen(http, kopf, 'video', 'video/webm', 'tipp.webm', bytes, {
+    width: 160,
+    height: 120,
+    durationMs: 30_000,
+  });
+  const bild = await bildHochladen(http, kopf, 'danach.png', 24, [40, 80, 220]);
+
+  // Ein Tablet bzw. zweites Telefon als „Fernseher" – ohne Tastatur.
+  const { tv, code } = await fernseherOeffnen(browser, wurzel, {
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 800, height: 450 },
+  });
+  const ein = await http.post(`${API}/tv/sitzungen/${encodeURIComponent(code)}/programm`, {
+    headers: kopf,
+    data: { attachmentIds: [video, bild], sekunden: 30 },
+  });
+  expect(ein.ok()).toBeTruthy();
+  await expect
+    .poll(async () => ((await film(tv)).versteckt ? 0 : (await film(tv)).zeit), {
+      timeout: 25_000,
+    })
+    .toBeGreaterThan(0.5);
+  expect((await film(tv)).stumm).toBe(true);
+  await expect(tv.locator('#ton')).toContainText('tippen');
+
+  /*
+   * Vorher hörte das Blatt nur auf Tasten. Ein Tipp tat nichts, das Video
+   * blieb für die ganze Sitzung stumm, und der Hinweis „OK drücken" liess
+   * sich auf einem Tablet nicht befolgen.
+   */
+  await tv.locator('#ton').tap();
+  await expect.poll(async () => (await film(tv)).stumm, { timeout: 5_000 }).toBe(false);
+  await expect(tv.locator('#ton')).toBeHidden();
+  expect((await film(tv)).pausiert, 'der Tipp für den Ton hat das Video angehalten').toBe(false);
+
+  // Ein Tipp in die Mitte hält jetzt an, einer an den rechten Rand blättert.
+  await tv.touchscreen.tap(400, 225);
+  await expect.poll(async () => (await film(tv)).pausiert, { timeout: 5_000 }).toBe(true);
+  await tv.touchscreen.tap(780, 225);
+  await expect.poll(() => stehendesBild(tv), { timeout: 10_000 }).toBe(24);
+
+  await http.dispose();
+  await tv.context().close();
+});
+
+test('Code-Weg: „Weiter" mitten im Video – am Ende des nächsten kommt das übernächste, nicht eins zu weit', async ({
+  browser,
+  baseURL,
+}) => {
+  const wurzel = baseURL ?? 'http://localhost:5173';
+  const http = await request.newContext();
+  const person = await registrieren(http, 'tvende');
+  const kopf = { authorization: `Bearer ${person.accessToken}` };
+  const werkbank = await (await browser.newContext()).newPage();
+  const videos: string[] = [];
+  for (const breite of [160, 176, 192]) {
+    const bytes = await videoErzeugen(werkbank, wurzel, { breite, hoehe: 120, sekunden: 4 });
+    if (!bytes) {
+      test.skip(true, 'Kein Videokodierer in diesem Browser');
+      return;
+    }
+    videos.push(
+      await hochladen(http, kopf, 'video', 'video/webm', `v${breite}.webm`, bytes, {
+        width: breite,
+        height: 120,
+        durationMs: 4_000,
+      }),
+    );
+  }
+  await werkbank.context().close();
+
+  const { tv, code } = await fernseherOeffnen(browser, wurzel);
+  const meldungen: string[] = [];
+  tv.on('request', (anfrage) => {
+    if (anfrage.method() === 'PUT' && anfrage.url().includes('/stelle')) {
+      meldungen.push(anfrage.postData() ?? '');
+    }
+  });
+  const sitzung = `${API}/tv/sitzungen/${encodeURIComponent(code)}`;
+  const ein = await http.post(`${sitzung}/programm`, {
+    headers: kopf,
+    data: { attachmentIds: videos },
+  });
+  expect(ein.ok()).toBeTruthy();
+  const breite = () =>
+    tv.evaluate(() => (document.getElementById('film') as HTMLVideoElement).videoWidth);
+  await expect.poll(breite, { timeout: 25_000 }).toBe(160);
+  await expect.poll(async () => (await film(tv)).zeit, { timeout: 10_000 }).toBeGreaterThan(0.5);
+
+  // „Weiter" vom Telefon, mitten im ersten Video.
+  expect((await http.patch(sitzung, { headers: kopf, data: { schritt: 1 } })).ok()).toBeTruthy();
+  await expect.poll(breite, { timeout: 10_000 }).toBe(176);
+  const vorher = meldungen.length;
+
+  // Das Ende des zweiten Videos abwarten – dann muss das DRITTE kommen.
+  await expect
+    .poll(breite, { timeout: 15_000, message: 'nach dem zweiten Video kam nichts' })
+    .not.toBe(176);
+  /*
+   * Vorher hing der Ende-Hörer des ersten Videos noch am Element. Am Ende des
+   * zweiten feuerten beide, die Schau sprang zwei Stücke weiter – zurück auf
+   * das erste – und zwei Meldungen gingen gleichzeitig hinaus.
+   */
+  expect(await breite(), 'am Ende des zweiten Videos kam nicht das dritte').toBe(192);
+  await tv.waitForTimeout(500);
+  expect(
+    meldungen.slice(vorher),
+    'am Ende eines Videos ging mehr als eine Meldung hinaus',
+  ).toHaveLength(1);
+
+  await http.dispose();
+  await tv.context().close();
+});
+
+test('Code-Weg: Ein Video, das der Fernseher nicht abspielen kann, hält die Schau nicht an', async ({
+  browser,
+  baseURL,
+}) => {
+  const wurzel = baseURL ?? 'http://localhost:5173';
+  const http = await request.newContext();
+  const person = await registrieren(http, 'tvkaputt');
+  const kopf = { authorization: `Bearer ${person.accessToken}` };
+  // Bytes, die kein Browser als Video liest – wie ein Format, das der Fernseher nicht kann.
+  const kaputt = await hochladen(
+    http,
+    kopf,
+    'video',
+    'video/mp4',
+    'kaputt.mp4',
+    Buffer.alloc(4096, 7),
+    { width: 160, height: 120, durationMs: 10_000 },
+  );
+  const bild = await bildHochladen(http, kopf, 'danach.png', 24, [40, 80, 220]);
+
+  const { tv, code } = await fernseherOeffnen(browser, wurzel);
+  const ein = await http.post(`${API}/tv/sitzungen/${encodeURIComponent(code)}/programm`, {
+    headers: kopf,
+    data: { attachmentIds: [kaputt, bild], sekunden: 30 },
+  });
+  expect(ein.ok()).toBeTruthy();
+
+  await expect(tv.locator('#hinweis')).toContainText('lässt sich hier nicht abspielen', {
+    timeout: 20_000,
+  });
+  // Kein „OK für Ton" über einem Video, das gar nicht spielt.
+  await expect(tv.locator('#ton')).toBeHidden();
+  /*
+   * Vorher stand die Schau hier, bis jemand am Telefon „Weiter" drückte – und
+   * OK schaltete nur stumm und laut hin und her.
+   */
+  await expect
+    .poll(() => stehendesBild(tv), {
+      timeout: 15_000,
+      message: 'die Schau blieb beim kaputten Video stehen',
+    })
+    .toBe(24);
+
+  await http.dispose();
+  await tv.context().close();
+});
+
+/* ======================================================================== *
+ * Dateibetrachter
+ * ======================================================================== */
+
+async function sammlungMitVideos(
+  browser: Browser,
+  wurzel: string,
+  prefix: string,
+  mitBild: boolean,
+) {
+  const http = await request.newContext();
+  const anna = await registrieren(http, prefix);
+  const kopf = { authorization: `Bearer ${anna.accessToken}` };
+  const werkbank = await (await browser.newContext()).newPage();
+  const bytes = await videoErzeugen(werkbank, wurzel);
+  await werkbank.context().close();
+  if (!bytes) return null;
+  const masse = { width: 160, height: 120, durationMs: 30_000 };
+  const erstes = await hochladen(http, kopf, 'video', 'video/webm', 'a-video.webm', bytes, masse);
+  const zweites = mitBild
+    ? await bildHochladen(http, kopf, 'b-bild.png', 24, [40, 80, 220])
+    : await hochladen(http, kopf, 'video', 'video/webm', 'b-video.webm', bytes, masse);
+  const sammlung = (await (
+    await http.post(`${API}/collections`, {
+      headers: kopf,
+      data: { name: `Abend ${Date.now()}` },
+    })
+  ).json()) as { id: string };
+  for (const anhang of [erstes, zweites]) {
+    const drin = await http.post(`${API}/collections/${sammlung.id}/items`, {
+      headers: kopf,
+      data: { attachmentId: anhang },
+    });
+    expect(drin.ok(), `Eintrag: ${drin.status()}`).toBeTruthy();
+  }
+  return { http, anna, sammlung: sammlung.id, erstes, zweites };
+}
+
+test('Dateibetrachter: Nach „Weiter ›" bekommt das nächste Video seine eigene Karte', async ({
+  browser,
+  baseURL,
+}) => {
+  const wurzel = baseURL ?? 'http://localhost:5173';
+  const lage = await sammlungMitVideos(browser, wurzel, 'tvbetr', false);
+  if (!lage) {
+    test.skip(true, 'Kein Videokodierer in diesem Browser');
+    return;
+  }
+  const seite = await seiteFuer(browser, lage.anna, wurzel, fernbedienungVortaeuschen(true));
+  await seite.goto(`${wurzel}/dateien/${lage.sammlung}`);
+  await seite.locator('.fil-tile-open').filter({ hasText: 'a-video.webm' }).first().click();
+  const film = seite.locator('.fv-backdrop video.fv-video');
+  const quelle = () => film.evaluate((v: HTMLVideoElement) => v.src).catch(() => '');
+  await expect.poll(quelle, { timeout: 20_000 }).toContain(`${lage.erstes}?tv=`);
+
+  await seite.getByRole('button', { name: 'Weiter ›' }).click();
+  await expect(seite.locator('.fv-title')).toContainText('b-video.webm');
+  /*
+   * Vorher blieb dasselbe Element samt 📺 stehen, und dessen Zustand gehörte
+   * noch zu Datei A: B bekam trotz gemeldetem Fernseher keine Karte, und die
+   * eingebauten Cast- und AirPlay-Knöpfe schickten wieder eine Adresse ohne
+   * Karte (401).
+   */
+  await expect
+    .poll(quelle, { timeout: 20_000, message: 'das zweite Video bekam keine Karte' })
+    .toContain(`${lage.zweites}?tv=`);
+
+  // Ein Ladefehler nimmt die Karte heraus – und setzt dabei NICHT Datei A ein.
+  await film.evaluate((v: HTMLVideoElement) => v.dispatchEvent(new Event('error')));
+  await expect.poll(quelle, { timeout: 5_000 }).not.toContain('tv=');
+  expect(await quelle(), 'der Betrachter heisst B und spielt A').toContain(lage.zweites);
+
+  await lage.http.dispose();
+  await seite.context().close();
+});
+
+test('Dateibetrachter: Esc schliesst nur das Blatt, und die Pfeile in der Fernsehansicht blättern den Betrachter nicht', async ({
+  browser,
+  baseURL,
+}) => {
+  const wurzel = baseURL ?? 'http://localhost:5173';
+  const lage = await sammlungMitVideos(browser, wurzel, 'tvesc', true);
+  if (!lage) {
+    test.skip(true, 'Kein Videokodierer in diesem Browser');
+    return;
+  }
+  const seite = await seiteFuer(browser, lage.anna, wurzel, fernbedienungVortaeuschen(false));
+  await seite.goto(`${wurzel}/dateien/${lage.sammlung}`);
+  await seite.locator('.fil-tile-open').filter({ hasText: 'a-video.webm' }).first().click();
+  const betrachter = seite.locator('.fv-backdrop');
+  await expect(betrachter).toHaveCount(1);
+  const tv = betrachter.getByRole('button', { name: 'Auf den Fernseher', exact: true });
+
+  // ---- Esc über dem Blatt „Auf den Fernseher" ------------------------------
+  await tv.click();
+  const blatt = seite.getByRole('dialog', { name: 'Auf den Fernseher' });
+  await expect(blatt).toBeVisible();
+  await seite.keyboard.press('Escape');
+  await expect(blatt).toBeHidden();
+  // Vorher nahm derselbe Esc den ganzen Betrachter mit.
+  await expect(betrachter, 'Esc hat den Betrachter mit geschlossen').toHaveCount(1);
+
+  // ---- Die Pfeile gehören der Fernsehansicht -------------------------------
+  await tv.click();
+  await blatt.getByRole('button', { name: /Fernsehansicht zum Spiegeln/ }).click();
+  await seite.getByRole('button', { name: /Fernsehansicht starten/ }).click();
+  const ansicht = seite.getByRole('dialog', { name: 'Fernsehansicht' });
+  await expect(ansicht).toBeVisible();
+  await seite.keyboard.press('ArrowRight');
+  await seite.waitForTimeout(500);
+  /*
+   * Vorher blätterte der Betrachter dahinter mit: Er hängte das Video samt 📺,
+   * Blatt und Ansicht aus, und der gespiegelte Fernseher zeigte wieder die App.
+   */
+  await expect(ansicht, 'die Pfeiltaste hat die Fernsehansicht geschlossen').toBeVisible();
+  await expect(betrachter.locator('.fv-bar-bottom')).toContainText('1 von 2');
+
+  await lage.http.dispose();
+  await seite.context().close();
+});
+
+/* ======================================================================== *
+ * Fernsehansicht und Karte an der Videoblase
+ * ======================================================================== */
+
+test('Fernsehansicht: hält das Video der Blase an, und ein einzelnes Video lässt sich nach dem Ende neu starten', async ({
+  browser,
+  baseURL,
+}) => {
+  const wurzel = baseURL ?? 'http://localhost:5173';
+  const lage = await chatMitVideo(browser, wurzel, 'tvdoppel', 3);
+  if (!lage) {
+    test.skip(true, 'Kein Videokodierer in diesem Browser');
+    return;
+  }
+  const telefon = await seiteFuer(browser, lage.anna, wurzel, fernbedienungVortaeuschen(false));
+  await telefon.goto(`${wurzel}/chats/${lage.chat}`);
+  const blase = telefon.locator('video.media-video').first();
+  await expect(blase).toBeVisible({ timeout: 15_000 });
+  await blase.evaluate((v: HTMLVideoElement) => {
+    v.loop = true;
+    v.muted = true;
+    return v.play();
+  });
+  await expect.poll(() => blase.evaluate((v: HTMLVideoElement) => v.paused)).toBe(false);
+
+  await telefon.getByRole('button', { name: 'Auf den Fernseher' }).first().click();
+  const blatt = telefon.getByRole('dialog', { name: 'Auf den Fernseher' });
+  await blatt.getByRole('button', { name: /Fernsehansicht zum Spiegeln/ }).click();
+  await telefon.getByRole('button', { name: /Fernsehansicht starten/ }).click();
+  const ansicht = telefon.getByRole('dialog', { name: 'Fernsehansicht' });
+  await expect(ansicht).toBeVisible();
+
+  /*
+   * Vorher lief das Video der Blase hinter der Ansicht mit Ton weiter – beim
+   * Spiegeln zwei versetzte Tonspuren auf dem Fernseher.
+   */
+  await expect
+    .poll(() => blase.evaluate((v: HTMLVideoElement) => v.paused), {
+      message: 'das Video der Blase läuft hinter der Fernsehansicht weiter',
+    })
+    .toBe(true);
+
+  // ---- Ein einzelnes Video am Ende: ▶ spielt es von vorn --------------------
+  const filmFa = ansicht.locator('video.fa-film');
+  await expect
+    .poll(() => filmFa.evaluate((v: HTMLVideoElement) => v.ended), { timeout: 15_000 })
+    .toBe(true);
+  /*
+   * Vorher zeigte der Knopf weiter „Anhalten", und kein Druck brachte das
+   * Video wieder zum Laufen – nur Schliessen und der ganze Weg von vorn.
+   */
+  const nochmal = ansicht.getByRole('button', { name: 'Weiter abspielen' });
+  await expect(nochmal).toBeVisible();
+  await nochmal.click();
+  await expect
+    .poll(() => filmFa.evaluate((v: HTMLVideoElement) => !v.paused && !v.ended), {
+      timeout: 5_000,
+      message: 'das Video lässt sich nach dem Ende nicht neu starten',
+    })
+    .toBe(true);
+
+  await lage.http.dispose();
+  await telefon.context().close();
+});
+
+test('Videoblase: Eine Karte, die erst nach dem Schliessen des Blattes ankommt, fliegt nach fünf Stunden trotzdem heraus', async ({
+  browser,
+  baseURL,
+}) => {
+  const wurzel = baseURL ?? 'http://localhost:5173';
+  const lage = await chatMitVideo(browser, wurzel, 'tvuhr');
+  if (!lage) {
+    test.skip(true, 'Kein Videokodierer in diesem Browser');
+    return;
+  }
+  const telefon = await seiteFuer(
+    browser,
+    lage.anna,
+    wurzel,
+    fernbedienungVortaeuschen(false),
+    async (page) => {
+      await page.clock.install();
+    },
+  );
+  await telefon.goto(`${wurzel}/chats/${lage.chat}`);
+  const video = telefon.locator('video.media-video').first();
+  await expect(video).toBeVisible({ timeout: 15_000 });
+  const quelle = () => video.evaluate((v: HTMLVideoElement) => v.src);
+
+  // Die Karte unterwegs festhalten – bis das Blatt schon wieder zu ist.
+  let freigeben: () => Promise<void> = async () => undefined;
+  const unterwegs = new Promise<void>((da) => {
+    void telefon.route('**/fernsehticket', async (route) => {
+      freigeben = () => route.continue();
+      da();
+    });
+  });
+  await telefon.getByRole('button', { name: 'Auf den Fernseher' }).first().click();
+  const blatt = telefon.getByRole('dialog', { name: 'Auf den Fernseher' });
+  await expect(blatt.getByRole('button', { name: 'Wird vorbereitet …' })).toBeVisible();
+  await unterwegs;
+  await blatt.getByRole('button', { name: 'Schließen' }).click();
+  await expect(blatt).toBeHidden();
+  await freigeben();
+  await expect.poll(quelle, { timeout: 10_000 }).toContain('tv=');
+
+  /*
+   * Vorher erfuhr der 📺 nichts von dieser Karte, weil das Blatt schon zu war,
+   * als sie kam – keine Uhr nahm sie heraus, und sie stand über ihre sechs
+   * Stunden hinaus in der Seite.
+   */
+  await telefon.clock.fastForward('05:01:00');
+  await expect
+    .poll(quelle, { timeout: 5_000, message: 'die Karte steht nach fünf Stunden noch im Video' })
+    .not.toContain('tv=');
+
+  await lage.http.dispose();
   await telefon.context().close();
 });

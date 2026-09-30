@@ -273,6 +273,32 @@ export function FernsehSheet({
   /** Lässt sich das hier auch über die Spiegelung zeigen? */
   const spiegelbar = !gespraech && Boolean(ansicht && ansicht.length > 0);
 
+  /*
+   * Der dritte Weg, am Ende und nicht vorn – in BEIDEN Zuständen des Blattes.
+   *
+   * Dieses Blatt ist der Code-Weg, und wer es öffnet, hat meist einen
+   * Fernseher mit Browser vor sich. Für die anderen – Apple TV, Chromecast,
+   * Roku, oder ein Fernseher, dessen Browser nicht mag – steht hier der Weg
+   * über die Spiegelung des Telefons.
+   *
+   * Er stand nur im Zweig ohne laufende Sitzung. Eine Code-Diashow läuft aber
+   * bis zu zwölf Stunden; wer währenddessen am ZWEITEN Fernseher spiegeln
+   * wollte, fand den Weg im Nachrichtenmenü, in der Sammlung und im
+   * Betrachter erst nach „Beenden".
+   */
+  const spiegelWeg = spiegelbar ? (
+    <div className="tv-andere-wege">
+      <p className="tv-hinweis">
+        {laeuft
+          ? 'Lieber auf einem anderen Fernseher zeigen – ohne Browser, etwa Apple TV oder Chromecast?'
+          : 'Fernseher ohne Browser? Apple TV, Chromecast, Roku – oder einfach kein Code zur Hand:'}
+      </p>
+      <button type="button" className="btn btn-block" onClick={() => setSpiegeln(true)}>
+        📱 Telefon spiegeln – Fernsehansicht
+      </button>
+    </div>
+  ) : null;
+
   return (
     <>
       <Sheet
@@ -375,6 +401,7 @@ export function FernsehSheet({
             >
               Beenden
             </button>
+            {spiegelWeg}
           </div>
         ) : (
           <div className="tv-einstellen">
@@ -489,25 +516,7 @@ export function FernsehSheet({
                   : 'Starten'}
             </button>
             {sicher && <p className="tv-hinweis">Jeder im Raum kann den Verlauf dann mitlesen.</p>}
-            {spiegelbar && (
-              /*
-               * Der dritte Weg, am Ende und nicht vorn.
-               *
-               * Dieses Blatt ist der Code-Weg, und wer es öffnet, hat meist einen
-               * Fernseher mit Browser vor sich. Für die anderen – Apple TV,
-               * Chromecast, Roku, oder ein Fernseher, dessen Browser nicht mag –
-               * steht hier der Weg über die Spiegelung des Telefons.
-               */
-              <div className="tv-andere-wege">
-                <p className="tv-hinweis">
-                  Fernseher ohne Browser? Apple TV, Chromecast, Roku – oder einfach kein Code zur
-                  Hand:
-                </p>
-                <button type="button" className="btn btn-block" onClick={() => setSpiegeln(true)}>
-                  📱 Telefon spiegeln – Fernsehansicht
-                </button>
-              </div>
-            )}
+            {spiegelWeg}
           </div>
         )}
       </Sheet>

@@ -74,6 +74,16 @@ describe('spiegelAnleitungen', () => {
     const pixel = ANLEITUNGEN.find((a) => a.id === 'pixel');
     expect(pixel?.hinweis).toMatch(/Miracast/);
   });
+
+  /*
+   * „Oben rechts nach unten wischen" öffnet auf einem iPhone mit Home-Taste
+   * (SE) die Mitteilungszentrale, nicht das Kontrollzentrum.
+   */
+  it('nennt beim iPhone auch die Geste für Geräte mit Home-Taste', () => {
+    const iphone = ANLEITUNGEN.find((a) => a.id === 'iphone');
+    expect(iphone?.schritte[0]).toMatch(/oben rechts/);
+    expect(iphone?.schritte[0]).toMatch(/Home-Taste.*unteren Rand/);
+  });
 });
 
 describe('mitteilungenAbschalten', () => {

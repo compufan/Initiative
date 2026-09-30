@@ -369,7 +369,12 @@ und das ist Absicht: Keiner davon funktioniert überall.
 - **In einer Sammlung** der Cast-Knopf und „Kein Chromecast? Code am
   Fernseher" – im Blatt dahinter ebenfalls „Telefon spiegeln".
 - **Im Dateibetrachter** über „⋯ → Auf den Fernseher", bei Videos zusätzlich
-  der 📺.
+  der 📺. Esc schliesst dort nur das oberste Blatt, nicht den Betrachter mit,
+  und beim Blättern bekommt jede Datei ihren eigenen 📺 (vorher hing die
+  vorbereitete Karte der vorigen Datei noch am Video).
+
+„Telefon spiegeln" steht in diesen Blättern auch dann, wenn schon eine
+Code-Diashow läuft – unter „Beenden", für einen zweiten Fernseher.
 
 Der Code-Weg ist die Rückfallebene – und die bessere Wahl, wenn es darauf
 ankommt: Er zeigt Bilder in voller Auflösung statt in 1280 × 720, und die
@@ -394,8 +399,9 @@ Datei sehen darf).
   Cast-Symbol, Safaris AirPlay – schickten eine Adresse ohne Karte, der
   Fernseher bekam 401. Beides geht jetzt. Der Preis: Wo ein Fernseher in
   Reichweite ist, steht in der Videoblase eine Adresse, die sechs Stunden lang
-  ohne Anmeldung genau diese eine Datei öffnet. Nach fünf Stunden nimmt die App
-  sie wieder heraus.
+  ohne Anmeldung genau diese eine Datei öffnet. Fünf Stunden, nachdem sie
+  eingesetzt wurde, nimmt die App sie wieder heraus – auch wenn das Blatt, das
+  sie bestellt hat, schon zu war, als sie ankam.
 - **Chrome bietet Videos bis 15 Sekunden nicht zum Streamen an** – auch sein
   eigenes Cast-Symbol fehlt dann. Das Blatt sagt es; mit Chromecast (Google
   Cast) geht es trotzdem.
@@ -431,14 +437,36 @@ Fernseher, in dem es hochgeladen wurde.
 ### Code am Fernseher – was sich geändert hat
 
 - **Ton:** Videos beginnen stumm (ohne Tastendruck spielt kein Browser Ton),
-  und im Bild steht „OK drücken für Ton". Ein Druck auf OK schaltet ihn ein –
-  für die Sitzung des Fernsehers.
+  und im Bild steht „OK drücken oder tippen für Ton". Ein Druck auf OK – oder
+  ein Tipp bzw. Klick auf den Schirm – schaltet ihn ein, für die Sitzung des
+  Fernsehers. Der Tipp zählt, weil „der Fernseher" oft ein Tablet, ein zweites
+  Telefon oder ein Rechner mit Maus ist und auch Fernbedienungen im
+  Zeigermodus (LG Magic Remote) OK als Klick schicken.
+- **Bedienen ohne Tasten:** Ein Tipp in die Mitte ist OK (Ton, sonst Pause
+  und Weiter), ein Tipp ins linke bzw. rechte Viertel blättert.
+- **Abspielen und Pause** (die einzelnen Tasten, etwa 415 und 19) tun, was
+  draufsteht. Vorher schalteten sie um – „Abspielen" bei laufender Schau hielt
+  sie an. Umschalten tun nur OK, Enter, Leertaste und die kombinierte Taste.
 - **Pause und Weiter starten ein Video nicht mehr von vorn.** Der Fernseher
   holt die Liste nur noch, wenn sich ihr Inhalt geändert haben kann; Pause und
   Blättern wirken am selben Element.
 - **Die Fernbedienung rechnet von der echten Stelle aus.** Der Fernseher meldet
   dem Server, wenn er selbst weiterblättert; das Telefon schickt nur noch
   „eins weiter" bzw. „eins zurück".
+- **Diese Meldung überschreibt keinen Befehl mehr.** Sie sagt, auf welchem
+  Stand der Fernseher beruht, und der Server nimmt sie nur an, wenn seitdem
+  niemand am Telefon etwas gedrückt hat. Vorher konnte sie in den zwei
+  Sekunden zwischen zwei Abfragen eine Pause vom Telefon wieder aufheben,
+  „Zurück" zu „Weiter" machen und „Stattdessen dies zeigen" mitten im neuen
+  Programm beginnen lassen. Die Pause meldet der Fernseher nur noch, wenn sie
+  an ihm selbst gedrückt wurde.
+- **Weiterblättern mitten im Video** liess am Ende des nächsten Videos ein
+  Stück aus (zwei Ende-Hörer am selben Element). Behoben.
+- **Videos, die der Fernseher nicht abspielen kann** (Format, abgelaufene
+  Karte), hielten die Diashow auf Schwarz an und zeigten dazu „OK drücken für
+  Ton". Jetzt steht „Dieses Video lässt sich hier nicht abspielen", und nach
+  vier Sekunden geht es weiter. Ist nur die Karte eines langen, angehaltenen
+  Videos abgelaufen, setzt der Fernseher die frische an derselben Stelle ein.
 - **„Stattdessen dies zeigen":** Läuft schon etwas, bietet „Auf den Fernseher"
   an, das Neue auf demselben Fernseher zu zeigen – ohne „Beenden" und ohne den
   Code neu abzutippen. Das zählt nicht gegen die Bremse von zwanzig
@@ -474,6 +502,14 @@ beim Code-Weg, Blättern per Wischen oder Tippen, Bildschirm bleibt wach.
   je Gerät, **bevor** die Ansicht startet.
 - **Das Telefon muss entsperrt bleiben und die App vorn.** Wer die App
   wechselt, zeigt das auf dem Fernseher, und die Diashow hält an.
+- **Andere Medien verstummen.** Beim Start hält die Ansicht alles an, was in
+  der App gerade spielt – das Video der Chatblase oder des Betrachters, von
+  dem aus man sie geöffnet hat, eine Sprachnachricht. Vorher liefen zwei
+  Tonspuren versetzt über den Fernseher.
+- **Ein einzelnes Video** steht am Ende mit ▶ und lässt sich neu starten.
+- **Die Pfeiltasten gehören der Ansicht** – der Dateibetrachter dahinter
+  blättert nicht mehr mit (vorher verschwand die Ansicht dabei mitten im
+  Spiegeln).
 - **iPhone:** Das Vollbild der Videosteuerung übergibt ein Video beim Spiegeln
   an AirPlay – der Fernseher holt es dann selbst und bleibt oft schwarz. In der
   Fernsehansicht laufen Videos deshalb im Bild, ohne diesen Knopf und mit
@@ -483,24 +519,25 @@ beim Code-Weg, Blättern per Wischen oder Tippen, Bildschirm bleibt wach.
   Code-Weg. Starten oder erkennen kann die App die Spiegelung nicht – keine
   Web-Schnittstelle meldet sie.
 - **Auf einen PC** lässt sich ebenfalls spiegeln: Windows empfängt Miracast
-  mit der optionalen Funktion „Drahtlose Anzeige", ein Mac (ab macOS 12)
-  AirPlay. Ein anderes Telefon empfängt keine Spiegelung – dort ist der
-  Code-Weg der Weg: `/tv` im Browser öffnen.
+  mit der optionalen Funktion „Drahtlose Anzeige", ein Mac AirPlay – ab macOS
+  12 und nur auf neueren Macs (etwa ab 2018, laut Apples Liste der Macs mit
+  AirPlay-Empfänger; nicht aus der Recherche). Ein anderes Telefon empfängt
+  keine Spiegelung – dort ist der Code-Weg der Weg: `/tv` im Browser öffnen.
 
 ### Funktioniert Chromecast mit allen Fernsehern?
 
 Nein. Google Cast ist **ein** Standard von mehreren. Der Stand (September 2026):
 
-| Plattform                                                     | Google Cast                                               | AirPlay 2 | Browser am Gerät        | Bildschirmspiegelung empfangen |
-| ------------------------------------------------------------- | --------------------------------------------------------- | --------- | ----------------------- | ------------------------------ |
-| Google TV / Android TV (Sony, TCL, Hisense, Philips, Sharp …) | ja                                                        | teilweise | nein                    | Google Cast                    |
-| Chromecast-Stick / Google TV Streamer                         | ja                                                        | nein      | nein                    | Google Cast                    |
-| **Samsung** (Tizen)                                           | **nur ausgewählte Modelle**, ab 2023 einzelne, per Update | ja        | ja                      | Miracast (Smart View), AirPlay |
-| **LG** (webOS)                                                | **ab Modelljahr 2024**, 2023er C3/G3 nachgerüstet         | ja        | ja                      | Miracast (Screen Share)        |
-| Amazon Fire TV                                                | nein (setzt auf Matter Casting)                           | nein      | Silk, nachinstallierbar | Miracast                       |
-| Roku                                                          | nein                                                      | ja        | nein                    | Miracast (nicht vom Pixel)     |
-| VIDAA (Hisense), Titan OS, TiVo OS                            | nein                                                      | teilweise | meist ja                | teilweise                      |
-| Apple TV                                                      | nein                                                      | ja        | nein                    | AirPlay                        |
+| Plattform                                                     | Google Cast                                               | AirPlay 2 | Browser am Gerät        | Bildschirmspiegelung empfangen                            |
+| ------------------------------------------------------------- | --------------------------------------------------------- | --------- | ----------------------- | --------------------------------------------------------- |
+| Google TV / Android TV (Sony, TCL, Hisense, Philips, Sharp …) | ja                                                        | teilweise | nein                    | Google Cast                                               |
+| Chromecast-Stick / Google TV Streamer                         | ja                                                        | nein      | nein                    | Google Cast                                               |
+| **Samsung** (Tizen)                                           | **nur ausgewählte Modelle**, ab 2023 einzelne, per Update | ja        | ja                      | Miracast (Smart View), AirPlay                            |
+| **LG** (webOS)                                                | **ab Modelljahr 2024**, 2023er C3/G3 nachgerüstet         | ja        | ja                      | Miracast (Screen Share), AirPlay                          |
+| Amazon Fire TV                                                | nein (setzt auf Matter Casting)                           | nein      | Silk, nachinstallierbar | Miracast                                                  |
+| Roku                                                          | nein                                                      | ja        | nein                    | Miracast (nicht vom Pixel), AirPlay (Modelle mit AirPlay) |
+| VIDAA (Hisense), Titan OS, TiVo OS                            | nein                                                      | teilweise | meist ja                | teilweise                                                 |
+| Apple TV                                                      | nein                                                      | ja        | nein                    | AirPlay                                                   |
 
 Samsung und LG – zusammen der grösste Teil der Wohnzimmer – konnten jahrelang
 **kein** Google Cast, und bei Samsung gibt es es bis heute nur auf

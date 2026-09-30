@@ -4,7 +4,7 @@ import type { AttachmentDto } from '@initiative/shared';
 import { useDialogAnmeldung } from '../../lib/dialogAnmeldung.js';
 import { imKreis } from '../../tv/ablauf.js';
 import { reihenfolge } from '../../tv/mischen.js';
-import { mediaSrc } from '../media/helpers.js';
+import { claimPlayback, mediaSrc, releasePlayback } from '../media/helpers.js';
 import { startStelle, vollbildVerlassen, wischSchritt } from './fernsehansicht.js';
 
 /**
@@ -173,7 +173,40 @@ export function Fernsehansicht({
     film.disablePictureInPicture = true;
   }, []);
 
-  // Pfeile und Leertaste – für den Rechner am Fernseher und für Tastaturen.
+  /*
+   * Alles andere verstummt, solange die Ansicht offen ist.
+   *
+   * Der häufigste Weg hierher führt über den 📺 an einem Video, das gerade
+   * LÄUFT – in der Chatblase oder im Dateibetrachter. Beide bleiben hinter
+   * der Ansicht eingehängt, und ihr Video spielte mit Ton weiter. Beim
+   * Spiegeln geht der Ton des Telefons auf den Fernseher: zwei versetzte
+   * Tonspuren, und aus der Ansicht heraus kommt man an das andere Video
+   * nicht heran. Also beim Öffnen alles anhalten, was spielt (auch eine
+   * Sprachnachricht), und das eigene Element danach als das eine laufende
+   * anmelden (`claimPlayback` im `onPlay` unten) – dann hält die App es
+   * wie jedes andere Medium an, wenn doch etwas Neues beginnt.
+   */
+  useEffect(() => {
+    const eigenes = filmRef.current;
+    document.querySelectorAll('video, audio').forEach((element) => {
+      const medium = element as HTMLMediaElement;
+      if (medium !== eigenes && !medium.paused) medium.pause();
+    });
+    return () => {
+      if (eigenes) releasePlayback(eigenes);
+    };
+  }, []);
+
+  /*
+   * Pfeile und Leertaste – für den Rechner am Fernseher und für Tastaturen.
+   *
+   * Im FANGdurchgang und mit `stopImmediatePropagation`: Die Ansicht liegt
+   * über anderen Ansichten, die selbst am Fenster auf die Pfeile hören – der
+   * Dateibetrachter etwa. Der blätterte bei „→" mit, hängte dabei seine Datei
+   * samt 📺, Blatt und dieser Ansicht aus, und die Spiegelung zeigte
+   * plötzlich wieder die App. Was die Ansicht deutet, gehört ihr allein.
+   * Esc bleibt unberührt – das schliesst über den gemeinsamen Stapel.
+   */
   useEffect(() => {
     const taste = (ereignis: KeyboardEvent) => {
       if (ereignis.key === 'ArrowRight') gehe(1);
@@ -181,10 +214,11 @@ export function Fernsehansicht({
       else if (ereignis.key === ' ') setPausiert((jetzt) => !jetzt);
       else return;
       ereignis.preventDefault();
+      ereignis.stopImmediatePropagation();
       setLeiste(true);
     };
-    window.addEventListener('keydown', taste);
-    return () => window.removeEventListener('keydown', taste);
+    window.addEventListener('keydown', taste, true);
+    return () => window.removeEventListener('keydown', taste, true);
   }, [gehe]);
 
   // Ein Stück wechselt: das Video laden oder leeren.
@@ -204,12 +238,27 @@ export function Fernsehansicht({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stueck?.id, istVideo]);
 
-  // Pause am selben Element – nie neu laden (siehe das Fernsehblatt).
+  /*
+   * Pause am selben Element – nie neu laden (siehe das Fernsehblatt).
+   *
+   * Ein Video, das zu Ende ist, beginnt auf ▶ von vorn. Hier stand
+   * `paused && !ended` – ein einzelnes Video (der häufigste Fall: der 📺 an
+   * einer Videoblase) liess sich nach dem Ende also nie wieder abspielen, und
+   * der Knopf zeigte dabei „Anhalten".
+   */
   useEffect(() => {
     const film = filmRef.current;
     if (!film || !istVideo || !film.src) return;
-    if (pausiert) film.pause();
-    else if (film.paused && !film.ended) spielen();
+    if (pausiert) {
+      film.pause();
+      return;
+    }
+    if (film.ended) {
+      film.currentTime = 0;
+      spielen();
+    } else if (film.paused) {
+      spielen();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pausiert]);
 
@@ -298,7 +347,17 @@ export function Fernsehansicht({
         hidden={!istVideo}
         playsInline
         preload="auto"
+        onPlay={(ereignis) => claimPlayback(ereignis.currentTarget)}
         onEnded={() => {
+          /*
+           * Mit nur einem Stück gibt es kein nächstes: Dann steht das Video
+           * am Ende, und die Leiste zeigt ▶ – ein Druck spielt es von vorn.
+           */
+          if (anzahl < 2) {
+            setPausiert(true);
+            setLeiste(true);
+            return;
+          }
           if (!pausiert) gehe(1);
         }}
         onError={() => {
