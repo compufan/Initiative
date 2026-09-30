@@ -143,6 +143,22 @@ impl Event {
         )
     }
 
+    /// Ein Termin ist für diese Empfänger nicht mehr da – mit Grund.
+    ///
+    /// `geloescht`: der Termin ist weg. `ausgeladen`: er besteht weiter, nur
+    /// nicht mehr für den Empfänger. Ältere Clients lesen nur `eventId` und
+    /// behandeln beides gleich.
+    pub fn event_deleted_grund(
+        event_id: uuid::Uuid,
+        conversation_id: Option<uuid::Uuid>,
+        grund: &str,
+    ) -> Self {
+        Self::new(
+            "event.deleted",
+            json!({ "eventId": event_id, "conversationId": conversation_id, "grund": grund }),
+        )
+    }
+
     pub fn game_updated(session: &crate::dto::GameSessionDto) -> Self {
         Self::new("game.updated", json!({ "session": session }))
     }
@@ -152,9 +168,23 @@ impl Event {
     }
 
     pub fn sync_hint(scope: &str, conversation_id: Option<uuid::Uuid>) -> Self {
-        Self::new(
-            "sync.hint",
-            json!({ "scope": scope, "conversationId": conversation_id }),
-        )
+        Self::sync_hint_fuer(scope, conversation_id, None)
+    }
+
+    /// Wie `sync_hint`, mit der Kennung des Termins, um den es geht.
+    ///
+    /// Ein Termin-Rundruf trägt die Kennung nicht auf oberster Ebene; ohne sie
+    /// wüsste der Client nach einem gekürzten Rundruf nicht, was er nachladen
+    /// soll.
+    pub fn sync_hint_fuer(
+        scope: &str,
+        conversation_id: Option<uuid::Uuid>,
+        event_id: Option<uuid::Uuid>,
+    ) -> Self {
+        let mut payload = json!({ "scope": scope, "conversationId": conversation_id });
+        if let (Some(event_id), Some(karte)) = (event_id, payload.as_object_mut()) {
+            karte.insert("eventId".to_string(), json!(event_id));
+        }
+        Self::new("sync.hint", payload)
     }
 }
