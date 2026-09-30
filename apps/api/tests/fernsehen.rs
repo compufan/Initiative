@@ -1471,13 +1471,17 @@ async fn der_fernseher_meldet_seine_stelle_und_die_fernbedienung_rechnet_davon()
             "PUT",
             &format!("/api/v1/tv/sitzungen/{code}/stelle?geheim=falsch"),
             None,
-            Some(json!({ "stelle": 2 })),
+            Some(json!({ "stelle": 2, "fassung": fassung })),
         )
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    let melden = |stelle: i32, pausiert: Option<bool>| {
-        let mut koerper = json!({ "stelle": stelle });
+    /*
+     * Jede Meldung sagt, auf welcher Fassung sie beruht – der Fernseher kennt
+     * sie aus dem letzten Stand. Siehe `stelle_melden_ueberschreibt_keinen_befehl`.
+     */
+    let melden = |stelle: i32, pausiert: Option<bool>, auf: i64| {
+        let mut koerper = json!({ "stelle": stelle, "fassung": auf });
         if let Some(p) = pausiert {
             koerper["pausiert"] = json!(p);
         }
@@ -1488,7 +1492,7 @@ async fn der_fernseher_meldet_seine_stelle_und_die_fernbedienung_rechnet_davon()
             "PUT",
             &format!("/api/v1/tv/sitzungen/{code}/stelle?geheim={geheim}"),
             None,
-            Some(melden(2, None)),
+            Some(melden(2, None, fassung)),
         )
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
@@ -1536,13 +1540,16 @@ async fn der_fernseher_meldet_seine_stelle_und_die_fernbedienung_rechnet_davon()
         "zurück vom Anfang geht ans Ende"
     );
 
-    // Hält jemand am Fernseher selbst an, steht das ebenfalls hier.
+    // Hält jemand am Fernseher selbst an, steht das ebenfalls hier – gemeldet
+    // auf dem Stand NACH den beiden Schritten, den der Fernseher inzwischen kennt.
+    let (_, stand) = probe.ohne_konto("GET", &stand_pfad).await;
+    let jetzt = stand["fassung"].as_i64().expect("Fassung");
     let (status, _) = probe
         .call(
             "PUT",
             &format!("/api/v1/tv/sitzungen/{code}/stelle?geheim={geheim}"),
             None,
-            Some(melden(1, Some(true))),
+            Some(melden(1, Some(true), jetzt)),
         )
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
@@ -1565,6 +1572,157 @@ async fn der_fernseher_meldet_seine_stelle_und_die_fernbedienung_rechnet_davon()
         "„Pause“ hat eine neue Mischung ausgelöst"
     );
     assert!(stand["fassung"].as_i64().expect("Fassung") > vorher);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stelle_melden_ueberschreibt_keinen_befehl() {
+    /*
+     * Das Rennen zwischen Fernseher und Telefon.
+     *
+     * Der Fernseher fragt alle zwei Sekunden nach dem Stand und blättert
+     * dazwischen selbst weiter – und meldet das. Landete ein Befehl vom
+     * Telefon zwischen seiner letzten Abfrage und seiner nächsten Meldung,
+     * schrieb die Meldung ihn wieder um: Die Pause war weg, „Stattdessen dies
+     * zeigen" begann beim vierten Stück, „Zurück" wurde zu „Weiter". Im
+     * Browser liess sich das bei jedem sechsten Druck nachstellen.
+     *
+     * Hier wird genau diese Reihenfolge geschickt: erst der Befehl, dann die
+     * Meldung, die noch auf dem Stand DAVOR beruht.
+     */
+    let Some(probe) = aufbauen().await else {
+        eprintln!("TEST_DATABASE_URL fehlt – übersprungen");
+        return;
+    };
+    let token = probe.anmelden("rennen").await;
+    let (code, geheim) = probe.fernseher().await;
+    let mut bilder = Vec::new();
+    for nummer in 0..6 {
+        bilder.push(
+            probe
+                .hochladen_bild(&token, &format!("r{nummer}.jpg"))
+                .await,
+        );
+    }
+    let einstellen = |stuecke: Vec<String>| {
+        let pfad = format!("/api/v1/tv/sitzungen/{code}/programm");
+        let token = token.clone();
+        let probe = &probe;
+        async move {
+            probe
+                .call(
+                    "POST",
+                    &pfad,
+                    Some(&token),
+                    Some(json!({ "attachmentIds": stuecke, "modus": "linear" })),
+                )
+                .await
+        }
+    };
+    let steuern = |koerper: Value| {
+        let pfad = format!("/api/v1/tv/sitzungen/{code}");
+        let token = token.clone();
+        let probe = &probe;
+        async move {
+            probe
+                .call("PATCH", &pfad, Some(&token), Some(koerper))
+                .await
+        }
+    };
+    let melden = |koerper: Value| {
+        let pfad = format!("/api/v1/tv/sitzungen/{code}/stelle?geheim={geheim}");
+        let probe = &probe;
+        async move { probe.call("PUT", &pfad, None, Some(koerper)).await }
+    };
+    let stand_pfad = format!("/api/v1/tv/sitzungen/{code}/stand?geheim={geheim}");
+    let fassung_jetzt = || {
+        let probe = &probe;
+        let pfad = stand_pfad.clone();
+        async move {
+            let (_, stand) = probe.ohne_konto("GET", &pfad).await;
+            (stand["fassung"].as_i64().expect("Fassung"), stand)
+        }
+    };
+
+    let (status, antwort) = einstellen(bilder.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+
+    // ---- 1. Pause vom Telefon, danach die Meldung vom Stand davor ---------
+    let (vorher, _) = fassung_jetzt().await;
+    let (status, _) = steuern(json!({ "pausiert": true })).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = melden(json!({ "stelle": 1, "fassung": vorher })).await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "eine überholte Meldung wurde angenommen"
+    );
+    let (_, stand) = fassung_jetzt().await;
+    assert_eq!(
+        stand["pausiert"],
+        json!(true),
+        "die Meldung des Fernsehers hat die Pause vom Telefon aufgehoben: {stand}"
+    );
+    assert_eq!(stand["stelle"], json!(0), "{stand}");
+
+    // Sogar eine Meldung MIT `pausiert: false` (so schickte sie das alte Blatt
+    // bei jedem Bild) hebt sie nicht auf.
+    let (status, _) = melden(json!({ "stelle": 1, "pausiert": false, "fassung": vorher })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (aktuell, stand) = fassung_jetzt().await;
+    assert_eq!(stand["pausiert"], json!(true), "{stand}");
+
+    // Beruht sie auf dem aktuellen Stand, gilt sie – und lässt die Pause stehen.
+    let (status, _) = melden(json!({ "stelle": 2, "fassung": aktuell })).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, stand) = fassung_jetzt().await;
+    assert_eq!(stand["stelle"], json!(2), "{stand}");
+    assert_eq!(
+        stand["pausiert"],
+        json!(true),
+        "eine Meldung ohne `pausiert` hat die Pause berührt: {stand}"
+    );
+
+    // ---- 2. „Zurück" vom Telefon, danach das eigene „Weiter" des Fernsehers -
+    let (vorher, _) = fassung_jetzt().await;
+    let (status, antwort) = steuern(json!({ "schritt": -1 })).await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+    assert_eq!(antwort["stelle"], json!(1));
+    let (status, _) = melden(json!({ "stelle": 3, "fassung": vorher })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (_, stand) = fassung_jetzt().await;
+    assert_eq!(
+        stand["stelle"],
+        json!(1),
+        "„Zurück“ wurde von der Meldung des Fernsehers zu „Weiter“: {stand}"
+    );
+
+    // ---- 3. „Stattdessen dies zeigen", danach eine Meldung aus dem alten Programm
+    let (vorher, _) = fassung_jetzt().await;
+    let (status, antwort) = einstellen(bilder[..4].to_vec()).await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+    let (status, _) = melden(json!({ "stelle": 3, "fassung": vorher })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (_, programm) = probe
+        .ohne_konto(
+            "GET",
+            &format!("/api/v1/tv/sitzungen/{code}/programm?geheim={geheim}"),
+        )
+        .await;
+    assert_eq!(
+        programm["stelle"],
+        json!(0),
+        "das neue Programm beginnt mitten drin, weil eine alte Meldung ankam: {programm}"
+    );
+    assert_eq!(programm["pausiert"], json!(false));
+
+    // Ein älteres Blatt ohne Fassung wird abgewiesen, statt blind zu schreiben.
+    let (status, _) = melden(json!({ "stelle": 2 })).await;
+    assert!(
+        status.is_client_error(),
+        "eine Meldung ohne Fassung wurde angenommen: {status}"
+    );
+    let (_, stand) = fassung_jetzt().await;
+    assert_eq!(stand["stelle"], json!(0));
 }
 
 #[tokio::test(flavor = "multi_thread")]

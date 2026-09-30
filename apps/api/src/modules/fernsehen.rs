@@ -1241,8 +1241,26 @@ async fn steuern(
 struct StelleMeldung {
     /// Die Stelle in der Reihenfolge, die der Fernseher gerade zeigt.
     stelle: i32,
-    /// Hat jemand am Fernseher selbst angehalten (OK auf der Fernbedienung)?
+    /**
+     * Hat jemand am Fernseher selbst angehalten oder fortgesetzt (OK auf der
+     * Fernbedienung)?
+     *
+     * Nur dann schickt das Blatt es mit. Beim eigenen Weiterblättern fehlt
+     * es – sonst meldete jedes Bild „läuft", und eine Pause vom Telefon, die
+     * zwischen zwei Bildern ankam, wäre wieder aufgehoben.
+     */
     pausiert: Option<bool>,
+    /**
+     * Auf welchem Stand der Fernseher gerade steht – die `fassung` aus dem
+     * letzten Stand bzw. Programm, das er übernommen hat.
+     *
+     * Pflicht, und das mit Absicht: Eine Meldung ohne diese Angabe lässt sich
+     * nicht prüfen (siehe `stelle_melden`), und eine ungeprüfte Meldung kann
+     * einen Befehl des Telefons überschreiben. Ein älteres Blatt, das sie noch
+     * nicht schickt, bekommt deshalb eine Absage vom Leser des Körpers – dann
+     * rechnet die Fernbedienung von der zuletzt bekannten Stelle, wie früher.
+     */
+    fassung: i64,
 }
 
 /**
@@ -1262,6 +1280,35 @@ struct StelleMeldung {
  * Erhöhte die eigene Meldung des Fernsehers sie, sähe er beim nächsten Takt
  * seine eigene Änderung als fremde – und holte bei jedem Bild die Liste neu.
  * Die Stelle ist hier nur eine AUSKUNFT für die Fernbedienung, kein Befehl.
+ *
+ * # Warum sie nur gilt, wenn sie auf dem AKTUELLEN Stand beruht
+ *
+ * Fernseher und Telefon schreiben dieselbe Stelle, und keiner wartet auf den
+ * anderen. Der Fernseher fragt alle zwei Sekunden nach dem Stand und blättert
+ * dazwischen selbst weiter. Kam ein Befehl vom Telefon in diese Lücke, hob
+ * die nächste Meldung des Fernsehers ihn wieder auf – nachgestellt im
+ * Browser und gegen den Server:
+ *
+ *   * **Pause ging verloren.** Das Telefon setzte `pausiert = true`, eine
+ *     Fünftelsekunde später meldete der Fernseher sein nächstes Bild samt
+ *     `pausiert: false`, und die Schau lief weiter.
+ *   * **„Stattdessen dies zeigen" begann mitten im neuen Programm.** Die
+ *     Meldung stammte noch aus dem ALTEN Programm (Stelle 3) und landete nach
+ *     dem Einstellen (Stelle 0) – das neue fing beim vierten Stück an.
+ *   * **„Zurück" wurde zu „Weiter".** Der Server rechnete s − 1, die Meldung
+ *     setzte s + 1 darüber.
+ *
+ * Bei sechs Sekunden Standzeit traf das etwa jeden sechsten Druck, bei zwei
+ * Sekunden bis zur Hälfte. Deshalb schickt der Fernseher mit, auf welcher
+ * `fassung` er beruht, und geschrieben wird nur, wenn sie noch gilt. Jeder
+ * Befehl vom Telefon erhöht die Fassung (`steuern`, `einstellen`,
+ * `beenden`); eine Meldung, die davor abgeschickt wurde, geht damit ins
+ * Leere. Der Fernseher bekommt dann 409 und holt sich beim nächsten Takt den
+ * Befehl – der Befehl gewinnt, nicht das Echo.
+ *
+ * Geprüft wird in DERSELBEN Anweisung (`where fassung = $4`), nicht vorher
+ * mit einer Abfrage: Zwischen Lesen und Schreiben könnte sonst wieder ein
+ * Befehl landen.
  *
  * # Warum das Geheimnis reicht und keine Bremse davor sitzt
  *
@@ -1285,18 +1332,24 @@ async fn stelle_melden(
     if row.art != "diashow" || row.besitzer_id.is_none() || anzahl == 0 {
         return Ok(StatusCode::NO_CONTENT);
     }
-    sqlx::query(
+    let ergebnis = sqlx::query(
         "update fernsehsitzungen
             set stelle = $2,
                 pausiert = coalesce($3, pausiert),
                 gesehen_at = now()
-          where code = $1",
+          where code = $1
+            and fassung = $4",
     )
     .bind(&row.code)
     .bind(meldung.stelle.rem_euclid(anzahl))
     .bind(meldung.pausiert)
+    .bind(meldung.fassung)
     .execute(&state.pool)
     .await?;
+    if ergebnis.rows_affected() == 0 {
+        // Überholt – siehe oben. Kein Fehler des Fernsehers, nur zu spät.
+        return Ok(StatusCode::CONFLICT);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
