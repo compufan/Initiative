@@ -100,8 +100,11 @@ export function hatFormTeile(doc: BildDoc): boolean {
  *
  * `lage` beschreibt den Weg vom ersten Bild zu diesem; `punktVor` rechnet
  * einen Punkt in dieselbe Richtung.
+ *
+ * Auch für die Maskenspuren (`masken.ts`): Dort wandert ein Formteil vom
+ * Bild seines Ankers aus – mit der Kamera oder mit dem Inhalt seiner Maske.
  */
-function formTeilZiehen(teil: Maskenteil, lage: Lage, faktor: number): Maskenteil {
+export function formTeilZiehen(teil: Maskenteil, lage: Lage, faktor: number): Maskenteil {
   const zieh = (x: number, y: number) => punktVor(lage, faktor, x, y);
   if (teil.art === 'verlauf') {
     const von = zieh(teil.von.x, teil.von.y);
@@ -283,4 +286,16 @@ let zaehler = 2 ** 30;
 function naechsteMarke(): number {
   zaehler += 1;
   return zaehler;
+}
+
+/**
+ * Eine Marke aus DEMSELBEN Zähler – für alles, was Masken für den Film
+ * zusammensetzt (`masken.ts`, die Spuren der Verfolgung).
+ *
+ * Derselbe Zähler und kein dritter: Zwei Zähler, die beide bei 2^30
+ * anfingen, vergäben dieselbe Zahl zweimal, und der Zwischenspeicher der
+ * Masken hielte dann die Maske eines anderen Bildes für diese.
+ */
+export function filmMarke(): number {
+  return naechsteMarke();
 }

@@ -865,8 +865,12 @@ function maskeSuchen(
  * Gesucht wird in wachsenden Quadraten bis zur halben Kantenlänge der Maske
  * (aus ihrer schon bekannten Fläche); findet sich nichts, bleibt der Punkt,
  * wo er ist.
+ *
+ * Auch für den Editor an einem Bild ohne Anker (`masken.ts`): Die Punkte des
+ * letzten Schlüsselbildes, mit der Maske verschoben, landen so IN ihr – und
+ * ein weiterer Tipp dort rechnet mit Punkten, die auf dem Gegenstand liegen.
  */
-function einrasten(
+export function einrasten(
   punkt: Punkt,
   maske: Uint8Array,
   breite: number,
