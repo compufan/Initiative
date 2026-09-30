@@ -11,7 +11,14 @@ export default defineConfig({
      * kaputt, die man dem Ergebnis nicht ansieht – ein falsch gerechneter
      * Zeilenfilter liefert kein Fehlerbild, sondern ein verschmiertes.
      */
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'scripts/**/*.test.mjs'],
+    include: [
+      'src/**/*.test.ts',
+      'src/**/*.test.tsx',
+      'scripts/**/*.test.mjs',
+      // Das Absenken des Fernsehblatts (`fernsehblatt.ts`) – es baut dafür
+      // `tv.html` wirklich und liest, was herauskommt.
+      'scripts/**/*.test.ts',
+    ],
     exclude: ['e2e/**', 'node_modules/**', 'dist/**'],
   },
 });

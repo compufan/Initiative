@@ -6,14 +6,23 @@ import './styles.css';
 /**
  * Der Fernseher als zweiter Bildschirm.
  *
- * Zwei Wege nebeneinander, beide ohne fremden Code:
+ * Drei Wege nebeneinander, weil keiner überall geht:
  *
- *   * `streamen.ts` – ein Video mit einem Fingertipp auf einen Chromecast oder
- *     per AirPlay. Der Knopf sitzt an der Videoblase und erscheint nur, wenn
- *     der Browser ein Gerät gefunden hat.
- *   * Das Blatt unter `/tv` – Fotos, Videos und Diashows auf jedem Fernseher
- *     mit Browser, also auf so gut wie jedem. Der Einstieg dorthin liegt an
- *     einer Sammlung (siehe `DateienScreen`) und hier, an der Nachricht.
+ *   * **Mit einem Tipp** – `streamen.ts` (Remote Playback in Chrome und
+ *     Safari, AirPlay) ohne fremden Code, und `cast.ts` (Google Cast) erst
+ *     nach ausdrücklicher Zustimmung, weil das Skript von Google kommt. Der 📺
+ *     sitzt an jedem Video und ist immer da; findet der Browser keinen
+ *     Fernseher, öffnet er „Auf den Fernseher" mit den anderen beiden Wegen
+ *     (`FernsehWahl`).
+ *   * **Code am Fernseher** – das Blatt unter `/tv`: Fotos, Videos und
+ *     Diashows auf jedem Fernseher mit Browser. Der Einstieg liegt an einer
+ *     Sammlung (siehe `DateienScreen`), an jedem Video und hier, an der
+ *     Nachricht.
+ *   * **Telefon spiegeln** – die Bildschirmspiegelung des Betriebssystems
+ *     (Smart View, „Übertragen", AirPlay) mit einer eigenen Fernsehansicht in
+ *     der App (`Fernsehansicht`, Anleitung in `SpiegelSheet`). Für Fernseher
+ *     ohne Browser, die trotzdem gespiegelt werden können: Apple TV,
+ *     Chromecast, Roku.
  *
  * Das Modul hat keinen eigenen Eintrag in der Leiste unten: „Fernseher“ ist
  * kein Ort, an den man geht, sondern etwas, das man mit einem Foto tut.

@@ -1,5 +1,6 @@
 import { Sheet } from '../../components/Sheet.js';
-import { castGrund, type CastZustand } from './cast.js';
+import { castGrund, castLadeFehler, type CastZustand } from './cast.js';
+import { browserAuskunft } from './castAnzeige.js';
 
 /**
  * „Warum wird kein Chromecast gefunden?“
@@ -19,8 +20,9 @@ import { castGrund, type CastZustand } from './cast.js';
  *     Jahre beherrscht. Danach steuert das Telefon diese App.
  *   * **Google Cast** schickt dem Gerät eine Adresse, die es selbst abruft.
  *     Das geht über mDNS und setzt voraus, dass der Fernseher Google Cast
- *     EMPFANGEN kann – Samsung erst ab Modelljahr 2023, LG ab 2024, Fire TV
- *     und Roku gar nicht.
+ *     EMPFANGEN kann – Samsung nur bei einzelnen Modellen ab 2023 (per Update
+ *     seit 2026), LG ab 2024 und bei einzelnen 2023ern, Fire TV und Roku gar
+ *     nicht.
  *
  * Ein Fernseher, auf dem YouTube läuft, kann also sehr wohl „kein Chromecast“
  * sein. Ohne diesen Satz sieht es aus, als sei die App kaputt.
@@ -49,9 +51,20 @@ export function CastDiagnose({
 }) {
   const grund = castGrund();
   const ort = typeof window === 'undefined' ? '' : window.location.origin;
-  const chromium =
-    typeof navigator !== 'undefined' && /Chrome|Chromium|Edg|OPR/.test(navigator.userAgent);
-  const apfel = typeof navigator !== 'undefined' && /iPhone|iPad|iPod/.test(navigator.userAgent);
+  /*
+   * Die Auskunft über den Browser kommt aus `browserAuskunft` – dort stand
+   * vorher „jeder Browser mit Chrome in der Kennung kann Chromecast", und
+   * das stimmte für Samsung Internet nicht.
+   */
+  const browser =
+    typeof navigator === 'undefined'
+      ? { text: '–', gut: false }
+      : browserAuskunft(
+          navigator.userAgent,
+          Boolean((navigator as Navigator & { brave?: unknown }).brave),
+        );
+  /** Kam das Skript an und sagte selbst „nicht in diesem Browser"? */
+  const ohneCast = castLadeFehler() === 'browser';
 
   return (
     <Sheet open={offen} onClose={zu} title="Warum wird kein Fernseher gefunden?" variant="modal">
@@ -64,22 +77,17 @@ export function CastDiagnose({
           YouTube startet seine eigene App auf dem Fernseher (über ein älteres Verfahren namens
           DIAL, das fast jeder Smart-TV kann). Chromecast schickt dem Gerät dagegen eine Adresse,
           die es selbst abruft – und das können nur Fernseher, die Google Cast eingebaut haben:
-          Google TV und Android TV immer, <strong>Samsung erst ab Modelljahr 2023</strong>,{' '}
-          <strong>LG ab 2024</strong>, Fire TV und Roku gar nicht.
+          Google TV und Android TV immer,{' '}
+          <strong>Samsung nur bei einzelnen Modellen ab 2023</strong>, <strong>LG ab 2024</strong>{' '}
+          (und einzelne 2023er), Fire TV und Roku gar nicht.
         </p>
 
         <h3 className="cast-diagnose-titel">Was hier gerade gilt</h3>
         <dl className="cast-diagnose-liste">
           <Zeile
             name="Dieser Browser"
-            wert={
-              apfel
-                ? 'iPhone oder iPad – kann kein Chromecast'
-                : chromium
-                  ? 'Chrome, Edge oder verwandt – kann Chromecast'
-                  : 'Safari oder Firefox – kann kein Chromecast'
-            }
-            gut={chromium && !apfel}
+            wert={ohneCast ? `${browser.text} – meldet selbst: kein Chromecast` : browser.text}
+            gut={browser.gut && !ohneCast}
           />
           <Zeile
             name="Adresse"
@@ -96,7 +104,9 @@ export function CastDiagnose({
               zustand === 'aus'
                 ? 'wird gerade geladen'
                 : zustand === 'fehlgeschlagen'
-                  ? 'nicht geladen – ein Inhaltsblocker?'
+                  ? ohneCast
+                    ? 'geladen – aber dieser Browser hat kein Chromecast eingebaut'
+                    : 'nicht geladen – ein Inhaltsblocker oder kein Netz?'
                   : 'geladen'
             }
             gut={zustand !== 'fehlgeschlagen'}

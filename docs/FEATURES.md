@@ -350,63 +350,219 @@ hochgeladen hat oder wer den Ordner pflegen darf.
 Fotos, Videos und Diashows auf dem grossen Bildschirm. Es gibt **drei Wege**,
 und das ist Absicht: Keiner davon funktioniert überall.
 
-| Weg                                       | Womit                                              | Was geht                                      | Wo es geht                                                                          |
-| ----------------------------------------- | -------------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------- |
-| **Chromecast** (der Ein-Tipp-Weg)         | Google Cast                                        | Fotos, Videos, Diashow                        | Chromium-Browser (Chrome, Edge …) und **nur über https** – **nicht auf dem iPhone** |
-| **AirPlay bzw. Remote Playback**          | Eingebaut im Browser                               | **nur Video**                                 | Safari (AirPlay), Chrome/Edge (Remote Playback)                                     |
-| **Code am Fernseher** (die Rückfallebene) | Der Browser des Fernsehers, eine Seite unter `/tv` | Fotos, Videos, Diashow – **in voller Grösse** | Jeder Fernseher mit Browser, jedes Telefon                                          |
+| Weg                                               | Womit                                                                    | Was geht                                                                    | Wo es geht                                                                                                                                                                                                 |
+| ------------------------------------------------- | ------------------------------------------------------------------------ | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Mit einem Tipp** – Chromecast                   | Google Cast, erst nach Zustimmung                                        | Fotos, Videos, Diashow                                                      | Chrome und Edge über https, an Fernsehern mit Google Cast – **nicht auf dem iPhone**, nicht in Samsung Internet                                                                                            |
+| **Mit einem Tipp** – Remote Playback bzw. AirPlay | Eingebaut im Browser                                                     | **nur Video**                                                               | Chrome/Edge an Google-Cast-Geräten, Safari/iPhone an AirPlay-Geräten                                                                                                                                       |
+| **Code am Fernseher**                             | Der Browser des Fernsehers, eine Seite unter `/tv`                       | Fotos, Videos, Diashow – **in voller Grösse**, Ton nach „OK"                | Jeder Fernseher mit Browser ab Chromium 63 (Samsung ab 2019, LG webOS ab 5), dazu jeder PC, jedes Tablet, jedes zweite Telefon                                                                             |
+| **Telefon spiegeln**                              | Die Bildschirmspiegelung des Telefons und die **Fernsehansicht** der App | Fotos, Videos, Diashow – mit Ton, in jedem Format, das das Telefon abspielt | Wo Telefon und Fernseher dasselbe Spiegeln können: Smart View/Miracast (Galaxy u. a. an Samsung, LG, Fire TV, Roku), Google Cast (Pixel an Chromecast), AirPlay (iPhone an Apple TV und AirPlay-Fernseher) |
 
-Der zweite Weg erscheint nur an einem einzelnen Video, nie an einer Sammlung –
-er kann dort nichts. Es sind auch zwei verschiedene Techniken hinter einem
-Knopf: die Remote Playback API in Chromium, AirPlay in Safari. Die Oberfläche
-zeigt beide als einen Weg, weil sie sich für den Bedienenden gleich anfühlen.
+**Wo man sie findet:**
 
-Im Chat heisst der dritte Weg im Nachrichtenmenü noch „Auf den Fernseher"; in
-einer Sammlung „Kein Chromecast? Code am Fernseher".
+- **An jedem Video** steht ein 📺 „Auf den Fernseher" – immer, auch wenn kein
+  Fernseher gefunden wurde. Meldet der Browser einen Fernseher in Reichweite,
+  öffnet ein Tipp sofort seine Geräteliste (das ist der Weg mit einem Tipp).
+  Sonst öffnet er ein Blatt mit allen drei Wegen und der Antwort auf „Kein
+  Fernseher gefunden?".
+- **Im Nachrichtenmenü** „Auf den Fernseher": der Code-Weg, und am Ende des
+  Blattes „📱 Telefon spiegeln".
+- **In einer Sammlung** der Cast-Knopf und „Kein Chromecast? Code am
+  Fernseher" – im Blatt dahinter ebenfalls „Telefon spiegeln".
+- **Im Dateibetrachter** über „⋯ → Auf den Fernseher", bei Videos zusätzlich
+  der 📺. Esc schliesst dort nur das oberste Blatt, nicht den Betrachter mit,
+  und beim Blättern bekommt jede Datei ihren eigenen 📺 (vorher hing die
+  vorbereitete Karte der vorigen Datei noch am Video).
 
-Der erste Weg steht vorn, weil er ein Fingertipp ist. Der dritte ist die
-Rückfallebene – und die bessere Wahl, wenn es darauf ankommt: Er zeigt Bilder
-in voller Auflösung statt in 1280 × 720, und die Diashow **läuft weiter, wenn
-das Telefon in der Tasche steckt** (der Fernseher taktet sie selbst).
+„Telefon spiegeln" steht in diesen Blättern auch dann, wenn schon eine
+Code-Diashow läuft – unter „Beenden", für einen zweiten Fernseher.
+
+Der Code-Weg ist die Rückfallebene – und die bessere Wahl, wenn es darauf
+ankommt: Er zeigt Bilder in voller Auflösung statt in 1280 × 720, und die
+Diashow **läuft weiter, wenn das Telefon in der Tasche steckt** (der Fernseher
+taktet sie selbst). Er braucht **kein gemeinsames WLAN**: Fernseher und
+Telefon reden beide nur mit dem Server. Deshalb lässt sich `/tv` auch auf einem
+PC, einem Laptop am Beamer oder einem zweiten Telefon öffnen – alles, was einen
+Browser hat, kann „der Fernseher" sein.
+
+### Mit einem Tipp – was dafür nötig ist und was sich geändert hat
+
+Der Fernseher holt die Datei **selbst**, ohne die Anmeldung des Telefons. Die
+Adresse trägt deshalb eine Eintrittskarte (gültig sechs Stunden, nur für diese
+Datei und diese Person; beim Abholen prüft der Server weiter, ob die Person die
+Datei sehen darf).
+
+- **Die Karte steht jetzt VOR dem Tipp im Video** – sobald der Browser einen
+  Fernseher in Reichweite meldet (für Videos, die schon im Bild waren) oder
+  jemand „Auf den Fernseher" für dieses Video öffnet. Vorher wurde sie erst nach dem Tipp geholt. Das hatte zwei
+  Folgen: Auf dem iPhone ging die AirPlay-Liste nie auf (der Fingertipp war bis
+  dahin verbraucht), und die **eingebauten Knöpfe der Videosteuerung** – Chromes
+  Cast-Symbol, Safaris AirPlay – schickten eine Adresse ohne Karte, der
+  Fernseher bekam 401. Beides geht jetzt. Der Preis: Wo ein Fernseher in
+  Reichweite ist, steht in der Videoblase eine Adresse, die sechs Stunden lang
+  ohne Anmeldung genau diese eine Datei öffnet. Fünf Stunden, nachdem sie
+  eingesetzt wurde, nimmt die App sie wieder heraus – auch wenn das Blatt, das
+  sie bestellt hat, schon zu war, als sie ankam.
+- **Chrome bietet Videos bis 15 Sekunden nicht zum Streamen an** – auch sein
+  eigenes Cast-Symbol fehlt dann. Das Blatt sagt es; mit Chromecast (Google
+  Cast) geht es trotzdem.
+- **Kein stiller Abbruch mehr.** Bricht der Browser die Geräteliste sofort ab
+  (kein Gerät, Video zu kurz), steht ein Satz da und das Blatt mit den anderen
+  Wegen geht auf.
+- **Chromecast-Ladefehler werden gemeldet.** Scheitert das Laden, heisst es
+  „Dieses Videoformat kann der Fernseher nicht abspielen" statt nichts.
+  iPhone-Videos (`video/quicktime`) gehen als `video/mp4` hinüber – derselbe
+  Behälter; ob der Empfänger HEVC kann, entscheidet er dann selbst.
+- **Samsung Internet** bringt kein Chromecast mit. Die App sagt das jetzt,
+  statt einen Inhaltsblocker zu vermuten.
+- **An der Videoblase im Chat** steht nach der Zustimmung auch der echte
+  Cast-Knopf, sobald ein Gerät da ist.
+
+### Formate
+
+Der Server wandelt nichts um – jedes Video geht in dem Format auf den
+Fernseher, in dem es hochgeladen wurde.
+
+- **Die Kamera der App nimmt jetzt MP4 mit H.264 und AAC auf**, wo der Browser
+  es kann (Chrome ab 126, auch auf Android, und Safari); sonst wie bisher WebM.
+  MP4/H.264 spielt so gut wie jeder Empfänger – Chromecast ab der ersten
+  Generation, AirPlay, Samsung, LG, Fire TV.
+- **Der Video-Editor schreibt weiter VP9-WebM ohne Ton.** Dafür fehlt der App
+  ein MP4-Behälter; H.264 kodieren könnten die Browser der Anwender durchaus
+  (die gegenteilige Aussage stammte aus der Test-Chromium ohne Codecs).
+  AirPlay und Chromecast der Generationen 1 bis 3 spielen solche Videos nicht
+  ab – der Code-Weg und die Spiegelung zeigen sie.
+- **iPhone-Videos** sind meist HEVC in MOV. Chromecast bis Generation 3 kann
+  kein HEVC.
+
+### Code am Fernseher – was sich geändert hat
+
+- **Ton:** Videos beginnen stumm (ohne Tastendruck spielt kein Browser Ton),
+  und im Bild steht „OK drücken oder tippen für Ton". Ein Druck auf OK – oder
+  ein Tipp bzw. Klick auf den Schirm – schaltet ihn ein, für die Sitzung des
+  Fernsehers. Der Tipp zählt, weil „der Fernseher" oft ein Tablet, ein zweites
+  Telefon oder ein Rechner mit Maus ist und auch Fernbedienungen im
+  Zeigermodus (LG Magic Remote) OK als Klick schicken.
+- **Bedienen ohne Tasten:** Ein Tipp in die Mitte ist OK (Ton, sonst Pause
+  und Weiter), ein Tipp ins linke bzw. rechte Viertel blättert.
+- **Abspielen und Pause** (die einzelnen Tasten, etwa 415 und 19) tun, was
+  draufsteht. Vorher schalteten sie um – „Abspielen" bei laufender Schau hielt
+  sie an. Umschalten tun nur OK, Enter, Leertaste und die kombinierte Taste.
+- **Pause und Weiter starten ein Video nicht mehr von vorn.** Der Fernseher
+  holt die Liste nur noch, wenn sich ihr Inhalt geändert haben kann; Pause und
+  Blättern wirken am selben Element.
+- **Die Fernbedienung rechnet von der echten Stelle aus.** Der Fernseher meldet
+  dem Server, wenn er selbst weiterblättert; das Telefon schickt nur noch
+  „eins weiter" bzw. „eins zurück".
+- **Diese Meldung überschreibt keinen Befehl mehr.** Sie sagt, auf welchem
+  Stand der Fernseher beruht, und der Server nimmt sie nur an, wenn seitdem
+  niemand am Telefon etwas gedrückt hat. Vorher konnte sie in den zwei
+  Sekunden zwischen zwei Abfragen eine Pause vom Telefon wieder aufheben,
+  „Zurück" zu „Weiter" machen und „Stattdessen dies zeigen" mitten im neuen
+  Programm beginnen lassen. Die Pause meldet der Fernseher nur noch, wenn sie
+  an ihm selbst gedrückt wurde.
+- **Weiterblättern mitten im Video** liess am Ende des nächsten Videos ein
+  Stück aus (zwei Ende-Hörer am selben Element). Behoben.
+- **Videos, die der Fernseher nicht abspielen kann** (Format, abgelaufene
+  Karte), hielten die Diashow auf Schwarz an und zeigten dazu „OK drücken für
+  Ton". Jetzt steht „Dieses Video lässt sich hier nicht abspielen", und nach
+  vier Sekunden geht es weiter. Ist nur die Karte eines langen, angehaltenen
+  Videos abgelaufen, setzt der Fernseher die frische an derselben Stelle ein.
+- **„Stattdessen dies zeigen":** Läuft schon etwas, bietet „Auf den Fernseher"
+  an, das Neue auf demselben Fernseher zu zeigen – ohne „Beenden" und ohne den
+  Code neu abzutippen. Das zählt nicht gegen die Bremse von zwanzig
+  Verbindungsversuchen je Stunde; die gilt nur für fremde Codes.
+- **Lange Diashows:** Der Fernseher holt nach fünf Stunden frische Karten.
+  Vorher lief eine Schau, die niemand anfasste, nach sechs Stunden in 401.
+- **Ältere Fernseher:** Das Blatt wird eigens für Chromium 63 gebaut
+  (`apps/web/scripts/fernsehblatt.ts`) – ohne `??`, `?.`, `replaceChildren` und
+  `inset`, die erst Chromium 80 bis 87 kennt. Damit laufen Samsung-Fernseher ab
+  2019 (Tizen 5) und LG webOS 5 und 6. Noch ältere Geräte (Samsung 2018, LG
+  webOS 4) kennen keine Modulskripte; für sie gibt es keinen Bau. Am Gerät
+  geprüft ist das nicht – nur mit dem Bauergebnis.
+- **Behoben:** In der zweiten Runde einer Diashow (und bei jedem Sprung auf ein
+  schon gezeigtes Bild) konnte der Fernseher schwarz werden – das Bild aus dem
+  Zwischenspeicher nahm sich beim Einblenden selbst die Sichtbarkeit.
+
+### Telefon spiegeln – die Fernsehansicht
+
+Die App kann den Bildschirm nicht selbst spiegeln – **das Betriebssystem des
+Telefons kann es**: Smart View auf Galaxy-Telefonen, „Übertragen" bzw. „Screen
+Cast" bei anderen Android-Herstellern, „Bildschirm übertragen" auf dem Pixel
+(nur zu Chromecast und Google TV, kein Miracast),
+„Bildschirmsynchronisierung" auf iPhone und iPad (Apple TV und
+AirPlay-Fernseher), Windows-Taste + K am PC. Die App liefert dafür die
+**Fernsehansicht**: schwarz, randlos, quer, gross, ohne Kopfzeile und Hinweise
+der App, Fotos und Videos mit Ton, Diashow mit denselben Einstellungen wie
+beim Code-Weg, Blättern per Wischen oder Tippen, Bildschirm bleibt wach.
+
+- **Vorher Mitteilungen aus.** Gespiegelt wird alles, was das Telefon zeigt –
+  auch Mitteilungen und Vorschauen aus anderen Chats. Beim iPhone sind sie
+  während der Synchronisierung standardmässig erlaubt (Einstellungen →
+  Mitteilungen → Bildschirmfreigabe). Die Anleitung in der App nennt den Weg
+  je Gerät, **bevor** die Ansicht startet.
+- **Das Telefon muss entsperrt bleiben und die App vorn.** Wer die App
+  wechselt, zeigt das auf dem Fernseher, und die Diashow hält an.
+- **Andere Medien verstummen.** Beim Start hält die Ansicht alles an, was in
+  der App gerade spielt – das Video der Chatblase oder des Betrachters, von
+  dem aus man sie geöffnet hat, eine Sprachnachricht. Vorher liefen zwei
+  Tonspuren versetzt über den Fernseher.
+- **Ein einzelnes Video** steht am Ende mit ▶ und lässt sich neu starten.
+- **Die Pfeiltasten gehören der Ansicht** – der Dateibetrachter dahinter
+  blättert nicht mehr mit (vorher verschwand die Ansicht dabei mitten im
+  Spiegeln).
+- **iPhone:** Das Vollbild der Videosteuerung übergibt ein Video beim Spiegeln
+  an AirPlay – der Fernseher holt es dann selbst und bleibt oft schwarz. In der
+  Fernsehansicht laufen Videos deshalb im Bild, ohne diesen Knopf und mit
+  `x-webkit-wirelessvideoplaybackdisabled`.
+- **Nicht überall:** Ein Pixel kann nicht auf Fernseher ohne Google Cast
+  spiegeln, ein iPhone nicht auf Fire TV oder Chromecast. Dort bleibt der
+  Code-Weg. Starten oder erkennen kann die App die Spiegelung nicht – keine
+  Web-Schnittstelle meldet sie.
+- **Auf einen PC** lässt sich ebenfalls spiegeln: Windows empfängt Miracast
+  mit der optionalen Funktion „Drahtlose Anzeige", ein Mac AirPlay – ab macOS
+  12 und nur auf neueren Macs (etwa ab 2018, laut Apples Liste der Macs mit
+  AirPlay-Empfänger; nicht aus der Recherche). Ein anderes Telefon empfängt
+  keine Spiegelung – dort ist der Code-Weg der Weg: `/tv` im Browser öffnen.
 
 ### Funktioniert Chromecast mit allen Fernsehern?
 
 Nein. Google Cast ist **ein** Standard von mehreren. Der Stand (September 2026):
 
-| Plattform                                                     | Google Cast                                           | AirPlay 2 | Browser am Gerät        |
-| ------------------------------------------------------------- | ----------------------------------------------------- | --------- | ----------------------- |
-| Google TV / Android TV (Sony, TCL, Hisense, Philips, Sharp …) | ja                                                    | teilweise | nein                    |
-| Chromecast-Stick / Google TV Streamer                         | ja                                                    | nein      | nein                    |
-| **Samsung** (Tizen)                                           | **seit April 2026**, Modelljahre 2023–2026 per Update | ja        | ja                      |
-| **LG** (webOS)                                                | **ab Modelljahr 2024**, 2023er nachgerüstet           | ja        | ja                      |
-| Amazon Fire TV                                                | nein (setzt auf Matter Casting)                       | nein      | Silk, nachinstallierbar |
-| Roku                                                          | nein                                                  | ja        | nein                    |
-| VIDAA (Hisense), Titan OS, TiVo OS                            | nein                                                  | teilweise | meist ja                |
-| Apple TV                                                      | nein                                                  | ja        | nein                    |
+| Plattform                                                     | Google Cast                                               | AirPlay 2 | Browser am Gerät        | Bildschirmspiegelung empfangen                            |
+| ------------------------------------------------------------- | --------------------------------------------------------- | --------- | ----------------------- | --------------------------------------------------------- |
+| Google TV / Android TV (Sony, TCL, Hisense, Philips, Sharp …) | ja                                                        | teilweise | nein                    | Google Cast                                               |
+| Chromecast-Stick / Google TV Streamer                         | ja                                                        | nein      | nein                    | Google Cast                                               |
+| **Samsung** (Tizen)                                           | **nur ausgewählte Modelle**, ab 2023 einzelne, per Update | ja        | ja                      | Miracast (Smart View), AirPlay                            |
+| **LG** (webOS)                                                | **ab Modelljahr 2024**, 2023er C3/G3 nachgerüstet         | ja        | ja                      | Miracast (Screen Share), AirPlay                          |
+| Amazon Fire TV                                                | nein (setzt auf Matter Casting)                           | nein      | Silk, nachinstallierbar | Miracast                                                  |
+| Roku                                                          | nein                                                      | ja        | nein                    | Miracast (nicht vom Pixel), AirPlay (Modelle mit AirPlay) |
+| VIDAA (Hisense), Titan OS, TiVo OS                            | nein                                                      | teilweise | meist ja                | teilweise                                                 |
+| Apple TV                                                      | nein                                                      | ja        | nein                    | AirPlay                                                   |
 
 Samsung und LG – zusammen der grösste Teil der Wohnzimmer – konnten jahrelang
-**kein** Google Cast. Samsung hat es erst im April 2026 nachgeliefert, und zwar
-nur für Geräte ab Modelljahr 2023. Ein Fernseher steht sieben bis zehn Jahre im
-Haushalt; im Bestand ist die Lücke also deutlich grösser als bei Neugeräten.
+**kein** Google Cast, und bei Samsung gibt es es bis heute nur auf
+ausgewählten Modellen. Ein Fernseher steht sieben bis zehn Jahre im Haushalt;
+im Bestand ist die Lücke also deutlich grösser als bei Neugeräten.
 
 **Der härtere Engpass liegt aber nicht beim Fernseher, sondern beim Telefon.**
-Das Cast-Web-SDK läuft nur in Chromium-Browsern, und auf iOS gar nicht – auch
+Das Cast-Web-SDK läuft nur in Chrome und Edge, und auf iOS gar nicht – auch
 nicht in Chrome für iOS, weil Apple dort die WebKit-Engine vorschreibt. Jede
 Person mit einem iPhone kann aus dieser App heraus also nicht casten. Für die
-gibt es AirPlay (nur Video) und den Weg mit dem Code (alles).
+gibt es AirPlay (nur Video), den Weg mit dem Code (alles) und die Spiegelung.
 
 Die übrigen Standards – Matter Casting, DIAL, Miracast, DLNA – sind aus einer
-Web-App technisch **gar nicht** erreichbar: Sie brauchen UDP-Multicast oder
-Betriebssystem-Rechte, die eine Webseite nicht hat. Google Cast, die Remote
-Playback API in Chromium, AirPlay in Safari und der eigene Weg über den Browser
-des Fernsehers sind zusammen das Maximum dessen, was eine reine Web-App heute
-erreichen kann – und
-genau diese drei sind eingebaut.
+Web-App technisch **nicht** erreichbar: Sie brauchen UDP-Multicast oder
+Betriebssystem-Rechte, die eine Webseite nicht hat. Miracast und die
+AirPlay-Bildschirmsynchronisierung kann aber das **Betriebssystem** des
+Telefons – deshalb der dritte Weg.
 
 ### Lässt sich die ganze App auf den Fernseher spiegeln?
 
-**Nein – Pixel-Spiegeln kann eine Web-App nicht.** Das ist keine Frage des
-Aufwands, sondern eine Grenze der Plattform, und sie ist an vier Stellen
+**Die App selbst nicht – das Telefon schon.** Die Spiegelung des
+Betriebssystems (siehe _Telefon spiegeln_) zeigt die ganze App auf dem
+Fernseher, und für Fotos und Videos gibt es dafür die Fernsehansicht. Eine
+Web-App kann die Spiegelung aber weder starten noch erkennen, und aus der App
+heraus lässt sich kein Bildschirm hinüberschicken. Das ist an vier Stellen
 nachgeschlagen:
 
 - **Presentation API mit einer beliebigen `https`-Adresse.** Das W3C-Wiki sagt
@@ -427,12 +583,12 @@ nachgeschlagen:
   hat 2021 ein „Intent to Prototype" geschrieben; ausgeliefert ist seither
   nichts.
 
-Was stattdessen geht und mehr ist als Spiegelung: Der Weg mit dem Code hat
+Was es daneben gibt und mehr ist als Spiegelung: Der Weg mit dem Code hat
 **zwei Programmarten**. Der Fernseher zeigt Fotos und Videos – und seit
 Migration 0021 auch einen **Chat**. Dieselbe Sitzung, derselbe Code, dieselbe
-Fernbedienung. Das läuft auf jedem Fernseher mit Browser statt nur auf
-Chromecast, ist aus vier Metern lesbar statt eine geschrumpfte
-Telefonoberfläche, und es läuft weiter, wenn das Telefon in der Tasche steckt.
+Fernbedienung. Das läuft auf jedem Fernseher mit Browser, ist aus vier Metern
+lesbar statt eine geschrumpfte Telefonoberfläche, und es läuft weiter, wenn das
+Telefon in der Tasche steckt.
 
 ### Chat auf dem Fernseher
 
@@ -475,7 +631,8 @@ Chromecast braucht ein Skript von `gstatic.com` – das einzige fremde Skript in
 dieser App. Es wird **erst nach ausdrücklicher Zustimmung** geladen, und die
 lässt sich unter _Profil → Einstellungen → Deine Daten_ jederzeit wieder
 zurücknehmen. Wer nie zustimmt, hat eine App, die nichts von fremden Servern
-lädt – und die anderen beiden Wege stehen trotzdem offen.
+lädt – und die anderen Wege (Remote Playback/AirPlay, Code, Spiegeln) stehen
+trotzdem offen.
 
 ## Ausgaben
 

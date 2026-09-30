@@ -22,7 +22,9 @@ import { api } from '../../lib/api.js';
  *
  * Gefragt wird selten – beim Start, nach dem Einstellen, beim Öffnen des
  * Blattes. Eine Diashow, die niemand steuert, braucht keine Umfrage im
- * Sekundentakt; der Fernseher taktet sich selbst.
+ * Sekundentakt; der Fernseher taktet sich selbst. Wo er gerade steht, meldet
+ * er dem Server – die Fernbedienung schickt deshalb nur noch eine Richtung
+ * („eins weiter"), und der Server rechnet von der echten Stelle aus.
  */
 export interface LaufendeSitzung {
   code: string;
@@ -61,7 +63,7 @@ interface FernseherStore {
 /**
  * Ab wann ein Fernseher als „meldet sich nicht mehr" gilt.
  *
- * Das TV-Blatt fragt im Sekundentakt nach der Fassungsnummer und setzt dabei
+ * Das TV-Blatt fragt alle zwei Sekunden nach dem Stand und setzt dabei
  * `gesehen_at`. Zwei Minuten Stille heissen also: ausgeschaltet, Browser zu,
  * oder aus dem WLAN. Eine Fernbedienung für so einen Fernseher anzubieten
  * wäre ein Knopf, der ins Leere greift.

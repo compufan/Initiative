@@ -12,10 +12,20 @@ import { webmSchreiben, type WebmBild, type WebmCodec } from './webm.js';
  *
  * # Warum VP9 und nicht H.264
  *
- * Weil H.264 lizenzpflichtig ist und Chromium es deshalb nicht kodiert –
- * nachgemessen: `VideoEncoder.isConfigSupported` nimmt `vp09`, `vp8` und
- * `av01`, aber kein `avc1`. Das ist kein Mangel dieser App, sondern die
- * Lage. VP9 spielt jeder Browser ab, der diese App überhaupt lädt.
+ * Hier stand: „Chromium kodiert kein H.264 – nachgemessen." Nachgemessen war
+ * das aber nur in der Chromium-Fassung der Browsertests, einem Bau ohne die
+ * lizenzpflichtigen Codecs (dort fehlt sogar `VideoDecoder`). In den
+ * Browsern, mit denen Menschen diese App öffnen, kodiert `VideoEncoder` sehr
+ * wohl `avc1` – Chrome auf Android, Windows und macOS ebenso wie Safari, über
+ * den Kodierer des Betriebssystems.
+ *
+ * Geschrieben wird trotzdem VP9, aus einem anderen Grund: Der Behälter hier
+ * ist WebM (`webm.ts`), und in WebM gehört kein H.264. Für H.264 bräuchte es
+ * einen MP4-Behälter (`avcC`, `stts`, `stsz` …), und den gibt es in dieser App
+ * noch nicht. Der Preis ist bekannt: AirPlay und Chromecast der ersten drei
+ * Generationen spielen VP9-WebM nicht ab (siehe `docs/FEATURES.md`,
+ * „Auf den Fernseher"). Die Kamera der App nimmt dagegen seit Kurzem MP4 mit
+ * H.264 auf, wo der Browser es kann (`VIDEO_MIME_CANDIDATES`).
  *
  * AV1 wäre kleiner und bleibt trotzdem aussen vor: Es verlangt im Behälter
  * eine `CodecPrivate` mit einem eigenen Kopfsatz, den `VideoEncoder` nicht

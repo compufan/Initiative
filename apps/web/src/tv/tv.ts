@@ -5,18 +5,33 @@
  *
  * 1. Beim Öffnen holt es sich eine Sitzung: einen CODE, den es gross anzeigt,
  *    und ein GEHEIMNIS, das es behält und nie zeigt.
- * 2. Es fragt im Sekundentakt nach der Fassungsnummer. Das ist eine winzige
+ * 2. Es fragt alle zwei Sekunden nach dem Stand. Das ist eine winzige
  *    Antwort; die Liste selbst – bei einem Urlaubsordner leicht ein Megabyte –
- *    wird erst geholt, wenn die Nummer sich bewegt hat.
+ *    wird erst geholt, wenn sich ihr Inhalt geändert haben kann
+ *    (`listeNeuHolen` in `ablauf.ts`). Blättert nur jemand oder hält an,
+ *    genügen Stelle und Pause aus dem Stand.
  * 3. Am Telefon tippt jemand den Code ein und wählt eine Sammlung. Ab da läuft
  *    die Diashow, und dasselbe Telefon ist die Fernbedienung.
+ * 4. Schaltet das Blatt selbst weiter, meldet es die neue Stelle zurück –
+ *    damit „Weiter" am Telefon von hier aus rechnet und nicht vom Anfang.
+ *    Die Meldung sagt dazu, auf welchem Stand sie beruht; kam inzwischen ein
+ *    Befehl vom Telefon, verwirft der Server sie (siehe `melden`).
  *
  * # Warum hier kein React steht
  *
  * Weil der Browser am anderen Ende selten ein aktueller ist. Dieses Blatt
- * kommt mit dem aus, was jeder Browser seit ungefähr 2017 kann: `fetch`,
+ * kommt mit dem aus, was ein Fernseher von 2019 kann (Chromium 63): `fetch`,
  * Klassenlisten, `<video>`. Keine Bibliothek, kein Zustandsspeicher, keine
  * Weiche.
+ *
+ * Hier stand einmal „seit ungefähr 2017" – und das stimmte nicht. Gebaut
+ * wurde für ES2022, und der Verkleinerer machte aus jedem `a != null ? a : b`
+ * wieder ein `a ?? b`, das erst Chromium 80 versteht; dazu `replaceChildren`
+ * (86) und `inset` im Stilblatt (87). Samsung-Geräte von 2020 bis 2022 und LG
+ * webOS 5/6 blieben beim „…" stehen oder zeigten eine Bühne ohne Grösse. Der
+ * Bau senkt das Blatt jetzt eigens ab (`scripts/fernsehblatt.ts`), und was
+ * sich nicht absenken lässt – Bibliotheksaufrufe –, ist hier von Hand
+ * ersetzt (`leeren`).
  *
  * # Warum zwei Bildelemente
  *
@@ -28,7 +43,18 @@
  */
 
 import { reihenfolge } from './mischen.js';
-import { verlaufZeichnen, type ChatProgramm } from './chat.js';
+import { leeren, verlaufZeichnen, type ChatProgramm } from './chat.js';
+import {
+  KAPUTT_WEITER_MS,
+  doppelteEingabe,
+  handlungFuer,
+  imKreis,
+  kartenAlt,
+  listeNeuHolen,
+  tasteDeuten,
+  tippDeuten,
+  type TastenSinn,
+} from './ablauf.js';
 
 const API = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');
 const WURZEL = `${API}/api/v1/tv/sitzungen`;
@@ -48,6 +74,7 @@ interface Stueck {
 interface Programm {
   art?: string;
   marke: string;
+  fassung?: number;
   modus: string;
   saat: number;
   sekunden: number;
@@ -62,6 +89,7 @@ const buehne = document.getElementById('buehne') as HTMLElement;
 const codeFeld = document.getElementById('code') as HTMLElement;
 const fehlerFeld = document.getElementById('fehler') as HTMLElement;
 const hinweisFeld = document.getElementById('hinweis') as HTMLElement;
+const tonFeld = document.getElementById('ton') as HTMLElement;
 const bildA = document.getElementById('bildA') as HTMLImageElement;
 const bildB = document.getElementById('bildB') as HTMLImageElement;
 const film = document.getElementById('film') as HTMLVideoElement;
@@ -92,6 +120,83 @@ let stelle = 0;
 let pausiert = false;
 let vorn: HTMLImageElement = bildA;
 let uhr: number | null = null;
+/** Wann die Liste zuletzt geholt wurde – für das Erneuern der Karten. */
+let geholtUm = 0;
+/**
+ * Welches Stück gerade auf dem Schirm steht, nach seiner Kennung.
+ *
+ * Die ADRESSE taugt dafür nicht: Sie trägt eine Karte, und jede neu geholte
+ * Liste hat neue Karten. Wer an der Adresse misst, hält dasselbe Video nach
+ * jedem Holen für ein anderes – und genau so fing es nach „Pause" von vorn an.
+ */
+let gezeigt: string | null = null;
+/**
+ * Auf welcher `fassung` der Sitzung das Blatt gerade steht – aus dem letzten
+ * Stand oder Programm, das es übernommen hat.
+ *
+ * Sie geht mit jeder Meldung der Stelle mit. Der Server schreibt die Meldung
+ * nur, wenn die Fassung noch gilt – sonst hat das Telefon inzwischen etwas
+ * befohlen, und die Meldung würde es überschreiben (siehe `melden`).
+ */
+let fassung: number | null = null;
+/** Läuft gerade eine Meldung der Stelle? Dann wartet der Takt auf sie. */
+let meldungLaeuft = false;
+/** Läuft gerade eine Abfrage? Zwei überholen sich sonst auf langsamen Netzen. */
+let fragtGerade = false;
+/**
+ * Welches Stück als Video nicht abspielbar ist – nach seiner Kennung.
+ *
+ * Damit Ladefehler und abgelehntes `play()`, die beide für dasselbe kaputte
+ * Video kommen, nur EINMAL zum Hinweis und zum Weiterschalten führen. Und
+ * damit OK bei so einem Video wieder anhält, statt einen Ton einzuschalten,
+ * den es nicht gibt.
+ */
+let kaputtFuer: string | null = null;
+/** Die Adresse, die gerade im Film steht – genau so, wie sie gesetzt wurde. */
+let filmAdresse = '';
+/** Für welche Adresse nach einem Ladefehler schon neu angesetzt wurde. */
+let neuAngesetzt = '';
+/**
+ * Wann zuletzt eine Taste bzw. ein Tipp gedeutet wurde – siehe `doppelteEingabe`.
+ *
+ * Getrennt geführt, weil nur das PAAR verdächtig ist: Ein Klick gleich nach
+ * einer Taste (oder umgekehrt) kann dieselbe Betätigung sein. Zwei Tipps
+ * hintereinander sind zwei Tipps – die schickt kein Gerät doppelt.
+ */
+let letzteTasteUm = 0;
+let letzterTippUm = 0;
+
+/**
+ * Darf das Video mit Ton laufen?
+ *
+ * # Warum es stumm anfängt
+ *
+ * Ohne Fingertipp – oder hier: ohne Tastendruck – verweigert jeder Browser das
+ * Abspielen MIT Ton. Auf einem Fernseher tippt niemand; lieber ein laufendes
+ * Video ohne Ton als ein stehendes mit.
+ *
+ * # Warum ein Druck auf OK genügt
+ *
+ * Ein Tastendruck ist eine Nutzeraktivierung, genau wie ein Fingertipp. Danach
+ * darf die Seite Ton abspielen. Die Videos liefen trotzdem immer stumm – es
+ * gab schlicht keinen Weg zum Ton. Jetzt steht „OK drücken für Ton" im Bild,
+ * und der erste OK schaltet ihn ein.
+ *
+ * Gemerkt wird das für die Sitzung des Blatts (`sessionStorage`), nicht für
+ * immer: Wer morgen den Fernseher einschaltet, soll nicht von einem Video mit
+ * voller Lautstärke überrascht werden, das er gestern freigegeben hat. Und
+ * nach einem Neuladen gilt die Aktivierung ohnehin nicht mehr – dann versucht
+ * das Blatt es mit Ton und fällt still auf stumm zurück, samt Hinweis.
+ */
+let tonAn = gemerkt('tv-ton') === 'an';
+
+function gemerkt(schluessel: string): string | null {
+  try {
+    return sessionStorage.getItem(schluessel);
+  } catch {
+    return null;
+  }
+}
 
 function fehler(text: string): void {
   fehlerFeld.textContent = text;
@@ -164,6 +269,23 @@ function wiederaufnehmen(): boolean {
 /** Der Taktgeber: fragt nach dem Stand und holt die Liste, wenn nötig. */
 async function nachsehen(): Promise<void> {
   if (!code || !geheim) return;
+  /*
+   * Solange die eigene Meldung unterwegs ist, wird nicht gefragt.
+   *
+   * Sonst kann ein Stand, der VOR der Meldung gelesen wurde, die gerade
+   * weitergeschaltete Stelle wieder zurücksetzen – das Blatt spränge dann ein
+   * Bild zurück, sobald jemand am Telefon „Pause" drückt.
+   */
+  if (meldungLaeuft || fragtGerade) return;
+  fragtGerade = true;
+  try {
+    await nachsehenJetzt();
+  } finally {
+    fragtGerade = false;
+  }
+}
+
+async function nachsehenJetzt(): Promise<void> {
   let stand: Record<string, unknown>;
   try {
     stand = await holen(`${WURZEL}/${code}/stand?geheim=${encodeURIComponent(geheim)}`);
@@ -200,9 +322,30 @@ async function nachsehen(): Promise<void> {
     marke = '';
     return;
   }
-  if (String(stand.marke ?? '') !== marke) {
+  const neueMarke = String(stand.marke ?? '');
+  const jetzt = Date.now();
+  if (programm && kartenAlt(geholtUm, jetzt)) {
+    // Nichts geändert, aber die Karten werden alt – siehe KARTEN_ERNEUERN_MS.
     await programmHolen();
+    return;
   }
+  if (neueMarke === marke) return;
+  const kopf = programm
+    ? { saat: programm.saat, modus: programm.modus, stueckzahl: programm.stuecke.length }
+    : null;
+  if (programm && !listeNeuHolen(stand, kopf, geholtUm, jetzt)) {
+    /*
+     * Nur Stelle, Pause oder Tempo haben sich bewegt – die Liste ist dieselbe.
+     * Dann bleibt jedes Element, wie es ist: Ein laufendes Video wird
+     * angehalten statt neu geladen.
+     */
+    marke = neueMarke;
+    fassung = typeof stand.fassung === 'number' ? stand.fassung : null;
+    if (typeof stand.sekunden === 'number') programm.sekunden = stand.sekunden;
+    uebernehmen(Number(stand.stelle) || 0, Boolean(stand.pausiert), false);
+    return;
+  }
+  await programmHolen();
 }
 
 async function programmHolen(): Promise<void> {
@@ -211,6 +354,7 @@ async function programmHolen(): Promise<void> {
     if (roh.art === 'chat') {
       const chat = roh as unknown as ChatProgramm;
       programm = null;
+      fassung = null;
       marke = chat.marke;
       zeigeVerlauf();
       verlaufZeichnen(verlaufListe, verlaufTitel, verlaufSeite, chat);
@@ -221,26 +365,55 @@ async function programmHolen(): Promise<void> {
       zeigeAnmeldung();
       return;
     }
-    const wechsel = !programm || neu.saat !== programm.saat || neu.modus !== programm.modus;
+    const wechsel =
+      !programm ||
+      neu.saat !== programm.saat ||
+      neu.modus !== programm.modus ||
+      neu.stuecke.length !== programm.stuecke.length;
     programm = neu;
     marke = neu.marke;
+    fassung = typeof neu.fassung === 'number' ? neu.fassung : null;
+    geholtUm = Date.now();
     if (wechsel) folge = reihenfolge(neu.stuecke.length, neu.modus, neu.saat);
-    stelle = Math.max(0, Math.min(neu.stelle, folge.length - 1));
-    pausiert = neu.pausiert;
-    zeigeBuehne();
-    spielen();
+    uebernehmen(neu.stelle, neu.pausiert, wechsel);
   } catch {
     /* Beim nächsten Takt noch einmal. */
   }
 }
 
-function zeigeAnmeldung(): void {
-  if (!buehne.hidden) {
-    film.pause();
-    film.removeAttribute('src');
-    film.load();
+/**
+ * Stelle und Pause übernehmen – und nur dann neu abspielen, wenn sich das
+ * STÜCK geändert hat.
+ *
+ * Das ist die Stelle, an der „Pause startet das Video von vorn" behoben ist.
+ * Vorher lief hier bei jedem Griff an die Fernbedienung `spielen()`, und das
+ * setzt `film.src` neu. Jetzt gilt: Steht dasselbe Stück noch auf dem Schirm,
+ * wird es angehalten oder fortgesetzt, am selben Element, an derselben Stelle.
+ */
+function uebernehmen(neueStelle: number, neuPausiert: boolean, wechsel: boolean): void {
+  const warPausiert = pausiert;
+  stelle = Math.max(0, Math.min(neueStelle, folge.length - 1));
+  pausiert = neuPausiert;
+  zeigeBuehne();
+  const jetzt = aktuell();
+  if (!wechsel && jetzt && gezeigt === jetzt.id) {
+    if (pausiert) {
+      anhalten();
+      if (!film.hidden) film.pause();
+    } else if (warPausiert) {
+      fortsetzen();
+    }
+    return;
   }
+  spielen();
+}
+
+function zeigeAnmeldung(): void {
+  filmLeeren();
   programm = null;
+  fassung = null;
+  gezeigt = null;
+  tonHinweis(false);
   anmeldung.hidden = false;
   buehne.hidden = true;
   verlauf.hidden = true;
@@ -253,7 +426,7 @@ function zeigeAnmeldung(): void {
    * ihn. Auf einem Gerät, das im Wohnzimmer steht, ist das kein theoretischer
    * Einwand.
    */
-  verlaufListe.replaceChildren();
+  leeren(verlaufListe);
   verlaufTitel.textContent = '';
   blatt.className = 'warten';
   anhalten();
@@ -261,16 +434,32 @@ function zeigeAnmeldung(): void {
 
 /** Der Verlauf tritt an die Stelle der Bühne – immer genau einer von beiden. */
 function zeigeVerlauf(): void {
-  if (!buehne.hidden) {
-    film.pause();
-    film.removeAttribute('src');
-    film.load();
-  }
+  filmLeeren();
+  gezeigt = null;
+  tonHinweis(false);
   anhalten();
   anmeldung.hidden = true;
   buehne.hidden = true;
   verlauf.hidden = false;
   blatt.className = 'liest';
+}
+
+/**
+ * Den Film anhalten und leeren – samt seinem Ende-Hörer.
+ *
+ * Der Hörer muss mit weg: Ein Video, das im Hintergrund doch noch sein Ende
+ * meldete, schaltete sonst eine Diashow weiter, die gar nicht mehr läuft.
+ */
+function filmLeeren(): void {
+  film.onended = null;
+  film.onloadedmetadata = null;
+  kaputtFuer = null;
+  if (!buehne.hidden) {
+    film.pause();
+    film.removeAttribute('src');
+    film.load();
+  }
+  filmAdresse = '';
 }
 
 function zeigeBuehne(): void {
@@ -293,10 +482,216 @@ function aktuell(): Stueck | null {
   return programm.stuecke[at] ?? null;
 }
 
-function weiter(): void {
+/**
+ * Einen Schritt weiter oder zurück – vom Blatt selbst oder von den Tasten.
+ *
+ * Und danach MELDEN. Der Server erfuhr vom eigenen Weiterschalten nie etwas,
+ * und die Fernbedienung am Telefon rechnete „weiter" von einer Stelle aus, die
+ * längst vorbei war: Nach ein paar Minuten Schau sprang ein Druck auf „Weiter"
+ * zurück an den Anfang.
+ */
+function schritt(richtung: number): void {
   if (!programm || folge.length === 0) return;
-  stelle = (stelle + 1) % folge.length;
+  stelle = imKreis(stelle + richtung, folge.length);
   spielen();
+  melden(false);
+}
+
+function weiter(): void {
+  schritt(1);
+}
+
+/**
+ * Die Stelle an den Server melden – still, ohne auf eine Antwort zu bestehen.
+ *
+ * Geht die Meldung verloren, rechnet die Fernbedienung beim nächsten Druck
+ * eben von der vorigen Stelle aus. Das ist der alte Zustand, kein neuer
+ * Fehler; einen Fernseher mit einer Fehlermeldung anzuhalten, weil eine
+ * Auskunft nicht ankam, wäre schlimmer.
+ *
+ * # Warum die Fassung mitgeht und die Pause nur manchmal
+ *
+ * Diese Meldung überschrieb Befehle vom Telefon. Das Blatt fragt nur alle
+ * zwei Sekunden nach dem Stand und blättert dazwischen selbst weiter; kam
+ * „Pause" vom Telefon in diese Lücke, meldete das nächste Bild `pausiert:
+ * false` hinterher, und die Schau lief weiter. „Stattdessen dies zeigen"
+ * begann mit der Stelle aus dem ALTEN Programm, „Zurück" wurde zu „Weiter".
+ *
+ * Jetzt geht die Fassung mit, auf der das Blatt steht, und der Server
+ * schreibt nur, wenn sie noch gilt. Sonst antwortet er 409 – dann hat das
+ * Telefon etwas befohlen, und das Blatt holt es sich sofort, statt auf den
+ * nächsten Takt zu warten. Und `pausiert` geht nur mit, wenn jemand HIER
+ * angehalten oder fortgesetzt hat (`mitPause`); beim eigenen Weiterblättern
+ * hat sich an der Pause nichts geändert, also wird sie auch nicht behauptet.
+ *
+ * Kein `finally` am Versprechen: Das kennt Chromium erst ab 63, und genau
+ * dort liegt die Grenze dieses Blatts.
+ */
+function melden(mitPause: boolean): void {
+  if (!code || !geheim || !programm || fassung === null) return;
+  meldungLaeuft = true;
+  const koerper: { stelle: number; fassung: number; pausiert?: boolean } = { stelle, fassung };
+  if (mitPause) koerper.pausiert = pausiert;
+  fetch(`${WURZEL}/${code}/stelle?geheim=${encodeURIComponent(geheim)}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(koerper),
+  }).then(
+    (antwort) => {
+      meldungLaeuft = false;
+      if (antwort.status === 409) void nachsehen();
+    },
+    () => {
+      meldungLaeuft = false;
+    },
+  );
+}
+
+/** Der Name eines abgelehnten Versprechens – ohne `instanceof`, das nicht jeder alte Browser für DOM-Fehler kennt. */
+function fehlerName(grund: unknown): string {
+  if (!grund || typeof grund !== 'object') return '';
+  const name = (grund as { name?: unknown }).name;
+  return typeof name === 'string' ? name : '';
+}
+
+/**
+ * Das Video abspielen – mit Ton, wenn er erlaubt ist, sonst stumm mit Hinweis.
+ *
+ * # Warum nur `NotAllowedError` auf stumm zurückfällt
+ *
+ * Hier galt JEDE Ablehnung als fehlende Tonfreigabe. Ein Video in einem
+ * Format, das der Fernseher nicht kann, wurde dadurch stumm geschaltet und
+ * bekam „OK drücken für Ton" – neben „lässt sich hier nicht abspielen". OK
+ * schaltete dann nur noch stumm und laut hin und her, und die Schau stand.
+ * Ohne Tonfreigabe heisst die Ablehnung `NotAllowedError`; alles andere
+ * (`NotSupportedError` vor allem) ist ein kaputtes Video (`filmKaputt`).
+ */
+function abspielen(): void {
+  const versuch = film.play();
+  if (!versuch || typeof versuch.catch !== 'function') return;
+  versuch.catch((grund: unknown) => {
+    const name = fehlerName(grund);
+    // Ein neues Stück hat das alte abgelöst – kein Fehler, nur überholt.
+    if (name === 'AbortError') return;
+    if (name !== 'NotAllowedError') {
+      filmKaputt();
+      return;
+    }
+    if (!film.muted) {
+      /*
+       * Mit Ton ging es nicht – typischerweise nach einem Neuladen, wenn die
+       * Aktivierung weg ist, der gemerkte Wunsch aber noch steht. Dann stumm
+       * weiter und wieder um OK bitten, statt stehenzubleiben.
+       */
+      film.muted = true;
+      tonHinweis(true);
+      const zweiter = film.play();
+      if (zweiter && typeof zweiter.catch === 'function') {
+        zweiter.catch((nochmal: unknown) => {
+          const zweiterName = fehlerName(nochmal);
+          if (zweiterName === 'AbortError' || zweiterName === 'NotAllowedError') return;
+          filmKaputt();
+        });
+      }
+      return;
+    }
+    /*
+     * Sogar stumm verweigert – manche Geräte spielen ohne Tastendruck gar
+     * nichts ab. Der Hinweis bleibt stehen: Der erste OK (oder Tipp) ist die
+     * Aktivierung, `tonEinschalten` startet das Video dann mit Ton.
+     */
+    tonHinweis(true);
+  });
+}
+
+/**
+ * Das Video im Bild lässt sich nicht abspielen – Hinweis, und dann weiter.
+ *
+ * # Der eine Fall, der kein kaputtes Video ist
+ *
+ * Nach fünf Stunden holt das Blatt frische Karten (`kartenAlt`), lässt ein
+ * laufendes oder angehaltenes Video aber bewusst an seiner alten Adresse –
+ * ein Tausch setzte es an den Anfang. Steht es danach noch länger als eine
+ * Stunde, ist dessen Karte abgelaufen, und das nächste Nachladen scheitert
+ * mit 401. Dann wird EINMAL die frische Adresse an derselben Stelle
+ * eingesetzt, statt das Video für kaputt zu erklären.
+ */
+function filmKaputt(): void {
+  const stueck = aktuell();
+  if (!stueck || buehne.hidden || film.hidden || gezeigt !== stueck.id) return;
+  if (stueck.url !== filmAdresse && neuAngesetzt !== stueck.url) {
+    neuAngesetzt = stueck.url;
+    const warBei = film.currentTime;
+    filmAdresse = stueck.url;
+    film.src = stueck.url;
+    /*
+     * Als Eigenschaft und nicht als Hörer: `spielen` und `filmLeeren` setzen
+     * sie zurück. Ein Hörer, der hängen bliebe, weil die neue Adresse auch
+     * nicht lädt, spränge sonst im NÄCHSTEN Video an diese Stelle.
+     */
+    film.onloadedmetadata = () => {
+      film.onloadedmetadata = null;
+      try {
+        if (warBei > 0) film.currentTime = warBei;
+      } catch {
+        /* Dann eben von vorn. */
+      }
+      if (!pausiert) abspielen();
+    };
+    return;
+  }
+  if (kaputtFuer === stueck.id) return;
+  kaputtFuer = stueck.id;
+  // Kein „OK für Ton" über einem Video, das gar nicht spielt.
+  tonHinweis(false);
+  hinweis('Dieses Video lässt sich hier nicht abspielen.');
+  kaputtWeiter();
+}
+
+/** Nach einem kaputten Video weiter – wie ein Bild, nur mit eigener Standzeit. */
+function kaputtWeiter(): void {
+  anhalten();
+  // Bei einem einzigen Stück gäbe es nur dasselbe kaputte Video noch einmal.
+  if (pausiert || folge.length < 2) return;
+  uhr = window.setTimeout(weiter, KAPUTT_WEITER_MS);
+}
+
+/** Weiter an derselben Stelle – nicht von vorn (siehe `uebernehmen`). */
+function fortsetzen(): void {
+  if (film.hidden) {
+    zeitAn();
+    return;
+  }
+  if (kaputtFuer !== null && kaputtFuer === gezeigt) {
+    kaputtWeiter();
+    return;
+  }
+  abspielen();
+}
+
+/** „OK drücken für Ton" – nur, solange wirklich ein Video stumm läuft. */
+function tonHinweis(zeigen: boolean): void {
+  tonFeld.hidden = !zeigen;
+}
+
+/** Der erste OK bei einem stummen Video: Ton an, und das für die Sitzung. */
+function tonEinschalten(): void {
+  tonAn = true;
+  try {
+    sessionStorage.setItem('tv-ton', 'an');
+  } catch {
+    /* Dann gilt es nur bis zum Neuladen. */
+  }
+  film.muted = false;
+  tonHinweis(false);
+  if (!pausiert && film.paused) abspielen();
+}
+
+/** Die Standzeit eines Bildes starten – ausser die Schau ist angehalten. */
+function zeitAn(): void {
+  anhalten();
+  if (pausiert) return;
+  uhr = window.setTimeout(weiter, (programm ? programm.sekunden : 6) * 1000);
 }
 
 /**
@@ -312,33 +707,46 @@ function spielen(): void {
   const stueck = aktuell();
   if (!stueck || !programm) return;
   hinweis('');
+  gezeigt = stueck.id;
 
   if (stueck.art === 'video') {
     bildA.classList.remove('sichtbar');
     bildB.classList.remove('sichtbar');
     film.hidden = false;
+    kaputtFuer = null;
+    film.onloadedmetadata = null;
+    filmAdresse = stueck.url;
     film.src = stueck.url;
     film.currentTime = 0;
     /*
-     * Stumm, und das ist eine Entscheidung: Ohne `muted` verweigert jeder
-     * Browser das Abspielen ohne Fingertipp – und auf einem Fernseher gibt es
-     * keinen. Lieber ein laufendes Video ohne Ton als ein stehendes mit.
+     * Stumm, bis jemand OK gedrückt hat – siehe `tonAn`. Der Hinweis steht
+     * nur da, solange es wirklich stumm ist; wer den Ton schon freigegeben
+     * hat, soll nicht bei jedem Video wieder dazu aufgefordert werden.
      */
-    film.muted = true;
-    const fertig = () => {
-      film.removeEventListener('ended', fertig);
+    film.muted = !tonAn;
+    tonHinweis(film.muted);
+    /*
+     * EIN Ende-Hörer, bei jedem Video überschrieben – kein `addEventListener`.
+     *
+     * Hier hing jedes Video einen eigenen Hörer an dasselbe Element, und
+     * abgehängt wurde er erst, wenn das Video zu Ende lief. Wer mitten im
+     * Video weiterblätterte (Telefon oder Pfeiltaste), liess ihn hängen; am
+     * Ende des NÄCHSTEN Videos feuerten dann beide. Die Schau sprang ein
+     * Stück zu weit, und zwei Meldungen mit verschiedenen Stellen gingen
+     * gleichzeitig hinaus – kamen sie vertauscht an, rechnete das Telefon
+     * danach von der falschen Stelle.
+     */
+    film.onended = () => {
       if (!pausiert) weiter();
     };
-    film.addEventListener('ended', fertig);
-    if (!pausiert) {
-      const versuch = film.play();
-      if (versuch && typeof versuch.catch === 'function') {
-        versuch.catch(() => hinweis('Das Video lässt sich hier nicht abspielen.'));
-      }
-    }
+    if (!pausiert) abspielen();
     return;
   }
 
+  film.onended = null;
+  film.onloadedmetadata = null;
+  kaputtFuer = null;
+  tonHinweis(false);
   film.pause();
   film.hidden = true;
   /*
@@ -349,49 +757,128 @@ function spielen(): void {
    * leere Fläche, und genau davor sollen die zwei Elemente schützen.
    */
   const hinten = vorn === bildA ? bildB : bildA;
-  const zeitAn = () => {
-    if (pausiert) return;
-    uhr = window.setTimeout(weiter, (programm?.sekunden ?? 6) * 1000);
-  };
-  hinten.onload = () => {
+  /*
+   * Genau EINMAL tauschen – auch wenn das Bild schon im Zwischenspeicher liegt.
+   *
+   * Hier lief der Tausch zweimal, wenn die Adresse schon einmal geladen war:
+   * einmal von Hand (unten), und dann noch einmal durch das echte
+   * `load`-Ereignis, das Chromium auch für ein Bild aus dem Speicher schickt.
+   * Beim zweiten Mal war `vorn` schon das neue Bild – und es nahm sich selbst
+   * die Sichtbarkeit. Beide Bilder unsichtbar, der Fernseher schwarz.
+   *
+   * Das traf jede Diashow in der zweiten Runde (dieselben Adressen wie in der
+   * ersten) und jeden Sprung zurück. Seit die Liste nach „Pause" nicht mehr
+   * mit neuen Adressen geholt wird, trat es noch öfter auf – ein Browsertest
+   * (`fernsehwege.spec.ts`) hat es so gefunden. Deshalb hängt sich der
+   * Tausch nach dem ersten Mal selbst ab.
+   */
+  const zeigen = () => {
+    hinten.onload = null;
+    hinten.onerror = null;
     hinten.classList.add('sichtbar');
-    vorn.classList.remove('sichtbar');
+    if (vorn !== hinten) vorn.classList.remove('sichtbar');
     vorn = hinten;
     zeitAn();
   };
+  hinten.onload = zeigen;
   hinten.onerror = () => {
+    hinten.onload = null;
+    hinten.onerror = null;
     hinweis('Dieses Bild liess sich nicht laden.');
     zeitAn();
   };
   hinten.src = stueck.url;
   // Ist es schon im Zwischenspeicher, kommt `onload` in manchen Browsern nicht
   // mehr – dann von Hand.
-  if (hinten.complete && hinten.naturalWidth > 0) hinten.onload(new Event('load'));
+  if (hinten.complete && hinten.naturalWidth > 0) zeigen();
 }
 
-/** Auf dem Fernseher gibt es keine Maus – aber fast immer Pfeiltasten. */
+/** Läuft gerade ein Video stumm, das sich abspielen lässt? Dann gehört OK dem Ton. */
+function videoStumm(): boolean {
+  return !buehne.hidden && !film.hidden && film.muted && kaputtFuer !== gezeigt;
+}
+
+/** Anhalten oder fortsetzen – von hier aus, also auch melden. */
+function pauseSetzen(an: boolean): void {
+  pausiert = an;
+  if (an) {
+    anhalten();
+    if (!film.hidden) film.pause();
+  } else {
+    fortsetzen();
+  }
+  melden(true);
+}
+
+/** Eine Taste oder ein Tipp – beides läuft hier zusammen. */
+function eingabe(sinn: TastenSinn | null): void {
+  if (!programm || buehne.hidden) return;
+  const handlung = handlungFuer(sinn, { videoStumm: videoStumm(), pausiert });
+  if (handlung === null) return;
+  switch (handlung) {
+    case 'weiter':
+      schritt(1);
+      break;
+    case 'zurueck':
+      schritt(-1);
+      break;
+    case 'ton':
+      /*
+       * Der erste OK bei einem stummen Video gehört dem Ton, nicht der Pause.
+       *
+       * Beides auf dieselbe Taste zu legen ist Absicht: Mehr als OK und die
+       * Pfeile hat eine Fernbedienung nicht verlässlich. Wer ein stummes Video
+       * sieht und OK drückt, will den Ton – das Video anzuhalten wäre die
+       * Antwort auf eine Frage, die niemand gestellt hat.
+       */
+      tonEinschalten();
+      break;
+    case 'anhalten':
+      pauseSetzen(true);
+      break;
+    case 'fortsetzen':
+      pauseSetzen(false);
+      break;
+    default:
+      break;
+  }
+}
+
+/**
+ * Tasten – und Tipps.
+ *
+ * Auf einem Fernseher gibt es fast immer Pfeiltasten und OK. Aber nicht
+ * überall: Ein Tablet oder zweites Telefon als „Fernseher", ein Rechner mit
+ * Maus und der Zeigermodus mancher Fernbedienungen kennen nur den Klick.
+ * Dort gab es weder Ton noch Pause noch Blättern (siehe `tippDeuten`).
+ */
 function tasten(): void {
   window.addEventListener('keydown', (ereignis) => {
     if (!programm) return;
-    if (ereignis.key === 'ArrowRight' || ereignis.key === 'MediaTrackNext') weiter();
-    if (ereignis.key === 'ArrowLeft' || ereignis.key === 'MediaTrackPrevious') {
-      stelle = (stelle - 1 + folge.length) % folge.length;
-      spielen();
-    }
-    if (ereignis.key === ' ' || ereignis.key === 'Enter' || ereignis.key === 'MediaPlayPause') {
-      pausiert = !pausiert;
-      if (pausiert) {
-        anhalten();
-        film.pause();
-      } else {
-        spielen();
-      }
-    }
+    const sinn = tasteDeuten(ereignis.key, ereignis.keyCode);
+    if (sinn === null) return;
+    // Gehörte dieser Druck zu einem Klick eben (Zeigermodus)? Dann zählt er nicht doppelt.
+    if (doppelteEingabe(letzterTippUm, Date.now())) return;
+    letzteTasteUm = Date.now();
+    eingabe(sinn);
+  });
+  blatt.addEventListener('click', (ereignis) => {
+    if (!programm || buehne.hidden) return;
+    if (doppelteEingabe(letzteTasteUm, Date.now())) return;
+    letzterTippUm = Date.now();
+    // Der Hinweis „… für Ton" selbst ist immer OK, wo er auch steht.
+    const sinn =
+      ereignis.target === tonFeld
+        ? 'ok'
+        : tippDeuten(ereignis.clientX, window.innerWidth || blatt.clientWidth);
+    eingabe(sinn);
   });
 }
 
 async function los(): Promise<void> {
   tasten();
+  // Ein Ladefehler des Videos hielt die Schau auf Schwarz an – siehe `filmKaputt`.
+  film.onerror = filmKaputt;
   if (!wiederaufnehmen()) await anmelden();
   await nachsehen();
   window.setInterval(() => void nachsehen(), TAKT_MS);

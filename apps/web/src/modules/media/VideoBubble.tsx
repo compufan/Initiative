@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { formatDuration } from '@initiative/shared';
 import type { MessageRendererProps } from '../types.js';
+import { CastKnopf } from '../fernseher/CastKnopf.js';
 import { FernsehKnopf } from '../fernseher/FernsehKnopf.js';
 import { VideoWerkstatt } from '../video/VideoWerkstatt.js';
 import { MediaCaption, PendingMedia } from './MediaFrame.js';
@@ -44,7 +45,21 @@ export function VideoBubble({ message, isMine }: MessageRendererProps) {
           onPlay={(ereignis) => claimPlayback(ereignis.currentTarget)}
           onPause={(ereignis) => releasePlayback(ereignis.currentTarget)}
         />
-        <FernsehKnopf video={video} attachmentId={attachment.id} />
+        {/*
+          „Auf den Fernseher" – immer da, auch ohne gefundenes Gerät (siehe
+          `FernsehKnopf`). Daneben der echte Cast-Knopf, sobald jemand
+          Chromecast erlaubt hat und ein Gerät da ist: §5.1 der Cast-
+          Bedingungen verlangt ihn auf oberster Ebene an jedem castbaren
+          Inhalt, und die Videoblase ist genau so einer. Vor der Zustimmung
+          steht er nicht hier, sondern im Blatt hinter dem 📺 – zwei gleiche
+          Zeichen, die Verschiedenes tun, wären die schlechtere Wahl.
+        */}
+        <FernsehKnopf video={video} anhang={attachment} />
+        <CastKnopf
+          stuecke={[attachment.id]}
+          was={attachment.fileName ?? 'Dieses Video'}
+          stil="blase"
+        />
         {/*
           Bearbeiten und „GIF daraus machen" sitzen neben dem Fernsehknopf und
           nicht im Nachrichtenmenü: Wer ein Video sieht und etwas damit

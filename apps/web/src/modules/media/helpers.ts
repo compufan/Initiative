@@ -276,11 +276,36 @@ export function supportsCapture(): boolean {
   return typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia);
 }
 
+/**
+ * In welchem Format die Kamera der App aufnimmt – das erste, das der Browser kann.
+ *
+ * # Warum MP4 mit H.264 und AAC jetzt vorn steht
+ *
+ * Hier stand WebM mit VP9 an erster Stelle. Das ist auf jedem Telefon
+ * abspielbar – aber nicht auf jedem Fernseher: AirPlay nimmt kein WebM, ein
+ * Chromecast der ersten drei Generationen kein VP9, und LG-Fernseher in Full HD
+ * auch nicht. Wer ein Video aus der App auf den Fernseher schickte, bekam dort
+ * „Format nicht unterstützt", während der Code-Weg (der Browser des Fernsehers
+ * dekodiert selbst) es zeigte.
+ *
+ * MP4 mit H.264 High (Level 4.0, `avc1.640028`) und AAC-LC (`mp4a.40.2`)
+ * spielt dagegen so gut wie jedes Gerät: Chromecast ab der ersten Generation,
+ * AirPlay, Samsung, LG, Fire TV. `MediaRecorder` kann es in Chrome ab 126 (auch
+ * auf Android) und in Safari. Die schlichteren Schreibweisen danach fangen
+ * Browser auf, die nur bestimmte Kennungen annehmen.
+ *
+ * Die WebM-Fassungen bleiben als Rückfall stehen – für Firefox und ältere
+ * Chrome, die kein MP4 aufnehmen. Ungeprüft ist, ob jeder Empfänger die
+ * fragmentierte MP4-Ausgabe von Chrome auch beim Spulen mitmacht; Abspielen
+ * von vorn tut er.
+ */
 export const VIDEO_MIME_CANDIDATES = [
+  'video/mp4;codecs=avc1.640028,mp4a.40.2',
+  'video/mp4;codecs=avc1,mp4a.40.2',
+  'video/mp4',
   'video/webm;codecs=vp9,opus',
   'video/webm;codecs=vp8,opus',
   'video/webm',
-  'video/mp4',
 ];
 
 /** iOS Safari only ever records `audio/mp4`. */

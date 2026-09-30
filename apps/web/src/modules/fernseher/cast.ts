@@ -282,6 +282,31 @@ export function castGrund(): CastGrund {
 let ladeVersprechen: Promise<CastContext | null> | null = null;
 
 /**
+ * Warum das Laden zuletzt nicht geklappt hat.
+ *
+ *   * `skript` – `cast_sender.js` kam gar nicht an: kein Netz, ein
+ *     Inhaltsblocker, oder die Frist von acht Sekunden ist abgelaufen.
+ *   * `browser` – das Skript IST angekommen, und es selbst meldet „geht hier
+ *     nicht" (`__onGCastApiAvailable(false)`). Das ist ein Browser ohne den
+ *     eingebauten Cast-Empfänger von Chrome: Samsung Internet, Brave mit
+ *     abgeschaltetem Cast, andere Chromium-Ableger.
+ *
+ * # Warum das unterschieden wird
+ *
+ * Die App schob bisher beides auf einen Inhaltsblocker. Wer Samsung Internet
+ * benutzt – auf Galaxy-Telefonen die Vorgabe –, suchte dann einen Blocker,
+ * den es nicht gibt. Die Unterscheidung ist verlässlich, weil sie nicht an
+ * der Browserkennung rät, sondern an der Antwort des Skripts selbst hängt.
+ */
+export type CastLadeFehler = 'skript' | 'browser';
+let ladeFehler: CastLadeFehler | null = null;
+
+/** Warum das SDK zuletzt nicht bereit war – oder `null`, wenn es das war. */
+export function castLadeFehler(): CastLadeFehler | null {
+  return ladeFehler;
+}
+
+/**
  * Das SDK holen und einrichten – genau einmal je Seitenaufruf.
  *
  * Gibt `null` zurück, wenn es hier nicht geht. Wirft nicht: Ein Browser ohne
@@ -312,7 +337,8 @@ export function castLaden(): Promise<CastContext | null> {
      * Ein Netz, das eine Sekunde später da ist, hilft dann nicht mehr; man
      * muss die App neu laden, und das weiss niemand.
      */
-    const scheitern = () => {
+    const scheitern = (grund: CastLadeFehler) => {
+      ladeFehler = grund;
       ladeVersprechen = null;
       fertig(null);
     };
@@ -320,12 +346,15 @@ export function castLaden(): Promise<CastContext | null> {
       if (erledigt) return;
       erledigt = true;
       if (!da) {
-        scheitern();
+        // Das Skript ist da und sagt selbst „nicht hier" – siehe `ladeFehler`.
+        scheitern('browser');
         return;
       }
       const ctx = einrichten();
-      if (ctx) fertig(ctx);
-      else scheitern();
+      if (ctx) {
+        ladeFehler = null;
+        fertig(ctx);
+      } else scheitern('browser');
     };
     const skript = document.createElement('script');
     skript.src = LADER;
@@ -333,7 +362,7 @@ export function castLaden(): Promise<CastContext | null> {
     skript.onerror = () => {
       if (erledigt) return;
       erledigt = true;
-      scheitern();
+      scheitern('skript');
     };
     document.head.appendChild(skript);
     /*
@@ -353,8 +382,10 @@ export function castLaden(): Promise<CastContext | null> {
        * auch wenn das Netz zwei Sekunden später zurückkommt.
        */
       const ctx = welt().cast?.framework ? einrichten() : null;
-      if (ctx) fertig(ctx);
-      else scheitern();
+      if (ctx) {
+        ladeFehler = null;
+        fertig(ctx);
+      } else scheitern('skript');
     }, 8000);
   });
   return ladeVersprechen;
@@ -418,8 +449,22 @@ export function castBeobachten(ctx: CastContext, melden: (z: CastZustand) => voi
   return () => ctx.removeEventListener(art, hoerer);
 }
 
-/** Fehlerkennungen des SDK in Sätze, die man jemandem zeigen kann. */
-export function castFehlertext(kennung: unknown): string {
+/**
+ * Fehlerkennungen des SDK in Sätze, die man jemandem zeigen kann.
+ *
+ * Die Kennungen sind die Werte von `chrome.cast.ErrorCode` – in
+ * Grossbuchstaben (`LOAD_MEDIA_FAILED`); verglichen wird ohne Rücksicht auf
+ * die Schreibung. Hier stand `load_failed`, eine Kennung, die das SDK gar
+ * nicht kennt: Der häufigste Fehler überhaupt – der Fernseher kann das Format
+ * nicht – fiel deshalb in „Das Streamen hat nicht geklappt".
+ *
+ * `art` sagt, ob ein Video oder ein Bild geschickt wurde. Scheitert das Laden
+ * eines VIDEOS, ist es fast immer das Format: WebM mit VP9 aus der
+ * Telefonkamera, HEVC vom iPhone – ein Chromecast der ersten drei
+ * Generationen kann beides nicht. Bilder gehen als JPEG hinüber (siehe
+ * `stueckFuer`), dort ist ein Ladefehler eher die Verbindung.
+ */
+export function castFehlertext(kennung: unknown, art: 'video' | 'bild' = 'video'): string {
   switch (String(kennung).toLowerCase()) {
     case 'cancel':
       return '';
@@ -431,14 +476,60 @@ export function castFehlertext(kennung: unknown): string {
       return 'Die Verbindung zum Fernseher ist abgebrochen.';
     case 'channel_error':
       return 'Die Verbindung zum Fernseher wurde unterbrochen.';
+    case 'load_media_failed':
     case 'load_failed':
-      return 'Der Fernseher konnte die Datei nicht laden.';
+      return art === 'video'
+        ? 'Dieses Videoformat kann der Fernseher nicht abspielen. Der Code am Fernseher oder die Spiegelung des Telefons zeigen es trotzdem.'
+        : 'Der Fernseher konnte das Bild nicht laden.';
+    case 'invalid_parameter':
+      return 'Der Fernseher hat die Anfrage nicht verstanden.';
     case 'extension_missing':
+    case 'extension_not_compatible':
     case 'api_not_initialized':
       return 'Dieser Browser kann nicht auf einen Chromecast streamen.';
     default:
       return 'Das Streamen hat nicht geklappt.';
   }
+}
+
+/**
+ * Was auch immer ein Cast-Aufruf verworfen hat – als Satz.
+ *
+ * # Warum es das braucht
+ *
+ * `CastSession.loadMedia` LEHNT im Fehlerfall mit einer Kennung als
+ * Zeichenkette AB (`"LOAD_MEDIA_FAILED"`), nicht mit einem `Error`. Der
+ * Aufrufer las `(fehler as Error)?.message` – bei einer Zeichenkette ist das
+ * `undefined`, und es erschien gar keine Meldung. Der Fernseher zeigte den
+ * leeren Standard-Empfänger, das Telefon schwieg.
+ *
+ * Deshalb hier alle Formen, in denen eine Ablehnung ankommen kann: die
+ * nackte Kennung, ein `chrome.cast.Error` mit `code`, und ein gewöhnlicher
+ * `Error`, dessen Text schon ein Satz ist (aus `abspielen`).
+ */
+export function castFehlerAus(roh: unknown, art: 'video' | 'bild' = 'video'): string {
+  if (typeof roh === 'string') return castFehlertext(roh, art);
+  if (roh instanceof Error) return roh.message || castFehlertext('', art);
+  if (roh && typeof roh === 'object' && typeof (roh as { code?: unknown }).code === 'string') {
+    return castFehlertext((roh as { code: string }).code, art);
+  }
+  return castFehlertext('', art);
+}
+
+/**
+ * Der Inhaltstyp, den der Standard-Empfänger versteht.
+ *
+ * Gespeichert wird, was das Telefon hochgeladen hat – beim iPhone also
+ * `video/quicktime`. Diesen Typ führt Google für Cast nicht; der Empfänger
+ * lehnt dann ab, bevor er einen Blick in die Datei wirft. Ein MOV ist aber
+ * derselbe Behälter wie ein MP4 (ISO-BMFF), und was darin H.264 ist, spielt
+ * er als `video/mp4` ab. Ob es HEVC ist, entscheidet dann der Empfänger
+ * selbst – mit einer ehrlichen Absage statt einer vorgeschobenen.
+ */
+export function castMime(mime: string): string {
+  const grund = mime.split(';')[0].trim().toLowerCase();
+  if (grund === 'video/quicktime') return 'video/mp4';
+  return mime;
 }
 
 /* ---------- Was gezeigt wird ---------- */
@@ -466,7 +557,7 @@ export async function stueckFuer(attachmentId: string): Promise<CastStueck> {
   const bild = karte.art === 'image' || karte.mime.startsWith('image/');
   const titel = karte.name ?? '';
   if (!bild) {
-    return { url: karte.url, mime: karte.mime, titel, bild: false };
+    return { url: karte.url, mime: castMime(karte.mime), titel, bild: false };
   }
   const feld = karte.feld ?? 'tv';
   return {
@@ -493,8 +584,20 @@ export async function abspielen(sitzung: CastSession, stueck: CastStueck): Promi
 
   const anfrage = new medien.LoadRequest(info);
   anfrage.autoplay = true;
-  const fehler = await sitzung.loadMedia(anfrage);
-  if (fehler) throw new Error(castFehlertext(fehler));
+  const art = stueck.bild ? 'bild' : 'video';
+  /*
+   * Beide Formen des Scheiterns abfangen: Das SDK erfüllt mit einer Kennung
+   * (ältere Fassungen) ODER lehnt mit ihr ab (die heutige). Siehe
+   * `castFehlerAus` – vorher kam die Ablehnung als Zeichenkette ungelesen
+   * durch, und niemand erfuhr, warum der Fernseher leer blieb.
+   */
+  let fehler: string | null | undefined;
+  try {
+    fehler = await sitzung.loadMedia(anfrage);
+  } catch (abgelehnt) {
+    throw new Error(castFehlerAus(abgelehnt, art));
+  }
+  if (fehler) throw new Error(castFehlertext(fehler, art));
 }
 
 /**
@@ -571,7 +674,7 @@ export class Diashow {
       if (!stueck.bild || !this.laufend) return;
       this.uhr = window.setTimeout(() => this.weiter(1), this.sekunden * 1000);
     } catch (fehler) {
-      this.melden?.(this.stelle, this.folge.length, (fehler as Error)?.message);
+      this.melden?.(this.stelle, this.folge.length, castFehlerAus(fehler));
       // Ein Bild, das nicht lädt, hält die Schau nicht an – sonst reicht eine
       // gelöschte Datei, und der Abend ist vorbei.
       if (this.laufend) {

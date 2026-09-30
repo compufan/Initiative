@@ -518,7 +518,14 @@ export const api = {
     /** Die Fernbedienung: weiter, zurück, Pause, Reihenfolge, Tempo. */
     steuern: (
       code: string,
-      body: { stelle?: number; pausiert?: boolean; modus?: 'linear' | 'zufall'; sekunden?: number },
+      body: {
+        stelle?: number;
+        /** „Eins weiter" (1) oder „eins zurück" (-1) – von der Stelle, die der Server kennt. */
+        schritt?: number;
+        pausiert?: boolean;
+        modus?: 'linear' | 'zufall';
+        sekunden?: number;
+      },
     ) =>
       patch<{ stelle: number; modus: string }>(`/tv/sitzungen/${encodeURIComponent(code)}`, body),
     beenden: (code: string) => del<void>(`/tv/sitzungen/${encodeURIComponent(code)}`),

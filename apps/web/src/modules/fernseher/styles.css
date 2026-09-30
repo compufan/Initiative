@@ -336,3 +336,282 @@
   font-size: 0.88rem;
   color: var(--text-muted);
 }
+
+/*
+ * Der echte Cast-Knopf an der Videoblase im Chat.
+ *
+ * Oben LINKS, gegenüber der Reihe aus 📺, GIF und Bearbeiten, die von rechts
+ * läuft (`.media-tv-btn` in media/styles.css). Er erscheint nur, wenn nach
+ * der Zustimmung ein Gerät da ist – dann aber auf oberster Ebene, wie §5.1
+ * der Cast-Bedingungen es verlangt.
+ */
+.cast-knopf-blase {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 3px;
+  border-radius: var(--radius-full);
+  background: rgba(4, 8, 20, 0.62);
+}
+
+/* ---------- „Auf den Fernseher" an einem Video: alle Wege ---------- */
+
+.fernseh-wahl .fw-weg {
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.fw-titel {
+  margin: 0 0 0.5rem;
+  font-size: 0.95rem;
+}
+
+.fernseh-wahl .fw-weg .tv-hinweis {
+  margin: 0.4rem 0 0.6rem;
+}
+
+.fw-meldung {
+  margin: 0.4rem 0 0;
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+.fw-erklaerung summary,
+.spiegel-andere summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.fw-erklaerung p {
+  margin: 0.6rem 0 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+/* „Stattdessen dies zeigen" – über der Fernbedienung, weil es das Neue ist. */
+.tv-stattdessen {
+  margin-bottom: 1rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.tv-stattdessen .tv-hinweis,
+.tv-andere-wege .tv-hinweis {
+  margin: 0.5rem 0 0.4rem;
+}
+
+.tv-andere-wege {
+  margin-top: 1.2rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--border);
+}
+
+/* ---------- Spiegeln: Anleitung ---------- */
+
+/*
+ * Die Warnung vor Mitteilungen – sichtbar anders als der Rest.
+ *
+ * Kein Rot: Es ist kein Fehler, sondern ein Schritt, der vor allen anderen
+ * kommt. Aber auffällig genug, dass niemand an ihr vorbeiliest.
+ */
+.spiegel-warnung {
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--warning, #fbbf24);
+  border-radius: var(--radius);
+  background: rgba(251, 191, 36, 0.1);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.spiegel-anleitung {
+  padding: 0.7rem 0.9rem 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.spiegel-andere .spiegel-anleitung {
+  margin-top: 0.7rem;
+}
+
+.spiegel-ueber {
+  margin: 0 0 0.2rem;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.spiegel-titel {
+  margin: 0 0 0.6rem;
+  font-size: 0.98rem;
+}
+
+.spiegel-anleitung .tv-hinweis {
+  margin: -0.4rem 0 0.7rem;
+}
+
+.spiegel-regeln {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.4rem;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+/* ---------- Die Fernsehansicht ---------- */
+
+/*
+ * Solange sie offen ist, tritt die App zurück.
+ *
+ * Meldungen, Tipps und der Fernsehbalken lägen sonst mitten auf dem
+ * Fernseher – vor dem ganzen Wohnzimmer. Die Ansicht deckt sie zwar ab, aber
+ * nicht jede Ebene liegt darunter (`.tipp` hat 9999), und was die Ansicht
+ * zudeckt, gehört trotzdem nicht in den Bildspeicher der Spiegelung.
+ */
+.fernsehansicht-offen .toast-host,
+.fernsehansicht-offen .tipp,
+.fernsehansicht-offen .tv-balken {
+  display: none !important;
+}
+
+/*
+ * Die Bühne – gekapselt unter `.fa-`.
+ *
+ * `src/tv/tv.css` sieht ähnlich aus und wird hier trotzdem NICHT eingebunden:
+ * Es setzt `html, body { background: #000; overflow: hidden }` und
+ * `[hidden] { display: none !important }` für die ganze Seite. In der App
+ * eingebunden, bliebe das nach dem Schliessen der Ansicht stehen – die ganze
+ * App wäre schwarz und liesse sich nicht mehr rollen.
+ */
+.fa-ansicht {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10000;
+  background: #000;
+  color: #fff;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.fa-bild,
+.fa-film {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.fa-bild {
+  animation: fa-einblenden 500ms ease;
+}
+
+@keyframes fa-einblenden {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.fa-film[hidden] {
+  display: none;
+}
+
+/*
+ * Die Leiste unten – verschwindet von selbst, ein Tipp holt sie zurück.
+ *
+ * Ausgeblendet nimmt sie auch keine Tipps an; sonst träfe ein Tipp auf das
+ * Bild einen unsichtbaren Knopf.
+ */
+.fa-leiste {
+  position: absolute;
+  left: 50%;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, 0.65);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 250ms ease;
+}
+
+.fa-leiste.ist-sichtbar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.fa-knopf {
+  min-width: 48px;
+  min-height: 48px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  font-size: 1.4rem;
+  cursor: pointer;
+}
+
+.fa-knopf[disabled] {
+  opacity: 0.35;
+}
+
+.fa-zaehler {
+  min-width: 4.5em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+/* Nur im Hochformat: auf dem iPhone lässt sich die Lage nicht erzwingen. */
+.fa-quer {
+  display: none;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+@media (orientation: portrait) {
+  .fa-quer {
+    display: inline;
+  }
+}
+
+.fa-ton {
+  position: absolute;
+  top: max(16px, env(safe-area-inset-top));
+  right: max(16px, env(safe-area-inset-right));
+  padding: 0.7rem 1.1rem;
+  border: none;
+  border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 1.05rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.fa-meldung {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  padding: 0.6rem 1rem;
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.7);
+}

@@ -311,6 +311,7 @@ export function DateiAktionen({
           open
           onClose={() => setFernseher(false)}
           attachmentIds={zeigbar.map((anhang) => anhang.id)}
+          ansicht={zeigbar}
           titel={
             zeigbar.length === 1 ? 'Auf den Fernseher' : `${zeigbar.length} Stück auf den Fernseher`
           }

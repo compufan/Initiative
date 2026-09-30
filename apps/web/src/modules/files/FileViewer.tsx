@@ -76,8 +76,23 @@ export function FileViewer({
        * eine Ansicht und soll keinen eigenen Verlaufseintrag anlegen. Damit
        * kennt er den Stapel aber auch nicht, und ein Blatt darüber würde bei
        * einem Esc mit ihm zusammen geschlossen.
+       *
+       * `dialogeOffen()` allein reichte dafür nicht. Bei einem echten
+       * Tastendruck rendert React zwischen zwei Hörern: `dialogVerlauf`
+       * schliesst das Blatt, das Blatt meldet sich ab, und wenn dieser Hörer
+       * drankommt, ist der Stapel schon leer – das Blatt „Auf den Fernseher"
+       * über einem Video nahm den ganzen Betrachter mit. Deshalb markiert
+       * `dialogVerlauf` einen Esc, den es verbraucht hat (`defaultPrevented`).
        */
+      if (event.defaultPrevented) return;
       if (event.key === 'Escape' && dialogeOffen() === 0) onClose();
+      /*
+       * Die Pfeile ebenso nur, wenn nichts darüber liegt. Ein Blatt über dem
+       * Betrachter (etwa „Auf den Fernseher") oder die Fernsehansicht hören
+       * nicht auf sie – blätterte der Betrachter dahinter trotzdem, hängte er
+       * mit der Datei das Blatt samt Ansicht aus, mitten im Spiegeln.
+       */
+      if (dialogeOffen() > 0) return;
       /*
        * Die Pfeile gehören dem Abspieler, wenn er den Fokus hat.
        *
@@ -226,7 +241,7 @@ function Video({ datei, quelle }: { datei: AttachmentDto; quelle: string }) {
         preload="metadata"
         onLoadedMetadata={(ereignis) => standbildHolen(ereignis.currentTarget)}
       />
-      <FernsehKnopf video={element} attachmentId={datei.id} />
+      <FernsehKnopf video={element} anhang={datei} />
     </div>
   );
 }
@@ -240,7 +255,14 @@ function Inhalt({ datei }: { datei: AttachmentDto }) {
   }
 
   if (datei.kind === 'video' || mime.startsWith('video/')) {
-    return <Video datei={datei} quelle={quelle} />;
+    /*
+     * Der Schlüssel legt je Datei ein neues `<video>` an. Ohne ihn behielt
+     * „Weiter ›" dasselbe Element und tauschte nur die Adresse – und alles,
+     * was am Element hing (die vorbereitete Fernsehkarte, der Zustand des
+     * 📺), gehörte dann noch zur vorigen Datei. Nur beim Video: Ein Bild, das
+     * sein Element behält, zeigt beim Blättern das alte, bis das neue da ist.
+     */
+    return <Video key={datei.id} datei={datei} quelle={quelle} />;
   }
 
   if (datei.kind === 'audio' || mime.startsWith('audio/')) {
