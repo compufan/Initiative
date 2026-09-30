@@ -1317,62 +1317,94 @@ export function bewegtGlaetten(
    * Modelläufen, mit stehender Seite.
    */
   const kaesten = masken.map((maske) => maskenKasten(maske, breite, hoehe));
-  return masken.map((maske, i) => {
-    const nachbarn: { maske: Uint8Array; dx: number; dy: number }[] = [];
-    if (i > 0 && !grenzen.has(i)) {
-      nachbarn.push({
-        maske: masken[i - 1],
-        dx: Math.round(versatz[i].x),
-        dy: Math.round(versatz[i].y),
-      });
-    }
-    if (i + 1 < masken.length && !grenzen.has(i + 1)) {
-      nachbarn.push({
-        maske: masken[i + 1],
-        dx: -Math.round(versatz[i + 1].x),
-        dy: -Math.round(versatz[i + 1].y),
-      });
-    }
-    if (nachbarn.length === 0) return maske;
-    let x0 = breite;
-    let y0 = hoehe;
-    let x1 = -1;
-    let y1 = -1;
-    const dazu = (k: MaskenKasten | null, dx: number, dy: number) => {
-      if (!k) return;
-      x0 = Math.min(x0, k.x0 + dx);
-      y0 = Math.min(y0, k.y0 + dy);
-      x1 = Math.max(x1, k.x1 + dx);
-      y1 = Math.max(y1, k.y1 + dy);
-    };
-    dazu(kaesten[i], 0, 0);
-    if (i > 0 && !grenzen.has(i)) dazu(kaesten[i - 1], nachbarn[0].dx, nachbarn[0].dy);
-    const hinten = nachbarn[nachbarn.length - 1];
-    if (i + 1 < masken.length && !grenzen.has(i + 1)) dazu(kaesten[i + 1], hinten.dx, hinten.dy);
-    const raus = new Uint8Array(breite * hoehe);
-    x0 = Math.max(0, x0);
-    y0 = Math.max(0, y0);
-    x1 = Math.min(breite - 1, x1);
-    y1 = Math.min(hoehe - 1, y1);
-    const teiler = nachbarn.length + 1;
-    for (let y = y0; y <= y1; y += 1) {
-      for (let x = x0; x <= x1; x += 1) {
-        const p = y * breite + x;
-        let summe = maske[p];
-        for (const n of nachbarn) {
-          // Was von ausserhalb käme, ist leer – wie bei `maskeVerschieben`.
-          const qx = x - n.dx;
-          const qy = y - n.dy;
-          if (qx >= 0 && qy >= 0 && qx < breite && qy < hoehe) summe += n.maske[qy * breite + qx];
-        }
-        raus[p] = Math.round(summe / teiler);
-      }
-    }
-    return raus;
-  });
+  return masken.map((maske, i) =>
+    bildGlaetten(
+      { maske, kasten: kaesten[i] },
+      i > 0 && !grenzen.has(i)
+        ? {
+            maske: masken[i - 1],
+            kasten: kaesten[i - 1],
+            dx: Math.round(versatz[i].x),
+            dy: Math.round(versatz[i].y),
+          }
+        : null,
+      i + 1 < masken.length && !grenzen.has(i + 1)
+        ? {
+            maske: masken[i + 1],
+            kasten: kaesten[i + 1],
+            dx: -Math.round(versatz[i + 1].x),
+            dy: -Math.round(versatz[i + 1].y),
+          }
+        : null,
+      breite,
+      hoehe,
+    ),
+  );
 }
 
-interface MaskenKasten {
+/** Ein Nachbar beim Glätten: seine Maske, ihr Kasten, und wohin er geschoben wird. */
+export interface GlattNachbar {
+  readonly maske: Uint8Array;
+  readonly kasten: MaskenKasten | null;
+  /** Um so viel wird er auf dieses Bild geschoben – ganze Bildpunkte. */
+  readonly dx: number;
+  readonly dy: number;
+}
+
+/**
+ * EIN Bild von `bewegtGlaetten` – mit seinen beiden Nachbarn, jeder schon
+ * um seinen Weg verschoben, oder ohne (`null`).
+ *
+ * Einzeln, damit die Verfolgung im Hintergrund Bild für Bild glätten und
+ * dazwischen die Seite zu Wort kommen lassen kann, statt ein Fenster am
+ * Stück zu rechnen. Dieselbe Rechnung wie dort, Bildpunkt für Bildpunkt.
+ */
+export function bildGlaetten(
+  mitte: { readonly maske: Uint8Array; readonly kasten: MaskenKasten | null },
+  vorher: GlattNachbar | null,
+  nachher: GlattNachbar | null,
+  breite: number,
+  hoehe: number,
+): Uint8Array {
+  const nachbarn = [vorher, nachher].filter((n): n is GlattNachbar => n !== null);
+  const maske = mitte.maske;
+  if (nachbarn.length === 0) return maske;
+  let x0 = breite;
+  let y0 = hoehe;
+  let x1 = -1;
+  let y1 = -1;
+  const dazu = (k: MaskenKasten | null, dx: number, dy: number) => {
+    if (!k) return;
+    x0 = Math.min(x0, k.x0 + dx);
+    y0 = Math.min(y0, k.y0 + dy);
+    x1 = Math.max(x1, k.x1 + dx);
+    y1 = Math.max(y1, k.y1 + dy);
+  };
+  dazu(mitte.kasten, 0, 0);
+  for (const n of nachbarn) dazu(n.kasten, n.dx, n.dy);
+  const raus = new Uint8Array(breite * hoehe);
+  x0 = Math.max(0, x0);
+  y0 = Math.max(0, y0);
+  x1 = Math.min(breite - 1, x1);
+  y1 = Math.min(hoehe - 1, y1);
+  const teiler = nachbarn.length + 1;
+  for (let y = y0; y <= y1; y += 1) {
+    for (let x = x0; x <= x1; x += 1) {
+      const p = y * breite + x;
+      let summe = maske[p];
+      for (const n of nachbarn) {
+        // Was von ausserhalb käme, ist leer – wie bei `maskeVerschieben`.
+        const qx = x - n.dx;
+        const qy = y - n.dy;
+        if (qx >= 0 && qy >= 0 && qx < breite && qy < hoehe) summe += n.maske[qy * breite + qx];
+      }
+      raus[p] = Math.round(summe / teiler);
+    }
+  }
+  return raus;
+}
+
+export interface MaskenKasten {
   readonly x0: number;
   readonly y0: number;
   readonly x1: number;
@@ -1380,7 +1412,11 @@ interface MaskenKasten {
 }
 
 /** Das Rechteck, in dem eine Maske überhaupt etwas hat – `null` für eine leere. */
-function maskenKasten(maske: Uint8Array, breite: number, hoehe: number): MaskenKasten | null {
+export function maskenKasten(
+  maske: Uint8Array,
+  breite: number,
+  hoehe: number,
+): MaskenKasten | null {
   let x0 = breite;
   let y0 = hoehe;
   let x1 = -1;

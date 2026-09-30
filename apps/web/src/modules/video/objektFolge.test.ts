@@ -4,7 +4,7 @@ import { flutmaske } from '../stickers/engines/flutung.js';
 import type { InhaltsTeil } from './bildweise.js';
 import type { GelesenesBild } from './bilderLesen.js';
 import { folgeTeile } from './folgeTeile.js';
-import { Spur } from './objektFolge.js';
+import { Spur, komponentenFiltern } from './objektFolge.js';
 import type { Grau } from './verfolgung.js';
 
 /**
@@ -377,5 +377,385 @@ describe('Die Spur selbst', () => {
     });
     while (spur.naechstes() !== null) await spur.schritt();
     expect(spur.fertigBis()).toBe(Number.POSITIVE_INFINITY);
+  });
+});
+
+/* ---------- In Fenstern, und wenn der Gegenstand geht ---------- */
+
+/**
+ * Eine Szene für die Spur allein: gemusterter, ruhender Grund, eine
+ * gemusterte Scheibe, die wandert, und wahlweise ein zweiter Gegenstand, den
+ * ein Freisteller genauso gern nähme (u²-Net liefert „das Auffälligste").
+ *
+ * Das Ersatzmodell sieht ALLES, was gerade zu sehen ist – die Scheibe und
+ * den Fremden. Welche Maske daraus gilt, entscheidet allein die Spur.
+ */
+describe('Die Spur in Fenstern und beim Verschwinden', () => {
+  const W = 320;
+  const H = 120;
+  const R = 14;
+  interface Scheibe {
+    x: number;
+    y: number;
+  }
+  interface Film {
+    /** Die verfolgte Scheibe – `null`, wo sie nicht zu sehen ist. */
+    scheibe: (n: number) => Scheibe | null;
+    /** Ein Fremder ab Bild `ab` an fester Stelle – ohne `r` so gross wie die Scheibe. */
+    fremd?: { x: number; y: number; ab: number; r?: number };
+  }
+
+  function grauBild(n: number, film: Film): Grau {
+    const werte = new Float32Array(W * H);
+    const s = film.scheibe(n);
+    const f = film.fremd && n >= film.fremd.ab ? film.fremd : null;
+    for (let y = 0; y < H; y += 1) {
+      for (let x = 0; x < W; x += 1) {
+        let g = 128 + 60 * Math.sin(x / 5.3 + Math.cos(y / 7.1)) * Math.cos(y / 4.7 - x / 13);
+        if (f && (x - f.x) ** 2 + (y - f.y) ** 2 <= (f.r ?? R) ** 2) {
+          g = 40 + 20 * Math.sin((x - f.x) / 2.5) * Math.cos((y - f.y) / 3.1);
+        }
+        if (s && (x - s.x) ** 2 + (y - s.y) ** 2 <= R * R) {
+          g = 220 + 30 * Math.sin((x - s.x) / 3) * Math.cos((y - s.y) / 4);
+        }
+        werte[y * W + x] = g;
+      }
+    }
+    return { breite: W, hoehe: H, werte };
+  }
+
+  function scheibenMaske(mitten: readonly ((Scheibe & { r?: number }) | null)[]): Uint8Array {
+    const maske = new Uint8Array(W * H);
+    for (const m of mitten) {
+      if (!m) continue;
+      const r = m.r ?? R;
+      for (let y = Math.max(0, Math.floor(m.y - r)); y <= Math.min(H - 1, m.y + r); y += 1) {
+        for (let x = Math.max(0, Math.floor(m.x - r)); x <= Math.min(W - 1, m.x + r); x += 1) {
+          if ((x - m.x) ** 2 + (y - m.y) ** 2 <= r * r) maske[y * W + x] = 255;
+        }
+      }
+    }
+    return maske;
+  }
+
+  /** Was das Ersatzmodell an Bild n sieht: alles Auffällige. */
+  function modell(film: Film, versatz = 0) {
+    return async (bild: number) => {
+      const n = bild + versatz;
+      const f = film.fremd && n >= film.fremd.ab ? film.fremd : null;
+      return scheibenMaske([film.scheibe(n), f]);
+    };
+  }
+
+  function schluesselBis(bis: number, abstand = 4): number[] {
+    const raus: number[] = [];
+    for (let k = 0; k <= bis; k += abstand) raus.push(k);
+    return raus;
+  }
+
+  async function laufen(spur: Spur): Promise<void> {
+    while (spur.naechstes() !== null) await spur.schritt();
+  }
+
+  const flaecheVon = (m: Uint8Array) => m.reduce((summe, v) => summe + (v >= 128 ? 1 : 0), 0);
+  /** Wie viel der Maske auf einer Scheibe liegt, die nicht die verfolgte ist. */
+  const aufDemFremden = (m: Uint8Array, film: Film) =>
+    film.fremd ? deckungMit(m, scheibenMaske([film.fremd])) : 0;
+  function deckungMit(m: Uint8Array, wahr: Uint8Array): number {
+    let beide = 0;
+    for (let i = 0; i < m.length; i += 1) if (m[i] >= 128 && wahr[i] >= 128) beide += 1;
+    return beide;
+  }
+
+  it('rechnet in Fenstern mit `fortsetzung` dasselbe wie am Stück', async () => {
+    /*
+     * Achtzig Bilder, eine Scheibe, die zwei Punkte je Bild wandert – einmal
+     * als EINE Spur, einmal in Fenstern zu sechzehn Bildern, jedes mit dem
+     * Stand und der rohen Maske, mit denen das vorige aufhörte. Die
+     * Schlüsselmasken müssen gleich sein, Byte für Byte, und dazwischen
+     * gleich gut.
+     */
+    const film: Film = { scheibe: (n) => ({ x: 40 + 2 * n, y: 60 }) };
+    const grau = Array.from({ length: 80 }, (_, n) => grauBild(n, film));
+    const amStueck = new Spur({
+      grau,
+      breite: W,
+      hoehe: H,
+      von: 0,
+      bis: 79,
+      anker: 0,
+      schluessel: schluesselBis(79),
+      punkte: null,
+      rechnen: modell(film),
+    });
+    await laufen(amStueck);
+    const ganz = amStueck.ergebnis();
+
+    const gefenstert: Uint8Array[] = [];
+    let rand: { maske: Uint8Array; stand: NonNullable<ReturnType<Spur['randAn']>> } | null = null;
+    for (let von = 0; von < 79; von += 16) {
+      const bis = Math.min(79, von + 16);
+      const spur: Spur = new Spur({
+        grau: grau.slice(von, bis + 1),
+        breite: W,
+        hoehe: H,
+        von: 0,
+        bis: bis - von,
+        anker: 0,
+        schluessel: schluesselBis(bis - von),
+        punkte: null,
+        ...(rand ? { ankerMaske: rand.maske, fortsetzung: rand.stand } : {}),
+        rechnen: modell(film, von),
+      });
+      await laufen(spur);
+      const teil = spur.ergebnis().masken;
+      // Das Randbild gehört dem vorigen Fenster – hier kommt es nicht noch einmal.
+      teil.forEach((maske, i) => {
+        if (i > 0 || von === 0) gefenstert[von + i] = maske;
+      });
+      const stand = spur.randAn(bis - von);
+      expect(stand).not.toBeNull();
+      rand = { maske: spur.maskeAn(bis - von), stand: stand as NonNullable<typeof stand> };
+    }
+
+    expect(gefenstert).toHaveLength(80);
+    for (let k = 0; k < 80; k += 1) {
+      if (k % 4 === 0 || k === 79) {
+        expect(Array.from(gefenstert[k]), `Schlüsselbild ${k}`).toEqual(Array.from(ganz.masken[k]));
+      } else {
+        expect(deckung(gefenstert[k], ganz.masken[k]), `Bild ${k}`).toBeGreaterThanOrEqual(0.98);
+      }
+    }
+  });
+
+  it('nimmt nach einem Austritt im nächsten Fenster kein Leck über das Dreifache an', async () => {
+    /*
+     * Ohne `fortsetzung` begänne das zweite Fenster mit der Fläche seines
+     * Ankers – und der ist leer, der Gegenstand ist ja gegangen. Mit null
+     * als Mass wäre jedes Leck willkommen.
+     */
+    const film: Film = { scheibe: (n) => (n < 17 ? { x: 200 + 8 * n, y: 60 } : null) };
+    const grau = Array.from({ length: 41 }, (_, n) => grauBild(n, film));
+    const erstes = new Spur({
+      grau: grau.slice(0, 25),
+      breite: W,
+      hoehe: H,
+      von: 0,
+      bis: 24,
+      anker: 0,
+      schluessel: schluesselBis(24),
+      punkte: null,
+      rechnen: modell(film),
+    });
+    await laufen(erstes);
+    expect(flaecheVon(erstes.maskeAn(24))).toBe(0);
+    const stand = erstes.randAn(24);
+    // Die Fläche der letzten nicht leeren Maske – hier der Streifen am Rand.
+    expect(stand?.flaeche).toBeGreaterThan(0);
+
+    // Ein Leck: ein Viertel des Bildes, das Zehnfache der Scheibe.
+    const leck = async () => {
+      const maske = new Uint8Array(W * H);
+      for (let y = 20; y < 80; y += 1) for (let x = 60; x < 160; x += 1) maske[y * W + x] = 255;
+      return maske;
+    };
+    const zweites = (mitStand: boolean) =>
+      new Spur({
+        grau: grau.slice(24, 41),
+        breite: W,
+        hoehe: H,
+        von: 0,
+        bis: 16,
+        anker: 0,
+        schluessel: schluesselBis(16),
+        punkte: null,
+        ankerMaske: erstes.maskeAn(24),
+        ...(mitStand && stand ? { fortsetzung: stand } : {}),
+        rechnen: leck,
+      });
+    const mit = zweites(true);
+    await laufen(mit);
+    expect(Math.max(...mit.ergebnis().masken.map(flaecheVon))).toBe(0);
+    // Gegenprobe: Ohne den mitgebrachten Stand gälte das Leck.
+    const ohne = zweites(false);
+    await laufen(ohne);
+    expect(flaecheVon(ohne.maskeAn(16))).toBe(6000);
+  });
+
+  it('gibt an Schlüsselbildern den Stand heraus – und nur dort', async () => {
+    const film: Film = { scheibe: (n) => (n < 17 ? { x: 200 + 8 * n, y: 60 } : null) };
+    const grau = Array.from({ length: 25 }, (_, n) => grauBild(n, film));
+    const spur = new Spur({
+      grau,
+      breite: W,
+      hoehe: H,
+      von: 0,
+      bis: 24,
+      anker: 0,
+      schluessel: schluesselBis(24),
+      punkte: null,
+      rechnen: modell(film),
+    });
+    await laufen(spur);
+    const frueh = spur.randAn(8);
+    expect(frueh?.tempo?.x).toBeCloseTo(8, 0);
+    expect(frueh?.abgelehnt).toBe(0);
+    expect(frueh?.abwesendSeit).toBeNull();
+    expect(frueh?.letzterKasten).not.toBeNull();
+    expect(spur.randAn(9)).toBeNull();
+    // Nach dem Austritt: seit wann er fehlt, und wo er zuletzt war.
+    const spaet = spur.randAn(24);
+    expect(spaet?.abwesendSeit).toBeGreaterThan(0);
+    expect(spaet?.letzterKasten?.x1).toBe(W - 1);
+  });
+
+  describe('mit `wiederBilder` (Motiv, BiRefNet)', () => {
+    const hinaus = (n: number) => (n < 17 ? { x: 200 + 8 * n, y: 60 } : null);
+
+    async function verfolgen(film: Film, anzahl: number, wiederBilder?: number) {
+      const grau = Array.from({ length: anzahl }, (_, n) => grauBild(n, film));
+      const spur = new Spur({
+        grau,
+        breite: W,
+        hoehe: H,
+        von: 0,
+        bis: anzahl - 1,
+        anker: 0,
+        schluessel: schluesselBis(anzahl - 1),
+        punkte: null,
+        // Der Anker: nur die Scheibe – so, wie der Anwender sie freigestellt hat.
+        ankerMaske: scheibenMaske([film.scheibe(0)]),
+        ...(wiederBilder !== undefined ? { wiederBilder } : {}),
+        rechnen: modell(film),
+      });
+      await laufen(spur);
+      return spur.ergebnis().masken;
+    }
+
+    it('bleibt leer, wenn nach dem Austritt ein Fremder im Bild steht', async () => {
+      /*
+       * Ein kleiner Fremder: Er besteht die alte Prüfung nach einer leeren
+       * Maske (höchstens das Dreifache der letzten Fläche – und die war der
+       * Streifen am Rand).
+       */
+      const film: Film = { scheibe: hinaus, fremd: { x: 80, y: 60, ab: 22, r: 8 } };
+      const mit = await verfolgen(film, 48, 50);
+      const text = mit.map(flaecheVon).join(' ');
+      expect(Math.max(...mit.slice(18).map(flaecheVon)), text).toBe(0);
+      // Gegenprobe – so war es, und so bleibt es ohne `wiederBilder`: Die Maske sprang auf ihn.
+      const ohne = await verfolgen(film, 48);
+      expect(aufDemFremden(ohne[47], film)).toBeGreaterThan(150);
+    });
+
+    it('nimmt einen Fremden nicht, der schon WÄHREND des Austritts da ist', async () => {
+      /*
+       * Der Fall, an dem die Wiedereintrittsregel allein scheitert: Der
+       * Fremde steht schon da, während die Scheibe noch halb im Bild ist.
+       * Die Vorhersage liegt dann halb draussen, und ohne Filter galt das
+       * Fremde nach zwei Ablehnungen – oder sofort, sobald die Vorhersage
+       * ganz draussen lag.
+       */
+      const film: Film = { scheibe: hinaus, fremd: { x: 80, y: 60, ab: 8 } };
+      const mit = await verfolgen(film, 48, 50);
+      expect(Math.max(...mit.map((m) => aufDemFremden(m, film)))).toBe(0);
+      expect(Math.max(...mit.slice(18).map(flaecheVon))).toBe(0);
+      // Solange die Scheibe da ist, sitzt die Maske auf ihr.
+      for (let n = 0; n < 12; n += 1) {
+        expect(deckung(mit[n], scheibenMaske([hinaus(n)])), `Bild ${n}`).toBeGreaterThan(0.8);
+      }
+      /*
+       * Gegenprobe ohne `wiederBilder`: Die frische Maske (Rest + Fremder)
+       * ist mehr als dreimal so gross wie die Vorhersage und wird für immer
+       * abgelehnt – die Vorhersage, ein Streifen am Rand, bleibt dort
+       * stehen bis zum Ende. Auch das ist eine Maske, die nicht mit ihrem
+       * Gegenstand geht.
+       */
+      const ohne = await verfolgen(film, 48);
+      expect(Math.min(...ohne.slice(18).map(flaecheVon))).toBeGreaterThan(0);
+    });
+
+    it('nimmt die Scheibe wieder, wenn sie vom Rand zurückkommt', async () => {
+      const film: Film = {
+        scheibe: (n) =>
+          n < 17 ? { x: 200 + 8 * n, y: 60 } : n >= 30 ? { x: 334 - 6 * (n - 30), y: 60 } : null,
+      };
+      const mit = await verfolgen(film, 56, 50);
+      expect(Math.max(...mit.slice(18, 30).map(flaecheVon))).toBe(0);
+      for (let n = 40; n < 56; n += 1) {
+        const wahr = scheibenMaske([film.scheibe(n)]);
+        expect(deckung(mit[n], wahr), `Bild ${n}`).toBeGreaterThan(0.7);
+      }
+    });
+
+    const verdeckt = (von: number, bis: number) => (n: number) =>
+      n >= von && n < bis ? null : { x: 40 + 2 * n, y: 60 };
+
+    it('findet die Scheibe nach einer Sekunde Verdeckung dort, wo sie zu erwarten war', async () => {
+      const film: Film = { scheibe: verdeckt(20, 45) };
+      const mit = await verfolgen(film, 72, 50);
+      for (let n = 52; n < 72; n += 1) {
+        const wahr = scheibenMaske([film.scheibe(n)]);
+        expect(deckung(mit[n], wahr), `Bild ${n}`).toBeGreaterThan(0.7);
+      }
+    });
+
+    it('bleibt nach drei Sekunden Verdeckung leer – dann könnte es ein anderer sein', async () => {
+      const film: Film = { scheibe: verdeckt(20, 95) };
+      const mit = await verfolgen(film, 121, 50);
+      expect(Math.max(...mit.slice(100).map(flaecheVon))).toBe(0);
+      // Gegenprobe: Ohne die Regel galt die Scheibe mitten im Bild wieder.
+      const ohne = await verfolgen(film, 121);
+      expect(flaecheVon(ohne[120])).toBeGreaterThan(400);
+    });
+  });
+});
+
+describe('komponentenFiltern', () => {
+  const B = 40;
+  const H = 30;
+  function feld(bloecke: { x0: number; y0: number; x1: number; y1: number }[]): Uint8Array {
+    const m = new Uint8Array(B * H);
+    for (const k of bloecke) {
+      for (let y = k.y0; y <= k.y1; y += 1)
+        for (let x = k.x0; x <= k.x1; x += 1) m[y * B + x] = 255;
+    }
+    return m;
+  }
+  const links = { x0: 2, y0: 10, x1: 8, y1: 16 };
+  const mitte = { x0: 18, y0: 10, x1: 24, y1: 16 };
+  const amRand = { x0: 34, y0: 10, x1: 39, y1: 16 };
+
+  it('behält, was eine Stelle trifft, und gibt sonst nichts zurück', () => {
+    const maske = feld([links, mitte]);
+    const raus = komponentenFiltern(maske, B, H, [{ x0: 20, y0: 12, x1: 21, y1: 13 }], false);
+    expect(Array.from(raus)).toEqual(Array.from(feld([mitte])));
+    expect(Math.max(...komponentenFiltern(maske, B, H, [], false))).toBe(0);
+  });
+
+  it('gibt die Maske selbst zurück, wenn alles bleibt', () => {
+    const maske = feld([mitte]);
+    expect(komponentenFiltern(maske, B, H, [mitte], false)).toBe(maske);
+  });
+
+  it('behält mit `randErlaubt`, was den Bildrand berührt', () => {
+    const maske = feld([mitte, amRand]);
+    expect(Array.from(komponentenFiltern(maske, B, H, [], true))).toEqual(
+      Array.from(feld([amRand])),
+    );
+  });
+
+  it('verbindet über Ecken, aber nicht über einen blassen Saum', () => {
+    const maske = feld([mitte]);
+    // Über Eck angesetzt: gehört dazu.
+    maske[17 * B + 25] = 255;
+    // Ein blasser Steg zum linken Block: verbindet NICHT, bleibt aber als Saum nahe der Mitte.
+    const mitLinks = feld([links, mitte]);
+    for (let x = 9; x < 18; x += 1) mitLinks[13 * B + x] = 60;
+    const raus = komponentenFiltern(mitLinks, B, H, [{ x0: 20, y0: 12, x1: 20, y1: 12 }], false);
+    expect(raus[12 * B + 4]).toBe(0);
+    expect(raus[13 * B + 16]).toBe(60);
+    expect(komponentenFiltern(maske, B, H, [{ x0: 25, y0: 17, x1: 25, y1: 17 }], false)).toBe(
+      maske,
+    );
   });
 });
