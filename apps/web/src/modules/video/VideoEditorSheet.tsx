@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Sheet } from '../../components/Sheet.js';
 import { toast } from '../../state/ui.js';
+import { neuesDoc, type BildDoc } from '../bild/doc.js';
 import { errorMessage } from '../media/helpers.js';
 import { AbbruchError } from '../stickers/engines/index.js';
 import {
@@ -20,12 +21,14 @@ import {
 } from './einstellungen.js';
 import { springenZu, useFilmWiedergabe } from './filmWiedergabe.js';
 import { SchnittEditor } from './SchnittEditor.js';
+import { useBearbeiteteVorschau } from './vorschau.js';
 import { filmZuQuelle } from './schnitt.js';
 import { nochOffen, useSchnitt } from './schnittZustand.js';
 import { videoTauglich } from './schreiben.js';
 import {
   BAUSCHRITT_TITEL,
   VideoBauAbbruch,
+  filmMass,
   pufferGruppen,
   videoAusVideo,
   type Bauschritt,
@@ -130,6 +133,57 @@ export function VideoEditorSheet({
   });
   const { abschnitte } = schnitt;
   const wiedergabe = useFilmWiedergabe(videoRef, abschnitte);
+
+  /*
+   * Auch das Blatt zeigt den Film MIT Bearbeitung – so, wie er herauskommt:
+   * zugeschnitten und in die Filmgrösse eingepasst. Noch ohne Bereiche; deren
+   * Masken gehören zu je einem Stellbild (siehe `SchnittEditor`).
+   */
+  const leinwandRef = useRef<HTMLCanvasElement | null>(null);
+  const ohneBereiche = useRef(new WeakMap<BildDoc, BildDoc>());
+  const lage = useRef({ spielt: false, nummer: 0, filmMs: 0 });
+  lage.current = {
+    spielt: wiedergabe.spielt,
+    nummer: wiedergabe.nummer,
+    filmMs: wiedergabe.spielkopfMs,
+  };
+  const docFuer = useCallback(
+    (quelleMs: number): BildDoc | null => {
+      const { spielt, nummer, filmMs } = lage.current;
+      const vermutet = spielt ? nummer : (filmZuQuelle(abschnitte, filmMs)?.nummer ?? nummer);
+      const liegtIn = (i: number) => {
+        const a = abschnitte[i];
+        return a !== undefined && quelleMs >= a.vonMs - 1 && quelleMs < a.bisMs + 1;
+      };
+      let treffer = liegtIn(vermutet) ? vermutet : abschnitte.findIndex((_, i) => liegtIn(i));
+      if (treffer < 0) treffer = vermutet;
+      const doc = abschnitte[treffer]?.doc ?? null;
+      if (!doc || doc.bereiche.length === 0) return doc;
+      let ohne = ohneBereiche.current.get(doc);
+      if (!ohne) {
+        ohne = { ...doc, bereiche: [] };
+        ohneBereiche.current.set(doc, ohne);
+      }
+      return ohne;
+    },
+    [abschnitte],
+  );
+  const vorschauFilm = useMemo(() => {
+    if (!rechenmass) return null;
+    const erster = abschnitte[0]?.doc ?? neuesDoc(rechenmass.b, rechenmass.h);
+    return filmMass(erster, rechenmass.b, rechenmass.h);
+  }, [abschnitte, rechenmass]);
+  const vorschauStand = useBearbeiteteVorschau({
+    video: videoRef,
+    leinwand: leinwandRef,
+    docFuer,
+    mass: rechenmass,
+    art: 'ausgabe',
+    film: vorschauFilm,
+    aktiv: !editorAuf,
+    schrittMs,
+    neuZeichnen: abschnitte,
+  });
 
   /*
    * Zurück aus dem Editor steht das Video des Blatts neu da – auf seinem
@@ -485,14 +539,23 @@ export function VideoEditorSheet({
                   dort und gegen die Mitnahme der Masken arbeitet.
               */}
               {!editorAuf && (
-                <video
-                  ref={videoRef}
-                  className="vg-quelle"
-                  src={quelleUrl ?? undefined}
-                  playsInline
-                  muted
-                  preload="metadata"
-                />
+                <div className="vg-quelle-rahmen">
+                  <video
+                    ref={videoRef}
+                    className={`vg-quelle${vorschauStand.bearbeitet ? ' ist-verdeckt' : ''}`}
+                    src={quelleUrl ?? undefined}
+                    playsInline
+                    muted
+                    preload="metadata"
+                  />
+                  {/* Der Film mit Bearbeitung – siehe `vorschau.ts`. */}
+                  <canvas
+                    ref={leinwandRef}
+                    className="vg-quelle-bild"
+                    hidden={!vorschauStand.bearbeitet}
+                    aria-hidden="true"
+                  />
+                </div>
               )}
               <Zeitleiste
                 abschnitte={abschnitte}

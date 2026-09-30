@@ -1348,6 +1348,19 @@ export function bildRechnen(
   hoehe: number,
   a: Anpassung,
   szene: Szene,
+  optionen?: {
+    /**
+     * Für Bilder, die gleich wieder vergehen – die Vorschau beim Wischen und
+     * Abspielen eines Films.
+     *
+     * Dann gibt es weder Merkzettel noch eigene Kopie: Bei jedem Filmbild
+     * ändert sich das Ergebnis ohnehin, und je Bild eine neue Leinwand samt
+     * 2D-Kontext anzulegen, ist auf einem Telefon genau das, woran der
+     * Grafikspeicher ausgeht. Zurück kommt die Leinwand der Grafikeinheit
+     * selbst; sie gilt nur bis zum nächsten Aufruf.
+     */
+    readonly fluechtig?: boolean;
+  },
 ): CanvasImageSource {
   /*
    * Der Kurzschluss prüft BEIDES.
@@ -1364,6 +1377,7 @@ export function bildRechnen(
   const schluessel = szene.bereiche.length > 0 ? szene.schluessel : tonSchluessel(a);
   const stand = quellstand(bild);
   if (
+    !optionen?.fluechtig &&
     gemerkt &&
     gemerkt.schluessel === schluessel &&
     gemerkt.breite === breite &&
@@ -1379,6 +1393,16 @@ export function bildRechnen(
   if (!fertig) {
     letzterWeg = 'keiner';
     return bild;
+  }
+  if (optionen?.fluechtig) {
+    /*
+     * Dieselbe Leinwand, neuer Inhalt – und das muss jeder erfahren, der
+     * sich ein Ergebnis an ihr merkt. Sonst zeigte `unkenntlich` in
+     * `zeichnen.ts` auf jedem weiteren Filmbild den Weichzeichnerfleck des
+     * ersten: dieselbe Fehlerklasse wie das eingefrorene Video aus 6faac08.
+     */
+    quelleVeraendert(fertig);
+    return fertig;
   }
   // Die GPU-Leinwand wird beim nächsten Aufruf überschrieben – für den
   // Merkzettel braucht es eine eigene Kopie.

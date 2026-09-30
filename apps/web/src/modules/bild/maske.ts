@@ -612,6 +612,24 @@ export function maskeLesen(feld: Uint8Array, raster: Raster, u: number, v: numbe
  * beantworten. Breite, Härte und Radiergummi müssen dagegen einzeln hinein –
  * sie ändern das Ergebnis, ohne die Zahl zu bewegen.
  */
+/**
+ * Eine billige Prüfsumme über alle Punkte von Pinselstrichen.
+ *
+ * Auf Hundertstel gerundet: feiner unterscheidet das Stempeln ohnehin nicht,
+ * und so ergibt dieselbe Lage nach einer Rundreise durch Gleitkommarechnung
+ * dieselbe Summe.
+ */
+export function punktSumme(striche: readonly { readonly punkte: ArrayLike<number> }[]): number {
+  let summe = 0;
+  for (const strich of striche) {
+    const p = strich.punkte;
+    for (let i = 0; i < p.length; i += 1) {
+      summe = (summe * 31 + Math.round(p[i] * 100)) % 2147483647;
+    }
+  }
+  return summe;
+}
+
 export function teilSchluessel(teil: Maskenteil): string {
   const kopf = `${teil.id}|${teil.modus}|${teil.umkehren ? 1 : 0}|${teil.art}`;
   switch (teil.art) {
@@ -629,7 +647,16 @@ export function teilSchluessel(teil: Maskenteil): string {
         punkte += strich.punkte.length >> 1;
         formen += `;${strich.breite},${strich.haerte},${strich.abziehen ? 1 : 0}`;
       }
-      return `${kopf}|${teil.striche.length}|${punkte}${formen}`;
+      /*
+       * Die Lage der Striche gehört mit hinein.
+       *
+       * Im Foto änderte sich ein Pinselteil nur durch Malen, also mit der
+       * Punktzahl. Im Film wandert es mit der Kamera: Dieselben Striche mit
+       * derselben Punktzahl stehen ein Bild später woanders. Ohne die
+       * Prüfsumme lieferte der Zwischenspeicher dann das Feld des vorigen
+       * Bildes – der Pinsel stand still, während die Szene weiterlief.
+       */
+      return `${kopf}|${teil.striche.length}|${punkte}${formen}|${punktSumme(teil.striche)}`;
     }
     case 'netz':
       return `${kopf}|${teil.netz}|${teil.breite}x${teil.hoehe}|${teil.marke}`;

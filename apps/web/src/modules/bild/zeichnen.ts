@@ -171,6 +171,8 @@ function bildRaum(
 interface MalOptionen {
   faktor: number;
   versatz: { x: number; y: number };
+  /** Für ein Bild, das gleich wieder vergeht – siehe `bildRechnen`. */
+  fluechtig?: boolean;
 }
 
 /**
@@ -237,8 +239,9 @@ function unkenntlich(
   skala: number,
   quellSkalaX: number,
   quellSkalaY: number,
+  fluechtig = false,
 ): void {
-  const alt = gemerkt.get(strich);
+  const alt = fluechtig ? undefined : gemerkt.get(strich);
   if (
     alt &&
     alt.skala === skala &&
@@ -394,6 +397,13 @@ function unkenntlich(
   }
   hctx.setTransform(1, 0, 0, 1, 0, 0);
 
+  if (fluechtig) {
+    // Kein Merkzettel: Beim nächsten Filmbild gilt er ohnehin nicht mehr, und
+    // je Bild und Strich eine eigene Leinwand anzulegen, liesse die Vorschau
+    // eines Films den Grafikspeicher volllaufen.
+    ctx.drawImage(hilf, x0, y0, bw, bh);
+    return;
+  }
   // Die Arbeitsfläche ist geteilt und beim nächsten Strich überschrieben –
   // für den Merkzettel braucht es eine eigene Kopie.
   const eigen = document.createElement('canvas');
@@ -497,7 +507,9 @@ function malen(
   const bw = Math.max(1, Math.round(width * skala));
   const bh = Math.max(1, Math.round(height * skala));
   const szene = szeneBauen(doc, width, height);
-  const bild = bildRechnen(roh, bw, bh, doc.anpassung, szene);
+  const bild = bildRechnen(roh, bw, bh, doc.anpassung, szene, {
+    fluechtig: optionen.fluechtig,
+  });
   /*
    * Wieviele Bildpunkte des gelieferten Bildes auf einen Quellbildpunkt
    * kommen: eins, wenn nichts eingestellt ist und das Original zurückkam.
@@ -532,7 +544,17 @@ function malen(
   for (const strich of doc.striche) {
     if (strich.punkte.length < 2) continue;
     if (istBildstrich(strich)) {
-      unkenntlich(ctx, bild, strich, width, height, skala, quellSkalaX, quellSkalaY);
+      unkenntlich(
+        ctx,
+        bild,
+        strich,
+        width,
+        height,
+        skala,
+        quellSkalaX,
+        quellSkalaY,
+        optionen.fluechtig,
+      );
     }
   }
   for (const strich of doc.striche) {
@@ -600,6 +622,8 @@ export function zeichneAnsicht(
     zoom?: number;
     /** Linke obere Ecke des sichtbaren Ausschnitts, in Ansichtspunkten. */
     versatz?: { x: number; y: number };
+    /** Für die Vorschau eines laufenden Films – siehe `bildRechnen`. */
+    fluechtig?: boolean;
     /** Der gewählte Bereich: Maskenschleier und Griffe darüberlegen. */
     bereichZeigen?: {
       maske: { feld: Uint8Array; raster: Raster } | null;
@@ -632,7 +656,7 @@ export function zeichneAnsicht(
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, breite, hoehe);
   ctx.imageSmoothingQuality = 'high';
-  malen(ctx, bild, width, height, doc, { faktor, versatz });
+  malen(ctx, bild, width, height, doc, { faktor, versatz, fluechtig: optionen.fluechtig });
 
   if (optionen.zuschnittZeigen) {
     zeichneZuschnitt(
@@ -838,18 +862,30 @@ export function zeichneAusgabe(
   width: number,
   height: number,
   doc: BildDoc,
+  optionen?: {
+    /**
+     * In diese Leinwand statt in eine neue – für die Vorschau eines Films,
+     * die sonst je Bild eine Leinwand anlegte.
+     */
+    readonly ziel?: HTMLCanvasElement;
+    /** Für ein Bild, das gleich wieder vergeht – siehe `bildRechnen`. */
+    readonly fluechtig?: boolean;
+  },
 ): HTMLCanvasElement {
   const mass = ausgabeGroesse(wirksamerZuschnitt(doc, width, height), doc.drehung);
-  const canvas = document.createElement('canvas');
-  canvas.width = mass.w;
-  canvas.height = mass.h;
+  const canvas = optionen?.ziel ?? document.createElement('canvas');
+  if (canvas.width !== mass.w) canvas.width = mass.w;
+  if (canvas.height !== mass.h) canvas.height = mass.h;
   const ctx = flaeche2d(canvas);
   if (!ctx) return canvas;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, mass.w, mass.h);
   ctx.imageSmoothingQuality = 'high';
   const ausschnitt = zuschnittInAnsicht(wirksamerZuschnitt(doc, width, height), width, height, doc);
   malen(ctx, bild, width, height, doc, {
     faktor: mass.faktor,
     versatz: { x: ausschnitt.x, y: ausschnitt.y },
+    fluechtig: optionen?.fluechtig,
   });
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   return canvas;

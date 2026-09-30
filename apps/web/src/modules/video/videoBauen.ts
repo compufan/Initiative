@@ -334,7 +334,7 @@ function fertigeDocs(gruppen: readonly Gruppe[], breite: number, hoehe: number):
 }
 
 /** Die Grösse des fertigen Films: die des ersten Bildes, genau wie `zeichneAusgabe` sie liefert. */
-function filmMass(doc: BildDoc, breite: number, hoehe: number): { w: number; h: number } {
+export function filmMass(doc: BildDoc, breite: number, hoehe: number): { w: number; h: number } {
   const mass = ausgabeGroesse(wirksamerZuschnitt(doc, breite, hoehe), doc.drehung);
   return { w: mass.w, h: mass.h };
 }

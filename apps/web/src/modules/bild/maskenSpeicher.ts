@@ -31,6 +31,7 @@ import {
   rasterFuer,
   strichStempeln,
   teilBauen,
+  punktSumme,
   teilSchluessel,
   type Raster,
 } from './maske.js';
@@ -83,11 +84,19 @@ const teilzettelRumpf = new Map<string, string>();
 /** Die Kennung eines Pinselteils OHNE die Länge seines letzten Strichs. */
 function pinselRumpf(teil: Maskenteil & PinselTeil): string {
   const bis = teil.striche.length - 1;
+  const letzter = teil.striche[bis];
+  /*
+   * Mit der Lage der fertigen Striche und dem Anfang des letzten: Nur dann
+   * darf fortgeschrieben werden, wenn allein der letzte Strich gewachsen ist.
+   * Hat die Kamera alles verschoben (Film), muss neu gestempelt werden.
+   */
   return (
     `${teil.id}|${teil.modus}|${teil.umkehren}|` +
     teil.striche
       .map((s, i) => `${s.breite},${s.haerte},${s.abziehen},${i < bis ? s.punkte.length : 'x'}`)
-      .join(';')
+      .join(';') +
+    `|${punktSumme(teil.striche.slice(0, Math.max(0, bis)))}` +
+    `|${letzter ? `${letzter.punkte[0]},${letzter.punkte[1]}` : ''}`
   );
 }
 

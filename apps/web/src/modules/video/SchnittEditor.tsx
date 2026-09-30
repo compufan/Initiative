@@ -7,10 +7,11 @@ import { BildEditor } from '../bild/BildEditor.js';
 import type { BildDoc } from '../bild/doc.js';
 import { errorMessage } from '../media/helpers.js';
 import { AbbruchError } from '../stickers/engines/index.js';
-import { videoLeserOeffnen, type VideoLeser } from './bilderLesen.js';
+import { masse, videoLeserOeffnen, type VideoLeser } from './bilderLesen.js';
 import { springenZu, useFilmWiedergabe } from './filmWiedergabe.js';
 import { filmZuQuelle, haengtAmBild, quelleZuFilm, standImRaster } from './schnitt.js';
 import type { SchnittZustand } from './schnittZustand.js';
+import { useBearbeiteteVorschau } from './vorschau.js';
 import { Zeitleiste, stellbildImFilm, zeitText } from './Zeitleiste.js';
 
 /**
@@ -273,6 +274,63 @@ export function SchnittEditor({
 
   /* ---------- Das Video über der Bühne ---------- */
 
+  /*
+   * Die Vorschau zeigt das Video MIT der Bearbeitung des Abschnitts, in dem
+   * das jeweilige Bild liegt – siehe `vorschau.ts`.
+   *
+   * Noch ohne Bereiche: Deren Masken gehören zu EINEM Bild (dem Stellbild).
+   * Über ein anderes Bild gelegt, sässen sie falsch – lieber gar nicht als
+   * falsch. Das ändert sich, sobald die Masken als Spuren über den Film
+   * verfolgt werden.
+   */
+  const leinwandRef = useRef<HTMLCanvasElement | null>(null);
+  const [videoMass, setVideoMass] = useState<{ b: number; h: number } | null>(null);
+  const ohneBereiche = useRef(new WeakMap<BildDoc, BildDoc>());
+  const lage = useRef({ spielt: false, nummer: 0, filmMs: 0 });
+  lage.current = {
+    spielt: wiedergabe.spielt,
+    nummer: wiedergabe.nummer,
+    filmMs: wiedergabe.spielkopfMs,
+  };
+  const docFuer = useCallback(
+    (quelleMs: number): BildDoc | null => {
+      const { spielt, nummer, filmMs } = lage.current;
+      // Welcher Abschnitt? Beim Abspielen der laufende, sonst der unter der
+      // Wiedergabestelle – und nur, wenn das Bild auch wirklich in ihm liegt.
+      // Ein Abschnitt kann dieselbe Stelle des Videos zeigen wie ein anderer.
+      const vermutet = spielt ? nummer : (filmZuQuelle(abschnitte, filmMs)?.nummer ?? nummer);
+      const liegtIn = (i: number) => {
+        const a = abschnitte[i];
+        return a !== undefined && quelleMs >= a.vonMs - 1 && quelleMs < a.bisMs + 1;
+      };
+      let treffer = liegtIn(vermutet) ? vermutet : abschnitte.findIndex((_, i) => liegtIn(i));
+      if (treffer < 0) treffer = vermutet;
+      const doc = abschnitte[treffer]?.doc ?? null;
+      if (!doc) return null;
+      if (doc.bereiche.length === 0) return doc;
+      let ohne = ohneBereiche.current.get(doc);
+      if (!ohne) {
+        ohne = { ...doc, bereiche: [] };
+        ohneBereiche.current.set(doc, ohne);
+      }
+      return ohne;
+    },
+    [abschnitte],
+  );
+  const bearbeiteteVorschau = useBearbeiteteVorschau({
+    video: videoRef,
+    leinwand: leinwandRef,
+    docFuer,
+    mass: videoMass,
+    art: 'ansicht',
+    aktiv: ueberlagert,
+    schrittMs,
+    neuZeichnen: abschnitte,
+  });
+  const maskenFehlen =
+    bearbeiteteVorschau.bearbeitet &&
+    abschnitte.some((eintrag) => (eintrag.doc?.bereiche.length ?? 0) > 0);
+
   const zeile = beschaeftigt ? (
     <div className="bild-wiedergabe-zeile">
       <span>
@@ -301,9 +359,16 @@ export function SchnittEditor({
         Zum Stellbild
       </button>
     </div>
-  ) : wiedergabe.spielt ? (
+  ) : wiedergabe.spielt && bearbeiteteVorschau.guete === 2 ? (
     <div className="bild-wiedergabe-zeile">
-      <span>Wiedergabe ohne Bearbeitung – die zeigt erst der fertige Film.</span>
+      <span>
+        Wiedergabe ohne Bearbeitung – dieses Gerät ist dafür zu langsam. Angehalten und beim Wischen
+        siehst du sie.
+      </span>
+    </div>
+  ) : (wiedergabe.spielt || zieht) && maskenFehlen ? (
+    <div className="bild-wiedergabe-zeile">
+      <span>Mit Bearbeitung, aber noch ohne Masken und Formen – die zeigt das Standbild.</span>
     </div>
   ) : null;
 
@@ -316,7 +381,22 @@ export function SchnittEditor({
           playsInline
           muted
           preload="auto"
-          className="bild-wiedergabe-video"
+          className={`bild-wiedergabe-video${bearbeiteteVorschau.bearbeitet ? ' ist-verdeckt' : ''}`}
+          onLoadedMetadata={(ereignis) => {
+            const element = ereignis.currentTarget;
+            setVideoMass(masse(element.videoWidth, element.videoHeight, kante));
+          }}
+        />
+        {/*
+            Über dem Video, nicht statt seiner: Das Video muss weiter
+            angezeigt werden (nur unsichtbar), sonst meldet es keine Bilder
+            mehr – und es ist der Rückfall, wenn das Gerät zu langsam ist.
+        */}
+        <canvas
+          ref={leinwandRef}
+          className="bild-wiedergabe-bild"
+          hidden={!bearbeiteteVorschau.bearbeitet}
+          aria-hidden="true"
         />
       </div>
       {zeile}

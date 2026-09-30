@@ -535,10 +535,11 @@ test('im Editor schneiden: Abschnitt wählen, Stellbild verschieben, abspielen, 
   await expect(titel).toHaveText('Abschnitt 1 von 2');
   await expect(wiedergabe).toBeHidden({ timeout: 20_000 });
 
-  // Abspielen: Das Video liegt über dem Standbild, mit dem Hinweis dazu.
+  // Abspielen: Das Video liegt über dem Standbild – ohne den alten Satz
+  // „Wiedergabe ohne Bearbeitung": Die Vorschau zeigt die Bearbeitung jetzt.
   await editor.getByRole('button', { name: 'Abspielen' }).click();
   await expect(wiedergabe).toBeVisible();
-  await expect(wiedergabe).toContainText('Wiedergabe ohne Bearbeitung');
+  await expect(wiedergabe).not.toContainText('ohne Bearbeitung');
   await page.waitForTimeout(700);
   await editor.getByRole('button', { name: 'Anhalten' }).click();
   await expect(wiedergabe).toBeHidden({ timeout: 20_000 });
@@ -1214,4 +1215,113 @@ test('beim Wischen läuft das Video mit, statt erst am Ende zu springen', async 
   }
   expect(sortiert.length, `angezeigt: ${sortiert.join(', ')}`).toBeGreaterThanOrEqual(15);
   expect(luecke, `angezeigt: ${sortiert.join(', ')}`).toBeLessThan(1500);
+});
+
+test('ein Weichzeichnerstrich friert in der Filmvorschau nicht auf dem ersten Bild ein', async ({
+  page,
+}) => {
+  /*
+   * Die Vorschau eines Films zeichnet jedes Bild „flüchtig": ohne Merkzettel
+   * und ohne eigene Leinwand je Bild. Dabei darf ein Strich, der das Bild
+   * darunter bearbeitet (Weichzeichnen), nicht das Ergebnis des ERSTEN Bildes
+   * weiterzeigen – dieselbe Fehlerklasse wie das eingefrorene Video aus
+   * 6faac08. Zwei verschiedene Quellbilder in dieselbe Leinwand, derselbe
+   * Strich: Die Mitte des Strichs muss sich unterscheiden.
+   */
+  await page.goto('/');
+  await page.waitForLoadState('networkidle');
+  const farben = await page.evaluate(async () => {
+    const pfade = {
+      zeichnen: '/src/modules/bild/zeichnen.ts',
+      ton: '/src/modules/bild/tonGpu.ts',
+      doc: '/src/modules/bild/doc.ts',
+    };
+    const zeichnen = (await import(
+      /* @vite-ignore */ pfade.zeichnen
+    )) as typeof import('../src/modules/bild/zeichnen.js');
+    const ton = (await import(
+      /* @vite-ignore */ pfade.ton
+    )) as typeof import('../src/modules/bild/tonGpu.js');
+    const docModul = (await import(
+      /* @vite-ignore */ pfade.doc
+    )) as typeof import('../src/modules/bild/doc.js');
+    const quelle = document.createElement('canvas');
+    quelle.width = 160;
+    quelle.height = 120;
+    const stift = quelle.getContext('2d') as CanvasRenderingContext2D;
+    const doc = {
+      ...docModul.neuesDoc(160, 120),
+      anpassung: { ...docModul.neuesDoc(1, 1).anpassung, belichtung: 0.5 },
+      striche: [{ farbe: '#000', breite: 40, punkte: [40, 60, 120, 60], art: 'weich' as const }],
+    };
+    const ziel = document.createElement('canvas');
+    const mitte = (farbe: string) => {
+      stift.fillStyle = farbe;
+      stift.fillRect(0, 0, 160, 120);
+      ton.quelleVeraendert(quelle);
+      zeichnen.zeichneAusgabe(quelle, 160, 120, doc, { ziel, fluechtig: true });
+      const d = (ziel.getContext('2d') as CanvasRenderingContext2D).getImageData(80, 60, 1, 1).data;
+      return [d[0], d[1], d[2]];
+    };
+    return { rot: mitte('#c02020'), blau: mitte('#2020c0') };
+  });
+  // Das zweite Bild ist blau – die Mitte des Strichs muss es auch sein.
+  expect(farben.blau[2], JSON.stringify(farben)).toBeGreaterThan(farben.blau[0] + 60);
+  expect(farben.rot[0], JSON.stringify(farben)).toBeGreaterThan(farben.rot[2] + 60);
+});
+
+test('beim Wischen im Editor zeigt die Vorschau das bearbeitete Bild', async ({ page }) => {
+  /*
+   * Vorher lag beim Wischen und Abspielen das rohe Video über dem Standbild
+   * („Wiedergabe ohne Bearbeitung"). Jetzt zeichnet die Vorschau jedes
+   * angezeigte Bild mit der Bearbeitung seines Abschnitts. Geprüft an einem
+   * roten Film, der auf Schwarz-Weiss gestellt wird: Während des Ziehens
+   * muss die Vorschau grau sein, und sie muss laufend neu zeichnen.
+   */
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 412, height: 880 });
+  if (!(await blattMitVideo(page))) {
+    test.skip(true, 'Kein Videokodierer in diesem Browser');
+    return;
+  }
+  const bearbeiten = page.getByRole('button', { name: /Bearbeiten und schneiden/ });
+  await expect(bearbeiten).toBeEnabled({ timeout: 30_000 });
+  await bearbeiten.click();
+  const editor = page.locator('.bild-editor');
+  await expect(editor.locator('.bild-wiedergabe')).toBeHidden({ timeout: 20_000 });
+  await editor.getByRole('button', { name: /Ton/ }).first().click();
+  await editor.getByRole('button', { name: 'Schwarz-Weiss', exact: true }).click();
+
+  const vorher = await page.evaluate(
+    () =>
+      (window as unknown as { __vorschau?: { gezeichnet: number } }).__vorschau?.gezeichnet ?? 0,
+  );
+  const bahn = (await editor.locator('.zl-bahn').boundingBox())!;
+  const y = bahn.y + bahn.height / 2;
+  await page.mouse.move(bahn.x + 10, y);
+  await page.mouse.down();
+  for (let i = 0; i <= 20; i += 1) {
+    await page.mouse.move(bahn.x + 10 + (bahn.width * 0.5 * i) / 20, y);
+    await page.waitForTimeout(30);
+  }
+  // Mitten im Zug: Die Vorschau liegt über dem Video und ist grau.
+  const leinwand = editor.locator('canvas.bild-wiedergabe-bild');
+  await expect(leinwand).toBeVisible();
+  const farbe = await leinwand.evaluate((flaeche: HTMLCanvasElement) => {
+    const d = (flaeche.getContext('2d') as CanvasRenderingContext2D).getImageData(
+      4,
+      flaeche.height - 6,
+      1,
+      1,
+    ).data;
+    return [d[0], d[1], d[2]];
+  });
+  const nachher = await page.evaluate(
+    () =>
+      (window as unknown as { __vorschau?: { gezeichnet: number } }).__vorschau?.gezeichnet ?? 0,
+  );
+  await page.mouse.up();
+  expect(nachher - vorher, 'Bilder in der Vorschau während des Zugs').toBeGreaterThanOrEqual(5);
+  const [r, g, b] = farbe;
+  expect(Math.abs(r - g) < 25 && Math.abs(g - b) < 25, `Vorschau ${farbe}`).toBe(true);
 });
