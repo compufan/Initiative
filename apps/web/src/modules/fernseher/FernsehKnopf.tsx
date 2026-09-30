@@ -68,6 +68,31 @@ export function FernsehKnopf({
   const [nochmal, setNochmal] = useState(0);
   const [wahl, setWahl] = useState(false);
   const [meldung, setMeldung] = useState('');
+  /*
+   * War das Video schon einmal im Bild?
+   *
+   * Erst dann lohnt die Karte. Ein Chat mit fünfzig Videos und einem
+   * Chromecast im WLAN holte sonst beim Öffnen fünfzig Karten und lüde die
+   * Kopfdaten von fünfzig Videos neu – für Knöpfe, die man nur an dem Video
+   * drückt, das man gerade sieht. Einmal im Bild, bleibt es dabei; ein Hin
+   * und Her beim Rollen wäre nur neuer Aufwand.
+   */
+  const [imBild, setImBild] = useState(false);
+
+  useEffect(() => {
+    if (!video || imBild) return undefined;
+    if (typeof IntersectionObserver === 'undefined') {
+      setImBild(true);
+      return undefined;
+    }
+    const beobachter = new IntersectionObserver((eintraege) => {
+      if (!eintraege.some((eintrag) => eintrag.isIntersecting)) return;
+      setImBild(true);
+      beobachter.disconnect();
+    });
+    beobachter.observe(video);
+    return () => beobachter.disconnect();
+  }, [video, imBild]);
 
   useEffect(() => {
     if (!video) return undefined;
@@ -97,9 +122,9 @@ export function FernsehKnopf({
    * zurücktauschte, tauschte im Kreis.
    */
   useEffect(() => {
-    if (geraet !== 'ja' || vorbereitetUm !== null || gescheitert.current) return;
+    if (geraet !== 'ja' || !imBild || vorbereitetUm !== null || gescheitert.current) return;
     vorbereiten();
-  }, [geraet, vorbereitetUm, vorbereiten]);
+  }, [geraet, imBild, vorbereitetUm, vorbereiten]);
 
   // Nach fünf Stunden zurück – ausser es läuft gerade etwas (dann später noch einmal).
   useEffect(() => {

@@ -55,8 +55,10 @@
  * Finger. Eingesetzt wird sie in genau zwei Fällen:
  *
  *   1. **Der Browser meldet einen Fernseher in Reichweite** (`geraeteBeobachten`
- *      sagt `ja`). Dann zeigen Chrome und Safari ihren eigenen Knopf, und der
- *      muss funktionieren.
+ *      sagt `ja`) und das Video war schon einmal im Bild. Dann zeigen Chrome
+ *      und Safari ihren eigenen Knopf, und der muss funktionieren. „Im Bild",
+ *      damit ein langer Chat nicht für jedes Video auf einmal eine Karte holt
+ *      (siehe `FernsehKnopf`).
  *   2. **Jemand öffnet „Auf den Fernseher" für dieses Video** – das Blatt
  *      bereitet vor, während es aufgeht.
  *

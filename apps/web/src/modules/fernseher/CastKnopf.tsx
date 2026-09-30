@@ -385,7 +385,14 @@ export function CastKnopf({ stuecke, sekunden, was, modusWahl, stil = 'rund' }: 
           text={
             grund === 'kein-sicherer-kontext'
               ? 'Chromecast braucht https – über diese Adresse geht nur der Weg mit dem Code.'
-              : 'Dieser Browser kann kein Chromecast – auf dem iPhone und in Safari geht nur der Weg mit dem Code.'
+              : /*
+                 * Samsung Internet beim Namen nennen: Wer auf einem Galaxy
+                 * liest „auf dem iPhone und in Safari", fühlt sich nicht
+                 * gemeint und sucht den Fehler woanders.
+                 */
+                typeof navigator !== 'undefined' && /SamsungBrowser/.test(navigator.userAgent)
+                ? KEIN_CAST_IM_BROWSER
+                : 'Dieser Browser kann kein Chromecast – auf dem iPhone und in Safari geht nur der Weg mit dem Code.'
           }
           weiter={() => setCodeWeg(true)}
         />

@@ -387,8 +387,8 @@ Datei und diese Person; beim Abholen prüft der Server weiter, ob die Person die
 Datei sehen darf).
 
 - **Die Karte steht jetzt VOR dem Tipp im Video** – sobald der Browser einen
-  Fernseher in Reichweite meldet oder jemand „Auf den Fernseher" für dieses
-  Video öffnet. Vorher wurde sie erst nach dem Tipp geholt. Das hatte zwei
+  Fernseher in Reichweite meldet (für Videos, die schon im Bild waren) oder
+  jemand „Auf den Fernseher" für dieses Video öffnet. Vorher wurde sie erst nach dem Tipp geholt. Das hatte zwei
   Folgen: Auf dem iPhone ging die AirPlay-Liste nie auf (der Fingertipp war bis
   dahin verbraucht), und die **eingebauten Knöpfe der Videosteuerung** – Chromes
   Cast-Symbol, Safaris AirPlay – schickten eine Adresse ohne Karte, der
