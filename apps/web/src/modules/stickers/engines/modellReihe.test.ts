@@ -158,6 +158,101 @@ describe('modellReihe', () => {
     expect(frei).toEqual(['tiefe']);
   });
 
+  it('gibt keine Sitzung frei, für die ein Auftrag der Verfolgung noch in der Reihe wartet', async () => {
+    /*
+     * Die Verfolgung holt ihre Tiefensitzung und reiht die Karte DANN ein.
+     * Gab ein Editor-Lauf eines anderen schweren Verfahrens die Sitzung frei,
+     * während die Karte wartete, rechnete sie danach auf einer geschlossenen.
+     */
+    const protokoll: string[] = [];
+    const frei: string[] = [];
+    modul.sitzungFreigeberSetzen('tiefe', () => void frei.push('tiefe'));
+    await modul.modellReihe('hinten', async () => 1, { verfahren: 'tiefe' });
+    const person = arbeit('person', protokoll);
+    const pPerson = modul.modellReihe('vorn', person.lauf, { verfahren: 'person' });
+    await ruhe();
+    let freiBeimLauf: string[] | null = null;
+    const pTiefe = modul.modellReihe(
+      'hinten',
+      async () => {
+        freiBeimLauf = [...frei];
+        return 2;
+      },
+      { verfahren: 'tiefe' },
+    );
+    await ruhe();
+    expect(modul.modellReiheStand().wartend).toBe(1);
+    // Der Editor tippt mit Netz – ein anderes schweres Verfahren.
+    await modul.modellReihe('vorn', async () => 3, { verfahren: 'tippen' });
+    expect(frei).toEqual([]);
+    person.fertig();
+    await pPerson;
+    await pTiefe;
+    expect(freiBeimLauf).toEqual([]);
+  });
+
+  it('lässt den Zeitgeber keine Sitzung freigeben, deren Auftrag noch wartet', async () => {
+    vi.useFakeTimers();
+    const protokoll: string[] = [];
+    const frei: string[] = [];
+    modul.sitzungFreigeberSetzen('tiefe', () => void frei.push('tiefe'));
+    await modul.modellReihe('hinten', async () => 1, { verfahren: 'tiefe' });
+    // Ein langer erster Lauf im Editor – die nächste Karte wartet dahinter.
+    const lang = arbeit('person', protokoll);
+    const pLang = modul.modellReihe('vorn', lang.lauf, { verfahren: 'person' });
+    await vi.advanceTimersByTimeAsync(10);
+    const pTiefe = modul.modellReihe('hinten', async () => 2, { verfahren: 'tiefe' });
+    await vi.advanceTimersByTimeAsync(modul.FREIGABE_NACH_MS + 1000);
+    expect(frei).toEqual([]);
+    lang.fertig();
+    await pLang;
+    await pTiefe;
+    // Danach läuft die Frist neu.
+    await vi.advanceTimersByTimeAsync(modul.FREIGABE_NACH_MS + 100);
+    expect(frei).toEqual(['tiefe']);
+  });
+
+  it('gibt die Sitzung trotzdem frei, wenn der wartende Auftrag abgebrochen wird', async () => {
+    vi.useFakeTimers();
+    const protokoll: string[] = [];
+    const frei: string[] = [];
+    modul.sitzungFreigeberSetzen('tiefe', () => void frei.push('tiefe'));
+    await modul.modellReihe('hinten', async () => 1, { verfahren: 'tiefe' });
+    const lang = arbeit('person', protokoll);
+    const pLang = modul.modellReihe('vorn', lang.lauf, { verfahren: 'person' });
+    await vi.advanceTimersByTimeAsync(10);
+    const steuer = new AbortController();
+    const pTiefe = modul.modellReihe('hinten', async () => 2, {
+      verfahren: 'tiefe',
+      abbruch: steuer.signal,
+    });
+    await vi.advanceTimersByTimeAsync(modul.FREIGABE_NACH_MS + 1000);
+    expect(frei).toEqual([]);
+    steuer.abort();
+    await expect(pTiefe).rejects.toBeInstanceOf(modul.AbbruchError);
+    await vi.advanceTimersByTimeAsync(modul.FREIGABE_NACH_MS + 100);
+    expect(frei).toEqual(['tiefe']);
+    lang.fertig();
+    await pLang;
+  });
+
+  it('lässt die Tiefensitzung der Verfolgung nicht verwaisen, wenn der Editor eine eigene Tiefe rechnet', async () => {
+    vi.useFakeTimers();
+    const frei: string[] = [];
+    modul.sitzungFreigeberSetzen('tiefe', () => void frei.push('tiefe'));
+    await modul.modellReihe('hinten', async () => 1, { verfahren: 'tiefe' });
+    // Der Editor rechnet eine Tiefe – auf SEINER Sitzung (`tiefenTeilRechnen`).
+    await modul.modellReihe('vorn', async () => 2, { verfahren: 'tiefe' });
+    await vi.advanceTimersByTimeAsync(modul.FREIGABE_NACH_MS + 100);
+    expect(frei).toEqual(['tiefe']);
+    // Und ein Wechsel zu einem anderen schweren Verfahren gibt sie ebenso frei.
+    frei.length = 0;
+    await modul.modellReihe('hinten', async () => 1, { verfahren: 'tiefe' });
+    await modul.modellReihe('vorn', async () => 2, { verfahren: 'tiefe' });
+    await modul.modellReihe('hinten', async () => 3, { verfahren: 'object' });
+    expect(frei).toEqual(['tiefe']);
+  });
+
   it('überlässt die Sitzung dem Editor, sobald er sie selbst benutzt', async () => {
     vi.useFakeTimers();
     const frei: string[] = [];
