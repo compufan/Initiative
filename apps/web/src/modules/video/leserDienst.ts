@@ -90,15 +90,35 @@ interface Auftrag {
   readonly aufgeben: () => void;
 }
 
-/** Ein Signal, das abbricht, sobald eines der beiden es tut. */
-function verbinden(a: AbortSignal, b: AbortSignal | undefined): AbortSignal {
-  if (!b) return a;
+/**
+ * Ein Signal, das abbricht, sobald eines der beiden es tut – und `loesen`,
+ * das die Horcher wieder abmeldet.
+ *
+ * # Warum abmelden
+ *
+ * Weil `a` das Signal der SITZUNG ist, und das lebt, solange das Blatt offen
+ * ist. Die Verfolgung reicht bei jeder Lesung ihr Fenstersignal herein; ohne
+ * Abmelden hing je Lesung ein Horcher mehr an der Sitzung – nach 50 000
+ * Lesungen 32 MB, jede neue Anmeldung langsamer (der Browser sucht die ganze
+ * Liste nach Doppelten ab), und `schliessen()` feuerte sie alle auf einmal.
+ */
+function verbinden(
+  a: AbortSignal,
+  b: AbortSignal | undefined,
+): { signal: AbortSignal; loesen: () => void } {
+  if (!b) return { signal: a, loesen: () => undefined };
   const steuer = new AbortController();
   const weiter = () => steuer.abort();
   if (a.aborted || b.aborted) steuer.abort();
   a.addEventListener('abort', weiter, { once: true });
   b.addEventListener('abort', weiter, { once: true });
-  return steuer.signal;
+  return {
+    signal: steuer.signal,
+    loesen: () => {
+      a.removeEventListener('abort', weiter);
+      b.removeEventListener('abort', weiter);
+    },
+  };
 }
 
 export function leserDienst(
@@ -175,10 +195,13 @@ export function leserDienst(
     laeuft = true;
     auftrag.abbruch?.removeEventListener('abort', auftrag.aufgeben);
     void (async () => {
+      let loesen: () => void = () => undefined;
       try {
         if (auftrag.abbruch?.aborted) throw new AbbruchError();
         const offen = await holenLeser();
-        const signal = verbinden(sitzung.signal, auftrag.abbruch);
+        const verbunden = verbinden(sitzung.signal, auftrag.abbruch);
+        loesen = verbunden.loesen;
+        const signal = verbunden.signal;
         const voll = auftrag.voll ? await offen.bildAn(auftrag.ms, signal) : null;
         let grau: Grau | null = null;
         if (auftrag.grau) {
@@ -189,6 +212,7 @@ export function leserDienst(
       } catch (fehler) {
         auftrag.ablehnen(fehler);
       } finally {
+        loesen();
         laeuft = false;
         pumpen();
       }

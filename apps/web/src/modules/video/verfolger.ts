@@ -5,6 +5,7 @@ import { filmMarke, type NeueDaten } from './bildweise.js';
 import { MAX_BILDER_FILM, dauerText } from './einstellungen.js';
 import { BytesLru } from './lru.js';
 import {
+  filmStandAn,
   kettenAuftrag,
   kettenBedarf,
   kettenPlan,
@@ -44,9 +45,9 @@ import type { Punkt } from './objektFolge.js';
 import { bildMitte, fensterGroesse, filmRaster, grobAbstand, schluesselAbstand } from './raster.js';
 import { rleDekodieren } from './rle.js';
 import type { Abschnitt } from './schnitt.js';
-import { Vorrat, type KettenEintrag, type Pass } from './spurVorrat.js';
+import { Vorrat, type KettenEintrag, type Pass, type Tiefenkarte } from './spurVorrat.js';
 import { teilRechnen } from './teilRechnen.js';
-import { LAGE_RUHE, grauMass, maskeZiehen } from './verfolgung.js';
+import { LAGE_RUHE, grauMass, maskeZiehen, type Lage } from './verfolgung.js';
 
 /**
  * Die Verfolgung der Masken im Hintergrund – was wann gerechnet wird, und
@@ -60,11 +61,14 @@ import { LAGE_RUHE, grauMass, maskeZiehen } from './verfolgung.js';
  *   `leser` ist der `leserDienst` der Sitzung, `mass` die Rechengrösse.
  *   Ändert sich eines davon: `schliessen()` und neu anlegen (die Schlüssel
  *   der Ketten enthalten Raster und Grösse, es gilt ohnehin nichts mehr).
+ *   Der Konstruktor hat KEINE Nebenwirkungen (StrictMode): Prüfhaken,
+ *   Horcher und Schleife kommen mit dem ersten `setzen`.
  * - `setzen(masken, abschnitte, F?)` bei JEDER Änderung von Masken oder
  *   Abschnitten. Rechnet den Unterschied: Teilen, Kürzen, Umstellen,
  *   Löschen und eine reine Änderung der Regler kosten nichts; ein neuer
  *   Anker beginnt 600 ms nach seinem Auftauchen (drei schnelle Tipps sind
- *   ein Auftrag). `F` ohne Angabe: `filmRaster(…).menge`.
+ *   ein Auftrag). `F` ohne Angabe: `filmRaster(…).menge`. Nach `schliessen`
+ *   fängt ein `setzen` von vorn an.
  * - `SpurQuelle` (`kette`, `maske`, `lage`, `tiefe`) – für `bildDocAn`,
  *   `bahnZustand`, `zustandAn`. Synchron.
  * - `abonnieren(fn)` / `stand()` – für `useSyncExternalStore`. `stand()`
@@ -73,20 +77,27 @@ import { LAGE_RUHE, grauMass, maskeZiehen } from './verfolgung.js';
  *   laeuft, fehler? }> }`. `version` taugt als Anlass, Bahnen neu zu zeichnen.
  * - `vorziehen(k)` – Editor und Vorschau für das Bild, das sie brauchen.
  *   Die Kette, der dort etwas fehlt, kommt zuerst dran; ein laufendes
- *   Fenster endet dafür am nächsten Schlüsselbild.
+ *   Fenster endet dafür am nächsten Schlüsselbild – oder gleich, wenn es
+ *   gerade am Tor wartet.
  * - `verfolgungRuhen(grund, an)` – `'zug'` (Finger auf Zeitleiste, Bühne,
- *   Griffen), `'wiedergabe'`. `'verborgen'` meldet der Verfolger selbst.
- *   Es geht 300 ms nach dem letzten Grund weiter, frühestens 500 ms nach
- *   einem Zug (BiRefNet: 1 s).
+ *   Griffen), `'wiedergabe'`, `'bauen'` (der Filmbau läuft – vom Start bis
+ *   zum Ende, auch nach einem Abbruch wieder aus). `'verborgen'` meldet der
+ *   Verfolger selbst. Es geht 300 ms nach dem letzten Grund weiter,
+ *   frühestens 500 ms nach einem Zug (BiRefNet: 1 s).
  * - `spurenFertig(abbruch?, fortschritt?)` – für den Filmbau: erfüllt sich,
  *   wenn jede EINGESCHALTETE Maske an jedem ihrer Filmbilder endgültige
- *   Daten hat; scheitert mit dem Fehler einer Kette („Die Maske ‚X' liess
- *   sich nicht verfolgen: …"). Ein Abbruch hält nur das Warten an, nicht
- *   die Verfolgung.
+ *   Daten hat – nach denselben Regeln wie `bildDocAn(…, 'bild')`
+ *   (`filmStandAn`); scheitert mit dem Fehler einer Kette („Die Maske ‚X'
+ *   liess sich nicht verfolgen: …"). Ein Abbruch hält nur das Warten an,
+ *   nicht die Verfolgung.
  * - `schliessen()` – beim Schliessen des Blatts und bei `alleVerwerfen`.
+ *   Wartende `spurenFertig` scheitern mit `AbbruchError`.
  * - Prüfhaken: `window.__verfolger = { laeufe, lesen, fenster }` (Zähler
  *   dieses Verfolgers: Modelläufe ohne Netzvorrat-Treffer, Leseaufträge,
- *   Fenster).
+ *   Fenster) – gesetzt beim ersten `setzen`.
+ * - Speicher: Über `SPUR_BUDGET` (nach dem Verdrängen von Ersetztem) hält
+ *   jede Kette an, die noch wachsen würde; die Bahn sagt `SPEICHER_VOLL`,
+ *   bis wieder Platz ist (siehe `speicherPruefen`).
  *
  * # Was als Nächstes dran ist
  *
@@ -128,7 +139,19 @@ export const TREUE_MS = 2000;
 /** Was die Bahn sagt, wenn eine Kette wegen des Speichers anhält. */
 export const SPEICHER_VOLL = 'Speicher voll – kürzer schneiden oder eine Maske löschen';
 
-export type RuheGrund = 'zug' | 'wiedergabe' | 'verborgen';
+/**
+ * Warum die Verfolgung ruht.
+ *
+ * - `'zug'`: ein Finger auf Zeitleiste, Bühne oder Griffen.
+ * - `'wiedergabe'`: die Vorschau spielt.
+ * - `'verborgen'`: die Seite ist nicht zu sehen – meldet der Verfolger selbst.
+ * - `'bauen'`: der Filmbau läuft. Nach `spurenFertig` rechnet die Verfolgung
+ *   sonst weiter an abgeschalteten Masken – mit einem eigenen Dekodierer
+ *   neben dem des Filmbaus und Modelläufen, die mit dem Kodieren um die
+ *   Grafikeinheit streiten. Ein `leser.schliessen()` allein half nicht: Der
+ *   nächste Leseauftrag der Verfolgung öffnete den Leser sofort wieder.
+ */
+export type RuheGrund = 'zug' | 'wiedergabe' | 'verborgen' | 'bauen';
 
 export interface MaskenFortschritt {
   /** Anteil der Filmbilder, an denen die Maske endgültig ist, 0 … 1. */
@@ -226,6 +249,8 @@ interface Tiefenjob {
   readonly fein: readonly TiefenLauf[];
   readonly grob: readonly TiefenLauf[];
   readonly ziele: ReadonlySet<number>;
+  /** An welchen Bildern eine Karte gebraucht wird – fein und grob. */
+  readonly karten: ReadonlySet<number>;
   readonly aktiv: boolean;
   readonly reihe: number;
   readonly masken: readonly string[];
@@ -273,19 +298,31 @@ class Ruhetor implements Tor {
     this.wecken();
   }
 
+  /**
+   * Wie lange insgesamt am Tor gewartet wurde, in ms – damit die Schätzung
+   * der Restzeit nur lernt, was gerechnet wurde, nicht wie lange der
+   * Anwender gewischt hat (siehe `ausfuehren`).
+   */
+  gewartet = 0;
+
   async offen(ruheNachZugMs = 0): Promise<void> {
-    for (;;) {
-      if (this.gruende.size > 0) {
-        await this.schlafen(null);
-        continue;
+    const beginn = Date.now();
+    try {
+      for (;;) {
+        if (this.gruende.size > 0) {
+          await this.schlafen(null);
+          continue;
+        }
+        const jetzt = Date.now();
+        const warten = Math.max(
+          this.frei - jetzt,
+          this.zugEnde + Math.max(ZUG_RUHE_MS, ruheNachZugMs) - jetzt,
+        );
+        if (warten <= 0) return;
+        await this.schlafen(warten);
       }
-      const jetzt = Date.now();
-      const warten = Math.max(
-        this.frei - jetzt,
-        this.zugEnde + Math.max(ZUG_RUHE_MS, ruheNachZugMs) - jetzt,
-      );
-      if (warten <= 0) return;
-      await this.schlafen(warten);
+    } finally {
+      this.gewartet += Date.now() - beginn;
     }
   }
 
@@ -338,11 +375,6 @@ function mitGrobpass(teil: Maskenteil): boolean {
 /** Wie weit etwas an einem Bild ist – für Fortschritt und `spurenFertig`. */
 type Fertig = 'fein' | 'grob' | 'offen';
 
-function schlechterStand(a: Fertig, b: Fertig): Fertig {
-  if (a === 'offen' || b === 'offen') return 'offen';
-  return a === 'grob' || b === 'grob' ? 'grob' : 'fein';
-}
-
 const OFFEN_BILD: KettenBild = { stand: 'offen' };
 const VERLOREN_BILD: KettenBild = { stand: 'verloren' };
 
@@ -366,8 +398,13 @@ export class Verfolger implements SpurQuelle {
   private teile = new Map<string, SpurTeil>();
   private readonly vorgaenger = new Map<string, Anker>();
   private readonly ankerSeit = new Map<string, number>();
-  private readonly angehalten = new Set<string>();
+  /** Ketten, die wegen des Speichers anhalten – siehe `speicherPruefen`. */
+  private angehalten = new Set<string>();
+  private tiefeAngehalten = false;
+  /** Warum die Tiefe nicht weiterkommt – bis ein neuer Tiefenanker kommt (siehe `setzen`). */
   private tiefeFehler: string | null = null;
+  /** Die Kennungen aller Tiefenanker beim letzten `setzen`. */
+  private tiefenAnker = new Set<string>();
   private kopf: number | null = null;
   private letztesVerfahren: string | null = null;
   private letzteRichtung: Richtung | null = null;
@@ -380,6 +417,10 @@ export class Verfolger implements SpurQuelle {
     unterbrechen: boolean;
   } | null = null;
   private geschlossen = false;
+  /** Läuft die Schleife? Erst ab dem ersten `setzen` – siehe `anlaufen`. */
+  private laeuft = false;
+  /** Zählt jedes Anlaufen: Eine Schleife von vor einem `schliessen` hört damit auf. */
+  private generation = 0;
   private weckRufe = new Set<() => void>();
 
   private standWert: VerfolgerStand = { version: 0, jeMaske: new Map() };
@@ -389,9 +430,8 @@ export class Verfolger implements SpurQuelle {
   private readonly wartendeFertig = new Set<(fehler: unknown) => void>();
 
   private readonly ausgepackt: BytesLru<number, Uint8Array>;
-  private readonly gezogen = new BytesLru<string, { daten: NeueDaten; marke: number }>(
-    4 * 1024 * 1024,
-  );
+  private readonly gezogen = new BytesLru<string, NeueDaten>(4 * 1024 * 1024);
+  private readonly tiefenMarken = new Map<string, number>();
   private tiefensitzung: Promise<Tiefensitzung> | null = null;
   private wachSperre: { release(): Promise<void> } | null = null;
   private wachAnfrage = false;
@@ -411,6 +451,31 @@ export class Verfolger implements SpurQuelle {
     this.entprellMs = optionen.entprellMs ?? ENTPRELL_MS;
     this.meldenMs = optionen.meldenMs ?? MELDEN_MS;
     this.ausgepackt = new BytesLru(4 * this.b * this.h);
+  }
+
+  /**
+   * Die Nebenwirkungen: Prüfhaken, Horcher auf die Sichtbarkeit, die
+   * Schleife. Erst beim ersten `setzen` – nicht im Konstruktor.
+   *
+   * # Warum nicht im Konstruktor
+   *
+   * Weil React im StrictMode (in der Entwicklung und damit in jeder
+   * e2e-Prüfung) die Fabrik eines `useMemo` zweimal ruft und die ERSTE
+   * Instanz behält. Mit Nebenwirkungen im Konstruktor zeigte
+   * `window.__verfolger` auf die Zähler der verworfenen zweiten – die immer
+   * bei 0 bleiben, und eine Prüfung „nichts neu gelesen" bestünde ohne
+   * Aussage –, und deren Horcher lebte weiter. Ein Verfolger, dem nie etwas
+   * gesetzt wird, tut hier gar nichts.
+   *
+   * Nach `schliessen` läuft er mit dem nächsten `setzen` wieder an, von
+   * vorn: StrictMode führt Aufräumen und Effekt ein zweites Mal aus, und ein
+   * endgültiges Schliessen hinterliesse einen toten Verfolger.
+   */
+  private anlaufen(): void {
+    if (this.laeuft) return;
+    this.laeuft = true;
+    this.geschlossen = false;
+    this.generation += 1;
     if (typeof window !== 'undefined') {
       (window as unknown as { __verfolger?: Zaehler }).__verfolger = this.zaehler;
     }
@@ -419,13 +484,13 @@ export class Verfolger implements SpurQuelle {
       document.addEventListener('visibilitychange', this.sichtbarkeit);
       this.sichtbarkeit();
     }
-    void this.schleife();
+    void this.schleife(this.generation);
   }
 
   /* ---------- Masken und Abschnitte ---------- */
 
   setzen(masken: readonly Maske[], abschnitte: readonly Abschnitt[], F?: readonly number[]): void {
-    if (this.geschlossen) return;
+    this.anlaufen();
     const { s, b, h, K } = this;
     this.masken = masken;
     this.bezug = { abschnitte, s };
@@ -445,7 +510,18 @@ export class Verfolger implements SpurQuelle {
           if (!alt || this.vorgaenger.has(anker.id) || alt.anker.some((a) => a.id === anker.id)) {
             continue;
           }
-          this.vorgaenger.set(anker.id, naechsterAnker(alt.anker, anker.k));
+          /*
+           * Ein Vorgänger, der nie gerechnet wurde (er wurde ersetzt, bevor
+           * seine Entprellung um war), taugt nicht als „veraltet" – dann
+           * gleich dessen Vorgänger. So bleibt die Reihe kurz.
+           */
+          let vor: Anker | undefined = naechsterAnker(alt.anker, anker.k);
+          const besucht = new Set<string>();
+          while (vor && !besucht.has(vor.id) && !this.hatDaten(vor)) {
+            besucht.add(vor.id);
+            vor = this.vorgaenger.get(vor.id);
+          }
+          if (vor) this.vorgaenger.set(anker.id, vor);
         }
       }
     }
@@ -465,6 +541,7 @@ export class Verfolger implements SpurQuelle {
       }
     >();
     const tiefeZiele = new Set<number>();
+    const tiefenAnker = new Set<string>();
     const tiefeMasken: string[] = [];
     let tiefeAktiv = false;
     let tiefeReihe = Infinity;
@@ -495,8 +572,21 @@ export class Verfolger implements SpurQuelle {
         tiefeMasken.push(maske.id);
         tiefeAktiv ||= maske.aktiv;
         tiefeReihe = Math.min(tiefeReihe, reihe);
+        for (const teil of maske.teile) {
+          if (teil.anker[0].teil.art === 'tiefe') for (const a of teil.anker) tiefenAnker.add(a.id);
+        }
       }
     });
+    /*
+     * Ein Fehler der Tiefe gilt, bis ein NEUER Tiefenanker kommt – wie bei
+     * den Inhaltsketten, deren Fehler am Anker hängt. Die Tiefe hat nur
+     * einen gemeinsamen Auftrag; ohne das sperrte ein einziger Aussetzer
+     * (ein Netzfehler beim Laden des Modells, die Tiefe erst in den
+     * Einstellungen eingeschaltet) jede Tiefe bis zum Schliessen des Blatts,
+     * auch für eine neu angelegte Maske.
+     */
+    if ([...tiefenAnker].some((id) => !this.tiefenAnker.has(id))) this.tiefeFehler = null;
+    this.tiefenAnker = tiefenAnker;
 
     const jobs = new Map<string, Job>();
     for (const [schluessel, gruppe] of gruppen) {
@@ -511,6 +601,7 @@ export class Verfolger implements SpurQuelle {
         kettenAuftrag(bedarf, {
           K,
           fenster: this.fensterBilder,
+          film: this.film,
           ...(grob ? { kGrob: this.kGrob } : {}),
         }),
       );
@@ -539,6 +630,11 @@ export class Verfolger implements SpurQuelle {
     }
     if (tiefeZiele.size > 0) {
       const ziele = [...tiefeZiele].sort((x, y) => x - y);
+      const karten = new Set<number>();
+      for (const k of ziele) {
+        karten.add(K * Math.floor(k / K));
+        karten.add(this.kGrob * Math.floor(k / this.kGrob));
+      }
       jobs.set('tiefe', {
         art: 'tiefe',
         schluessel: 'tiefe',
@@ -546,6 +642,7 @@ export class Verfolger implements SpurQuelle {
         fein: tiefenLaeufe(ziele, K),
         grob: tiefenLaeufe(ziele, this.kGrob),
         ziele: tiefeZiele,
+        karten,
         aktiv: tiefeAktiv,
         reihe: tiefeReihe,
         masken: tiefeMasken,
@@ -554,12 +651,15 @@ export class Verfolger implements SpurQuelle {
     this.jobs = jobs;
     this.vorrat.aktuellSetzen([...jobs.keys()].filter((schluessel) => schluessel !== 'tiefe'));
 
-    // Wer wegen des Speichers anhielt, bekommt eine neue Chance – `aufraeumen` sagt, ob zu Recht.
-    for (const schluessel of this.angehalten) {
-      const kette = this.vorrat.holen(schluessel);
-      if (kette?.fehler === SPEICHER_VOLL) kette.fehler = null;
-    }
-    this.angehalten.clear();
+    /*
+     * Wer wegen des Speichers anhält, bleibt angehalten, bis der Vorrat
+     * wieder unter das Budget kommt – `speicherPruefen` fragt den Speicher,
+     * nicht, ob `setzen` kam. Pauschal freigeben hiesse: jeder Reglerschritt
+     * ein Fenster mehr über dem Budget. Gleich hier geprüft, weil eine
+     * gelöschte Maske Platz schafft und ein wartendes `spurenFertig` das
+     * sofort sehen soll.
+     */
+    this.speicherPruefen();
 
     // Ein laufendes Fenster, dessen Kette niemand mehr braucht, wird verworfen.
     if (this.laufend && !jobs.has(this.laufend.wahl.job.schluessel)) this.laufend.steuer.abort();
@@ -645,11 +745,19 @@ export class Verfolger implements SpurQuelle {
     });
   }
 
+  /**
+   * Alles anhalten und freigeben: das laufende Fenster, Wartende von
+   * `spurenFertig` (mit `AbbruchError`), die Bildschirmsperre, die
+   * Tiefensitzung, der Vorrat. Ein späteres `setzen` fängt von vorn an
+   * (siehe `anlaufen`).
+   */
   schliessen(): void {
-    if (this.geschlossen) return;
     this.geschlossen = true;
-    this.laufend?.steuer.abort();
     for (const ende of [...this.wartendeFertig]) ende(new AbbruchError());
+    if (!this.laeuft) return;
+    this.laeuft = false;
+    this.laufend?.steuer.abort();
+    this.laufend = null;
     if (this.meldung) clearTimeout(this.meldung);
     this.meldung = null;
     if (this.wachZeitgeber) clearTimeout(this.wachZeitgeber);
@@ -659,6 +767,11 @@ export class Verfolger implements SpurQuelle {
     if (this.sichtbarkeit && typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.sichtbarkeit);
     }
+    this.sichtbarkeit = null;
+    this.angehalten = new Set();
+    this.tiefeAngehalten = false;
+    this.tiefeFehler = null;
+    this.stillstand.clear();
     const sitzung = this.tiefensitzung;
     this.tiefensitzung = null;
     if (sitzung) {
@@ -708,11 +821,33 @@ export class Verfolger implements SpurQuelle {
     return { stand: 'offen' };
   }
 
+  /**
+   * Die Tiefe an k – `daten` erst, wenn jemand sie liest.
+   *
+   * # Warum erst dann
+   *
+   * Weil die Bahn für JEDES Filmbild fragt, bei jedem Neuzeichnen, und nur
+   * den Stand braucht (Tiefe ist immer sichtbar). Die Karte zwischen zwei
+   * Schlüsselbildern mit der Kamera zu ziehen kostet je Bild rund eine
+   * Millisekunde; über 600 Bilder war das je Bahn eine halbe Sekunde auf dem
+   * Rechner, auf einem Telefon zwei. Der Stand und die Marke kosten nichts.
+   */
   tiefe(k: number): TiefenBild {
-    const fein = this.tiefeAn(k, this.K);
-    if (fein) return { stand: 'fein', daten: fein.daten, marke: fein.marke };
-    const grob = this.tiefeAn(k, this.kGrob);
-    if (grob) return { stand: 'grob', daten: grob.daten, marke: grob.marke };
+    for (const [stand, abstand] of [
+      ['fein', this.K],
+      ['grob', this.kGrob],
+    ] as const) {
+      const quelle = this.tiefeFinden(k, abstand);
+      if (!quelle) continue;
+      const bauen = () => this.tiefeZiehen(k, quelle);
+      return {
+        stand,
+        marke: quelle.marke,
+        get daten() {
+          return bauen();
+        },
+      };
+    }
     return { stand: 'offen' };
   }
 
@@ -725,18 +860,28 @@ export class Verfolger implements SpurQuelle {
     mitVorgaenger: boolean,
   ): Gefunden | null {
     const schluessel = kettenSchluessel(anker, this.s, this.b, this.h, this.K);
-    const job = this.jobs.get(schluessel);
-    if (job && job.art !== 'tiefe' && job.ohne[richtung].has(k)) return 'verloren';
+    /*
+     * Erst was gerechnet ist, dann der Plan: Eine Kette, deren Geltung
+     * schrumpfte, hat ihre Bilder weiter – auch dort, wo der neue Plan einen
+     * Schnitt sähe. Gerechnetes wird nie nachträglich „verloren".
+     */
     const eintrag = this.vorrat.holen(schluessel)?.bild(k);
     if (eintrag) return eintrag.verloren ? 'verloren' : { eintrag, stand: eintrag.guete };
+    const job = this.jobs.get(schluessel);
+    if (job && job.art !== 'tiefe' && job.ohne[richtung].has(k)) return 'verloren';
     if (!mitVorgaenger) return null;
     /*
      * Veraltet: die Kette eines Ankers, den dieser ersetzt hat – nur für
-     * Vorschau und Bahn (`masken.ts` entscheidet, wer es nimmt). Höchstens
-     * vier Schritte zurück; weiter hinten ist ohnehin nichts mehr ähnlich.
+     * Vorschau und Bahn (`masken.ts` entscheidet, wer es nimmt). So weit
+     * zurück, bis eine etwas hat: Wer einen Tipp mit fünf Plus- und
+     * Minus-Tipps nachbessert, erzeugt fünf Anker, von denen die mittleren
+     * wegen der Entprellung nie gerechnet werden – und die gerechnete Kette
+     * des ersten ist das Beste, was die Vorschau hat. `besucht` gegen Kreise.
      */
+    const besucht = new Set<string>([anker.id]);
     let vor = this.vorgaenger.get(anker.id);
-    for (let schritt = 0; vor && schritt < 4; schritt += 1) {
+    while (vor && !besucht.has(vor.id)) {
+      besucht.add(vor.id);
       const alt = this.vorrat.holen(kettenSchluessel(vor, this.s, this.b, this.h, this.K))?.bild(k);
       if (alt && !alt.verloren) return { eintrag: alt, stand: 'veraltet' };
       vor = this.vorgaenger.get(vor.id);
@@ -744,46 +889,76 @@ export class Verfolger implements SpurQuelle {
     return null;
   }
 
-  private tiefeAn(k: number, abstand: number): { daten: NeueDaten; marke: number } | null {
+  /**
+   * Wo die Tiefe an k herkommt: die Karte am Schlüsselbild davor und die
+   * Kamera von dort bis k – ohne etwas zu ziehen. `marke` ist je (Karte, k)
+   * dieselbe, auch wenn die gezogene Karte inzwischen verdrängt wurde: Der
+   * Renderer erkennt eine Karte an ihr.
+   */
+  private tiefeFinden(
+    k: number,
+    abstand: number,
+  ): { basis: number; karte: Tiefenkarte; lage: Lage | null; marke: number } | null {
     const basis = abstand * Math.floor(k / abstand);
     const karte = this.vorrat.tiefe.holen(basis);
     if (!karte) return null;
-    if (basis === k) return karte;
+    if (basis === k) return { basis, karte, lage: null, marke: karte.marke };
     const lage = this.vorrat.kamera.lage(basis, k);
     if (!lage) return null;
     const schluessel = `${k}|${karte.marke}`;
+    let marke = this.tiefenMarken.get(schluessel);
+    if (marke === undefined) {
+      marke = filmMarke();
+      // Klein halten: Jede neue Karte bringt neue Schlüssel, alte braucht niemand.
+      if (this.tiefenMarken.size > 8192) this.tiefenMarken.clear();
+      this.tiefenMarken.set(schluessel, marke);
+    }
+    return { basis, karte, lage, marke };
+  }
+
+  private tiefeZiehen(
+    k: number,
+    quelle: { karte: Tiefenkarte; lage: Lage | null; marke: number },
+  ): NeueDaten {
+    if (!quelle.lage) return quelle.karte.daten;
+    const schluessel = `${k}|${quelle.karte.marke}`;
     const da = this.gezogen.holen(schluessel);
     if (da) return da;
-    const { breite, hoehe, werte } = karte.daten;
+    const { breite, hoehe, werte } = quelle.karte.daten;
     // Die Karte liegt in Graugrösse, die Lage rechnet in Graupunkten: Faktor 1.
-    const neu = {
-      daten: { breite, hoehe, werte: maskeZiehen(werte, breite, hoehe, lage, 1) },
-      marke: filmMarke(),
-    };
+    const neu = { breite, hoehe, werte: maskeZiehen(werte, breite, hoehe, quelle.lage, 1) };
     this.gezogen.ablegen(schluessel, neu, werte.byteLength);
     return neu;
   }
 
-  /** Wie weit eine Kette ist, 0 … 1 – für die Wahl, wer bei vollem Speicher anhält. */
+  /** Wie weit eine Kette fein ist, 0 … 1 – unter 1 wächst sie noch (siehe `speicherPruefen`). */
   private fertigAnteil(schluessel: string): number {
     const job = this.jobs.get(schluessel);
     if (!job || job.art !== 'inhalt') return 1;
-    const kette = this.vorrat.holen(schluessel);
+    const kette = this.vorrat.vorhanden(schluessel);
     let ziele = 0;
     let da = 0;
     for (const richtung of ['vor', 'rueck'] as const) {
       for (const lauf of job.plan[richtung].laeufe) {
         for (const k of lauf.ziele) {
           ziele += 1;
-          if (kette?.bild(k)) da += 1;
+          // Erst fein ist fertig – eine Kette mit groben Bildern wächst im Feinpass noch.
+          if (kette?.bild(k)?.guete === 'fein') da += 1;
         }
       }
     }
     return ziele === 0 ? 1 : da / ziele;
   }
 
+  /** Hat die Kette dieses Ankers irgendetwas gerechnet? */
+  private hatDaten(anker: Anker): boolean {
+    const kette = this.vorrat.vorhanden(kettenSchluessel(anker, this.s, this.b, this.h, this.K));
+    return (kette?.anzahl ?? 0) > 0;
+  }
+
   private kettenFehler(job: Job): string | null {
-    if (job.art === 'tiefe') return this.tiefeFehler;
+    if (job.art === 'tiefe')
+      return this.tiefeFehler ?? (this.tiefeAngehalten ? SPEICHER_VOLL : null);
     return this.vorrat.holen(job.schluessel)?.fehler ?? null;
   }
 
@@ -798,55 +973,14 @@ export class Verfolger implements SpurQuelle {
 
   /* ---------- Innen: wie fertig eine Maske ist ---------- */
 
-  /** Wie weit eine Kette an k ist: endgültig, grob oder offen. */
-  private kettenStand(anker: Anker, richtung: Richtung, k: number): Fertig {
-    const gefunden = this.aufloesen(anker, richtung, k, false);
-    if (!gefunden || gefunden === 'verloren') return gefunden === 'verloren' ? 'fein' : 'offen';
-    return gefunden.stand === 'grob' ? 'grob' : 'fein';
-  }
-
-  /** Wie weit eine Maske an k ist – nach denselben Regeln wie `bildDocAn`. */
+  /**
+   * Wie weit eine Maske an k ist – nach DENSELBEN Regeln wie
+   * `bildDocAn(…, 'bild')`, aus derselben Funktion (`filmStandAn`). Eine
+   * eigene Nachbildung hier liess Formen in Masken mit Inhalt aus: Der
+   * Fortschritt meldete „fertig", und danach warf der Filmbau.
+   */
   private maskeStand(maske: Maske, k: number): Fertig {
-    let schlechtest: Fertig = 'fein';
-    const mitInhalt = hatInhalt(maske);
-    const schlechter = (stand: Fertig) => {
-      schlechtest = schlechterStand(schlechtest, stand);
-    };
-    for (const teil of maske.teile) {
-      const art = teil.anker[0].teil.art;
-      if (art === 'netz' || art === 'tipp') {
-        const hier = teil.anker.find((a) => a.k === k);
-        if (hier && !hier.neuRechnen) continue;
-        let vorher: Anker | undefined = hier;
-        let nachher: Anker | undefined;
-        if (!hier) {
-          for (const a of teil.anker) {
-            if (a.k < k) vorher = a;
-            else if (a.k > k) {
-              nachher = a;
-              break;
-            }
-          }
-        }
-        if (vorher) schlechter(this.kettenStand(vorher, 'vor', k));
-        if (nachher) schlechter(this.kettenStand(nachher, 'rueck', k));
-      } else if (art === 'tiefe') {
-        if (teil.anker.some((a) => a.k === k)) continue;
-        schlechter(
-          tiefeBereit(k, this.K, this.vorrat)
-            ? 'fein'
-            : tiefeBereit(k, this.kGrob, this.vorrat)
-              ? 'grob'
-              : 'offen',
-        );
-      } else if (!mitInhalt) {
-        const anker = naechsterAnker(teil.anker, k);
-        const antwort = this.lage(anker.k, k);
-        schlechter(antwort.stand === 'offen' ? 'offen' : 'fein');
-      }
-      if ((schlechtest as Fertig) === 'offen') break;
-    }
-    return schlechtest;
+    return filmStandAn(maske, k, this, { ...this.bezug, b: this.b, h: this.h });
   }
 
   private kostenJeBild(maske: Maske): { fein: number; grob: number } {
@@ -1085,13 +1219,15 @@ export class Verfolger implements SpurQuelle {
     });
   }
 
-  private async schleife(): Promise<void> {
-    // Erst nach dem Anlegen: Wer `setzen` gleich danach ruft, soll nicht gegen die Schleife laufen.
+  private async schleife(generation: number): Promise<void> {
+    // Erst nach dem Anlaufen: Wer `setzen` gleich danach ruft, soll nicht gegen die Schleife laufen.
     await Promise.resolve();
-    while (!this.geschlossen) {
+    const aktuell = () => !this.geschlossen && generation === this.generation;
+    while (aktuell()) {
       try {
         await this.tor.offen();
-        if (this.geschlossen) return;
+        if (!aktuell()) return;
+        this.speicherPruefen();
         const wahl = this.waehlen();
         if (!wahl) {
           this.wachLassen();
@@ -1125,6 +1261,7 @@ export class Verfolger implements SpurQuelle {
     this.wachHalten();
     this.melden();
     const beginn = Date.now();
+    const gewartet = this.tor.gewartet;
     try {
       const ergebnis = await fensterRechnen(fenster, {
         leser: this.optionen.leser,
@@ -1147,9 +1284,16 @@ export class Verfolger implements SpurQuelle {
       const stillstand = weiter ? 0 : (this.stillstand.get(wahl.job.schluessel) ?? 0) + 1;
       this.stillstand.set(wahl.job.schluessel, stillstand);
       if (stillstand >= 2) throw new Error('Die Verfolgung kommt an dieser Stelle nicht weiter.');
-      // Die Schätzung lernt: Millisekunden je Pfadbild, gleitend gemittelt.
+      /*
+       * Die Schätzung lernt: Millisekunden je Pfadbild, gleitend gemittelt –
+       * OHNE die Zeit am Tor. Wer mitten im Fenster anderthalb Sekunden
+       * wischt, hat die Verfolgung nicht langsamer gemacht; mit der Wandzeit
+       * gelernt, verdreifachte das die Restzeit, und die Anzeige „noch ~…"
+       * war nach jedem Wischen minutenlang zu hoch.
+       */
       const schluessel = `${wahl.job.verfahren}|${wahl.job.art === 'inhalt' && !wahl.job.grob ? 'fein' : wahl.pass}`;
-      const jeBild = (Date.now() - beginn) / Math.max(1, pfad.length);
+      const rechenMs = Date.now() - beginn - (this.tor.gewartet - gewartet);
+      const jeBild = Math.max(0, rechenMs) / Math.max(1, pfad.length);
       const alt = this.kosten.get(schluessel);
       this.kosten.set(schluessel, alt === undefined ? jeBild : alt * 0.7 + jeBild * 0.3);
     } catch (fehler) {
@@ -1162,16 +1306,69 @@ export class Verfolger implements SpurQuelle {
         else this.vorrat.kette(wahl.job.schluessel, wahl.job.anker.k).fehler = text;
       }
     } finally {
-      this.laufend = null;
-      if (!this.geschlossen) {
-        for (const schluessel of this.vorrat.aufraeumen((s) => this.fertigAnteil(s))) {
-          this.angehalten.add(schluessel);
-          const kette = this.vorrat.holen(schluessel);
-          if (kette && kette.fehler === null) kette.fehler = SPEICHER_VOLL;
-        }
+      // Nach einem `schliessen` samt neuem Anlaufen gehört `laufend` schon dem neuen Fenster.
+      if (this.laufend?.steuer === steuer) this.laufend = null;
+      if (!steuer.signal.aborted && !this.geschlossen) {
+        this.speicherPruefen();
         this.melden();
       }
     }
+  }
+
+  /**
+   * Unter das Budget kommen (`Vorrat.aufraeumen`) – und reicht das nicht,
+   * hält JEDE Kette an, die noch wachsen würde, bis der Vorrat wieder
+   * darunter ist. Vor jedem Fenster und nach jedem.
+   *
+   * # Warum alle, und warum hier
+   *
+   * Anhalten gibt nichts frei: Was eine Kette hat, bleibt. Hielte nur die am
+   * weitesten von fertig an, wüchsen die anderen weiter über das Budget –
+   * nachgestellt bis zum Doppelten. Und die Freigabe gehört hierher, an den
+   * Speicher, nicht an `setzen`: Dort gab jeder Reglerschritt jeder
+   * angehaltenen Kette ein weiteres Fenster, und der Vorrat wuchs mit jeder
+   * Bewegung im Editor. Frei werden sie, sobald wieder Platz ist – ersetzte
+   * Ketten verdrängt, eine Maske gelöscht, der Film gekürzt.
+   */
+  private speicherPruefen(): void {
+    const tiefe = this.jobs.get('tiefe');
+    const voll = this.vorrat.aufraeumen(
+      tiefe && tiefe.art === 'tiefe' ? (k) => tiefe.karten.has(k) : () => false,
+    );
+    const neu = new Set<string>();
+    let tiefeAn = false;
+    if (voll) {
+      for (const job of this.jobs.values()) {
+        if (job.art === 'inhalt' && this.fertigAnteil(job.schluessel) < 1) neu.add(job.schluessel);
+        if (job.art === 'tiefe') tiefeAn = this.tiefeHatArbeit(job);
+      }
+    }
+    let geaendert = tiefeAn !== this.tiefeAngehalten;
+    for (const schluessel of this.angehalten) {
+      if (neu.has(schluessel)) continue;
+      const kette = this.vorrat.vorhanden(schluessel);
+      if (kette?.fehler === SPEICHER_VOLL) kette.fehler = null;
+      geaendert = true;
+    }
+    for (const schluessel of neu) {
+      const job = this.jobs.get(schluessel);
+      if (!job || job.art === 'tiefe') continue;
+      const kette = this.vorrat.kette(schluessel, job.anker.k);
+      if (kette.fehler === null) {
+        kette.fehler = SPEICHER_VOLL;
+        geaendert = true;
+      }
+    }
+    this.angehalten = neu;
+    this.tiefeAngehalten = tiefeAn;
+    if (geaendert) this.melden();
+  }
+
+  private tiefeHatArbeit(job: Tiefenjob): boolean {
+    return (
+      tiefenFensterSuchen(job.grob, this.kGrob, this.vorrat, this.fensterBilder) !== null ||
+      tiefenFensterSuchen(job.fein, this.K, this.vorrat, this.fensterBilder) !== null
+    );
   }
 
   private fensterBauen(wahl: Kandidat): Fenster {
@@ -1212,7 +1409,8 @@ export class Verfolger implements SpurQuelle {
       tipp: teil.art === 'tipp',
       ...(job.wiederBilder !== undefined ? { wiederBilder: job.wiederBilder } : {}),
       brauchtBild: (k) => !(teil.art === 'netz' && this.vorrat.netz.hat(teil.netz, k)),
-      rechnen: (k, bild, gezogen, abbruch) => this.rechnen(teil, k, bild, gezogen, abbruch),
+      rechnen: (k, bild, gezogen, abbruch) =>
+        this.rechnen(teil, k, bild, gezogen, abbruch, wahl.pass),
       ruheVorModellMs: job.ruheMs,
     };
   }
@@ -1224,6 +1422,7 @@ export class Verfolger implements SpurQuelle {
     bild: ImageData | null,
     punkte: readonly Punkt[] | null,
     abbruch?: AbortSignal,
+    pass: Pass = 'fein',
   ): Promise<Uint8Array> {
     const laenge = this.b * this.h;
     if (teil.art === 'netz') {
@@ -1259,7 +1458,8 @@ export class Verfolger implements SpurQuelle {
           )
         ).werte;
     this.zaehler.laeufe += 1;
-    if (teil.art === 'netz') this.vorrat.netz.ablegen(teil.netz, k, maske);
+    // Genau die Maske, die ein späterer Treffer im Netzvorrat liefern wird – siehe `Netzvorrat.ablegen`.
+    if (teil.art === 'netz') return this.vorrat.netz.ablegen(teil.netz, k, maske, pass);
     return maske;
   }
 
@@ -1271,25 +1471,43 @@ export class Verfolger implements SpurQuelle {
   private async tiefeRechnen(bild: ImageData, abbruch?: AbortSignal): Promise<NeueDaten> {
     this.zaehler.laeufe += 1;
     if (this.optionen.tiefeRechnen) return this.optionen.tiefeRechnen(bild, abbruch);
-    if (!this.tiefensitzung) {
-      const versuch = import('../bild/tiefeNetz.js').then((modul) => modul.tiefensitzungOeffnen());
-      this.tiefensitzung = versuch;
-      versuch.then(
-        (offen) => {
-          sitzungFreigeberSetzen('tiefe', async () => {
-            if (this.tiefensitzung === versuch) this.tiefensitzung = null;
-            sitzungFreigeberSetzen('tiefe', null);
-            await offen.schliessen();
-          });
-        },
-        () => {
-          if (this.tiefensitzung === versuch) this.tiefensitzung = null;
-        },
-      );
+    /*
+     * Ein zweiter Versuch mit einer frischen Sitzung, falls die erste
+     * freigegeben wurde, während ihr Auftrag noch in der Reihe stand – die
+     * Reihe verhindert das (`modellReihe` zählt Wartende mit), aber ein
+     * Fehler, der daran hängt, sperrte sonst die Tiefe (siehe `tiefeFehler`).
+     */
+    for (let versuch = 0; ; versuch += 1) {
+      const offen = this.tiefeSitzung();
+      const sitzung = await offen;
+      try {
+        const karte = await sitzung.karteFuer(bild, { vorrang: 'hinten', abbruch });
+        return { breite: karte.breite, hoehe: karte.hoehe, werte: karte.feld };
+      } catch (fehler) {
+        const freigegeben = this.tiefensitzung !== offen;
+        if (fehler instanceof AbbruchError || !freigegeben || versuch > 0) throw fehler;
+      }
     }
-    const sitzung = await this.tiefensitzung;
-    const karte = await sitzung.karteFuer(bild, { vorrang: 'hinten', abbruch });
-    return { breite: karte.breite, hoehe: karte.hoehe, werte: karte.feld };
+  }
+
+  /** Die Tiefensitzung der Verfolgung – geöffnet, wenn es keine gibt. */
+  private tiefeSitzung(): Promise<Tiefensitzung> {
+    if (this.tiefensitzung) return this.tiefensitzung;
+    const versuch = import('../bild/tiefeNetz.js').then((modul) => modul.tiefensitzungOeffnen());
+    this.tiefensitzung = versuch;
+    versuch.then(
+      (offen) => {
+        sitzungFreigeberSetzen('tiefe', async () => {
+          if (this.tiefensitzung === versuch) this.tiefensitzung = null;
+          sitzungFreigeberSetzen('tiefe', null);
+          await offen.schliessen();
+        });
+      },
+      () => {
+        if (this.tiefensitzung === versuch) this.tiefensitzung = null;
+      },
+    );
+    return versuch;
   }
 
   /* ---------- Innen: der Bildschirm bleibt an, solange gerechnet wird ---------- */

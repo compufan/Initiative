@@ -5,7 +5,7 @@ import type { LeseOptionen, Lesung, Prioritaet } from './leserDienst.js';
 import { fensterTeilen, type Lauf, type Richtung, type TippPunkte } from './masken.js';
 import { Spur, type Punkt } from './objektFolge.js';
 import { bildMitte } from './raster.js';
-import { metaMessen, rleDekodieren, rleKodieren } from './rle.js';
+import { ablegbar, metaMessen, rleDekodieren } from './rle.js';
 import type { Kette, KettenEintrag, Pass, Randzustand, Vorrat } from './spurVorrat.js';
 import {
   bildGlaetten,
@@ -63,43 +63,8 @@ import {
 /** So lange darf ein Gegenstand fehlen und wird dort wiedergefunden, wo er zu erwarten ist. */
 export const WIEDER_MS = 2000;
 
-/** Ab so vielen Bytes Lauflängen gilt eine Maske als verrauscht – siehe `ablegbar`. */
-export const RAUSCHEN_AB = 48 * 1024;
-
-/**
- * Eine Maske so, wie sie abgelegt wird: als Lauflängen – und, wenn sie sich
- * so nicht klein machen lässt, vorher gröber gestuft.
- *
- * # Warum
- *
- * Nachgemessen bei 960 × 540 (`messung.test.ts`): Eine weiche Scheibe kommt
- * mit der Rundung aus `rle.ts` (ab 250 → 255, bis 5 → 0) auf 6,6 KB. Eine
- * Zuversichtsmaske, wie ein Freisteller sie liefern kann – innen 235 … 255,
- * aussen 0 … 12, beides verrauscht –, bleibt bei 497 KB, fast ihrer vollen
- * Grösse: Jeder Punkt beginnt einen neuen Lauf. Sechshundert Filmbilder
- * davon wären 290 MB, das Doppelte des ganzen Budgets.
- *
- * Nur für SOLCHE Masken wird gröber gestuft: bis 16 → 0, ab 232 → 255,
- * dazwischen auf Achtel. Das ist höchstens ein Zehntel der Wirkung am
- * äussersten Saum und im Innern – und im Innern ist es Rauschen, das im Film
- * ohnehin nur flimmerte. Dieselbe verrauschte Maske, geglättet und so
- * gestuft: 9,7 KB, und die Verfolgung kostet je Bild 20 statt 47 ms, weil
- * das Packen nicht mehr jeden Punkt einzeln schreibt. Eine Maske, die sich
- * ordentlich packen lässt, bleibt Bit für Bit, wie sie war.
- */
-export function ablegbar(maske: Uint8Array): {
-  readonly rle: Uint8Array;
-  readonly maske: Uint8Array;
-} {
-  const rle = rleKodieren(maske);
-  if (rle.length <= RAUSCHEN_AB) return { rle, maske };
-  const grob = new Uint8Array(maske.length);
-  for (let i = 0; i < maske.length; i += 1) {
-    const wert = maske[i];
-    grob[i] = wert <= 16 ? 0 : wert >= 232 ? 255 : (wert + 4) & ~7;
-  }
-  return { rle: rleKodieren(grob), maske: grob };
-}
+// `ablegbar` wohnt in `rle.ts` – auch der Netzvorrat packt damit (`spurVorrat.ts`).
+export { RAUSCHEN_AB, ablegbar } from './rle.js';
 
 /** Was ein Fenster vom Leser braucht – der `Leserdienst`, in den Prüfungen ein Ersatz. */
 export interface FensterLeser {
@@ -164,7 +129,7 @@ export interface InhaltsFenster {
   /** Wo der Lauf beginnt – dessen Maske taugt als Nachbar beim Glätten, auch wenn sie kein Ziel ist. */
   readonly laufStart: number;
   readonly start: FensterStart;
-  /** Ein Tipp: Punkte werden mit abgelegt, und ohne Punkte ist die Kette „verloren". */
+  /** Ein Tipp: Punkte werden mit abgelegt; ohne Punkte (alle hinausgelaufen) ist die Maske leer. */
   readonly tipp: boolean;
   /** Siehe `SpurAuftrag.wiederBilder` – nur Motiv und BiRefNet. */
   readonly wiederBilder?: number;
@@ -345,8 +310,21 @@ async function inhaltRechnen(f: InhaltsFenster, u: Umgebung): Promise<Fenstererg
   let unterbrochen = false;
   for (let ziel = spur.naechstes(); ziel !== null; ziel = spur.naechstes()) {
     abbruchPruefen(u.abbruch);
-    await u.tor?.offen();
+    await u.tor?.offen(f.ruheVorModellMs ?? 0);
     abbruchPruefen(u.abbruch);
+    /*
+     * Auch VOR dem nächsten Schlüsselbild fragen, nicht nur danach: Der
+     * typische Fall ist ein Wischen im Editor – das Tor schliesst, der
+     * Anwender landet bei k (`vorziehen`), lässt los. Gefragt nur nach dem
+     * Schritt, rechnete das alte Fenster erst noch ein ganzes Schlüsselbild
+     * (bei BiRefNet zwei Sekunden), bevor die Kette für k drankam. Erst nach
+     * dem ersten echten Schritt: Ein Fenster muss über seinen Anfang
+     * hinauskommen, sonst hielte es der Verfolger für festgefahren.
+     */
+    if (letzter !== startLokal && u.unterbrechen?.()) {
+      unterbrochen = true;
+      break;
+    }
     await spur.schritt();
     letzter = ziel;
     schritte += 1;
@@ -426,29 +404,31 @@ async function inhaltRechnen(f: InhaltsFenster, u: Umgebung): Promise<Fenstererg
       b,
       h,
     );
+    /*
+     * Die Punkte eines Tipps. Haben alle das Bild verlassen, ist der
+     * Gegenstand HINAUSGELAUFEN: Die Spur rechnet dort leere Masken, und die
+     * Bahn sagt „leer" – wie bei einem Motiv, das geht. Nicht „verloren"
+     * („hier neu antippen"): Das gilt nur, wo die Spur abriss (ein
+     * Szenenschnitt), und in der Lücke, bis der Gegenstand zurückkommt, gäbe
+     * es nichts anzutippen.
+     */
     let tipp: TippPunkte | undefined;
-    let verloren = false;
     if (f.tipp) {
       const g = leitSchluessel(k);
       const liste = spur.punkteAn(lokal(g));
-      if (liste && liste.length === 0) verloren = true;
-      else if (liste) {
+      if (liste && liste.length > 0) {
         const m = spur.maskeBild(lokal(g)).mitte;
         tipp = { liste, mx: m?.x ?? 0, my: m?.y ?? 0 };
       }
     }
-    let eintrag: KettenEintrag;
-    if (verloren) eintrag = { verloren: true, guete: f.pass };
-    else {
-      const abgelegt = ablegbar(glatt);
-      eintrag = {
-        rle: abgelegt.rle,
-        meta: metaMessen(abgelegt.maske, b, h),
-        marke: filmMarke(),
-        guete: f.pass,
-        ...(tipp ? { punkte: tipp } : {}),
-      };
-    }
+    const abgelegt = ablegbar(glatt);
+    const eintrag: KettenEintrag = {
+      rle: abgelegt.rle,
+      meta: metaMessen(abgelegt.maske, b, h),
+      marke: filmMarke(),
+      guete: f.pass,
+      ...(tipp ? { punkte: tipp } : {}),
+    };
     if (f.kette.ablegen(k, eintrag)) gespeichert += 1;
     zwischen.delete(k - 2);
     await luft();
@@ -581,6 +561,11 @@ async function tiefeRechnen(f: TiefenFenster, u: Umgebung): Promise<Fensterergeb
     abbruchPruefen(u.abbruch);
     await u.tor?.offen(f.ruheVorModellMs ?? 0);
     abbruchPruefen(u.abbruch);
+    // Auch nach einer Pause am Tor fragen – siehe `inhaltRechnen`.
+    if (i > 0 && u.unterbrechen?.()) {
+      unterbrochen = true;
+      break;
+    }
     const bild = gelesen.voll.get(k);
     if (!bild) throw new Error(`Für die Tiefe an Bild ${k} fehlt das Bild`);
     const daten = await f.tiefeRechnen(k, bild, u.abbruch);

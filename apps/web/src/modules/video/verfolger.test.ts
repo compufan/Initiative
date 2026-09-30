@@ -1,14 +1,32 @@
+import { getEventListeners } from 'node:events';
+
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { BEREICH_NEUTRAL, type Maskenteil } from '../bild/doc.js';
-import { EngineError } from '../stickers/engines/index.js';
+import { AbbruchError, EngineError } from '../stickers/engines/index.js';
 import { filmMarke } from './bildweise.js';
 import type { Lesung, LeseOptionen } from './leserDienst.js';
-import { ankerFuer, bildDocAn, maskenUmrastern, type Maske, type SpurTeil } from './masken.js';
+import {
+  BAHN,
+  ankerFuer,
+  bildDocAn,
+  kettenSchluessel,
+  maskenUmrastern,
+  zustandAn,
+  type Maske,
+  type SpurTeil,
+} from './masken.js';
 import type { FensterLeser } from './maskenVerfolgen.js';
 import { bildIndex } from './raster.js';
+import { META_LEER } from './rle.js';
 import type { Abschnitt } from './schnitt.js';
-import { Verfolger, type Fensterprotokoll, type VerfolgerOptionen } from './verfolger.js';
+import type { Vorrat } from './spurVorrat.js';
+import {
+  SPEICHER_VOLL,
+  Verfolger,
+  type Fensterprotokoll,
+  type VerfolgerOptionen,
+} from './verfolger.js';
 import { graustufen } from './verfolgung.js';
 
 /**
@@ -429,5 +447,404 @@ describe('Verfolger – fertig und nicht fertig', () => {
     expect(stand.jeMaske.get('A')?.anteil).toBe(1);
     expect(stand.jeMaske.get('A')?.laeuft).toBe(false);
     ab();
+  });
+});
+
+/* ---------- Nach der Gegenlesung ---------- */
+
+/** Ein Tipp auf die Scheibe an Bild k – Antippen nach Farbe, ohne Netz. */
+function tippTeil(k: number): Maskenteil {
+  const m = wo(k);
+  return {
+    id: `t${filmMarke()}`,
+    modus: 'dazu',
+    umkehren: false,
+    art: 'tipp',
+    mitNetz: false,
+    punkte: [{ x: m.x, y: m.y }],
+    toleranz: 32,
+    breite: B,
+    hoehe: H,
+    alpha: scheibe(k),
+    marke: filmMarke(),
+  };
+}
+
+/** Wartet, bis `bedingung` gilt – höchstens `ms`. */
+async function bis(bedingung: () => boolean, ms = 3000): Promise<void> {
+  const ende = Date.now() + ms;
+  while (!bedingung() && Date.now() < ende) await schlafen(5);
+}
+
+/** Der Vorrat eines Verfolgers – für Prüfungen, die in den Speicher sehen. */
+function vorratVon(v: Verfolger): Vorrat {
+  return (v as unknown as { vorrat: Vorrat }).vorrat;
+}
+
+describe('Verfolger – Formen in Masken mit Inhalt', () => {
+  it('rechnet das Ankerbild einer Form mit, auch wenn der Film es nicht mehr zeigt', async () => {
+    // Inhalt bei 0, Ellipse bei 30 – der Film zeigt nur 0 … 19.
+    const { v } = verfolger();
+    const m = maske('M', [spur('t', 0, netz(0, 'object')), spur('r', 30, radial())]);
+    const film = [abschnitt('a', 0, 20)];
+    v.setzen([m], film);
+    await v.spurenFertig();
+    const rahmen = { abschnitte: film, s: S, b: B, h: H };
+    for (let k = 0; k < 20; k += 1) {
+      expect(() => bildDocAn(null, [m], v, k, 'bild', rahmen), `Bild ${k}`).not.toThrow();
+      expect(bildDocAn(null, [m], v, k, 'editor', rahmen).fehlend, `Bild ${k}`).toEqual([]);
+    }
+  });
+
+  it('bleibt fertig, wenn der Inhalt danach zwischen seinem Anker und dem der Form neu angetippt wird', async () => {
+    const { v } = verfolger();
+    const inhalt = spur('t', 0, netz(0, 'object'));
+    const form = spur('r', 30, radial());
+    const lang = [abschnitt('a', 0, 40)];
+    v.setzen([maske('M', [inhalt, form])], lang);
+    await v.spurenFertig();
+    const kurz = [abschnitt('a', 0, 20)];
+    // Nachgetippt bei 10: ein zweiter Anker im selben Teil.
+    const zwei: SpurTeil = {
+      id: 't',
+      anker: [inhalt.anker[0], ankerFuer(10, netz(10, 'object'))],
+    };
+    const m = maske('M', [zwei, form]);
+    v.setzen([m], kurz);
+    await v.spurenFertig();
+    const rahmen = { abschnitte: kurz, s: S, b: B, h: H };
+    for (let k = 0; k < 20; k += 1) {
+      expect(() => bildDocAn(null, [m], v, k, 'bild', rahmen), `Bild ${k}`).not.toThrow();
+    }
+  });
+});
+
+describe('Verfolger – eine Geltung, die schrumpft', () => {
+  it('behält nach „Ab hier" hinter dem Anker, was schon gerechnet ist – ohne einen Modellauf', async () => {
+    const { v, modell: m } = verfolger();
+    const film = [abschnitt('a', 0, 120)];
+    const a = maske('A', [spur('ta', 5, netz(5, 'object'))]);
+    v.setzen([a], film);
+    await v.spurenFertig();
+    const anker = a.teile[0].anker[0];
+    for (const k of [60, 80, 100]) expect(v.kette(anker, 'vor', k).stand).toBe('fein');
+    const laeufe = m.aufrufe.length;
+    const ab: Maske = { ...a, geltung: { art: 'stuecke', stuecke: [{ vonK: 60, bisK: 120 }] } };
+    v.setzen([ab], film);
+    await v.spurenFertig();
+    for (const k of [60, 80, 100]) expect(v.kette(anker, 'vor', k).stand, `Bild ${k}`).toBe('fein');
+    expect(m.aufrufe.length).toBe(laeufe);
+    const rahmen = { abschnitte: film, s: S, b: B, h: H };
+    const teil = bildDocAn(null, [ab], v, 100, 'bild', rahmen).doc.bereiche[0].teile[0];
+    if (teil.art !== 'netz') throw new Error('kein Netzteil');
+    expect(teil.alpha.some((wert) => wert > 0)).toBe(true);
+  });
+});
+
+describe('Verfolger – ein Tipp, der hinausläuft', () => {
+  it('ist danach leer, nicht verloren', async () => {
+    // Die Scheibe wandert 0,8 Punkte je Bild nach rechts und ist ab Bild 111 ganz draussen.
+    const { v } = verfolger();
+    const film = [abschnitt('a', 100, 130)];
+    const t = maske('T', [spur('tt', 100, tippTeil(100))]);
+    v.setzen([t], film);
+    await v.spurenFertig();
+    const rahmen = { abschnitte: film, s: S, b: B, h: H };
+    const anker = t.teile[0].anker[0];
+    expect(v.kette(anker, 'vor', 125).stand).toBe('fein');
+    expect(zustandAn(t, 125, null, v, rahmen)).toBe(BAHN.leer);
+    expect(zustandAn(t, 101, null, v, rahmen)).toBe(BAHN.sichtbar);
+  });
+});
+
+describe('Verfolger – veraltet nach vielen Nachbesserungen', () => {
+  it('zeigt auch nach fünf schnellen Tipps die gerechnete Kette als veraltet', async () => {
+    const { v } = verfolger({ entprellMs: 400 });
+    const film = [abschnitt('a', 0, 30)];
+    const alt = spur('t', 5, netz(5));
+    v.setzen([maske('A', [alt])], film);
+    await v.spurenFertig();
+    let letzter = alt;
+    for (let i = 0; i < 6; i += 1) {
+      letzter = spur('t', 5, netz(5));
+      v.setzen([maske('A', [letzter])], film);
+    }
+    expect(v.kette(letzter.anker[0], 'vor', 20).stand).toBe('veraltet');
+    await v.spurenFertig();
+    expect(v.kette(letzter.anker[0], 'vor', 20).stand).toBe('fein');
+  });
+});
+
+describe('Verfolger – Speicher', () => {
+  it('hält über dem Budget an – und ein Reglerschritt gibt nichts frei, erst freier Speicher', async () => {
+    const budget = 3_000_000;
+    const { v, protokoll } = verfolger({ budget });
+    const film = [abschnitt('a', 0, 40)];
+    const a = maske('A', [spur('ta', 0, netz(0))]);
+    const b = maske('B', [spur('tb', 20, netz(20))]);
+    // Die Kette von B ist schon riesig (etwa aus einer früheren Rechnung) – mit Arbeit übrig.
+    const riesig = vorratVon(v).kette(kettenSchluessel(b.teile[0].anker[0], S, B, H, 4), 20);
+    riesig.ablegen(39, {
+      rle: new Uint8Array(budget + 100_000),
+      meta: META_LEER,
+      marke: filmMarke(),
+      guete: 'grob',
+    });
+    v.setzen([a, b], film);
+    await expect(v.spurenFertig()).rejects.toThrow(SPEICHER_VOLL);
+    const bytes = vorratVon(v).bytes;
+    const fenster = protokoll.length;
+    // Jeder Reglerschritt ruft `setzen` – das darf keiner angehaltenen Kette ein Fenster geben.
+    for (let i = 0; i < 30; i += 1) {
+      v.setzen([a, b], film);
+      await schlafen(2);
+    }
+    await schlafen(50);
+    expect(protokoll.length).toBe(fenster);
+    expect(vorratVon(v).bytes).toBe(bytes);
+    expect(v.stand().jeMaske.get('A')?.fehler).toBe(SPEICHER_VOLL);
+    // B gelöscht: Ihre Kette ist ersetzt, wird verdrängt – und A rechnet weiter.
+    v.setzen([a], film);
+    await v.spurenFertig();
+    expect(vorratVon(v).bytes).toBeLessThanOrEqual(budget);
+    await bis(() => v.stand().jeMaske.get('A')?.fehler === undefined);
+    expect(v.stand().jeMaske.get('A')?.fehler).toBeUndefined();
+  });
+});
+
+describe('Verfolger – Tiefe nach einem Fehler', () => {
+  it('rechnet für einen neuen Tiefenanker wieder – ein Aussetzer sperrt nicht für immer', async () => {
+    let versuche = 0;
+    const { v } = verfolger({
+      tiefeRechnen: async () => {
+        versuche += 1;
+        if (versuche === 1) throw new Error('Netz kurz weg');
+        return { breite: 42, hoehe: 28, werte: new Uint8Array(42 * 28).fill(99) };
+      },
+    });
+    const film = [abschnitt('a', 0, 12)];
+    const t1 = maske('T1', [spur('d1', 3, tiefe())]);
+    v.setzen([t1], film);
+    await expect(v.spurenFertig()).rejects.toThrow('Netz kurz weg');
+    // Derselbe Anker: Der Fehler bleibt – kein stilles Wiederholen im Kreis.
+    v.setzen([t1], film);
+    await expect(v.spurenFertig()).rejects.toThrow('Netz kurz weg');
+    expect(versuche).toBe(1);
+    // Die Maske gelöscht, eine neue Tiefe angelegt: Sie wird gerechnet.
+    v.setzen([], film);
+    const neu = maske('T2', [spur('d2', 5, tiefe())]);
+    v.setzen([neu], film);
+    await v.spurenFertig();
+    expect(versuche).toBeGreaterThan(1);
+    expect(v.tiefe(7).stand).toBe('fein');
+  });
+});
+
+describe('Verfolger – Tor, Filmbau, Unterbrechen', () => {
+  it("rechnet während des Filmbaus nichts ('bauen') – auch keine abgeschaltete Maske", async () => {
+    const { v, leser } = verfolger();
+    const film = [abschnitt('a', 0, 60)];
+    const an = maske('A', [spur('ta', 0, netz(0))]);
+    const aus = maske('B', [spur('tb', 30, netz(30))], false);
+    v.setzen([an, aus], film);
+    await v.spurenFertig();
+    v.verfolgungRuhen('bauen', true);
+    await schlafen(30);
+    const gelesen = leser.gelesen.length;
+    await schlafen(200);
+    expect(leser.gelesen.length).toBe(gelesen);
+    v.verfolgungRuhen('bauen', false);
+    await bis(() => leser.gelesen.length > gelesen);
+    expect(leser.gelesen.length).toBeGreaterThan(gelesen);
+  });
+
+  it('bricht nach einer Pause am Tor ab, statt noch ein Schlüsselbild zu rechnen', async () => {
+    let v: Verfolger | null = null;
+    const m = modell();
+    const aufrufe: string[] = [];
+    let einmal = false;
+    const r = verfolger({
+      rechnen: async (teil, bild, punkte, abbruch) => {
+        aufrufe.push(teil.id);
+        const maskeHier = await m.rechnen(teil, bild, punkte, abbruch);
+        if (!einmal && aufrufe.filter((id) => id === teil.id).length === 2) {
+          einmal = true;
+          // Der Anwender wischt, landet bei 55 und lässt los – während das Fenster am Tor wartet.
+          v?.verfolgungRuhen('zug', true);
+          setTimeout(() => {
+            v?.vorziehen(55);
+            setTimeout(() => v?.verfolgungRuhen('zug', false), 30);
+          }, 30);
+        }
+        return maskeHier;
+      },
+    });
+    v = r.v;
+    const a = maske('A', [spur('ta', 0, netz(0))]);
+    const b = maske('B', [spur('tb', 50, netz(50))]);
+    v.setzen([a, b], [abschnitt('a', 0, 60)]);
+    await v.spurenFertig();
+    const idA = a.teile[0].anker[0].teil.id;
+    const idB = b.teile[0].anker[0].teil.id;
+    const nachPause = aufrufe.slice(aufrufe.findIndex((id, i) => id === idA && i > 0) + 1);
+    // Der nächste Modellauf nach der Pause gehört B.
+    expect(nachPause[0]).toBe(idB);
+  });
+
+  it('lernt die Restzeit ohne die Zeit am Tor', async () => {
+    let v: Verfolger | null = null;
+    let einmal = false;
+    const m = modell();
+    const r = verfolger({
+      rechnen: async (teil, bild, punkte, abbruch) => {
+        if (!einmal && m.aufrufe.length === 3) {
+          einmal = true;
+          v?.verfolgungRuhen('zug', true);
+          setTimeout(() => v?.verfolgungRuhen('zug', false), 800);
+        }
+        return m.rechnen(teil, bild, punkte, abbruch);
+      },
+    });
+    v = r.v;
+    const a = maske('A', [spur('ta', 0, netz(0))]);
+    v.setzen([a], [abschnitt('a', 0, 60)]);
+    await v.spurenFertig();
+    const kosten = (v as unknown as { kosten: Map<string, number> }).kosten.get('person|fein');
+    // 800 ms Zug plus 500 ms Ruhe über rund 50 Bilder wären mehr als 25 ms je Bild.
+    expect(kosten).toBeLessThan(15);
+  });
+
+  it('lässt ein wartendes spurenFertig beim Schliessen scheitern', async () => {
+    const { v } = verfolger({ entprellMs: 5000 });
+    v.setzen([maske('A', [spur('ta', 0, netz(0))])], [abschnitt('a', 0, 20)]);
+    const warten = v.spurenFertig();
+    v.schliessen();
+    await expect(warten).rejects.toBeInstanceOf(AbbruchError);
+  });
+
+  it('wirft ein laufendes Fenster weg, wenn seine Kette verschwindet – und rechnet dafür nichts mehr', async () => {
+    let v: Verfolger | null = null;
+    const m = modell();
+    const r = verfolger({
+      rechnen: async (teil, bild, punkte, abbruch) => {
+        if (m.aufrufe.length === 1) v?.setzen([], [abschnitt('a', 0, 60)]);
+        await schlafen(5);
+        return m.rechnen(teil, bild, punkte, abbruch);
+      },
+    });
+    v = r.v;
+    v.setzen([maske('A', [spur('ta', 0, netz(0))])], [abschnitt('a', 0, 60)]);
+    await bis(() => m.aufrufe.length >= 2);
+    await schlafen(100);
+    expect(m.aufrufe.length).toBeLessThanOrEqual(3);
+    expect(r.protokoll).toHaveLength(1);
+  });
+});
+
+describe('Verfolger – React StrictMode', () => {
+  const global = globalThis as unknown as { window?: { __verfolger?: unknown } };
+  afterEach(() => {
+    delete global.window;
+  });
+
+  it('hat vor dem ersten `setzen` keine Nebenwirkungen – und läuft nach `schliessen` wieder an', async () => {
+    global.window = {};
+    // Zwei Fabrikaufrufe, wie `useMemo` im StrictMode – React behält den ERSTEN.
+    const erster = verfolger();
+    const zweiter = verfolger();
+    expect(global.window.__verfolger).toBeUndefined();
+    const a = maske('A', [spur('ta', 0, netz(0))]);
+    const film = [abschnitt('a', 0, 20)];
+    erster.v.setzen([a], film);
+    expect(global.window.__verfolger).toBe(erster.v.zaehler);
+    // StrictMode: Aufräumen, dann der Effekt noch einmal.
+    erster.v.schliessen();
+    erster.v.setzen([a], film);
+    await erster.v.spurenFertig();
+    expect(erster.v.zaehler.lesen).toBeGreaterThan(0);
+    expect(zweiter.v.zaehler.lesen).toBe(0);
+    expect(global.window.__verfolger).toBe(erster.v.zaehler);
+  });
+});
+
+describe('Verfolger – Seite verborgen, Bildschirmsperre, Verfahrenstreue', () => {
+  const global = globalThis as unknown as {
+    document?: EventTarget & { hidden: boolean; visibilityState: string };
+    navigator: Navigator;
+  };
+  let wakeLock: PropertyDescriptor | undefined;
+  afterEach(() => {
+    delete global.document;
+    if (wakeLock) Object.defineProperty(global.navigator, 'wakeLock', wakeLock);
+    else delete (global.navigator as unknown as { wakeLock?: unknown }).wakeLock;
+    wakeLock = undefined;
+  });
+
+  function seite(verborgen: boolean) {
+    const ziel = new EventTarget() as EventTarget & { hidden: boolean; visibilityState: string };
+    ziel.hidden = verborgen;
+    ziel.visibilityState = verborgen ? 'hidden' : 'visible';
+    global.document = ziel;
+    return (jetzt: boolean) => {
+      ziel.hidden = jetzt;
+      ziel.visibilityState = jetzt ? 'hidden' : 'visible';
+      ziel.dispatchEvent(new Event('visibilitychange'));
+    };
+  }
+
+  it('ruht, solange die Seite verborgen ist – und meldet den Horcher beim Schliessen ab', async () => {
+    const umschalten = seite(true);
+    const { v, leser } = verfolger();
+    v.setzen([maske('A', [spur('ta', 0, netz(0))])], [abschnitt('a', 0, 30)]);
+    await schlafen(150);
+    expect(leser.gelesen).toHaveLength(0);
+    umschalten(false);
+    await v.spurenFertig();
+    expect(leser.gelesen.length).toBeGreaterThan(0);
+    expect(getEventListeners(global.document as EventTarget, 'visibilitychange')).toHaveLength(1);
+    v.schliessen();
+    expect(getEventListeners(global.document as EventTarget, 'visibilitychange')).toHaveLength(0);
+  });
+
+  it('hält den Bildschirm wach, solange gerechnet wird, und gibt ihn beim Schliessen frei', async () => {
+    seite(false);
+    wakeLock = Object.getOwnPropertyDescriptor(global.navigator, 'wakeLock');
+    let angefragt = 0;
+    let frei = 0;
+    Object.defineProperty(global.navigator, 'wakeLock', {
+      configurable: true,
+      value: {
+        request: async () => {
+          angefragt += 1;
+          const sperre = new EventTarget() as EventTarget & { release(): Promise<void> };
+          sperre.release = async () => {
+            frei += 1;
+          };
+          return sperre;
+        },
+      },
+    });
+    const { v } = verfolger();
+    v.setzen([maske('A', [spur('ta', 0, netz(0))])], [abschnitt('a', 0, 30)]);
+    await v.spurenFertig();
+    expect(angefragt).toBe(1);
+    expect(frei).toBe(0);
+    v.schliessen();
+    await schlafen(0);
+    expect(frei).toBe(1);
+  });
+
+  it('bleibt beim selben Verfahren, solange ein anderes nicht deutlich näher liegt', async () => {
+    // Person bei 0, Motiv bei 10: Nach dem ersten Fenster läge das Motiv näher an seinem
+    // Anker – aber nicht um zwei Sekunden. Die Person rechnet weiter, statt dass das
+    // Modell wechselt.
+    const { v, protokoll } = verfolger();
+    const person = maske('P', [spur('tp', 0, netz(0, 'person'))]);
+    const motiv = maske('O', [spur('to', 10, netz(10, 'object'))]);
+    v.setzen([person, motiv], [abschnitt('a', 0, 100)]);
+    await v.spurenFertig();
+    expect(protokoll[0].masken).toEqual(['P']);
+    expect(protokoll[1].masken).toEqual(['P']);
+    expect(protokoll.some((e) => e.masken.includes('O'))).toBe(true);
   });
 });

@@ -3,7 +3,7 @@ import { Kamerapfad } from './kamerapfad.js';
 import { BytesLru } from './lru.js';
 import type { Richtung, TippPunkte } from './masken.js';
 import type { Punkt, SpurRand } from './objektFolge.js';
-import { rleDekodieren, rleKodieren, type MaskenMeta } from './rle.js';
+import { ablegbar, rleDekodieren, type MaskenMeta } from './rle.js';
 import type { Grau } from './verfolgung.js';
 
 /**
@@ -32,9 +32,12 @@ import type { Grau } from './verfolgung.js';
  * die ganze Bearbeitung. `SPUR_BUDGET` gilt für alles hier zusammen. Wird es
  * überschritten, geht zuerst, was niemand mehr braucht: Ketten ersetzter
  * Anker (die Vorschau zeigt sie noch als „veraltet", aber sie sind
- * entbehrlich), die am längsten nicht gebrauchten zuerst. Dann der
- * Netzvorrat. Reicht auch das nicht, hält die Kette an, die am weitesten von
- * fertig ist, und ihre Bahn sagt warum.
+ * entbehrlich), die am längsten nicht gebrauchten zuerst; Tiefenkarten, die
+ * keine Maske mehr braucht. Dann der Netzvorrat. Reicht auch das nicht, hält
+ * JEDE Kette an, die noch wachsen würde, bis wieder Platz ist, und ihre Bahn
+ * sagt warum (`Verfolger.speicherPruefen`). Nicht nur die am weitesten von
+ * fertig: Anhalten gibt nichts frei, und die übrigen wüchsen weiter über das
+ * Budget – nachgestellt bis zum Doppelten.
  */
 
 /** Für alle Spuren zusammen. */
@@ -52,9 +55,11 @@ export type Pass = 'grob' | 'fein';
 /**
  * Was eine Kette an einem Bild weiss.
  *
- * `verloren`: Ein Tipp hat keine Punkte mehr (alle haben das Bild
- * verlassen) – die Spur kann den Gegenstand nicht wiederfinden, auch wenn er
- * zurückkommt. Die Bahn sagt dort „hier neu antippen" statt „leer".
+ * `verloren`: Die Spur ist an diesem Bild abgerissen – die Bahn sagt dort
+ * „hier neu antippen" statt „leer". Die Verfolgung legt so etwas zur Zeit
+ * nicht ab: Szenenschnitte stehen im Plan (`Richtungsplan.ohne`), und ein
+ * Tipp, dessen Punkte alle hinausliefen, ist LEER (der Gegenstand ging),
+ * nicht verloren – siehe `maskenVerfolgen.ts`.
  */
 export type KettenEintrag =
   | { readonly verloren: true; readonly guete: Pass }
@@ -172,39 +177,70 @@ export class Kette {
  * nicht noch einmal – zusammen kosten beide so viele Modelläufe wie der
  * Feinpass allein. Nicht für „Antippen": Dessen Maske hängt an den Punkten,
  * und die hängen an der Kette.
+ *
+ * # Damit das auch hält
+ *
+ * Zwei Dinge, beide nachgemessen:
+ *
+ * - **Gepackt wie die Ketten** (`ablegbar`). Mit der Rundung der Lauflängen
+ *   allein blieb eine verrauschte Zuversichtsmaske bei 497 KB, echte u²-Net-
+ *   Ausgaben bei 100 – 210 KB; 16 MB fassten dann 32 bis 160 Einträge – für
+ *   600 Bilder zu wenig.
+ * - **Grobe Ergebnisse in einem eigenen Topf.** Der Grobpass legt zuerst ab,
+ *   der Feinpass danach in derselben Reihenfolge, und in einem einzigen
+ *   Speicher verdrängte jedes neue feine Ergebnis genau das nächste grobe,
+ *   das er gleich gebraucht hätte: 24 von 25 groben Läufen wurden noch
+ *   einmal gerechnet. Feine Ergebnisse verdrängen deshalb nur feine.
  */
 export class Netzvorrat {
-  private readonly lru: BytesLru<string, Uint8Array>;
+  private readonly fein: BytesLru<string, Uint8Array>;
+  private readonly grob: BytesLru<string, Uint8Array>;
 
   constructor(maxBytes = NETZ_BUDGET) {
-    this.lru = new BytesLru(maxBytes);
+    // Ein Viertel für den Grobpass: rund ein Lauf je Sekunde Film, bei 600 Bildern 25.
+    this.grob = new BytesLru(Math.floor(maxBytes / 4));
+    this.fein = new BytesLru(maxBytes - Math.floor(maxBytes / 4));
   }
 
   hat(verfahren: string, k: number): boolean {
-    return this.lru.hat(`${verfahren}|${k}`);
+    const schluessel = `${verfahren}|${k}`;
+    return this.grob.hat(schluessel) || this.fein.hat(schluessel);
   }
 
+  /** Die Maske, wie `ablegen` sie packte – ausgepackt. */
   holen(verfahren: string, k: number, laenge: number): Uint8Array | undefined {
-    const rle = this.lru.holen(`${verfahren}|${k}`);
+    const schluessel = `${verfahren}|${k}`;
+    const rle = this.grob.holen(schluessel) ?? this.fein.holen(schluessel);
     return rle ? rleDekodieren(rle, laenge) : undefined;
   }
 
-  ablegen(verfahren: string, k: number, maske: Uint8Array): void {
-    const rle = rleKodieren(maske);
-    this.lru.ablegen(`${verfahren}|${k}`, rle, rle.byteLength + EINTRAG_BYTES);
+  /**
+   * Ablegen – und die Maske zurück, wie sie ab jetzt gilt: gepackt und
+   * wieder ausgepackt. Wer das Ergebnis frisch bekommt, rechnet so mit
+   * genau derselben Maske wie einer, der es später hier findet.
+   */
+  ablegen(verfahren: string, k: number, maske: Uint8Array, pass: Pass = 'fein'): Uint8Array {
+    const { rle } = ablegbar(maske);
+    const schluessel = `${verfahren}|${k}`;
+    const topf = pass === 'grob' || this.grob.hat(schluessel) ? this.grob : this.fein;
+    if (topf === this.grob) this.fein.loeschen(schluessel);
+    topf.ablegen(schluessel, rle, rle.byteLength + EINTRAG_BYTES);
+    return rleDekodieren(rle, maske.length);
   }
 
-  /** Das am längsten nicht Gebrauchte vergessen, bis höchstens `bytes` übrig sind. */
+  /** Das am längsten nicht Gebrauchte vergessen, bis höchstens `bytes` übrig sind – Feines zuerst. */
   schrumpfen(bytes: number): void {
-    this.lru.begrenzen(bytes);
+    this.fein.begrenzen(Math.max(0, bytes - this.grob.bytes));
+    this.grob.begrenzen(Math.max(0, bytes - this.fein.bytes));
   }
 
   leeren(): void {
-    this.lru.leeren();
+    this.grob.leeren();
+    this.fein.leeren();
   }
 
   get bytes(): number {
-    return this.lru.bytes;
+    return this.grob.bytes + this.fein.bytes;
   }
 }
 
@@ -242,6 +278,16 @@ export class Tiefenvorrat {
     this.karten.set(k, karte);
     this.summe += daten.werte.byteLength + EINTRAG_BYTES;
     return karte;
+  }
+
+  /** Karten vergessen, die niemand mehr braucht, bis höchstens `bytes` übrig sind. */
+  schrumpfen(bytes: number, gebraucht: (k: number) => boolean): void {
+    for (const [k, karte] of this.karten) {
+      if (this.summe <= bytes) return;
+      if (gebraucht(k)) continue;
+      this.karten.delete(k);
+      this.summe -= karte.daten.werte.byteLength + EINTRAG_BYTES;
+    }
   }
 
   leeren(): void {
@@ -340,6 +386,11 @@ export class Vorrat {
     return kette;
   }
 
+  /** Eine vorhandene Kette – ohne sie als gebraucht zu zählen (für Buchhaltung, nicht zum Lesen). */
+  vorhanden(schluessel: string): Kette | undefined {
+    return this.ketten.get(schluessel);
+  }
+
   /** Eine vorhandene Kette – auch eine ersetzte, solange sie nicht verdrängt ist. */
   holen(schluessel: string): Kette | undefined {
     const kette = this.ketten.get(schluessel);
@@ -370,16 +421,16 @@ export class Vorrat {
   }
 
   /**
-   * Unter das Budget kommen – in der Reihenfolge aus dem Kopf.
+   * Unter das Budget kommen – in der Reihenfolge aus dem Kopf: ersetzte
+   * Ketten, Tiefenkarten ohne Bedarf (`tiefeGebraucht`), der Netzvorrat.
    *
-   * Gibt die Schlüssel der Ketten zurück, die anhalten müssen, weil selbst
-   * die gebrauchten allein zu viel sind: die, die am weitesten von fertig ist
-   * (`fertig` je Schlüssel, 0 … 1), eine nach der anderen, bis der Rest ins
-   * Budget passte. Angehaltene wachsen nicht mehr; was sie haben, bleibt.
+   * Gibt zurück, ob es TROTZDEM zu viel ist. Dann bleibt nur, die gebrauchten
+   * Ketten nicht weiter wachsen zu lassen – das entscheidet der Verfolger,
+   * der weiss, welche noch Arbeit haben (`speicherPruefen`).
    */
-  aufraeumen(fertig: (schluessel: string) => number = () => 0): string[] {
+  aufraeumen(tiefeGebraucht: (k: number) => boolean = () => true): boolean {
     let zuviel = this.bytes - this.budget;
-    if (zuviel <= 0) return [];
+    if (zuviel <= 0) return false;
     const ersetzt = [...this.ketten.values()]
       .filter((kette) => !this.aktuell.has(kette.schluessel))
       .sort((a, b) => a.zuletzt - b.zuletzt);
@@ -389,21 +440,21 @@ export class Vorrat {
       zuviel -= kette.bytes;
     }
     if (zuviel > 0) {
+      const tiefe = this.tiefe.bytes;
+      this.tiefe.schrumpfen(Math.max(0, tiefe - zuviel), tiefeGebraucht);
+      zuviel -= tiefe - this.tiefe.bytes;
+    }
+    if (zuviel > 0) {
       const netz = this.netz.bytes;
       this.netz.schrumpfen(Math.max(0, netz - zuviel));
       zuviel -= netz - this.netz.bytes;
     }
-    if (zuviel <= 0) return [];
-    const gebraucht = [...this.ketten.values()]
-      .filter((kette) => kette.fehler === null)
-      .sort((a, b) => fertig(a.schluessel) - fertig(b.schluessel));
-    const anhalten: string[] = [];
-    for (const kette of gebraucht) {
-      if (zuviel <= 0) break;
-      anhalten.push(kette.schluessel);
-      zuviel -= kette.bytes;
-    }
-    return anhalten;
+    return zuviel > 0;
+  }
+
+  /** Liegt der Vorrat über dem Budget? */
+  get voll(): boolean {
+    return this.bytes > this.budget;
   }
 
   leeren(): void {
