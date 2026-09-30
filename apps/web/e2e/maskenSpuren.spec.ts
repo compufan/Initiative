@@ -199,6 +199,13 @@ test('Ab hier grenzt die Maske ein – ihr Griff steht an der Wiedergabestelle',
   // Zweimal zehn Bilder bei 25 je Sekunde: 0,8 s – auf ein Bild genau.
   expect(Math.abs(wert - 800), `Anfang bei ${wert} ms`).toBeLessThanOrEqual(40);
 
+  // Die Pfeiltaste am Griff: genau ein Bild (40 ms bei 25 je Sekunde).
+  await anfang.focus();
+  await anfang.press('ArrowRight');
+  await expect(anfang).toHaveAttribute('aria-valuenow', String(wert + 40));
+  await anfang.press('ArrowLeft');
+  await expect(anfang).toHaveAttribute('aria-valuenow', String(wert));
+
   // Ganzer Film und zurück: Der Zeitraum ist nicht vergessen.
   await zeile.getByRole('radio', { name: 'Ganzer Film' }).click();
   await expect(anfang).toHaveCount(0);
@@ -390,13 +397,82 @@ test('Nur Abschnitt 2, Hier trennen, ausschalten – jede Maske behält ihre Bah
   });
 
   // Ausschalten: Der Editor zeigt sie abgehakt, die Bahn bleibt.
-  await zeile.getByRole('button', { name: /ausschalten/ }).click();
-  await expect(zeile.getByRole('button', { name: /einschalten/ })).toHaveAttribute(
-    'aria-pressed',
-    'false',
-  );
+  const wirkt = zeile.getByRole('button', { name: /wirkt/ });
+  await expect(wirkt).toHaveAttribute('aria-pressed', 'true');
+  await wirkt.click();
+  await expect(wirkt).toHaveAttribute('aria-pressed', 'false');
   await expect(bereichsKnoepfe(editor).filter({ hasText: '✗' })).toHaveCount(1, {
     timeout: 20_000,
   });
   await expect(editor.locator('.mb-zeile')).toHaveCount(2);
+});
+
+test('nur ansehen bearbeitet nichts – kein ✎, die Grösse bleibt wählbar', async ({ page }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 412, height: 880 });
+  if (!(await blattMitVideo(page))) {
+    test.skip(true, OHNE_KODIERER);
+    return;
+  }
+  const editor = await editorOeffnen(page);
+  // Das Stellbild einmal wechseln – auch das ist nur Ansehen.
+  const leiste = editor.getByRole('slider', { name: 'Wiedergabestelle' });
+  await leiste.focus();
+  await leiste.press('Shift+ArrowRight');
+  await expect(editor.locator('.bild-wiedergabe')).toBeHidden({ timeout: 20_000 });
+  await page.waitForTimeout(500);
+  await expect(editor.locator('.zl-nummer').first()).not.toContainText('✎');
+  await editor.getByRole('button', { name: 'Fertig', exact: true }).click();
+  await expect(editor).toBeHidden();
+  await expect(page.getByText(/Noch nichts eingestellt/)).toBeVisible();
+  await expect(page.getByRole('button', { name: '640' })).toBeEnabled();
+});
+
+test('ab drei Masken: ein Tipp auf die Sammelbahn zeigt die Namen, jede ist wählbar', async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 412, height: 880 });
+  if (!(await blattMitVideo(page))) {
+    test.skip(true, OHNE_KODIERER);
+    return;
+  }
+  const editor = await editorOeffnen(page);
+  await reiterBereiche(editor);
+  const dazu = editor.getByRole('button', { name: '＋ Bereich' });
+  for (let i = 1; i <= 3; i += 1) {
+    await dazu.click();
+    await expect(bereichsKnoepfe(editor)).toHaveCount(i + 1, { timeout: 20_000 });
+  }
+  await expect(einstellungen(editor)).toBeVisible();
+  await einstellungen(editor)
+    .getByRole('button', { name: /Maske fertig/ })
+    .click();
+  await expect(editor.locator('.mb-zeile')).toHaveCount(1);
+
+  // Ein Tipp auf die Sammelbahn: die drei Namen zur Wahl.
+  const sammel = await editor.locator('.mb-zeile').first().boundingBox();
+  if (!sammel) throw new Error('keine Sammelbahn');
+  await page.mouse.click(sammel.x + sammel.width / 3, sammel.y + sammel.height / 2);
+  const wahl = editor.getByRole('toolbar', { name: 'Maske wählen' });
+  await expect(wahl).toBeVisible();
+  const namen = wahl.locator('.mb-namenwahl');
+  await expect(namen).toHaveCount(3);
+  const zweiter = ((await namen.nth(1).textContent()) ?? '').trim();
+  await namen.nth(1).click();
+  await expect(einstellungen(editor).locator('.mb-name')).toContainText(zweiter);
+
+  // Und mit der Tastatur: „Maske wählen" in der Knopfzeile, dann die dritte.
+  await einstellungen(editor)
+    .getByRole('button', { name: /Maske fertig/ })
+    .click();
+  const knopf = editor.getByRole('button', { name: 'Maske wählen' });
+  await expect(knopf).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(wahl.locator('.mb-namenwahl').first()).toBeFocused();
+  const dritter = ((await wahl.locator('.mb-namenwahl').nth(2).textContent()) ?? '').trim();
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Enter');
+  await expect(einstellungen(editor).locator('.mb-name')).toContainText(dritter);
 });

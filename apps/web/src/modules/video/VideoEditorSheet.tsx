@@ -645,7 +645,9 @@ export function VideoEditorSheet({
                   wiedergabe.anhalten();
                   schnitt.dazu();
                 }}
-                masken={maskenLeiste}
+                // Hinter dem offenen Editor rechnete und zeichnete sie sonst
+                // jede Bahn ein zweites Mal – unsichtbar.
+                masken={editorAuf ? undefined : maskenLeiste}
               />
               <p className="vg-hinweis">
                 {abschnitte.length > 1 && `${abschnitte.length} Abschnitte · `}

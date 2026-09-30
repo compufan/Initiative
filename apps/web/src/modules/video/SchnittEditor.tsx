@@ -12,7 +12,8 @@ import { useVorschauDoc } from './filmDoc.js';
 import { springenZu, useFilmWiedergabe } from './filmWiedergabe.js';
 import { restText, type MaskenLeiste } from './Maskenbahnen.js';
 import { bereichePlatz, bildDocAn, type Gezeigt } from './masken.js';
-import { bildIndex } from './raster.js';
+import { bildIndex, bildMitte, filmRaster } from './raster.js';
+import { MAX_BILDER_FILM } from './einstellungen.js';
 import { filmZuQuelle, standImRaster } from './schnitt.js';
 import type { SchnittZustand } from './schnittZustand.js';
 import { useBearbeiteteVorschau } from './vorschau.js';
@@ -120,7 +121,11 @@ export function SchnittEditor({
     }
     const steuer = new AbortController();
     const holen = async () => {
-      const lesung = await leser.holen(standMs, 'vorn', { voll: true, abbruch: steuer.signal });
+      // An der Mitte des Rasterbildes – dort, wo auch Verfolgung und Filmbau
+      // lesen. Nach einem Wechsel der Bildrate liegt `standMs` nicht mehr
+      // unbedingt dort, und der Anker säße auf einem anderen Quellbild.
+      const mitte = bildMitte(bildIndex(standMs, schrittMs), schrittMs);
+      const lesung = await leser.holen(mitte, 'vorn', { voll: true, abbruch: steuer.signal });
       if (!lesung.voll) throw new Error('Das Standbild kam leer an');
       const blob = await alsPng(lesung.voll);
       const speicher = zwischenspeicher.current;
@@ -139,7 +144,7 @@ export function SchnittEditor({
       // Ein Bild, das niemand mehr braucht, hält die Verfolgung nicht auf.
       steuer.abort();
     };
-  }, [id, leser, standMs]);
+  }, [id, leser, schrittMs, standMs]);
 
   const stillBereit =
     standbild !== null &&
@@ -209,10 +214,17 @@ export function SchnittEditor({
     gezeigt !== null &&
     abschnitt !== undefined &&
     gezeigt.id === abschnitt.id &&
-    gezeigt.ms === abschnitt.standMs &&
-    gezeigt.fassung === fassung;
+    gezeigt.ms === abschnitt.standMs;
   const bereitRef = useRef(bereit);
   bereitRef.current = bereit;
+  /*
+   * Dasselbe Bild wird gerade neu zusammengesetzt (`fassung`): Der Editor
+   * bleibt stehen und unverdeckt – ein Aufblitzen der Wiedergabe für ein
+   * Neuladen, das niemand sieht, wäre nur Unruhe. Was er in diesem
+   * Augenblick meldet, gehört aber noch zum alten Stand und wird verworfen.
+   */
+  const aktuellRef = useRef(true);
+  aktuellRef.current = gezeigt?.fassung === fassung;
 
   /* ---------- Wiedergabestelle ---------- */
 
@@ -287,22 +299,62 @@ export function SchnittEditor({
    * Eine Maske, die am Stellbild noch fehlte (oder erst grob war), ist
    * inzwischen da: dann dasselbe Bild neu zusammensetzen. Geprüft wird nur,
    * wenn die Verfolgung etwas Neues meldet – höchstens viermal je Sekunde.
+   *
+   * Aber nur, solange im Editor seither nichts geändert wurde. Ein Neuladen
+   * baut den Rückgängig-Verlauf um (`verlaufMitMasken`) – mitten in der
+   * Arbeit nähme das die letzten Schritte an den Masken weg. Dann steht
+   * statt dessen ein Knopf da, und der Anwender entscheidet.
    */
   const version = schnitt.spurstand.version;
+  const [nachladbar, setNachladbar] = useState<{ fassung: string; namen: string[] } | null>(null);
   useEffect(() => {
     if (!gezeigt || !rahmen || !abschnitt || gezeigt.id !== abschnitt.id) return;
-    const { k, z } = gezeigt.stand;
+    const { k, z, vorSitzung } = gezeigt.stand;
     if (z.fehlend.length === 0 && z.grob.length === 0) return;
     const liste = maskenJetzt.current;
     const jetzt = bildDocAn(abschnitt.doc, liste, spuren, k, 'editor', rahmen, speicher);
     const gibtEs = (id: string) => liste.some((maske) => maske.id === id);
-    const besser =
-      z.fehlend.some((id) => gibtEs(id) && !jetzt.fehlend.includes(id)) ||
-      z.grob.some((id) => gibtEs(id) && !jetzt.grob.includes(id) && !jetzt.fehlend.includes(id));
-    if (besser) setNeuLaden((zahl) => zahl + 1);
+    const besser = [
+      ...z.fehlend.filter((id) => gibtEs(id) && !jetzt.fehlend.includes(id)),
+      ...z.grob.filter(
+        (id) => gibtEs(id) && !jetzt.grob.includes(id) && !jetzt.fehlend.includes(id),
+      ),
+    ];
+    if (besser.length === 0) return;
+    if (liste === vorSitzung) {
+      setNeuLaden((zahl) => zahl + 1);
+      return;
+    }
+    const namen = besser
+      .map((maskeId) => liste.find((maske) => maske.id === maskeId)?.name)
+      .filter((name): name is string => Boolean(name));
+    setNachladbar({ fassung: gezeigt.fassung, namen });
     // Nur die Meldung der Verfolgung löst das aus – siehe oben.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version]);
+
+  /*
+   * Ein Finger auf Bühne oder Werkzeugen lässt die Verfolgung ruhen – ein
+   * Pinselstrich oder ein Tipp soll nicht auf ein Modell warten, das im
+   * Hintergrund gerade rechnet. Die Zeitleiste meldet sich selbst (`zug`).
+   */
+  useEffect(() => {
+    const an = (ereignis: PointerEvent) => {
+      const ziel = ereignis.target instanceof Element ? ereignis.target : null;
+      if (!ziel?.closest('.bild-editor') || ziel.closest('.bild-zeitleiste')) return;
+      spuren.verfolgungRuhen('finger', true);
+    };
+    const aus = () => spuren.verfolgungRuhen('finger', false);
+    document.addEventListener('pointerdown', an, true);
+    document.addEventListener('pointerup', aus, true);
+    document.addEventListener('pointercancel', aus, true);
+    return () => {
+      document.removeEventListener('pointerdown', an, true);
+      document.removeEventListener('pointerup', aus, true);
+      document.removeEventListener('pointercancel', aus, true);
+      spuren.verfolgungRuhen('finger', false);
+    };
+  }, [spuren]);
 
   /* ---------- Die beiden Steckplätze ---------- */
 
@@ -350,9 +402,10 @@ export function SchnittEditor({
     neuZeichnen,
   });
   /** Gibt es eine eingeschaltete Maske, die noch nicht überall verfolgt ist? */
-  const nochNichtUeberall = masken.some(
-    (maske) => maske.aktiv && (schnitt.spurstand.jeMaske.get(maske.id)?.anteil ?? 0) < 1,
-  );
+  const nochNichtUeberall = masken.some((maske) => {
+    const stand = schnitt.spurstand.jeMaske.get(maske.id);
+    return maske.aktiv && !stand?.fehler && (stand?.anteil ?? 0) < 1;
+  });
 
   const zeile =
     wiedergabe.spielt && bearbeiteteVorschau.guete === 2 ? (
@@ -415,6 +468,7 @@ export function SchnittEditor({
     onLoeschen: schnitt.maskeLoeschen,
     onTrennen: schnitt.maskeTrennen,
     onZurueck: schnitt.leisteZurueck,
+    onZurueckHalten: schnitt.leisteZurueckHalten,
     onGriffZug: (filmMs, fertig) => {
       // Das Video folgt dem Griff, und beim Loslassen steht das Stellbild
       // dort – man sieht, wo die Maske jetzt anfängt oder endet.
@@ -429,16 +483,65 @@ export function SchnittEditor({
    * Was über die Masken an DIESEM Bild zu sagen ist – eine Zeile über der
    * Zeitleiste, solange der Editor zu sehen ist.
    */
+  const imFilm = useMemo(
+    () =>
+      gezeigt
+        ? filmRaster(abschnitte, schrittMs, MAX_BILDER_FILM).menge.includes(gezeigt.stand.k)
+        : true,
+    [abschnitte, gezeigt, schrittMs],
+  );
   const maskenLage = (() => {
     if (!gezeigt || ueberlagert) return null;
     const { z } = gezeigt.stand;
+    if (nachladbar && nachladbar.fassung === gezeigt.fassung) {
+      return (
+        <p className="mb-lage" role="status">
+          {aufzaehlen(nachladbar.namen)} {nachladbar.namen.length === 1 ? 'ist' : 'sind'} hier
+          inzwischen verfolgt.
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => {
+              setNachladbar(null);
+              setNeuLaden((zahl) => zahl + 1);
+            }}
+          >
+            Zeigen
+          </button>
+        </p>
+      );
+    }
     const namen = (ids: readonly string[]) =>
       aufzaehlen(
         ids
           .map((maskeId) => masken.find((maske) => maske.id === maskeId)?.name)
           .filter((name): name is string => Boolean(name)),
       );
-    const fehlend = z.fehlend.filter((maskeId) => masken.some((maske) => maske.id === maskeId));
+    const fehlendAlle = z.fehlend.filter((maskeId) => masken.some((maske) => maske.id === maskeId));
+    // Eine Kette, die gescheitert ist, rechnet nicht noch einmal – das
+    // sagen, statt für immer „wird verfolgt" zu drehen.
+    const gescheitert = fehlendAlle
+      .map((maskeId) => ({
+        name: masken.find((maske) => maske.id === maskeId)?.name ?? '',
+        fehler: schnitt.spurstand.jeMaske.get(maskeId)?.fehler,
+      }))
+      .filter((eintrag) => eintrag.fehler);
+    if (gescheitert.length > 0) {
+      return (
+        <p className="mb-lage mb-hinweis" role="status">
+          „{gescheitert[0].name}": {gescheitert[0].fehler}
+        </p>
+      );
+    }
+    if (fehlendAlle.length > 0 && !imFilm) {
+      return (
+        <p className="mb-lage" role="status">
+          Dieses Bild liegt hinter dem Ende des fertigen Films (höchstens {MAX_BILDER_FILM} Bilder)
+          – hier wird nicht verfolgt.
+        </p>
+      );
+    }
+    const fehlend = fehlendAlle;
     if (fehlend.length > 0) {
       return (
         <p className="mb-lage" role="status">
@@ -552,7 +655,7 @@ export function SchnittEditor({
       // Nur, solange Bild, Dokument und Abschnitt zusammenpassen – siehe
       // `gezeigt` –, und nur für ein Dokument, das zu diesem Bild geladen
       // wurde, nicht für das vorige, das beim Laden noch dasteht.
-      if (!bereitRef.current || !gezeigt) return;
+      if (!bereitRef.current || !aktuellRef.current || !gezeigt) return;
       if (herkunft.quelle !== gezeigt.blob || herkunft.sitzung !== gezeigt.id) return;
       const erg = routen(doc, gezeigt.stand, gezeigt.id);
       if (erg.abgelehnt) {

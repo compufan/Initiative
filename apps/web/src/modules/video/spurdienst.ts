@@ -46,8 +46,11 @@ export interface Spurdienst extends SpurQuelle {
 /**
  * Warum die Verfolgung gerade ruht. `'bau'`: Der Filmbau liest selbst – ein
  * zweiter Dekodierer daneben kostete Speicher und machte beide langsamer.
+ * `'finger'`: ein Finger auf der Bühne oder den Werkzeugen des Editors –
+ * ein Pinselstrich, ein Regler, ein Tipp soll nicht auf ein Modell warten,
+ * das im Hintergrund gerade rechnet.
  */
-export type Ruhegrund = 'zug' | 'wiedergabe' | 'verborgen' | 'bau';
+export type Ruhegrund = 'zug' | 'wiedergabe' | 'verborgen' | 'bau' | 'finger';
 
 export type MaskenFortschritt = VerfolgerFortschritt;
 
@@ -69,15 +72,16 @@ export interface SpurAuftrag {
  * Der Dienst für dieses Video: ein `Verfolger` – oder, solange die
  * Rechengrösse noch nicht bekannt ist, der leere.
  *
- * Der Verfolger kennt drei Ruhegründe; `'bau'` ist hier dazugekommen und
- * ruht wie die Wiedergabe (beide brauchen den Dekodierer). Getrennt
- * gezählt, damit das Ende des einen nicht den anderen aufhebt.
+ * Der Verfolger kennt drei Ruhegründe; `'bau'` ruht hier wie die
+ * Wiedergabe (beide brauchen den Dekodierer), `'finger'` wie ein Zug an der
+ * Leiste. Getrennt gezählt, damit das Ende des einen nicht den anderen
+ * aufhebt.
  */
 export function spurdienstFuer(auftrag: SpurAuftrag): Spurdienst {
   const { leser, s, mass } = auftrag;
   if (!mass) return leereSpuren();
   const verfolger = new Verfolger({ leser, s, mass });
-  const ruht = { wiedergabe: false, bau: false };
+  const ruht = { wiedergabe: false, bau: false, zug: false, finger: false };
   return {
     kette: (anker, richtung, k) => verfolger.kette(anker, richtung, k),
     maske: (anker, richtung, k) => verfolger.maske(anker, richtung, k),
@@ -91,6 +95,11 @@ export function spurdienstFuer(auftrag: SpurAuftrag): Spurdienst {
       if (grund === 'wiedergabe' || grund === 'bau') {
         ruht[grund] = an;
         verfolger.verfolgungRuhen('wiedergabe', ruht.wiedergabe || ruht.bau);
+        return;
+      }
+      if (grund === 'zug' || grund === 'finger') {
+        ruht[grund] = an;
+        verfolger.verfolgungRuhen('zug', ruht.zug || ruht.finger);
         return;
       }
       verfolger.verfolgungRuhen(grund, an);

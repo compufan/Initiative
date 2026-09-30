@@ -623,6 +623,12 @@
   cursor: default;
 }
 
+/* Wie `.zl.ist-aus .zl-bahn` – während der Film gebaut wird. */
+.mb.ist-aus {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 .mb-zeile {
   position: relative;
   border-radius: 3px;

@@ -112,6 +112,8 @@ export interface SchnittZustand {
   maskeTrennen(id: string, filmMs: number): void;
   ankerEntfernen(id: string, k: number): void;
   leisteZurueck(): void;
+  /** ↺ bleibt stehen, solange Finger oder Fokus darauf liegen. */
+  leisteZurueckHalten(an: boolean): void;
 }
 
 export interface SchnittAuftrag {
@@ -185,7 +187,31 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
     return () => dienst.schliessen();
   }, [leser, schrittMs, rahmenMass]);
   const spurstand = useSyncExternalStore(spuren.abonnieren, spuren.stand, spuren.stand);
+  /*
+   * Der Verfolgung nur melden, was sie angeht: Grenzen der Abschnitte und
+   * Teile, Geltung, Schalter und Namen der Masken. Jeder Reglerschritt im
+   * Editor ersetzt Dokument und Maske – gemeldet, riefe das `setzen` und
+   * damit eine neue `version` hervor, und alle Bahnen rechneten neu.
+   */
+  const zuletztGemeldet = useRef<{
+    spuren: Spurdienst;
+    grenzen: string;
+    masken: readonly Maske[];
+  } | null>(null);
   useEffect(() => {
+    const grenzen = abschnitte
+      .map((abschnitt) => `${abschnitt.id}:${abschnitt.vonMs}:${abschnitt.bisMs}`)
+      .join('|');
+    const vorher = zuletztGemeldet.current;
+    if (
+      vorher &&
+      vorher.spuren === spuren &&
+      vorher.grenzen === grenzen &&
+      fuerSpurGleich(vorher.masken, masken)
+    ) {
+      return;
+    }
+    zuletztGemeldet.current = { spuren, grenzen, masken };
     spuren.setzen(masken, abschnitte, filmRaster(abschnitte, schrittMs, MAX_BILDER_FILM).menge);
   }, [abschnitte, masken, schrittMs, spuren]);
 
@@ -245,6 +271,9 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
     if (schrittVorher.current !== schrittMs) {
       setMasken(maskenUmrastern(maskenRef.current, schrittVorher.current, schrittMs));
       schrittVorher.current = schrittMs;
+      // Ein ↺ stellte Masken auf dem ALTEN Raster wieder her – also vergessen.
+      zurueckVergessenRef.current();
+      zugAnfang.current = null;
     }
     setAbschnitte((alt) => {
       const erg = rasterNeu(alt, schrittMs, quelleRef.current);
@@ -299,36 +328,45 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
     setAktivRoh(erg.neu);
   }, [aktiv, quelleMs, schrittMs]);
 
-  const docSetzen = useCallback(
-    (id: string, doc: BildDoc) => {
-      /*
-       * Ein Dokument, das nichts tut, wird zu `null`.
-       *
-       * Der Editor legt beim Öffnen eines unbearbeiteten Abschnitts ein
-       * frisches Dokument an und meldet es sofort. Ohne diese Prüfung trüge
-       * danach jeder Abschnitt, den jemand nur angesehen hat, das Zeichen
-       * „bearbeitet".
-       */
-      const wirkt = !(mass && docUnberuehrt(doc, mass.b, mass.h));
-      setAbschnitte((alt) => {
-        let geaendert = false;
-        const neu = alt.map((abschnitt) => {
-          if (abschnitt.id !== id) return abschnitt;
-          const neuesDoc = wirkt ? doc : null;
-          if (abschnitt.doc === neuesDoc) return abschnitt;
-          geaendert = true;
-          // Was jetzt eingestellt wird, gehört zum Stellbild – eine noch
-          // offene Mitnahme ist damit gegenstandslos.
-          const { teileMs: _weg, ...ohne } = abschnitt;
-          return { ...ohne, doc: neuesDoc };
-        });
-        // Dieselbe Liste, wenn sich nichts geändert hat – sonst rechnete
-        // alles, was an ihr hängt, für nichts neu.
-        return geaendert ? neu : alt;
+  /*
+   * Über eine Referenz: `routen` hält `docSetzen` fest, und das erste
+   * Zeichnen kennt die Rechengrösse noch nicht. Mit einer festgehaltenen
+   * `null` galt jedes nur angesehene Dokument als bearbeitet.
+   */
+  const massRef = useRef(mass);
+  massRef.current = mass;
+  const docSetzen = useCallback((id: string, doc: BildDoc) => {
+    const mass = massRef.current;
+    /*
+     * Ein Dokument, das nichts tut, wird zu `null`.
+     *
+     * Der Editor legt beim Öffnen eines unbearbeiteten Abschnitts ein
+     * frisches Dokument an und meldet es sofort. Ohne diese Prüfung trüge
+     * danach jeder Abschnitt, den jemand nur angesehen hat, das Zeichen
+     * „bearbeitet".
+     */
+    const wirkt = !(mass && docUnberuehrt(doc, mass.b, mass.h));
+    setAbschnitte((alt) => {
+      let geaendert = false;
+      const neu = alt.map((abschnitt) => {
+        if (abschnitt.id !== id) return abschnitt;
+        const neuesDoc = wirkt ? doc : null;
+        if (abschnitt.doc === neuesDoc) return abschnitt;
+        // Nur die Bereiche anders (die leben in den Masken): dasselbe Dokument.
+        if (abschnitt.doc && neuesDoc && gleichOhneBereiche(abschnitt.doc, neuesDoc)) {
+          return abschnitt;
+        }
+        geaendert = true;
+        // Was jetzt eingestellt wird, gehört zum Stellbild – eine noch
+        // offene Mitnahme ist damit gegenstandslos.
+        const { teileMs: _weg, ...ohne } = abschnitt;
+        return { ...ohne, doc: neuesDoc };
       });
-    },
-    [mass],
-  );
+      // Dieselbe Liste, wenn sich nichts geändert hat – sonst rechnete
+      // alles, was an ihr hängt, für nichts neu.
+      return geaendert ? neu : alt;
+    });
+  }, []);
 
   const standSetzen = useCallback((id: string, ms: number) => {
     setAbschnitte((alt) => {
@@ -366,17 +404,45 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
       docSetzen(abschnittId, erg.clipDoc);
       if (erg.abgelehnt) return { abgelehnt: erg.abgelehnt };
       geloeschtRef.current = erg.geloescht;
+      /*
+       * Hat der Editor die Masken geändert, gilt ein offenes ↺ der
+       * Zeitleiste nicht mehr: Es stellte die ganze Liste von davor her und
+       * nähme die Änderung aus dem Editor stillschweigend mit weg.
+       */
+      if (erg.masken !== maskenRef.current) zurueckVergessenRef.current();
       setMasken(erg.masken);
       if (erg.neu.length > 0) setGewaehlt(erg.neu[erg.neu.length - 1]);
       return {};
     },
-    // `docSetzen` ist stabil genug: Es hängt nur an der Rechengrösse.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [bezug, setMasken],
+    [bezug, docSetzen, setMasken],
   );
 
   /** Eine Änderung aus der Zeitleiste – mit einem Schritt zurück für zehn Sekunden. */
   const zurueckUhr = useRef<number | null>(null);
+  const zurueckGehalten = useRef(false);
+  const uhrAnhalten = () => {
+    if (zurueckUhr.current !== null) window.clearTimeout(zurueckUhr.current);
+    zurueckUhr.current = null;
+  };
+  const uhrStarten = () => {
+    uhrAnhalten();
+    if (zurueckGehalten.current) return;
+    zurueckUhr.current = window.setTimeout(() => {
+      zurueckUhr.current = null;
+      vorLeiste.current = null;
+      setLeisteZurueckMoeglich(false);
+    }, 10_000);
+  };
+  const zurueckVergessen = () => {
+    uhrAnhalten();
+    if (!vorLeiste.current) return;
+    vorLeiste.current = null;
+    setLeisteZurueckMoeglich(false);
+  };
+  const zurueckVergessenRef = useRef(zurueckVergessen);
+  zurueckVergessenRef.current = zurueckVergessen;
+  const uhrStartenRef = useRef(uhrStarten);
+  uhrStartenRef.current = uhrStarten;
   const leisteAendern = useCallback(
     (neu: readonly Maske[], vorher: readonly Maske[] = maskenRef.current) => {
       if (neu === maskenRef.current) return;
@@ -384,14 +450,19 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
       setMasken(neu);
       setLeistenFassung((fassung) => fassung + 1);
       setLeisteZurueckMoeglich(true);
-      if (zurueckUhr.current !== null) window.clearTimeout(zurueckUhr.current);
-      zurueckUhr.current = window.setTimeout(() => {
-        vorLeiste.current = null;
-        setLeisteZurueckMoeglich(false);
-      }, 10_000);
+      uhrStartenRef.current();
     },
     [setMasken],
   );
+  const leisteZurueckHalten = useCallback((an: boolean) => {
+    zurueckGehalten.current = an;
+    if (an) {
+      if (zurueckUhr.current !== null) window.clearTimeout(zurueckUhr.current);
+      zurueckUhr.current = null;
+    } else if (vorLeiste.current) {
+      uhrStartenRef.current();
+    }
+  }, []);
   useEffect(
     () => () => {
       if (zurueckUhr.current !== null) window.clearTimeout(zurueckUhr.current);
@@ -402,6 +473,22 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
   const geltungSetzen = useCallback(
     (id: string, geltung: Geltung, fertig: boolean): boolean => {
       const alt = maskenRef.current;
+      const jetzt = alt.find((maske) => maske.id === id);
+      if (!jetzt) return false;
+      /*
+       * Nichts geändert – ein Tipp auf einen Griff, „Ganzer Film" bei ganzem
+       * Film, ein Zug, der dort endet, wo er anfing: kein Neuladen des
+       * Editors und kein ↺, das ein älteres ↺ (etwa nach einem Löschen)
+       * überschriebe.
+       */
+      const anfang = zugAnfang.current ?? alt;
+      const vorZug = anfang.find((maske) => maske.id === id) ?? jetzt;
+      if (fertig && geltungGleich(vorZug.geltung, geltung)) {
+        zugAnfang.current = null;
+        if (anfang !== alt) setMasken(anfang);
+        return true;
+      }
+      if (!fertig && geltungGleich(jetzt.geltung, geltung)) return true;
       const neu = alt.map((maske) => {
         if (maske.id !== id) return maske;
         // Wer auf „ganzer Film" geht, soll seinen Zeitraum mit einem Tipp
@@ -421,7 +508,7 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
         setMasken(neu);
         return true;
       }
-      leisteAendern(neu, zugAnfang.current ?? alt);
+      leisteAendern(neu, anfang);
       zugAnfang.current = null;
       return true;
     },
@@ -522,5 +609,61 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
     maskeTrennen,
     ankerEntfernen,
     leisteZurueck,
+    leisteZurueckHalten,
   };
+}
+
+/**
+ * Sind zwei Dokumente gleich bis auf die Bereiche? Verglichen wird Feld für
+ * Feld nach Identität – der Editor ersetzt nur, was er ändert.
+ */
+function gleichOhneBereiche(a: BildDoc, b: BildDoc): boolean {
+  const pa = a as unknown as Record<string, unknown>;
+  const pb = b as unknown as Record<string, unknown>;
+  for (const feld of new Set([...Object.keys(pa), ...Object.keys(pb)])) {
+    if (feld === 'bereiche') {
+      if (a.bereiche !== b.bereiche && (a.bereiche.length > 0 || b.bereiche.length > 0)) {
+        return false;
+      }
+      continue;
+    }
+    if (!Object.is(pa[feld], pb[feld])) return false;
+  }
+  return true;
+}
+
+/** Dieselbe Geltung, der Sache nach. */
+function geltungGleich(a: Geltung, b: Geltung): boolean {
+  if (a === b) return true;
+  if (a.art === 'ganz' || b.art === 'ganz') return a.art === b.art;
+  if (a.art === 'abschnitte' && b.art === 'abschnitte') {
+    return a.ids.length === b.ids.length && a.ids.every((id, i) => id === b.ids[i]);
+  }
+  if (a.art === 'stuecke' && b.art === 'stuecke') {
+    return (
+      a.stuecke.length === b.stuecke.length &&
+      a.stuecke.every(
+        (stueck, i) => stueck.vonK === b.stuecke[i].vonK && stueck.bisK === b.stuecke[i].bisK,
+      )
+    );
+  }
+  return false;
+}
+
+/** Haben sich die Masken in etwas geändert, das die Verfolgung angeht? */
+function fuerSpurGleich(a: readonly Maske[], b: readonly Maske[]): boolean {
+  if (a === b) return true;
+  return (
+    a.length === b.length &&
+    a.every((maske, i) => {
+      const andere = b[i];
+      return (
+        maske.id === andere.id &&
+        maske.teile === andere.teile &&
+        maske.geltung === andere.geltung &&
+        maske.aktiv === andere.aktiv &&
+        maske.name === andere.name
+      );
+    })
+  );
 }

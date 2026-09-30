@@ -1,7 +1,13 @@
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 
 import { kannTeilen } from './ausschnitt.js';
-import { MaskenChips, Maskenbahnen, type MaskenLeiste } from './Maskenbahnen.js';
+import {
+  MaskenChips,
+  MaskenNamen,
+  Maskenbahnen,
+  type BahnWerte,
+  type MaskenLeiste,
+} from './Maskenbahnen.js';
 import {
   filmAnfangMs,
   filmDauerMs,
@@ -190,8 +196,10 @@ export function Zeitleiste({
     setFesterUmfang(null);
   };
 
+  const abspielRef = useRef<HTMLButtonElement | null>(null);
   const abspielKnopf = (
     <button
+      ref={abspielRef}
       type="button"
       className="btn btn-sm"
       onClick={onAbspielen}
@@ -207,11 +215,30 @@ export function Zeitleiste({
    * „Fertig" bringt die Knöpfe zurück. Abspielen bleibt vorn stehen: Ob die
    * Maske sitzt, sieht man am laufenden Film.
    */
-  const maskeGewaehlt =
-    masken !== undefined &&
-    !masken.lesend &&
-    !gesperrt &&
-    masken.masken.some((maske) => maske.id === masken.gewaehlt);
+  const waehlbar = masken !== undefined && !masken.lesend && !gesperrt;
+  const maskeGewaehlt = waehlbar && masken.masken.some((maske) => maske.id === masken.gewaehlt);
+  /** Die Namen der Masken zur Wahl – nach einem Tipp auf die Sammelbahn oder „Masken". */
+  const [namenOffen, setNamenOffen] = useState(false);
+  const namenZeigen = waehlbar && namenOffen && !maskeGewaehlt && masken.masken.length > 0;
+  const bahnWerte = useRef<BahnWerte | null>(null);
+
+  /*
+   * Die Zeile wechselt unter dem Fokus: „Fertig" und 🗑 verschwinden mit
+   * der Zeile, in der sie stehen. Der Fokus fiele dann auf die Seite, und
+   * die nächste Tabulatortaste finge ganz oben an. Er geht deshalb auf den
+   * Knopf „Masken" der neuen Zeile – oder auf ▶.
+   */
+  const zeileArt = maskeGewaehlt ? 'maske' : namenZeigen ? 'namen' : 'knoepfe';
+  const zeileVorher = useRef(zeileArt);
+  const maskenKnopf = useRef<HTMLButtonElement | null>(null);
+  useLayoutEffect(() => {
+    const vorher = zeileVorher.current;
+    zeileVorher.current = zeileArt;
+    if (vorher === zeileArt || zeileArt !== 'knoepfe') return;
+    const fokus = document.activeElement;
+    if (fokus && fokus !== document.body) return;
+    (maskenKnopf.current ?? abspielRef.current)?.focus();
+  }, [zeileArt]);
 
   return (
     <div className={`zl${gesperrt ? ' ist-aus' : ''}`}>
@@ -223,7 +250,10 @@ export function Zeitleiste({
           spielkopfMs={spielkopfMs}
           onZurStelle={(filmMs) => onSpielkopf(filmMs, true)}
           vorne={abspielKnopf}
+          bahnWerte={bahnWerte}
         />
+      ) : namenZeigen ? (
+        <MaskenNamen leiste={masken} vorne={abspielKnopf} onZu={() => setNamenOffen(false)} />
       ) : (
         <div className="zl-leiste">
           {abspielKnopf}
@@ -292,8 +322,28 @@ export function Zeitleiste({
               disabled={gesperrt}
               aria-label="Letzte Änderung an den Masken zurücknehmen"
               title="Letzte Änderung an den Masken zurücknehmen"
+              onFocus={() => masken.onZurueckHalten?.(true)}
+              onBlur={() => masken.onZurueckHalten?.(false)}
+              onPointerEnter={() => masken.onZurueckHalten?.(true)}
+              onPointerLeave={() => masken.onZurueckHalten?.(false)}
             >
               ↺
+            </button>
+          )}
+          {/*
+              Der Weg zu jeder Maske, auch mit der Tastatur: Die Bahnen
+              lassen sich nur antippen.
+          */}
+          {waehlbar && masken.masken.length > 0 && (
+            <button
+              ref={maskenKnopf}
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setNamenOffen(true)}
+              aria-label="Maske wählen"
+              title="Eine Maske wählen – für Zeitraum, Ausschalten, Trennen, Löschen"
+            >
+              ◐
             </button>
           )}
         </div>
@@ -422,7 +472,10 @@ export function Zeitleiste({
           s={schrittMs}
           umfangMs={umfang}
           gesamtMs={gesamt}
+          gesperrt={gesperrt}
           onWischen={onSpielkopf}
+          onSammelTipp={() => setNamenOffen(true)}
+          bahnWerte={bahnWerte}
         />
       )}
     </div>
