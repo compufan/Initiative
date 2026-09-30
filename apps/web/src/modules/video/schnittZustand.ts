@@ -16,8 +16,9 @@ import {
   type Gezeigt,
   type Maske,
 } from './masken.js';
+import { leserDienst, type Leserdienst } from './leserDienst.js';
 import { filmRaster } from './raster.js';
-import { spurdienstFuer, type Spurdienst, type Spurstand } from './spurdienst.js';
+import { leereSpuren, spurdienstFuer, type Spurdienst, type Spurstand } from './spurdienst.js';
 import {
   abschnittDazu,
   abschnittEntfernen,
@@ -83,6 +84,11 @@ export interface SchnittZustand {
   readonly gewaehlt: string | null;
   /** Die Verfolgung – liefert, was an einem Bild von jeder Maske bekannt ist. */
   readonly spuren: Spurdienst;
+  /**
+   * Der eine Dekodierer der Sitzung – für die Stellbilder des Editors
+   * (`'vorn'`) und die Verfolgung (`'hinten'`), siehe `leserDienst.ts`.
+   */
+  readonly leser: Leserdienst;
   readonly spurstand: Spurstand;
   /** Geteilt von Editor und Vorschau: dieselben Teile für dasselbe Bild. */
   readonly speicher: Kompositspeicher;
@@ -161,27 +167,23 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
     () => (massB > 0 && massH > 0 ? { b: massB, h: massH } : null),
     [massB, massH],
   );
-  const spuren = useMemo(
-    () =>
-      spurdienstFuer({
-        datei,
-        kante,
-        s: schrittMs,
-        mass: rahmenMass,
-      }),
-    [datei, kante, schrittMs, rahmenMass],
-  );
-  useEffect(() => () => spuren.schliessen(), [spuren]);
+  const leser = useMemo(() => leserDienst(datei, kante, schrittMs), [datei, kante, schrittMs]);
+  useEffect(() => () => leser.schliessen(), [leser]);
   /*
-   * Ein verborgenes Fenster rechnet nicht: Auf einem Telefon hiesse das
-   * Akku für nichts, und der Browser drosselt es ohnehin.
+   * Angelegt in einem Effekt, nicht in `useMemo`: Der Verfolger rechnet ab
+   * seiner Geburt und muss geschlossen werden. Aus `useMemo` käme im
+   * Entwicklungsmodus (StrictMode) ein zweiter, der nie geschlossen wird,
+   * und das Aufräumen des Probedurchlaufs schlösse den, der bleibt. Bis der
+   * Effekt gelaufen ist, gilt der leere – einen Augenblick lang.
+   *
+   * Ein verborgenes Fenster meldet der Verfolger selbst.
    */
+  const [spuren, setSpuren] = useState<Spurdienst>(leereSpuren);
   useEffect(() => {
-    const melden = () => spuren.verfolgungRuhen('verborgen', document.visibilityState === 'hidden');
-    melden();
-    document.addEventListener('visibilitychange', melden);
-    return () => document.removeEventListener('visibilitychange', melden);
-  }, [spuren]);
+    const dienst = spurdienstFuer({ leser, s: schrittMs, mass: rahmenMass });
+    setSpuren(dienst);
+    return () => dienst.schliessen();
+  }, [leser, schrittMs, rahmenMass]);
   const spurstand = useSyncExternalStore(spuren.abonnieren, spuren.stand, spuren.stand);
   useEffect(() => {
     spuren.setzen(masken, abschnitte, filmRaster(abschnitte, schrittMs, MAX_BILDER_FILM).menge);
@@ -507,6 +509,7 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
     masken,
     gewaehlt: gewaehltGilt ? gewaehlt : null,
     spuren,
+    leser,
     spurstand,
     speicher,
     leistenFassung,

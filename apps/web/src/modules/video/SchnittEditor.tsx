@@ -7,7 +7,7 @@ import { BildEditor } from '../bild/BildEditor.js';
 import type { BildDoc } from '../bild/doc.js';
 import { errorMessage } from '../media/helpers.js';
 import { AbbruchError } from '../stickers/engines/index.js';
-import { masse, videoLeserOeffnen, type VideoLeser } from './bilderLesen.js';
+import { masse } from './bilderLesen.js';
 import { useVorschauDoc } from './filmDoc.js';
 import { springenZu, useFilmWiedergabe } from './filmWiedergabe.js';
 import { restText, type MaskenLeiste } from './Maskenbahnen.js';
@@ -63,7 +63,6 @@ import { Zeitleiste, stellbildImFilm } from './Zeitleiste.js';
  */
 export function SchnittEditor({
   schnitt,
-  datei,
   quelleUrl,
   kante,
   schrittMs,
@@ -73,7 +72,6 @@ export function SchnittEditor({
   onClose,
 }: {
   schnitt: SchnittZustand;
-  datei: Blob;
   quelleUrl: string;
   kante: number;
   schrittMs: number;
@@ -92,25 +90,15 @@ export function SchnittEditor({
   /* ---------- Das Standbild ---------- */
 
   /*
-   * EIN Leser für die ganze Sitzung, und alle Sprünge darin nacheinander.
-   *
-   * Je Standbild ein neues Videoelement kostete jedes Mal das Laden der
-   * Metadaten; zwei Sprünge im selben Element zugleich lieferten beide das
-   * Bild, bei dem der spätere ankam. Der Rand ist die halbe Schrittweite,
-   * wie beim Filmbau – sonst läge das Stellbild am Filmende auf einem
-   * anderen Bild als das, das später gerechnet wird.
+   * Aus dem EINEN Dekodierer der Sitzung (`leserDienst.ts`), mit Vorfahrt:
+   * Er springt einer nach dem anderen, und der Editor, der ein Bild zeigen
+   * will, kommt vor jedem wartenden Auftrag der Verfolgung. Ein eigener
+   * Leser daneben hielte auf einem Telefon einen zweiten Dekodierer fest.
+   * Der Rand am Videoende ist die halbe Schrittweite, wie beim Filmbau –
+   * sonst läge das Stellbild am Filmende auf einem anderen Bild als das,
+   * das später gerechnet wird.
    */
-  const leser = useRef<Promise<VideoLeser> | null>(null);
-  const kette = useRef<Promise<unknown>>(Promise.resolve());
-  useEffect(() => {
-    const offen = videoLeserOeffnen(datei, { kante, randMs: schrittMs / 2 });
-    leser.current = offen;
-    offen.catch(() => undefined);
-    return () => {
-      leser.current = null;
-      void offen.then((l) => l.schliessen()).catch(() => undefined);
-    };
-  }, [datei, kante, schrittMs]);
+  const { leser } = schnitt;
 
   const zwischenspeicher = useRef(new Map<number, Blob>());
   const [standbild, setStandbild] = useState<{ id: string; ms: number; blob: Blob } | null>(null);
@@ -130,26 +118,28 @@ export function SchnittEditor({
         gilt = false;
       };
     }
+    const steuer = new AbortController();
     const holen = async () => {
-      const offen = leser.current;
-      if (!offen || !gilt) return;
-      const daten = await (await offen).bildAn(standMs);
-      const blob = await alsPng(daten);
+      const lesung = await leser.holen(standMs, 'vorn', { voll: true, abbruch: steuer.signal });
+      if (!lesung.voll) throw new Error('Das Standbild kam leer an');
+      const blob = await alsPng(lesung.voll);
       const speicher = zwischenspeicher.current;
       speicher.set(standMs, blob);
       // Ein Dutzend genügt fürs Hin- und Herspringen; mehr hielte nur Speicher fest.
       if (speicher.size > 12) speicher.delete(speicher.keys().next().value as number);
       fertig(blob);
     };
-    kette.current = kette.current.then(holen).catch((ausfall: unknown) => {
+    holen().catch((ausfall: unknown) => {
       if (gilt && !(ausfall instanceof AbbruchError)) {
         toast(errorMessage(ausfall, 'Das Standbild ging nicht'), 'error');
       }
     });
     return () => {
       gilt = false;
+      // Ein Bild, das niemand mehr braucht, hält die Verfolgung nicht auf.
+      steuer.abort();
     };
-  }, [id, standMs]);
+  }, [id, leser, standMs]);
 
   const stillBereit =
     standbild !== null &&

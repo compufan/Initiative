@@ -235,6 +235,13 @@ export function Maskenbahnen({
   const rahmen = useRef<HTMLDivElement | null>(null);
   const [breite, setBreite] = useState(0);
 
+  /*
+   * Gemessen wird, sobald es den Rahmen gibt – und den gibt es erst mit der
+   * ersten Maske. An `[]` gehängt, lief die Messung beim Einhängen der
+   * leeren Zeitleiste, fand nichts und kam nie wieder: Die Bahn blieb null
+   * Punkte breit.
+   */
+  const hatMasken = masken.length > 0;
   useEffect(() => {
     const element = rahmen.current;
     if (!element) return undefined;
@@ -243,7 +250,7 @@ export function Maskenbahnen({
     const beobachter = new ResizeObserver(messen);
     beobachter.observe(element);
     return () => beobachter.disconnect();
-  }, []);
+  }, [hatMasken]);
 
   const dichte = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
   const spalten = Math.max(0, Math.round(breite * dichte));
@@ -748,6 +755,12 @@ export function MaskenChips({
           type="button"
           className="btn btn-sm btn-primary"
           onClick={() => leiste.onWaehlen(null)}
+          /*
+           * Ein eigener Name: Der Editor hat unten schon ein „Fertig", das ihn
+           * schliesst. Zwei gleich benannte Knöpfe liessen eine Vorlesehilfe
+           * raten, welcher was tut.
+           */
+          aria-label="Maske fertig – zurück zu den Knöpfen der Zeitleiste"
         >
           Fertig
         </button>

@@ -391,6 +391,13 @@ export function VideoEditorSheet({
         const rahmen = rechenmass
           ? { abschnitte, s: schrittMs, b: rechenmass.b, h: rechenmass.h }
           : null;
+        /*
+         * Der Filmbau liest selbst. Die Verfolgung ruht so lange (abgeschaltete
+         * Masken rechnete sie sonst weiter), und ihr Dekodierer wird frei –
+         * zwei nebeneinander kosteten auf einem Telefon Speicher und Zeit.
+         */
+        spuren.verfolgungRuhen('bau', true);
+        schnitt.leser.schliessen();
         const fertig = await videoAusVideo({
           datei: video,
           stuecke: abschnitte,
@@ -440,6 +447,7 @@ export function VideoEditorSheet({
           toast(errorMessage(ausfall, 'Das Video ging nicht'), 'error');
         }
       } finally {
+        spuren.verfolgungRuhen('bau', false);
         await wachePruefen(false);
         steuerung.current = null;
         setLauf(null);
@@ -457,6 +465,7 @@ export function VideoEditorSheet({
       maxGepuffert,
       rechenmass,
       schluesselAbstand,
+      schnitt.leser,
       schrittMs,
       spuren,
       video,
@@ -493,7 +502,6 @@ export function VideoEditorSheet({
     editorAuf && quelleUrl ? (
       <SchnittEditor
         schnitt={schnitt}
-        datei={video}
         quelleUrl={quelleUrl}
         kante={kante}
         schrittMs={schrittMs}

@@ -1,5 +1,11 @@
+import type { Leserdienst } from './leserDienst.js';
 import type { Maske, SpurQuelle } from './masken.js';
 import type { Abschnitt } from './schnitt.js';
+import {
+  Verfolger,
+  type MaskenFortschritt as VerfolgerFortschritt,
+  type VerfolgerStand,
+} from './verfolger.js';
 
 /**
  * Was der Film von der Verfolgung der Masken braucht – mehr als nur Daten.
@@ -7,8 +13,8 @@ import type { Abschnitt } from './schnitt.js';
  * `SpurQuelle` (masken.ts) liefert, was an einem Bild bekannt ist. Dazu kommt
  * hier die Steuerung: welche Masken gerade gelten, wann gerechnet werden
  * darf, worauf der Filmbau wartet. Der `Verfolger` (verfolger.ts) erfüllt
- * das; bis er da ist – oder solange die Rechengrösse des Videos noch nicht
- * bekannt ist – steht `leereSpuren()` an seiner Stelle.
+ * das; solange die Rechengrösse des Videos noch nicht bekannt ist, steht
+ * `leereSpuren()` an seiner Stelle.
  */
 export interface Spurdienst extends SpurQuelle {
   /**
@@ -37,32 +43,22 @@ export interface Spurdienst extends SpurQuelle {
   schliessen(): void;
 }
 
-export type Ruhegrund = 'zug' | 'wiedergabe' | 'verborgen';
+/**
+ * Warum die Verfolgung gerade ruht. `'bau'`: Der Filmbau liest selbst – ein
+ * zweiter Dekodierer daneben kostete Speicher und machte beide langsamer.
+ */
+export type Ruhegrund = 'zug' | 'wiedergabe' | 'verborgen' | 'bau';
 
-export interface MaskenFortschritt {
-  /** Anteil der Bilder im Geltungsbereich, die fertig (fein) verfolgt sind. */
-  readonly anteil: number;
-  /** Anteil der Bilder mit wenigstens grober Verfolgung. */
-  readonly grobAnteil: number;
-  /** Geschätzte Restzeit bis fertig, in Millisekunden. */
-  readonly restMs: number;
-  /** … bis alles wenigstens grob da ist. */
-  readonly grobRestMs: number;
-  readonly laeuft: boolean;
-  readonly fehler?: string;
-}
+export type MaskenFortschritt = VerfolgerFortschritt;
 
-export interface Spurstand {
-  /** Steigt, sobald sich etwas an den Daten geändert hat – dann Bahnen neu zeichnen. */
-  readonly version: number;
-  readonly jeMaske: ReadonlyMap<string, MaskenFortschritt>;
-}
+/** `version` steigt, sobald sich etwas an den Daten geändert hat – dann Bahnen neu zeichnen. */
+export type Spurstand = VerfolgerStand;
 
 const LEERER_STAND: Spurstand = { version: 0, jeMaske: new Map() };
 
 export interface SpurAuftrag {
-  readonly datei: Blob;
-  readonly kante: number;
+  /** Der Dekodierer der Sitzung – derselbe, aus dem der Editor seine Stellbilder holt. */
+  readonly leser: Leserdienst;
   /** Der Bildabstand des Films – das Raster, auf dem verfolgt wird. */
   readonly s: number;
   /** Die Rechengrösse; ohne sie gibt es noch nichts zu rechnen. */
@@ -70,14 +66,38 @@ export interface SpurAuftrag {
 }
 
 /**
- * Der Dienst für dieses Video.
+ * Der Dienst für dieses Video: ein `Verfolger` – oder, solange die
+ * Rechengrösse noch nicht bekannt ist, der leere.
  *
- * Solange es die Verfolgung noch nicht gibt, oder die Rechengrösse noch
- * nicht bekannt ist, der leere.
+ * Der Verfolger kennt drei Ruhegründe; `'bau'` ist hier dazugekommen und
+ * ruht wie die Wiedergabe (beide brauchen den Dekodierer). Getrennt
+ * gezählt, damit das Ende des einen nicht den anderen aufhebt.
  */
 export function spurdienstFuer(auftrag: SpurAuftrag): Spurdienst {
-  void auftrag;
-  return leereSpuren();
+  const { leser, s, mass } = auftrag;
+  if (!mass) return leereSpuren();
+  const verfolger = new Verfolger({ leser, s, mass });
+  const ruht = { wiedergabe: false, bau: false };
+  return {
+    kette: (anker, richtung, k) => verfolger.kette(anker, richtung, k),
+    maske: (anker, richtung, k) => verfolger.maske(anker, richtung, k),
+    lage: (a, k) => verfolger.lage(a, k),
+    tiefe: (k) => verfolger.tiefe(k),
+    setzen: (masken, abschnitte, F) => verfolger.setzen(masken, abschnitte, F),
+    abonnieren: verfolger.abonnieren,
+    stand: verfolger.stand,
+    vorziehen: (k) => verfolger.vorziehen(k),
+    verfolgungRuhen: (grund, an) => {
+      if (grund === 'wiedergabe' || grund === 'bau') {
+        ruht[grund] = an;
+        verfolger.verfolgungRuhen('wiedergabe', ruht.wiedergabe || ruht.bau);
+        return;
+      }
+      verfolger.verfolgungRuhen(grund, an);
+    },
+    spurenFertig: (abbruch, fortschritt) => verfolger.spurenFertig(abbruch, fortschritt),
+    schliessen: () => verfolger.schliessen(),
+  };
 }
 
 /**
