@@ -226,7 +226,7 @@ function Video({ datei, quelle }: { datei: AttachmentDto; quelle: string }) {
         preload="metadata"
         onLoadedMetadata={(ereignis) => standbildHolen(ereignis.currentTarget)}
       />
-      <FernsehKnopf video={element} attachmentId={datei.id} />
+      <FernsehKnopf video={element} anhang={datei} />
     </div>
   );
 }

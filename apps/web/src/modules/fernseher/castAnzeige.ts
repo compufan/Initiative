@@ -61,11 +61,37 @@ export interface CastLage {
    * ohnehin daneben. Alles andere ist in beiden Fällen gleich, und
    * insbesondere gibt es auch in der engen Leiste nach einer Zustimmung immer
    * etwas zu sehen.
+   *
+   * `blase` ist die Videoblase im Chat – siehe unten in `castAnzeige`.
    */
-  stil: 'rund' | 'leiste';
+  stil: 'rund' | 'leiste' | 'blase';
 }
 
 export function castAnzeige({ grund, erlaubt, zustand, stil }: CastLage): CastAnzeige {
+  if (stil === 'blase') {
+    /*
+     * An der Videoblase im Chat steht NUR der echte Cast-Knopf – und nur,
+     * wenn es etwas zu verbinden gibt.
+     *
+     * Die Regel „wer zugestimmt hat, sieht immer etwas" gilt hier trotzdem:
+     * Neben diesem Platz steht an jeder Videoblase immer der 📺 „Auf den
+     * Fernseher", und dessen Blatt zeigt den Cast-Knopf mit Schalter, Laden,
+     * „kein Gerät" und Diagnose (`stil: 'leiste'`). Dieselben Auskünfte an
+     * jeder Blase eines Chats zu wiederholen, wäre an jedem Schreibtisch ohne
+     * Chromecast eine Reihe von ⓘ.
+     *
+     * Und vor der Zustimmung nichts – ein zweiter 📺 für „mit Google" neben
+     * dem ersten liesse zwei gleiche Zeichen verschiedenes tun. Das SDK ist
+     * dann nicht geladen, und §5.1 der Bedingungen verlangt den Knopf erst
+     * für Seiten, die castbare Inhalte ÜBER das SDK anbieten. Sobald es
+     * geladen ist und ein Gerät da ist, steht der echte Knopf auf oberster
+     * Ebene an der Blase.
+     */
+    if (grund !== 'geht' || !erlaubt) return 'nichts';
+    return zustand === 'bereit' || zustand === 'verbindet' || zustand === 'verbunden'
+      ? 'knopf'
+      : 'nichts';
+  }
   if (grund !== 'geht') {
     /*
      * Vor jeder Zustimmung: In der engen Leiste schweigen, in der breiten den
@@ -141,4 +167,45 @@ export function castWeiter(anzeige: CastAnzeige, sucht: boolean): CastWeiter {
     case 'knopf':
       return 'nichts';
   }
+}
+
+/**
+ * Was die Diagnose über DIESEN Browser sagt – als reine Entscheidung.
+ *
+ * # Warum hier mehr steht als „Chrome ja, Safari nein"
+ *
+ * Die Diagnose hielt jeden Browser mit „Chrome" in der Kennung für castfähig.
+ * Das trifft auf die Ableger nicht zu: Samsung Internet – auf Galaxy-Telefonen
+ * die Vorgabe – ist aus Chromium gebaut und nennt „Chrome" in der Kennung,
+ * bringt aber den Cast-Empfänger von Chrome nicht mit. Die Diagnose sagte
+ * dort „kann Chromecast", und die Suche lief ins Leere.
+ *
+ * Ob das SDK hier wirklich nicht will, entscheidet am Ende das SDK selbst
+ * (`castLadeFehler` in `cast.ts`); das hier ist die Auskunft VORHER, damit
+ * niemand erst zustimmen muss, um zu erfahren, dass es nicht geht.
+ */
+export function browserAuskunft(ua: string, brave = false): { text: string; gut: boolean } {
+  if (/iPhone|iPad|iPod/.test(ua))
+    return { text: 'iPhone oder iPad – kann kein Chromecast', gut: false };
+  if (/SamsungBrowser/.test(ua)) {
+    return {
+      text: 'Samsung Internet – kann kein Chromecast. In Chrome geht es.',
+      gut: false,
+    };
+  }
+  if (brave) {
+    return {
+      text: 'Brave – Chromecast nur, wenn es in den Einstellungen eingeschaltet ist',
+      gut: false,
+    };
+  }
+  if (/Firefox|FxiOS/.test(ua)) return { text: 'Firefox – kann kein Chromecast', gut: false };
+  if (/Edg\//.test(ua)) return { text: 'Edge – kann Chromecast', gut: true };
+  if (/OPR\/|Opera/.test(ua)) {
+    return { text: 'Opera – Chromecast nicht verlässlich, besser Chrome', gut: false };
+  }
+  if (/Chrome|Chromium|CriOS/.test(ua) && !/OS X.*Version\//.test(ua)) {
+    return { text: 'Chrome oder verwandt – kann Chromecast', gut: true };
+  }
+  return { text: 'Safari oder ein anderer Browser – kann kein Chromecast', gut: false };
 }

@@ -10,7 +10,9 @@ import {
   castErlaubnisBeobachten,
   castErlaubt,
   castErlauben,
+  castFehlerAus,
   castGrund,
+  castLadeFehler,
   castLaden,
   stueckFuer,
   type CastZustand,
@@ -111,8 +113,11 @@ interface CastKnopfProps {
    * Dort steht daneben ein beschrifteter Knopf, und ein nacktes Emoji verliert
    * jeden Vergleich. Hier darf der Knopf Text tragen und darf sagen, wenn
    * etwas nicht geht.
+   *
+   * `blase` ist die Videoblase im Chat: nur der echte Knopf, und nur wenn ein
+   * Gerät da ist – alles andere sagt der 📺 daneben (siehe `castAnzeige`).
    */
-  stil?: 'rund' | 'leiste';
+  stil?: 'rund' | 'leiste' | 'blase';
 }
 
 /**
@@ -145,6 +150,16 @@ const WUNSCH_GILT_MS = 60_000;
 const KEIN_GERAET_SUCHT = 'Suche Fernseher im WLAN …';
 const NICHT_GELADEN =
   'Chromecast liess sich nicht laden – meist hält ein Inhaltsblocker im Browser gstatic.com auf. Dann hilft der Weg mit dem Code.';
+/*
+ * Das Skript IST gekommen, und es sagt selbst: nicht in diesem Browser.
+ *
+ * Das ist kein Blocker, und so zu tun, schickte jemanden auf die Suche nach
+ * etwas, das es nicht gibt. Der häufigste Fall ist Samsung Internet – auf
+ * Galaxy-Telefonen die Vorgabe –, das zwar aus Chromium gebaut ist, aber den
+ * Cast-Empfänger von Chrome nicht mitbringt. Siehe `castLadeFehler`.
+ */
+const KEIN_CAST_IM_BROWSER =
+  'Dieser Browser bringt kein Chromecast mit (etwa Samsung Internet). In Chrome geht es – oder mit dem Code am Fernseher.';
 /*
  * Kurz bleiben, obwohl es viel zu sagen gäbe.
  *
@@ -198,6 +213,8 @@ export function CastKnopf({ stuecke, sekunden, was, modusWahl, stil = 'rund' }: 
   stueckeRef.current = stuecke;
 
   const grund = castGrund();
+  /** Für die Auskunft zählt nur: Platz für einen Satz oder nicht. */
+  const eng: 'rund' | 'leiste' = stil === 'leiste' ? 'leiste' : 'rund';
 
   /*
    * Laden und beobachten – an `erlaubt` gehängt, nicht an nichts.
@@ -290,7 +307,13 @@ export function CastKnopf({ stuecke, sekunden, was, modusWahl, stil = 'rund' }: 
           await schauNeu.starten();
         }
       } catch (fehler) {
-        const text = (fehler as Error)?.message;
+        /*
+         * `castFehlerAus` und nicht `(fehler as Error).message`: Das SDK lehnt
+         * mit einer KENNUNG als Zeichenkette ab, und deren `message` ist
+         * `undefined` – es erschien dann gar nichts, während der Fernseher
+         * leer blieb.
+         */
+        const text = castFehlerAus(fehler);
         if (text) toast(text, 'error');
       } finally {
         setLaeuft(false);
@@ -357,7 +380,7 @@ export function CastKnopf({ stuecke, sekunden, was, modusWahl, stil = 'rund' }: 
     return (
       <>
         <Auskunft
-          stil={stil}
+          stil={eng}
           zeichen="ⓘ"
           text={
             grund === 'kein-sicherer-kontext'
@@ -483,9 +506,9 @@ export function CastKnopf({ stuecke, sekunden, was, modusWahl, stil = 'rund' }: 
     return (
       <>
         <Auskunft
-          stil={stil}
+          stil={eng}
           zeichen="⚠"
-          text={NICHT_GELADEN}
+          text={castLadeFehler() === 'browser' ? KEIN_CAST_IM_BROWSER : NICHT_GELADEN}
           weiter={fuehrtZu('fehlgeschlagen')}
         />
         <CodeWeg
@@ -512,6 +535,7 @@ export function CastKnopf({ stuecke, sekunden, was, modusWahl, stil = 'rund' }: 
       className={[
         'cast-knopf',
         stil === 'leiste' ? 'cast-knopf-leiste' : '',
+        stil === 'blase' ? 'cast-knopf-blase' : '',
         laeuft ? 'ist-beschaeftigt' : '',
         keineGeraete ? 'ist-leer' : '',
       ]
@@ -580,7 +604,7 @@ export function CastKnopf({ stuecke, sekunden, was, modusWahl, stil = 'rund' }: 
          * geschickt werden, das ihm den Umweg erklärt.
          */
         <Auskunft
-          stil={stil}
+          stil={eng}
           zeichen={sucht ? '⋯' : 'ⓘ'}
           text={sucht ? KEIN_GERAET_SUCHT : KEIN_GERAET_TEXT}
           weiter={fuehrtZu('kein-geraet')}
