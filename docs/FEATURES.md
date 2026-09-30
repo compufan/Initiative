@@ -212,6 +212,35 @@ Fünf Werkzeuge, alle im Gerät – kein Bild verlässt es dabei.
 
 Rückgängig und Wiederherstellen gelten für alles; ein Zug ist ein Schritt.
 
+## Videos bearbeiten
+
+Derselbe Editor wie beim Foto, mit einer **Zeitleiste** darunter – schneiden
+und bearbeiten an einem Ort, alles im Gerät.
+
+- **Abschnitte**: an der Wiedergabestelle teilen, Anfang und Ende ziehen,
+  umstellen, entfernen, einen weiteren anhängen. Jeder Abschnitt trägt seine
+  eigene Bearbeitung (Licht, Farbe, Zuschnitt).
+- **Wischen zeigt den Film live** – mit Bearbeitung und Masken, nicht erst
+  beim Loslassen. Wo das Gerät beim Abspielen nicht mitkommt, zeichnet es
+  kleiner, und erst ganz zuletzt ohne Bearbeitung.
+- **Masken gehören dem Film, nicht einem Bild.** Eine Maske (Antippen,
+  Person, Motiv, Tiefe, Verlauf, Ellipse, Pinsel) gilt entweder im
+  **ganzen Film** oder in einem **Zeitraum** („Ab hier", „Bis hier", „Nur
+  Abschnitt 2", Griffe zum Ziehen). Die App verfolgt ihren Gegenstand im
+  Hintergrund über alle Bilder; läuft er aus dem Bild oder aus dem Zuschnitt,
+  verschwindet die Maske dort und kommt wieder, wenn er zurückkehrt.
+- **Jede Maske hat eine Bahn** unter den Abschnitten: kräftig, wo sie zu
+  sehen ist, eine dünne Linie, wo ihr Gegenstand nicht im Bild ist,
+  gestreift, wo sie erst grob verfolgt ist, grau, wo noch gerechnet wird,
+  rot, wo die Verfolgung ihn verloren hat (dort neu antippen). Ein Tipp auf
+  die Bahn wählt die Maske; ihre Einstellungen stehen dann statt der
+  Schnittknöpfe – dazu „Hier trennen" für verschiedene Einstellungen vor und
+  nach einer Stelle, Ausschalten, Löschen und ↺.
+- Höchstens acht Masken im Film und vier an einem Bild.
+- **Film bauen** wartet, bis alle eingeschalteten Masken überall verfolgt
+  sind (meist ist das längst geschehen), und nimmt dann an jedem Bild die
+  verfolgte Maske.
+
 ## Sticker
 
 - **Sticker-Tastatur** im Chat: alle installierten Pakete auf einen Blick.
