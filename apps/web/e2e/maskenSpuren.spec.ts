@@ -331,3 +331,72 @@ test('im fertigen Film sitzt die Maske an jedem Bild auf dem Gegenstand', async 
     expect(rot(probe.grund), `Grund, Probe ${i}: ${probe.grund}`).toBe(true);
   }
 });
+
+test('Nur Abschnitt 2, Hier trennen, ausschalten – jede Maske behält ihre Bahn', async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await page.setViewportSize({ width: 412, height: 880 });
+  if (!(await blattMitVideo(page))) {
+    test.skip(true, OHNE_KODIERER);
+    return;
+  }
+  // Im Blatt bei 1,2 s teilen – zwei Abschnitte.
+  await expect(page.getByRole('button', { name: /Bearbeiten und schneiden/ })).toBeEnabled({
+    timeout: 30_000,
+  });
+  const blattLeiste = page.getByRole('slider', { name: 'Wiedergabestelle' });
+  await blattLeiste.focus();
+  for (let i = 0; i < 3; i += 1) await blattLeiste.press('Shift+ArrowRight');
+  await page.getByRole('button', { name: 'An der Wiedergabestelle teilen' }).click();
+  await expect(page.locator('.zl-abschnitt')).toHaveCount(2);
+
+  const editor = await editorOeffnen(page);
+  await expect(editor.locator('.bild-kopf strong')).toHaveText('Abschnitt 2 von 2');
+  await reiterBereiche(editor);
+  await editor
+    .getByRole('button', { name: /Verlauf/ })
+    .first()
+    .click();
+  const zeile = einstellungen(editor);
+  await expect(zeile).toBeVisible({ timeout: 20_000 });
+
+  // Nur im zweiten Abschnitt: Die Bahn zeigt sie erst ab 1,2 s.
+  await zeile.getByRole('button', { name: 'Nur Abschnitt 2' }).click();
+  await expect(zeile.getByRole('button', { name: 'Nur Abschnitt 2' })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  const bahn = editor.locator('.mb-leinwand').first();
+  await expect(bahn).toHaveAttribute('aria-label', /^sichtbar 1,[12] s bis (2,9|3,0) s$/, {
+    timeout: 120_000,
+  });
+
+  // Bei 2,0 s trennen: zwei Masken, zwei Bahnen, die neue ist gewählt.
+  const leiste = editor.getByRole('slider', { name: 'Wiedergabestelle' });
+  await leiste.focus();
+  for (let i = 0; i < 2; i += 1) await leiste.press('Shift+ArrowRight');
+  await expect(editor.locator('.bild-wiedergabe')).toBeHidden({ timeout: 20_000 });
+  const nameVorher = await zeile.locator('.mb-name').textContent();
+  await zeile.getByRole('button', { name: 'Hier trennen' }).click();
+  await expect(editor.locator('.mb-zeile')).toHaveCount(2);
+  await expect(zeile.locator('.mb-name')).not.toHaveText(nameVorher ?? '');
+  const bahnen = editor.locator('.mb-leinwand');
+  await expect(bahnen.nth(0)).toHaveAttribute('aria-label', /^sichtbar 1,[12] s bis 2,0 s$/, {
+    timeout: 60_000,
+  });
+  await expect(bahnen.nth(1)).toHaveAttribute('aria-label', /^sichtbar 2,0 s bis (2,9|3,0) s$/, {
+    timeout: 60_000,
+  });
+
+  // Ausschalten: Der Editor zeigt sie abgehakt, die Bahn bleibt.
+  await zeile.getByRole('button', { name: /ausschalten/ }).click();
+  await expect(zeile.getByRole('button', { name: /einschalten/ })).toHaveAttribute(
+    'aria-pressed',
+    'false',
+  );
+  await expect(bereichsKnoepfe(editor).filter({ hasText: '✗' })).toHaveCount(1, {
+    timeout: 20_000,
+  });
+  await expect(editor.locator('.mb-zeile')).toHaveCount(2);
+});
