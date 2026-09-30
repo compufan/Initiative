@@ -88,26 +88,38 @@ vi.mock('../bild/tippMaske.js', () => ({
   },
 }));
 
-vi.mock('../bild/tiefeNetz.js', () => ({
-  tiefensitzungOeffnen: async () => {
-    sitzungenAuf += 1;
-    return {
-      karteFuer: async (bild: ImageData) => {
-        tiefeLaeufe += 1;
-        return {
-          breite: bild.width,
-          hoehe: bild.height,
-          // Ein Verlauf, kein Volltreffer: Daran lässt sich sehen, ob am Ende
-          // geglättet wurde.
-          feld: new Uint8Array(bild.width * bild.height).map((_, i) => (i * 7) % 256),
-        };
-      },
-      schliessen: async () => {
-        sitzungenZu += 1;
-      },
-    };
-  },
-}));
+/*
+ * Die Karte kommt in der Grösse des NETZES, wie beim echten Modell
+ * (`netzGroesse`: seitenrichtig, durch 14 teilbar – bei 128 × 128 sind das
+ * 518 × 518). Früher kam sie hier in Bildgrösse, und genau deshalb fiel
+ * nicht auf, dass die Tiefe im Film überall 0 war: Der Filmbau schrieb die
+ * Rechengrösse daneben, und der Renderer fand zu wenige Werte.
+ */
+vi.mock('../bild/tiefeNetz.js', async () => {
+  const { netzGroesse } =
+    await vi.importActual<typeof import('../bild/tiefe.js')>('../bild/tiefe.js');
+  return {
+    tiefensitzungOeffnen: async () => {
+      sitzungenAuf += 1;
+      return {
+        karteFuer: async (bild: ImageData) => {
+          tiefeLaeufe += 1;
+          const { w, h } = netzGroesse(bild.width, bild.height);
+          return {
+            breite: w,
+            hoehe: h,
+            // Ein Verlauf, kein Volltreffer: Daran lässt sich sehen, ob am Ende
+            // geglättet wurde.
+            feld: new Uint8Array(w * h).map((_, i) => (i * 7) % 256),
+          };
+        },
+        schliessen: async () => {
+          sitzungenZu += 1;
+        },
+      };
+    },
+  };
+});
 
 /*
  * 128 und nicht mehr 32.
@@ -299,8 +311,27 @@ describe('folgeTeile', () => {
       teile: [TIEFE],
       schluesselAbstand: 1,
     });
-    const erwartet = Array.from({ length: 128 * 128 }, (_, i) => (i * 7) % 256);
+    const erwartet = Array.from({ length: 518 * 518 }, (_, i) => (i * 7) % 256);
     expect(Array.from(jeBild[2].get('d1')?.werte ?? [])).toEqual(erwartet);
+  });
+
+  it('gibt die Tiefe in der Grösse der Karte weiter – auch zwischen den Schlüsselbildern', async () => {
+    /*
+     * Der Fehler, der die Tiefe im Film wirkungslos machte: Die Karte kam
+     * in Netzgrösse, daneben stand die Rechengrösse. Jetzt stehen bei jedem
+     * Bild die Masse der Karte – und zwischen den Schlüsselbildern ist sie
+     * in DIESER Grösse mit der Kamera gezogen, nicht leer.
+     */
+    const { jeBild } = await folgeTeile(folge(6), { teile: [TIEFE], schluesselAbstand: 4 });
+    for (const [i, karte] of jeBild.entries()) {
+      const daten = karte.get('d1');
+      expect(daten?.breite, `Bild ${i}`).toBe(518);
+      expect(daten?.hoehe, `Bild ${i}`).toBe(518);
+      expect(daten?.werte.length, `Bild ${i}`).toBe(518 * 518);
+      // Gezogen, aber nicht ausgelöscht: Der Grossteil der Karte bleibt im Bild.
+      const belegt = (daten?.werte ?? new Uint8Array()).reduce((n, v) => n + (v > 0 ? 1 : 0), 0);
+      expect(belegt / (518 * 518), `Bild ${i}`).toBeGreaterThan(0.8);
+    }
   });
 
   it('überblendet zwischen den Schlüsselbildern, statt neu zu rechnen', async () => {

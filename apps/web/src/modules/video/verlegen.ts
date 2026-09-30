@@ -10,7 +10,7 @@ import {
   type InhaltsTeil,
   type NeueDaten,
 } from './bildweise.js';
-import { teilRechnen } from './folgeTeile.js';
+import { teilRechnen } from './teilRechnen.js';
 import { Spur, type Punkt } from './objektFolge.js';
 import {
   LAGE_RUHE,
@@ -157,17 +157,16 @@ export async function teileVerlegen(
         if (auftrag.abbruch?.aborted) throw new AbbruchError();
         const teil = eintrag.teil;
         if (teil.art === 'tiefe') {
-          // Die Tiefe hängt nur am Bild: Am Ziel gerechnet ist sie richtig.
-          const werte = await teilRechnen(
-            eintrag,
-            bildAn(ziel),
-            breite,
-            hoehe,
-            tiefe,
-            auftrag.abbruch,
-            null,
+          /*
+           * Die Tiefe hängt nur am Bild: Am Ziel gerechnet ist sie richtig.
+           * In der Grösse der Karte, wie sie aus dem Netz kommt – mit der
+           * Rechengrösse daneben fand der Renderer zu wenige Werte, und die
+           * Tiefe verschwand nach jeder Mitnahme (siehe `teilRechnen.ts`).
+           */
+          daten.set(
+            teil.id,
+            await teilRechnen(eintrag, bildAn(ziel), breite, hoehe, tiefe, auftrag.abbruch, null),
           );
-          daten.set(teil.id, { breite, hoehe, werte });
         } else if (teil.art === 'netz' || teil.art === 'tipp') {
           const gleichGross = teil.breite === breite && teil.hoehe === hoehe;
           const spur = new Spur({
@@ -186,8 +185,18 @@ export async function teileVerlegen(
              * zweiter Modellauf für dasselbe Bild.
              */
             ankerMaske: gleichGross ? teil.alpha : undefined,
-            rechnen: (bild, gezogen) =>
-              teilRechnen(eintrag, bildAn(bild), breite, hoehe, tiefe, auftrag.abbruch, gezogen),
+            rechnen: async (bild, gezogen) =>
+              (
+                await teilRechnen(
+                  eintrag,
+                  bildAn(bild),
+                  breite,
+                  hoehe,
+                  tiefe,
+                  auftrag.abbruch,
+                  gezogen,
+                )
+              ).werte,
           });
           while (spur.naechstes() !== null) await spur.schritt();
           daten.set(teil.id, { breite, hoehe, werte: spur.maskeAn(ziel) });

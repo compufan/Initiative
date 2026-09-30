@@ -62,7 +62,13 @@
  *    am Regler.
  */
 
-import { EngineError, engineAvailable, engineInfo } from '../stickers/engines/index.js';
+import {
+  EngineError,
+  engineAvailable,
+  engineInfo,
+  modellReihe,
+  type Vorrang,
+} from '../stickers/engines/index.js';
 import { flaechenMittel, vorlageAus } from '../stickers/engines/prepare.js';
 import type { InferenceSession } from 'onnxruntime-web';
 // Die Laufzeitdateien ueber `?url`, nicht aus `public/`: Vite gibt uns die
@@ -138,10 +144,18 @@ function vorbereiten(
  *
  * Wer sie aufmacht, MUSS sie schliessen. Deshalb gibt es sie nur so: mit
  * einem `schliessen`, das danebensteht, und einem `finally` beim Aufrufer.
+ *
+ * Jeder Lauf geht durch `modellReihe` wie jedes andere Modell: Die
+ * Verfolgung im Hintergrund (`vorrang: 'hinten'`) lässt dem Editor den
+ * Vortritt. Die Karte kommt in der Grösse des Netzes (`netzGroesse`), nicht
+ * in der des Bildes – wer sie über ein Bild legt, rechnet sie um.
  */
 export interface Tiefensitzung {
   /** Rechnet die Karte für ein Bild – beliebig oft. */
-  karteFuer(bild: ImageData): Promise<{ breite: number; hoehe: number; feld: Uint8Array }>;
+  karteFuer(
+    bild: ImageData,
+    optionen?: { readonly vorrang?: Vorrang; readonly abbruch?: AbortSignal },
+  ): Promise<{ breite: number; hoehe: number; feld: Uint8Array }>;
   schliessen(): Promise<void>;
 }
 
@@ -177,12 +191,18 @@ export async function tiefensitzungOeffnen(melden?: Fortschritt): Promise<Tiefen
 
   const offen = sitzung;
   return {
-    async karteFuer(bild: ImageData) {
-      const { w, h } = netzGroesse(bild.width, bild.height);
-      const eingabe = new ort.Tensor('float32', vorbereiten(bild, w, h), [1, 3, h, w]);
-      const ergebnis = await offen.run({ [offen.inputNames[0]]: eingabe });
-      const roh = ergebnis[offen.outputNames[0]].data as Float32Array;
-      return tiefeNormalisieren(roh, w, h);
+    karteFuer(bild, optionen) {
+      return modellReihe(
+        optionen?.vorrang ?? 'vorn',
+        async () => {
+          const { w, h } = netzGroesse(bild.width, bild.height);
+          const eingabe = new ort.Tensor('float32', vorbereiten(bild, w, h), [1, 3, h, w]);
+          const ergebnis = await offen.run({ [offen.inputNames[0]]: eingabe });
+          const roh = ergebnis[offen.outputNames[0]].data as Float32Array;
+          return tiefeNormalisieren(roh, w, h);
+        },
+        { verfahren: 'tiefe', abbruch: optionen?.abbruch },
+      );
     },
     async schliessen() {
       await offen.release().catch(() => undefined);

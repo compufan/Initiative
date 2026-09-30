@@ -1,9 +1,8 @@
-import { AbbruchError, NichtsGefunden, runEngine } from '../stickers/engines/index.js';
-import { kanteWeichzeichnen } from '../stickers/engines/prepare.js';
-import { tippTeilRechnen } from '../bild/tippMaske.js';
+import { AbbruchError } from '../stickers/engines/index.js';
 import type { GelesenesBild, Fortschritt } from './bilderLesen.js';
 import type { InhaltsTeil, NeueDaten } from './bildweise.js';
 import { Spur, type Punkt } from './objektFolge.js';
+import { teilRechnen } from './teilRechnen.js';
 import {
   LAGE_RUHE,
   bewegtGlaetten,
@@ -123,15 +122,8 @@ export class TeileAbbruch extends AbbruchError {
   }
 }
 
-/**
- * Der Weichzeichner für die Kante einer Netzmaske.
- *
- * Dieselbe Überlegung wie in `netzMaske.ts`: Ein Netz liefert eine harte
- * Entscheidung je Bildpunkt; für eine Anpassung, die überblendet wird, ist
- * eine harte Kante das, was ein Bild künstlich aussehen lässt. Im Film fällt
- * es sogar mehr auf als im Standbild, weil die Kante dann auch noch flimmert.
- */
-const KANTE_WEICH = 1;
+/** Weitergereicht, damit bestehende Importe gelten – siehe `teilRechnen.ts`. */
+export { teilRechnen } from './teilRechnen.js';
 
 /** Der Seite Luft lassen – ein Makrotask, damit Zeichnen und „Abbrechen" durchkommen. */
 const luftholen = () => new Promise<void>((weiter) => setTimeout(weiter, 0));
@@ -237,7 +229,7 @@ export async function folgeTeile(
    */
   const folgen = abschnitte.map(
     (abschnitt) =>
-      new Map<string, (Uint8Array | undefined)[]>(
+      new Map<string, (NeueDaten | undefined)[]>(
         abschnitt.teile.map((eintrag) => [
           eintrag.teil.id,
           new Array(abschnitt.bis - abschnitt.von + 1),
@@ -247,7 +239,7 @@ export async function folgeTeile(
 
   const rechnenFuer =
     (eintrag: InhaltsTeil) =>
-    async (bild: number, punkte: readonly Punkt[] | null): Promise<Uint8Array> => {
+    async (bild: number, punkte: readonly Punkt[] | null): Promise<NeueDaten> => {
       gerechnetAn.add(bild);
       return teilRechnen(eintrag, bilder[bild], breite, hoehe, tiefe, auftrag.abbruch, punkte);
     };
@@ -269,7 +261,7 @@ export async function folgeTeile(
           anker: abschnitt.anker,
           schluessel: schluesselSortiert,
           punkte: eintrag.teil.art === 'tipp' ? eintrag.teil.punkte : null,
-          rechnen: rechnenFuer(eintrag),
+          rechnen: async (bild, punkte) => (await rechnenFuer(eintrag)(bild, punkte)).werte,
         }),
       });
     }
@@ -336,7 +328,7 @@ export async function folgeTeile(
         const abschnitt = abschnitte[arbeit.nummer];
         for (const eintrag of tiefenJe(arbeit.nummer)) {
           const karte = await rechnenFuer(eintrag)(arbeit.bild, null);
-          const folge = folgen[arbeit.nummer].get(eintrag.teil.id) as (Uint8Array | undefined)[];
+          const folge = folgen[arbeit.nummer].get(eintrag.teil.id) as (NeueDaten | undefined)[];
           folge[arbeit.bild - abschnitt.von] = karte;
           erledigt += 1;
         }
@@ -370,9 +362,9 @@ export async function folgeTeile(
        * Weg je Bild.
        */
       const glatt = bewegtGlaetten(lauf.masken, breite, hoehe, lauf.versatz);
-      const folge = folgen[nummer].get(eintrag.teil.id) as (Uint8Array | undefined)[];
+      const folge = folgen[nummer].get(eintrag.teil.id) as (NeueDaten | undefined)[];
       glatt.forEach((maske, i) => {
-        if (abschnitt.von + i <= abschnitt.bis) folge[i] = maske;
+        if (abschnitt.von + i <= abschnitt.bis) folge[i] = { breite, hoehe, werte: maske };
       });
       erledigt += 1;
       melden();
@@ -387,17 +379,35 @@ export async function folgeTeile(
    * Entfernung klebt an der Szene, nicht an einem Gegenstand. Geglättet wird
    * sie nicht: Sie besteht überall aus Zwischenwerten, und über drei Bilder
    * gemittelt bekäme die Unschärfe an jeder Silhouette einen Hof.
+   *
+   * Gezogen wird in der Grösse der KARTE, nicht der Rechengrösse (siehe
+   * `teilRechnen.ts`) – und deshalb mit einem umgerechneten Faktor: Die Lage
+   * rechnet in Graupunkten, und ein Graupunkt ist `faktor` Bildpunkte, also
+   * `faktor · kartenBreite / breite` Kartenpunkte. Die Karte ist nach
+   * `netzGroesse` auf Vielfache von 14 gerundet und damit in der Höhe um
+   * höchstens ein Prozent anders gestaucht als in der Breite; das bleibt
+   * unter einem Kartenpunkt.
    */
   abschnitte.forEach((abschnitt, nummer) => {
     for (const eintrag of tiefenJe(nummer)) {
-      const folge = folgen[nummer].get(eintrag.teil.id) as (Uint8Array | undefined)[];
+      const folge = folgen[nummer].get(eintrag.teil.id) as (NeueDaten | undefined)[];
       for (let i = abschnitt.von; i <= abschnitt.bis; i += 1) {
         if (folge[i - abschnitt.von]) continue;
         const anker = Math.max(abschnitt.von, schluesselVor(schluessel, i));
         const vorlage = folge[anker - abschnitt.von];
         if (!vorlage) continue;
         const seitAnker = lageVerketten(lagen[i], lageKehren(lagen[anker]));
-        folge[i - abschnitt.von] = maskeZiehen(vorlage, breite, hoehe, seitAnker, faktor);
+        folge[i - abschnitt.von] = {
+          breite: vorlage.breite,
+          hoehe: vorlage.hoehe,
+          werte: maskeZiehen(
+            vorlage.werte,
+            vorlage.breite,
+            vorlage.hoehe,
+            seitAnker,
+            (faktor * vorlage.breite) / breite,
+          ),
+        };
       }
     }
   });
@@ -406,8 +416,8 @@ export async function folgeTeile(
   abschnitte.forEach((abschnitt, nummer) => {
     for (const [id, folge] of folgen[nummer]) {
       for (let i = abschnitt.von; i <= abschnitt.bis; i += 1) {
-        const werte = folge[i - abschnitt.von];
-        if (werte) jeBild[i].set(id, { breite, hoehe, werte });
+        const daten = folge[i - abschnitt.von];
+        if (daten) jeBild[i].set(id, daten);
       }
     }
   });
@@ -468,70 +478,6 @@ function abschnitteFuer(
     }
   }
   return raus;
-}
-
-/** Ein einzelnes Teil für ein einzelnes Bild rechnen. */
-export async function teilRechnen(
-  eintrag: InhaltsTeil,
-  bild: GelesenesBild,
-  breite: number,
-  hoehe: number,
-  tiefe: { karteFuer(bild: ImageData): Promise<{ feld: Uint8Array }> } | null,
-  abbruch: AbortSignal | undefined,
-  /** Die angetippten Punkte an DIESEM Bild – schon mitgezogen, siehe `Spur`. */
-  punkte: readonly Punkt[] | null,
-): Promise<Uint8Array> {
-  const teil = eintrag.teil;
-
-  if (teil.art === 'tiefe') {
-    if (!tiefe) throw new Error('Für die Tiefe fehlt die Sitzung');
-    const karte = await tiefe.karteFuer(bild.daten);
-    return karte.feld;
-  }
-
-  if (teil.art === 'netz') {
-    const maske = await runEngine(teil.netz, { image: bild.daten, abbruch });
-    return kanteWeichzeichnen(maske, breite, hoehe, KANTE_WEICH);
-  }
-
-  if (teil.art === 'tipp') {
-    const gezogen = (punkte ?? teil.punkte).map((punkt) => ({
-      x: Math.min(breite - 1, Math.max(0, Math.round(punkt.x))),
-      y: Math.min(hoehe - 1, Math.max(0, Math.round(punkt.y))),
-    }));
-    /*
-     * Keine Punkte, keine Maske. So kommt ein Tipp aus `verlegen.ts`, dessen
-     * Gegenstand am neuen Stellbild schon aus dem Bild war – und
-     * `tippTeilRechnen` gäbe dafür nichts zurück, was hier den ganzen
-     * Filmbau abbräche.
-     */
-    if (gezogen.length === 0) return new Uint8Array(breite * hoehe);
-    try {
-      const gerechnet = await tippTeilRechnen(bild.daten, gezogen, {
-        modus: teil.modus,
-        mitNetz: teil.mitNetz,
-        toleranz: teil.toleranz,
-        id: teil.id,
-      });
-      if (!gerechnet || gerechnet.art !== 'tipp') throw new Error('Der Tipp ergab keine Maske');
-      return gerechnet.alpha;
-    } catch (fehler) {
-      /*
-       * `NichtsGefunden` heisst: An dieser Stelle ist gerade nichts – das
-       * angetippte Ding kann aus dem Bild gelaufen sein. Das darf den ganzen
-       * Filmbau nicht abbrechen, sonst kostete ein Objekt, das für ein paar
-       * Sekunden hinter etwas verschwindet, den kompletten Export. Eine leere
-       * Maske ist die ehrliche Antwort; die Spur weiss damit umzugehen.
-       * Jeder andere Fehler bleibt tödlich – ein abgeschaltetes oder
-       * abgestürztes Verfahren fände beim nächsten Schlüsselbild ebenso
-       * wenig.
-       */
-      if (fehler instanceof NichtsGefunden) return new Uint8Array(breite * hoehe);
-      throw fehler;
-    }
-  }
-
-  throw new Error(`Diese Maskenart wird je Bild nicht gerechnet: ${teil.art}`);
 }
 
 /** Das letzte Schlüsselbild bis einschliesslich `bis`. */
