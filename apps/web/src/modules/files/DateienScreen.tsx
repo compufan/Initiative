@@ -110,9 +110,10 @@ export function DateienScreen() {
    * Server wiese die Liste ab („weder Fotos noch Videos"), und ein Knopf, der
    * zuverlässig eine Fehlermeldung ergibt, ist schlechter als keiner.
    */
-  const zeigbareIds = items
-    .filter((eintrag) => eintrag.attachment.kind === 'image' || eintrag.attachment.kind === 'video')
-    .map((eintrag) => eintrag.attachment.id);
+  const zeigbareAnhaenge = items
+    .map((eintrag) => eintrag.attachment)
+    .filter((anhang) => anhang.kind === 'image' || anhang.kind === 'video');
+  const zeigbareIds = zeigbareAnhaenge.map((anhang) => anhang.id);
   const zeigbare = zeigbareIds.length;
   const inhaltGeladen = collectionId ? Boolean(geladen[collectionId]) : true;
 
@@ -558,6 +559,7 @@ export function DateienScreen() {
           open={fernseher}
           onClose={() => setFernseher(false)}
           collection={aktuell}
+          ansicht={zeigbareAnhaenge}
           titel={`„${aktuell.name}“ auf den Fernseher`}
         />
       )}
