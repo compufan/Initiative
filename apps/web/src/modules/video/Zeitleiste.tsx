@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 
 import { kannTeilen } from './ausschnitt.js';
+import { MaskenChips, Maskenbahnen, type MaskenLeiste } from './Maskenbahnen.js';
 import {
   filmAnfangMs,
   filmDauerMs,
@@ -60,6 +61,11 @@ export interface ZeitleisteProps {
   onEntfernen: () => void;
   onVerschieben: (richtung: -1 | 1) => void;
   onDazu: () => void;
+  /**
+   * Die Masken des Films – je eine Bahn unter den Abschnitten, im selben
+   * Massstab. Ohne Angabe keine Bahnen.
+   */
+  masken?: MaskenLeiste;
 }
 
 interface Griff {
@@ -89,6 +95,7 @@ export function Zeitleiste({
   onEntfernen,
   onVerschieben,
   onDazu,
+  masken,
 }: ZeitleisteProps) {
   const bahn = useRef<HTMLDivElement | null>(null);
   const kopfZieht = useRef(false);
@@ -183,72 +190,114 @@ export function Zeitleiste({
     setFesterUmfang(null);
   };
 
+  const abspielKnopf = (
+    <button
+      type="button"
+      className="btn btn-sm"
+      onClick={onAbspielen}
+      disabled={gesperrt}
+      aria-label={spielt ? 'Anhalten' : 'Abspielen'}
+    >
+      {spielt ? '⏸' : '▶'}
+    </button>
+  );
+  /*
+   * Ist eine Maske gewählt, wird die Knopfzeile zur Zeile ihrer
+   * Einstellungen – statt einer zweiten darunter, die der Bühne Höhe nähme.
+   * „Fertig" bringt die Knöpfe zurück. Abspielen bleibt vorn stehen: Ob die
+   * Maske sitzt, sieht man am laufenden Film.
+   */
+  const maskeGewaehlt =
+    masken !== undefined &&
+    !masken.lesend &&
+    !gesperrt &&
+    masken.masken.some((maske) => maske.id === masken.gewaehlt);
+
   return (
     <div className={`zl${gesperrt ? ' ist-aus' : ''}`}>
-      <div className="zl-leiste">
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={onAbspielen}
-          disabled={gesperrt}
-          aria-label={spielt ? 'Anhalten' : 'Abspielen'}
-        >
-          {spielt ? '⏸' : '▶'}
-        </button>
-        <span className="zl-zeit">
-          {zeitText(spielkopfMs)} / {zeitText(gesamt)}
-        </span>
-        <span className="zl-luecke" />
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={onTeilen}
-          disabled={!teilbar}
-          title="Teilt den Abschnitt an der Wiedergabestelle – beide Hälften behalten die Bearbeitung"
-          aria-label="An der Wiedergabestelle teilen"
-        >
-          ✂
-        </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={() => onVerschieben(-1)}
-          disabled={gesperrt || aktiv <= 0}
-          aria-label={`Abschnitt ${aktiv + 1} nach vorn`}
-          title="Den gewählten Abschnitt eine Stelle nach vorn"
-        >
-          {/* Pfeile und nicht ◀ ▶ – daneben steht der Abspielknopf. */}←
-        </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={() => onVerschieben(1)}
-          disabled={gesperrt || aktiv >= abschnitte.length - 1}
-          aria-label={`Abschnitt ${aktiv + 1} nach hinten`}
-          title="Den gewählten Abschnitt eine Stelle nach hinten"
-        >
-          →
-        </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={onEntfernen}
-          disabled={gesperrt || abschnitte.length <= 1}
-          aria-label={`Abschnitt ${aktiv + 1} entfernen`}
-        >
-          🗑
-        </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={onDazu}
-          disabled={gesperrt || quelleMs <= 0}
-          aria-label="Abschnitt hinzufügen"
-          title="Hängt hinter dem gewählten einen weiteren Abschnitt an – mit derselben Bearbeitung"
-        >
-          ＋
-        </button>
-      </div>
+      {maskeGewaehlt ? (
+        <MaskenChips
+          leiste={masken}
+          abschnitte={abschnitte}
+          s={schrittMs}
+          spielkopfMs={spielkopfMs}
+          onZurStelle={(filmMs) => onSpielkopf(filmMs, true)}
+          vorne={abspielKnopf}
+        />
+      ) : (
+        <div className="zl-leiste">
+          {abspielKnopf}
+          <span className="zl-zeit">
+            {zeitText(spielkopfMs)} / {zeitText(gesamt)}
+          </span>
+          <span className="zl-luecke" />
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={onTeilen}
+            disabled={!teilbar}
+            title="Teilt den Abschnitt an der Wiedergabestelle – beide Hälften behalten die Bearbeitung"
+            aria-label="An der Wiedergabestelle teilen"
+          >
+            ✂
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => onVerschieben(-1)}
+            disabled={gesperrt || aktiv <= 0}
+            aria-label={`Abschnitt ${aktiv + 1} nach vorn`}
+            title="Den gewählten Abschnitt eine Stelle nach vorn"
+          >
+            {/* Pfeile und nicht ◀ ▶ – daneben steht der Abspielknopf. */}←
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => onVerschieben(1)}
+            disabled={gesperrt || aktiv >= abschnitte.length - 1}
+            aria-label={`Abschnitt ${aktiv + 1} nach hinten`}
+            title="Den gewählten Abschnitt eine Stelle nach hinten"
+          >
+            →
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={onEntfernen}
+            disabled={gesperrt || abschnitte.length <= 1}
+            aria-label={`Abschnitt ${aktiv + 1} entfernen`}
+          >
+            🗑
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={onDazu}
+            disabled={gesperrt || quelleMs <= 0}
+            aria-label="Abschnitt hinzufügen"
+            title="Hängt hinter dem gewählten einen weiteren Abschnitt an – mit derselben Bearbeitung"
+          >
+            ＋
+          </button>
+          {/*
+              Auch hier, nicht nur bei der gewählten Maske: Nach „Löschen"
+              ist keine Maske mehr gewählt – und genau dann braucht man es.
+          */}
+          {masken?.zurueckMoeglich && !masken.lesend && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={masken.onZurueck}
+              disabled={gesperrt}
+              aria-label="Letzte Änderung an den Masken zurücknehmen"
+              title="Letzte Änderung an den Masken zurücknehmen"
+            >
+              ↺
+            </button>
+          )}
+        </div>
+      )}
 
       <div
         ref={bahn}
@@ -366,6 +415,16 @@ export function Zeitleiste({
         )}
         <div className="zl-kopf" style={{ left: `${anteil(spielkopfMs) * 100}%` }} />
       </div>
+      {masken && (
+        <Maskenbahnen
+          leiste={masken}
+          abschnitte={abschnitte}
+          s={schrittMs}
+          umfangMs={umfang}
+          gesamtMs={gesamt}
+          onWischen={onSpielkopf}
+        />
+      )}
     </div>
   );
 }

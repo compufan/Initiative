@@ -102,6 +102,15 @@ export interface VideoBauAuftrag {
   readonly maxGepuffert?: number;
   readonly fortschritt?: (anteil: number, abschnitt: Bauschritt, text: string) => void;
   readonly abbruch?: AbortSignal;
+  /**
+   * Die Bearbeitung eines einzelnen Bildes – aus der seines Stücks.
+   *
+   * So kommen die Masken des Films hinein (`masken.ts`, `bildDocAn`): Sie
+   * gehören zu keinem Stück, sondern gelten über Zeiträume und sind schon
+   * verfolgt, bevor gebaut wird. `zeitMs` ist die Stelle im Quellvideo,
+   * `stueck` die Stelle in `stuecke`. Wirft der Haken, bricht der Bau ab.
+   */
+  readonly bildDoc?: (zeitMs: number, stueck: number, doc: BildDoc) => BildDoc;
 }
 
 export interface VideoBauErgebnis {
@@ -482,6 +491,8 @@ async function bauen(
             daten = await leser.bildAn(punkte[nummer], auftrag.abbruch);
             stand.gelesen();
           }
+          if (auftrag.bildDoc)
+            doc = auftrag.bildDoc(punkte[nummer], plan.stueckJeBild[nummer], doc);
           stift.putImageData(daten, 0, 0);
           quelleVeraendert(quelle);
           const bild = einpassen(zeichneAusgabe(quelle, breite, hoehe, doc));

@@ -565,67 +565,18 @@ test('im Editor schneiden: Abschnitt wählen, Stellbild verschieben, abspielen, 
   await bild(page, '7-hinzugefuegt');
 });
 
-test('eine angetippte Maske im Editor an ein anderes Bild mitnehmen', async ({ page }) => {
-  test.setTimeout(240_000);
-  await page.setViewportSize({ width: 412, height: 880 });
-  if (!(await blattMitVideo(page))) {
-    test.skip(true, 'Kein Videokodierer in diesem Browser');
-    return;
-  }
-  const bearbeiten = page.getByRole('button', { name: /Bearbeiten und schneiden/ });
-  await expect(bearbeiten).toBeEnabled({ timeout: 30_000 });
-  await bearbeiten.click();
-  const editor = page.locator('.bild-editor');
-  const wiedergabe = editor.locator('.bild-wiedergabe');
-  await expect(wiedergabe).toBeHidden({ timeout: 20_000 });
-
-  // Bild 0 bei 25 je Sekunde, Quelle 10 je Sekunde: das Quadrat bei x = 20 … 60.
-  await editor
-    .locator('.bild-reiter')
-    .getByRole('button', { name: /Bereiche/ })
-    .click();
-  await editor.getByRole('button', { name: /Antippen aus/ }).click();
-  const leinwand = editor.locator('.bild-leinwand');
-  const kasten = await leinwand.boundingBox();
-  if (!kasten) throw new Error('keine Leinwand');
-  await page.mouse.click(
-    kasten.x + (40 / 320) * kasten.width,
-    kasten.y + (120 / 240) * kasten.height,
-  );
-  await expect(editor.getByRole('group', { name: 'Bereiche' }).getByRole('button')).not.toHaveCount(
-    1,
-    { timeout: 20_000 },
-  );
-  await bild(page, '8-angetippt');
-
-  // Die Wiedergabestelle weiter – das Stellbild bleibt, und die Frage kommt.
-  const leiste = editor.getByRole('slider', { name: 'Wiedergabestelle' });
-  await leiste.focus();
-  for (let i = 0; i < 3; i += 1) await leiste.press('Shift+ArrowRight');
-  await expect(wiedergabe).toBeVisible();
-  const mitnehmen = editor.getByRole('button', { name: 'Masken hierher mitnehmen' });
-  await expect(mitnehmen).toBeVisible();
-  await bild(page, '9-frage');
-  await mitnehmen.click();
-  // Rechnen, neues Standbild, und der Editor steht wieder – mit dem Bereich.
-  await expect(wiedergabe).toBeHidden({ timeout: 60_000 });
-  await editor
-    .locator('.bild-reiter')
-    .getByRole('button', { name: /Bereiche/ })
-    .click();
-  await expect(editor.getByRole('group', { name: 'Bereiche' }).getByRole('button')).not.toHaveCount(
-    1,
-  );
-  await bild(page, '10-mitgenommen');
-});
-
 /* ---------- Nach der Gegenlesung ---------- */
 
 test('Rückgängig holt keine Maske eines anderen Stellbildes zurück', async ({ page }) => {
   /*
    * Nachgestellt: Tipp auf das Quadrat, ↺, Stellbild verschieben, ↻ – und
-   * die Maske des alten Bildes galt für das neue. Nach dem Wechsel des
-   * Bildes darf ↻ nichts mehr wiederherstellen, das zu einem Bild gehört.
+   * die Maske des alten Bildes galt für das neue.
+   *
+   * Seit die Masken dem Film gehören, bleibt der Verlauf über einen
+   * Bildwechsel erhalten (Licht, Farbe, Zuschnitt) – aber jeder alte Stand
+   * bekommt die Masken des NEUEN Bildes. ↻ darf also etwas tun, nur keine
+   * Maske zurückbringen, die am alten Bild angelegt und dann zurückgenommen
+   * wurde.
    */
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 412, height: 880 });
@@ -656,7 +607,10 @@ test('Rückgängig holt keine Maske eines anderen Stellbildes zurück', async ({
   await leiste.focus();
   for (let i = 0; i < 3; i += 1) await leiste.press('Shift+ArrowRight');
   await expect(wiedergabe).toBeHidden({ timeout: 20_000 });
-  await expect(wieder).toBeDisabled();
+  if (await wieder.isEnabled()) await wieder.click();
+  // Keine Maske im Editor, keine in der Zeitleiste.
+  await expect(editor.getByRole('group', { name: 'Bereiche' }).getByRole('button')).toHaveCount(1);
+  await expect(editor.locator('.mb-zeile')).toHaveCount(0);
 });
 
 test('Kürzen während der Wiedergabe hält sie an, statt hängenzubleiben', async ({ page }) => {
@@ -712,39 +666,6 @@ test('Pfeiltasten tragen über eine Abschnittsgrenze – der Fokus bleibt', asyn
   await expect(leiste).toBeFocused();
   for (let i = 0; i < 3; i += 1) await leiste.press('ArrowRight');
   await expect(titel).toHaveText('Abschnitt 2 von 2');
-});
-
-test('ein Verlauf bleibt beim Verschieben der Wiedergabe an seinem Bild', async ({ page }) => {
-  /*
-   * Ein Verlauf steht in Punkten des Stellbildes. Vorher rückte das
-   * Stellbild einfach mit, und der Verlauf galt danach als an einem anderen
-   * Bild gezeichnet. Jetzt kommt dieselbe Frage wie bei einer Maske.
-   */
-  test.setTimeout(240_000);
-  await page.setViewportSize({ width: 412, height: 880 });
-  if (!(await blattMitVideo(page))) {
-    test.skip(true, 'Kein Videokodierer in diesem Browser');
-    return;
-  }
-  await page.getByRole('button', { name: /Bearbeiten und schneiden/ }).click();
-  const editor = page.locator('.bild-editor');
-  const wiedergabe = editor.locator('.bild-wiedergabe');
-  await expect(wiedergabe).toBeHidden({ timeout: 20_000 });
-  await editor
-    .locator('.bild-reiter')
-    .getByRole('button', { name: /Bereiche/ })
-    .click();
-  await editor
-    .getByRole('button', { name: /Verlauf/ })
-    .first()
-    .click();
-  const leiste = editor.getByRole('slider', { name: 'Wiedergabestelle' });
-  await leiste.focus();
-  for (let i = 0; i < 3; i += 1) await leiste.press('Shift+ArrowRight');
-  const mitnehmen = editor.getByRole('button', { name: 'Masken hierher mitnehmen' });
-  await expect(mitnehmen).toBeVisible();
-  await mitnehmen.click();
-  await expect(wiedergabe).toBeHidden({ timeout: 60_000 });
 });
 
 test('Formen wandern beim Mitnehmen mit der Kamera', async ({ page }) => {

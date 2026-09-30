@@ -1,9 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { docUnberuehrt, type BildDoc } from '../bild/doc.js';
 import { toast } from '../../state/ui.js';
-import { errorMessage } from '../media/helpers.js';
-import { AbbruchError } from '../stickers/engines/index.js';
+import { MAX_BILDER_FILM } from './einstellungen.js';
+import {
+  GELOESCHT_MAX,
+  Kompositspeicher,
+  ankerEntfernen as ankerEntfernenRein,
+  bereicheUmwandeln,
+  editorAenderung,
+  grenzeVerletzt,
+  maskeTrennen as maskeTrennenRein,
+  maskenUmrastern,
+  type Geltung,
+  type Gezeigt,
+  type Maske,
+} from './masken.js';
+import { filmRaster } from './raster.js';
+import { spurdienstFuer, type Spurdienst, type Spurstand } from './spurdienst.js';
 import {
   abschnittDazu,
   abschnittEntfernen,
@@ -12,8 +26,6 @@ import {
   abschnittTeilen,
   abschnittVerschieben,
   ersterAbschnitt,
-  haengtAmBild,
-  mussVerlegen,
   rasterNeu,
   verlegungVermerken,
   type Abschnitt,
@@ -27,21 +39,24 @@ import {
  *
  * # Was hier im Hintergrund läuft
  *
- * Die Mitnahme der Masken (`verlegen.ts`). Wer einen freigestellten
- * Abschnitt teilt, hat danach eine Hälfte, deren Stellbild woanders liegt
- * als das Bild, zu dem ihre Maske gehört. Die Maske wird dorthin verfolgt –
- * Bild für Bild, wie beim Filmbau –, und bis das fertig ist, dreht sich an
- * der Hälfte ein Kreisel und sie lässt sich nicht bearbeiten.
+ * Die Verfolgung der Masken (`spurdienst.ts`). Eine Maske gehört nicht zu
+ * einem Abschnitt, sondern zum Film: Sie gilt überall oder in einem
+ * Zeitraum, und die Verfolgung rechnet aus, wo ihr Gegenstand an jedem Bild
+ * liegt. Schneiden, Teilen und Umstellen kosten dabei nichts – verfolgt
+ * wird in Bildern des Videos, nicht des Films.
  *
- * Immer nur EINE Mitnahme zur Zeit: Jede liest Bilder aus dem Video und
- * startet womöglich ein Modell, und zwei davon nebeneinander verdoppelten
- * den Speicher, ohne schneller fertig zu sein.
+ * Früher hing jede Maske an EINEM Bild ihres Abschnitts und wurde beim
+ * Verschieben des Stellbildes erst dorthin „mitgenommen"; währenddessen
+ * drehte sich ein Kreisel. Das gibt es nicht mehr: Das Stellbild wandert
+ * frei, und was an ihm zu sehen ist, setzt `bildDocAn` zusammen.
  */
 export interface SchnittZustand {
   readonly abschnitte: readonly Abschnitt[];
   readonly aktiv: number;
-  /** Abschnitte, deren Masken gerade mitgenommen werden oder noch warten. */
-  readonly beschaeftigt: ReadonlySet<string>;
+  /** Der Bildabstand des Films – das Raster, auf dem die Masken stehen. */
+  readonly s: number;
+  /** Die Rechengrösse – darin stehen Dokumente und Masken. */
+  readonly mass: { readonly b: number; readonly h: number } | null;
   setAktiv(nummer: number): void;
   /** Mit dem ganzen Video (höchstens `bisMs`) neu anfangen. */
   anfangen(bisMs: number): void;
@@ -52,13 +67,45 @@ export interface SchnittZustand {
   dazu(): void;
   /** Die Bearbeitung eines Abschnitts ersetzen – jede Änderung aus dem Editor. */
   docSetzen(id: string, doc: BildDoc): void;
-  /**
-   * Das Stellbild versetzen. Hängen Masken am Dokument, werden sie
-   * mitgenommen – das ist dann keine Kleinigkeit, siehe oben.
-   */
+  /** Das Stellbild versetzen – das Bild, das der Editor zeigt. */
   standSetzen(id: string, ms: number): void;
   /** Alle Bearbeitungen weg – nach einem Wechsel der Rechengrösse. */
   alleVerwerfen(): void;
+
+  /* ---------- Die Masken des Films (masken.ts) ---------- */
+
+  /**
+   * Die Masken – nicht mehr je Abschnitt, sondern als Spuren über den Film.
+   * Wo eine gilt, sagt ihre `geltung`; wo sie zu sehen ist, die Verfolgung.
+   */
+  readonly masken: readonly Maske[];
+  /** Die Maske, die in der Zeitleiste gewählt ist. */
+  readonly gewaehlt: string | null;
+  /** Die Verfolgung – liefert, was an einem Bild von jeder Maske bekannt ist. */
+  readonly spuren: Spurdienst;
+  readonly spurstand: Spurstand;
+  /** Geteilt von Editor und Vorschau: dieselben Teile für dasselbe Bild. */
+  readonly speicher: Kompositspeicher;
+  /**
+   * Steigt, wenn die Zeitleiste eine Maske geändert hat. Der Editor lädt sein
+   * Bild dann neu – sonst zeigte er eine gelöschte Maske weiter an.
+   */
+  readonly leistenFassung: number;
+  /** Lässt sich die letzte Änderung aus der Zeitleiste zurücknehmen? */
+  readonly leisteZurueckMoeglich: boolean;
+  waehlen(id: string | null): void;
+  /**
+   * Eine Änderung aus dem Editor verteilen: der Rest an den Abschnitt, die
+   * Bereiche an die Masken (siehe `editorAenderung`).
+   */
+  routen(neu: BildDoc, gezeigt: Gezeigt, abschnittId: string): { abgelehnt?: string };
+  /** `fertig: false` während eines Zugs am Griff – nur zum Zeichnen. */
+  geltungSetzen(id: string, geltung: Geltung, fertig: boolean): boolean;
+  maskeAn(id: string, aktiv: boolean): void;
+  maskeLoeschen(id: string): void;
+  maskeTrennen(id: string, filmMs: number): void;
+  ankerEntfernen(id: string, k: number): void;
+  leisteZurueck(): void;
 }
 
 export interface SchnittAuftrag {
@@ -74,9 +121,92 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
   const { datei, kante, schrittMs, quelleMs, mass } = auftrag;
   const [abschnitte, setAbschnitte] = useState<readonly Abschnitt[]>([]);
   const [aktiv, setAktivRoh] = useState(0);
-  const [laeuft, setLaeuft] = useState<string | null>(null);
   const liste = useRef(abschnitte);
   liste.current = abschnitte;
+
+  /*
+   * Die Masken leben in einer Referenz UND im Zustand.
+   *
+   * Die Referenz wird sofort gesetzt, nicht erst nach dem nächsten Zeichnen:
+   * Der Editor meldet bei einem Zug mehrere Änderungen hintereinander, und
+   * jede muss die vorige sehen – sonst überschriebe die zweite die erste.
+   * Und die Rückruf-Funktionen, die davon lesen, bleiben dieselben; der
+   * Editor (4400 Zeilen) rechnet deshalb nicht bei jedem Reglerschritt neu.
+   */
+  const [masken, setMaskenRoh] = useState<readonly Maske[]>([]);
+  const maskenRef = useRef(masken);
+  const setMasken = useCallback((neu: readonly Maske[]) => {
+    if (neu === maskenRef.current) return;
+    maskenRef.current = neu;
+    setMaskenRoh(neu);
+  }, []);
+  /** Gelöschte Masken, damit ein Rückgängig im Editor sie mit ihren Spuren zurückholt. */
+  const geloeschtRef = useRef<ReadonlyMap<string, Maske>>(new Map());
+  const [gewaehlt, setGewaehlt] = useState<string | null>(null);
+  const [leistenFassung, setLeistenFassung] = useState(0);
+  const [leisteZurueckMoeglich, setLeisteZurueckMoeglich] = useState(false);
+  const vorLeiste = useRef<readonly Maske[] | null>(null);
+  const zugAnfang = useRef<readonly Maske[] | null>(null);
+  const speicher = useMemo(() => new Kompositspeicher(), []);
+
+  /*
+   * Die Verfolgung – EINE je Video, Rechengrösse und Bildraster. Ändert sich
+   * eines davon, stimmt keine gerechnete Spur mehr; die Masken bleiben, ihre
+   * Spuren werden neu gerechnet.
+   */
+  const massB = mass?.b ?? 0;
+  const massH = mass?.h ?? 0;
+  /** Dieselbe Angabe, solange sich die Zahlen nicht ändern – sie steckt in Abhängigkeiten. */
+  const rahmenMass = useMemo(
+    () => (massB > 0 && massH > 0 ? { b: massB, h: massH } : null),
+    [massB, massH],
+  );
+  const spuren = useMemo(
+    () =>
+      spurdienstFuer({
+        datei,
+        kante,
+        s: schrittMs,
+        mass: rahmenMass,
+      }),
+    [datei, kante, schrittMs, rahmenMass],
+  );
+  useEffect(() => () => spuren.schliessen(), [spuren]);
+  /*
+   * Ein verborgenes Fenster rechnet nicht: Auf einem Telefon hiesse das
+   * Akku für nichts, und der Browser drosselt es ohnehin.
+   */
+  useEffect(() => {
+    const melden = () => spuren.verfolgungRuhen('verborgen', document.visibilityState === 'hidden');
+    melden();
+    document.addEventListener('visibilitychange', melden);
+    return () => document.removeEventListener('visibilitychange', melden);
+  }, [spuren]);
+  const spurstand = useSyncExternalStore(spuren.abonnieren, spuren.stand, spuren.stand);
+  useEffect(() => {
+    spuren.setzen(masken, abschnitte, filmRaster(abschnitte, schrittMs, MAX_BILDER_FILM).menge);
+  }, [abschnitte, masken, schrittMs, spuren]);
+
+  /*
+   * Bereiche, die noch in einem Abschnittsdokument stehen, werden Masken.
+   *
+   * Das kommt nur aus einer Sitzung, die über eine Aktualisierung hinweg
+   * offen war (oder aus einem Aufrufer, der noch Dokumente mit Bereichen
+   * hereinreicht): Der Editor liefert Bereiche seit den Maskenspuren nie
+   * mehr an einen Abschnitt.
+   */
+  useEffect(() => {
+    if (!abschnitte.some((abschnitt) => (abschnitt.doc?.bereiche.length ?? 0) > 0)) return;
+    const erg = bereicheUmwandeln(abschnitte, maskenRef.current, schrittMs, mass ?? undefined);
+    setAbschnitte(erg.abschnitte);
+    setMasken(erg.masken);
+    if (erg.verworfen > 0) {
+      toast(
+        `${erg.verworfen} ${erg.verworfen === 1 ? 'Bereich passte' : 'Bereiche passten'} nicht mehr in den Film – höchstens 4 Masken wirken an einem Bild.`,
+        'info',
+      );
+    }
+  }, [abschnitte, mass, schrittMs, setMasken]);
 
   const setAktiv = useCallback((nummer: number) => {
     setAktivRoh(Math.max(0, Math.min(nummer, liste.current.length - 1)));
@@ -107,7 +237,13 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
    */
   const quelleRef = useRef(quelleMs);
   quelleRef.current = quelleMs;
+  const schrittVorher = useRef(schrittMs);
   useEffect(() => {
+    // Die Masken stehen in Rasterbildern – mit dem Raster rücken sie mit.
+    if (schrittVorher.current !== schrittMs) {
+      setMasken(maskenUmrastern(maskenRef.current, schrittVorher.current, schrittMs));
+      schrittVorher.current = schrittMs;
+    }
     setAbschnitte((alt) => {
       const erg = rasterNeu(alt, schrittMs, quelleRef.current);
       return erg.verlegungen.reduce(
@@ -210,98 +346,154 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
         return { ...ohne, doc: null };
       }),
     );
-  }, []);
+    setMasken([]);
+    geloeschtRef.current = new Map();
+    vorLeiste.current = null;
+    setLeisteZurueckMoeglich(false);
+    setGewaehlt(null);
+    speicher.leeren();
+  }, [setMasken, speicher]);
 
-  /* ---------- Die Mitnahme im Hintergrund ---------- */
+  /* ---------- Masken ---------- */
 
-  const laufSteuer = useRef<AbortController | null>(null);
-  /** Wofür die laufende Mitnahme rechnet – siehe den Abbruch weiter unten. */
-  const laufZiel = useRef<{ doc: BildDoc; nachMs: number } | null>(null);
-  useEffect(() => () => laufSteuer.current?.abort(), []);
+  const bezug = useCallback(() => ({ abschnitte: liste.current, s: schrittMs }), [schrittMs]);
 
-  useEffect(() => {
-    if (laeuft) return;
-    const offen = abschnitte.find(mussVerlegen);
-    if (!offen || offen.teileMs === undefined || !offen.doc) return;
-    const id = offen.id;
-    const doc = offen.doc;
-    const vonMs = offen.teileMs;
-    const nachMs = offen.standMs;
-    const steuer = new AbortController();
-    laufSteuer.current = steuer;
-    laufZiel.current = { doc, nachMs };
-    setLaeuft(id);
-    void (async () => {
-      try {
-        const { teileVerlegen } = await import('./verlegen.js');
-        const neu = await teileVerlegen(datei, doc, {
-          vonMs,
-          nachMs,
-          kante,
-          schrittMs,
-          abbruch: steuer.signal,
-        });
-        setAbschnitte((alt) =>
-          alt.map((abschnitt) => {
-            // Inzwischen anders bearbeitet? Dann gilt das Neue, und die
-            // gerechnete Fassung ist hinfällig.
-            if (abschnitt.id !== id || abschnitt.doc !== doc) return abschnitt;
-            if (abschnitt.standMs === nachMs) {
-              const { teileMs: _weg, ...ohne } = abschnitt;
-              return { ...ohne, doc: neu };
-            }
-            // Das Stellbild ist währenddessen weitergewandert: Die Masken
-            // stehen jetzt bei `nachMs`, und von dort geht es weiter.
-            return { ...abschnitt, doc: neu, teileMs: nachMs };
-          }),
-        );
-      } catch (ausfall) {
-        if (!(ausfall instanceof AbbruchError)) {
-          toast(errorMessage(ausfall, 'Die Masken liessen sich nicht mitnehmen'), 'error');
-          // Nicht noch einmal versuchen: Die Masken bleiben, wie sie sind,
-          // und gelten beim Filmbau am Stellbild.
-          setAbschnitte((alt) =>
-            alt.map((abschnitt) => {
-              if (abschnitt.id !== id) return abschnitt;
-              const { teileMs: _weg, ...ohne } = abschnitt;
-              return ohne;
-            }),
-          );
-        }
-      } finally {
-        if (laufSteuer.current === steuer) laufSteuer.current = null;
-        setLaeuft(null);
+  const routen = useCallback(
+    (neu: BildDoc, gezeigt: Gezeigt, abschnittId: string): { abgelehnt?: string } => {
+      const erg = editorAenderung(neu, gezeigt, maskenRef.current, geloeschtRef.current, bezug());
+      docSetzen(abschnittId, erg.clipDoc);
+      if (erg.abgelehnt) return { abgelehnt: erg.abgelehnt };
+      geloeschtRef.current = erg.geloescht;
+      setMasken(erg.masken);
+      if (erg.neu.length > 0) setGewaehlt(erg.neu[erg.neu.length - 1]);
+      return {};
+    },
+    // `docSetzen` ist stabil genug: Es hängt nur an der Rechengrösse.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [bezug, setMasken],
+  );
+
+  /** Eine Änderung aus der Zeitleiste – mit einem Schritt zurück für zehn Sekunden. */
+  const zurueckUhr = useRef<number | null>(null);
+  const leisteAendern = useCallback(
+    (neu: readonly Maske[], vorher: readonly Maske[] = maskenRef.current) => {
+      if (neu === maskenRef.current) return;
+      vorLeiste.current = vorher;
+      setMasken(neu);
+      setLeistenFassung((fassung) => fassung + 1);
+      setLeisteZurueckMoeglich(true);
+      if (zurueckUhr.current !== null) window.clearTimeout(zurueckUhr.current);
+      zurueckUhr.current = window.setTimeout(() => {
+        vorLeiste.current = null;
+        setLeisteZurueckMoeglich(false);
+      }, 10_000);
+    },
+    [setMasken],
+  );
+  useEffect(
+    () => () => {
+      if (zurueckUhr.current !== null) window.clearTimeout(zurueckUhr.current);
+    },
+    [],
+  );
+
+  const geltungSetzen = useCallback(
+    (id: string, geltung: Geltung, fertig: boolean): boolean => {
+      const alt = maskenRef.current;
+      const neu = alt.map((maske) => {
+        if (maske.id !== id) return maske;
+        // Wer auf „ganzer Film" geht, soll seinen Zeitraum mit einem Tipp
+        // zurückbekommen – `zuletzt` merkt ihn sich.
+        const zuletzt =
+          geltung.art === 'ganz' && maske.geltung.art !== 'ganz' ? maske.geltung : maske.zuletzt;
+        return { ...maske, geltung, ...(zuletzt ? { zuletzt } : {}) };
+      });
+      const fehler = grenzeVerletzt(neu, bezug());
+      if (fehler) {
+        if (fertig) toast(fehler, 'info');
+        return false;
       }
-    })();
-    return undefined;
-  }, [abschnitte, datei, kante, laeuft, schrittMs]);
+      if (!fertig) {
+        // Während des Zugs nur zeichnen; zurück geht es an den Anfang des Zugs.
+        zugAnfang.current ??= alt;
+        setMasken(neu);
+        return true;
+      }
+      leisteAendern(neu, zugAnfang.current ?? alt);
+      zugAnfang.current = null;
+      return true;
+    },
+    [bezug, leisteAendern, setMasken],
+  );
 
-  /*
-   * Eine Mitnahme, deren Abschnitt verschwunden ist oder deren Ziel sich
-   * verschoben hat, braucht niemand mehr.
-   *
-   * Ohne Abbruch läse sie weiter Bilder und rechnete am alten Ziel ein
-   * Modell – und danach käme eine zweite vom alten zum neuen Ziel. Nach dem
-   * Abbruch beginnt eine einzige neu: `teileMs` steht noch auf dem Bild, zu
-   * dem die Masken gehören, und `standMs` auf dem neuen Ziel. Ein anderes
-   * Dokument (neu eingestellt oder verworfen) macht sie ebenso hinfällig.
-   */
-  useEffect(() => {
-    if (!laeuft) return;
-    const ziel = abschnitte.find((abschnitt) => abschnitt.id === laeuft);
-    const lauf = laufZiel.current;
-    if (!ziel || !lauf || ziel.standMs !== lauf.nachMs || ziel.doc !== lauf.doc) {
-      laufSteuer.current?.abort();
-    }
-  }, [abschnitte, laeuft]);
+  const maskeAn = useCallback(
+    (id: string, aktiv: boolean) => {
+      const alt = maskenRef.current;
+      const neu = alt.map((maske) => (maske.id === id ? { ...maske, aktiv } : maske));
+      if (aktiv) {
+        const fehler = grenzeVerletzt(neu, bezug());
+        if (fehler) {
+          toast(fehler, 'info');
+          return;
+        }
+      }
+      leisteAendern(neu);
+    },
+    [bezug, leisteAendern],
+  );
 
-  const beschaeftigt = new Set(abschnitte.filter(mussVerlegen).map((abschnitt) => abschnitt.id));
-  if (laeuft) beschaeftigt.add(laeuft);
+  const maskeLoeschen = useCallback(
+    (id: string) => {
+      const alt = maskenRef.current;
+      const maske = alt.find((eintrag) => eintrag.id === id);
+      if (!maske) return;
+      const geloescht = new Map(geloeschtRef.current);
+      geloescht.set(id, maske);
+      while (geloescht.size > GELOESCHT_MAX) geloescht.delete(geloescht.keys().next().value!);
+      geloeschtRef.current = geloescht;
+      leisteAendern(alt.filter((eintrag) => eintrag.id !== id));
+      setGewaehlt((jetzt) => (jetzt === id ? null : jetzt));
+    },
+    [leisteAendern],
+  );
+
+  const maskeTrennen = useCallback(
+    (id: string, filmMs: number) => {
+      const erg = maskeTrennenRein(maskenRef.current, id, bezug(), filmMs);
+      if ('abgelehnt' in erg) {
+        toast(erg.abgelehnt, 'info');
+        return;
+      }
+      leisteAendern(erg.masken);
+      setGewaehlt(erg.neu);
+    },
+    [bezug, leisteAendern],
+  );
+
+  const ankerEntfernen = useCallback(
+    (id: string, k: number) => {
+      leisteAendern(ankerEntfernenRein(maskenRef.current, id, k));
+    },
+    [leisteAendern],
+  );
+
+  const leisteZurueck = useCallback(() => {
+    const vorher = vorLeiste.current;
+    if (!vorher) return;
+    vorLeiste.current = null;
+    setMasken(vorher);
+    setLeistenFassung((fassung) => fassung + 1);
+    setLeisteZurueckMoeglich(false);
+  }, [setMasken]);
+
+  // Eine Maske, die es nicht mehr gibt, ist auch nicht mehr gewählt.
+  const gewaehltGilt = gewaehlt !== null && masken.some((maske) => maske.id === gewaehlt);
 
   return {
     abschnitte,
     aktiv: Math.min(aktiv, Math.max(0, abschnitte.length - 1)),
-    beschaeftigt,
+    s: schrittMs,
+    mass: rahmenMass,
     setAktiv,
     anfangen,
     teilen,
@@ -312,12 +504,20 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
     docSetzen,
     standSetzen,
     alleVerwerfen,
+    masken,
+    gewaehlt: gewaehltGilt ? gewaehlt : null,
+    spuren,
+    spurstand,
+    speicher,
+    leistenFassung,
+    leisteZurueckMoeglich,
+    waehlen: setGewaehlt,
+    routen,
+    geltungSetzen,
+    maskeAn,
+    maskeLoeschen,
+    maskeTrennen,
+    ankerEntfernen,
+    leisteZurueck,
   };
 }
-
-/** Ist irgendwo noch etwas offen, das den Filmbau verfälschen würde? */
-export function nochOffen(abschnitte: readonly Abschnitt[]): boolean {
-  return abschnitte.some(mussVerlegen);
-}
-
-export { haengtAmBild };

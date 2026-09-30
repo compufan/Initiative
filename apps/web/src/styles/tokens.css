@@ -83,6 +83,18 @@
   --ebene-schleier: 76;
   --ebene-blatt: 77;
   --ebene-hinweis: 80;
+
+  /* ---------- Farben der Masken ----------
+     Je Maske eine, in der Zeitleiste und am Punkt vor ihrem Namen. Acht,
+     weil ein Film höchstens acht Masken trägt; auf dunklem Grund heller. */
+  --maske-0: #f5a524;
+  --maske-1: #22d3ee;
+  --maske-2: #f472b6;
+  --maske-3: #a3e635;
+  --maske-4: #a78bfa;
+  --maske-5: #fb7185;
+  --maske-6: #34d399;
+  --maske-7: #facc15;
 }
 
 [data-theme='light'] {
@@ -107,4 +119,13 @@
   --shadow-sm: 0 1px 2px rgba(19, 25, 52, 0.08);
   --shadow: 0 10px 30px rgba(19, 25, 52, 0.1);
   --shadow-lg: 0 24px 60px rgba(19, 25, 52, 0.16);
+
+  --maske-0: #c77700;
+  --maske-1: #0e8fa6;
+  --maske-2: #c2327f;
+  --maske-3: #4d7c0f;
+  --maske-4: #6d4fd8;
+  --maske-5: #d62d4c;
+  --maske-6: #0f8a60;
+  --maske-7: #a16207;
 }

@@ -8,11 +8,15 @@ import type { BildDoc } from '../bild/doc.js';
 import { errorMessage } from '../media/helpers.js';
 import { AbbruchError } from '../stickers/engines/index.js';
 import { masse, videoLeserOeffnen, type VideoLeser } from './bilderLesen.js';
+import { useVorschauDoc } from './filmDoc.js';
 import { springenZu, useFilmWiedergabe } from './filmWiedergabe.js';
-import { filmZuQuelle, haengtAmBild, quelleZuFilm, standImRaster } from './schnitt.js';
+import { restText, type MaskenLeiste } from './Maskenbahnen.js';
+import { bereichePlatz, bildDocAn, type Gezeigt } from './masken.js';
+import { bildIndex } from './raster.js';
+import { filmZuQuelle, standImRaster } from './schnitt.js';
 import type { SchnittZustand } from './schnittZustand.js';
 import { useBearbeiteteVorschau } from './vorschau.js';
-import { Zeitleiste, stellbildImFilm, zeitText } from './Zeitleiste.js';
+import { Zeitleiste, stellbildImFilm } from './Zeitleiste.js';
 
 /**
  * Der Fotoeditor mit einer Zeitleiste darunter – bearbeiten und schneiden
@@ -20,23 +24,23 @@ import { Zeitleiste, stellbildImFilm, zeitText } from './Zeitleiste.js';
  *
  * # Was man sieht
  *
- * Oben das STELLBILD des gewählten Abschnitts, mit allem, was an ihm
- * eingestellt ist – genau wie beim Foto. Darunter die Zeitleiste. Wer darin
- * einen anderen Abschnitt antippt, bearbeitet diesen; wer die
- * Wiedergabestelle innerhalb eines Abschnitts verschiebt, bekommt dort sein
- * Stellbild. Beim Abspielen liegt das laufende Video über dem Standbild –
- * OHNE Bearbeitung, denn die gerechneten Masken gibt es erst im fertigen
- * Film, und eine Vorschau, in der die Maske stehen bliebe, sähe genau so
- * aus wie der Fehler, den sie nicht hat.
+ * Oben das Bild an der Wiedergabestelle – das STELLBILD –, mit allem, was
+ * dort eingestellt ist, genau wie beim Foto. Darunter die Zeitleiste. Wer
+ * darin einen anderen Abschnitt antippt, bearbeitet diesen; wer die
+ * Wiedergabestelle verschiebt, bekommt beim Loslassen das Bild dort. Beim
+ * Abspielen und Wischen liegt das laufende Video über dem Standbild, MIT
+ * Bearbeitung (`vorschau.ts`).
  *
- * # Die eine Ausnahme beim Verschieben
+ * # Was an einem Bild zusammenkommt
  *
- * Trägt ein Abschnitt eine Maske (Freistellen, Tiefe, Tipp) oder eine Form
- * (Verlauf, Ellipse, Pinsel), gehört sie zu EINEM Bild. Das Stellbild
- * einfach mitzuziehen hiesse, sie über ein anderes Bild zu legen. Dann
- * bleibt das Stellbild, wo es ist, und oben steht, was sich tun lässt: sie
- * an die neue Stelle mitnehmen (sie werden dorthin verfolgt) oder zurück
- * zum Stellbild.
+ * Zwei Dinge: die Bearbeitung des Abschnitts (Licht, Farbe, Zuschnitt) und
+ * die Masken des FILMS (`masken.ts`). Eine Maske gehört nicht zu einem
+ * Abschnitt, sondern gilt im ganzen Film oder in einem Zeitraum und wird
+ * über die Bilder verfolgt; die Zeitleiste zeigt, wo sie zu sehen ist.
+ * `bildDocAn` setzt für das Stellbild zusammen, was der Editor bekommt, und
+ * `routen` verteilt jede Änderung zurück: die Bereiche an die Masken, den
+ * Rest an den Abschnitt. Eine Maske, die an diesem Bild noch nicht verfolgt
+ * ist, fehlt im Editor – und erscheint, sobald sie da ist.
  *
  * # Warum der Editor nicht je Abschnitt neu entsteht
  *
@@ -147,7 +151,6 @@ export function SchnittEditor({
     };
   }, [id, standMs]);
 
-  const beschaeftigt = abschnitt ? schnitt.beschaeftigt.has(abschnitt.id) : false;
   const stillBereit =
     standbild !== null &&
     abschnitt !== undefined &&
@@ -165,28 +168,59 @@ export function SchnittEditor({
    * falsche Bild gelegt – und der Editor meldet jede Änderung sofort
    * zurück, schon beim Laden.
    */
-  const [gezeigt, setGezeigt] = useState<{
-    id: string;
-    ms: number;
-    blob: Blob;
-    doc: BildDoc | null;
-  } | null>(null);
+  const [gezeigt, setGezeigt] = useState<Anzeige | null>(null);
+  const { masken, spuren, speicher, mass } = schnitt;
+  const rahmen = useMemo(
+    () => (mass ? { abschnitte, s: schrittMs, b: mass.b, h: mass.h } : null),
+    [abschnitte, mass, schrittMs],
+  );
+  /*
+   * Die Masken über eine Referenz: Jede Änderung im Editor ändert sie, und
+   * das Zusammensetzen soll davon nicht jedes Mal ausgelöst werden – nur bei
+   * einem neuen Bild oder einem der Anlässe unter `fassung`.
+   */
+  const maskenJetzt = useRef(masken);
+  maskenJetzt.current = masken;
+  /**
+   * Anlässe, dasselbe Bild neu zusammenzusetzen: Die Zeitleiste hat eine
+   * Maske geändert (gelöscht, getrennt, eingegrenzt), eine Änderung aus dem
+   * Editor wurde abgelehnt, oder eine Maske ist hier inzwischen verfolgt.
+   * Ohne das zeigte der Editor eine gelöschte Maske weiter an – und die
+   * nächste Reglerbewegung holte sie zurück.
+   */
+  const [neuLaden, setNeuLaden] = useState(0);
+  const fassung = `${schnitt.leistenFassung}|${neuLaden}`;
   useEffect(() => {
-    if (!abschnitt || !stillBereit || beschaeftigt || !standbild) return;
-    if (gezeigt && gezeigt.id === abschnitt.id && gezeigt.ms === abschnitt.standMs) return;
+    if (!abschnitt || !stillBereit || !standbild || !rahmen) return;
+    const gleichesBild =
+      gezeigt !== null && gezeigt.id === abschnitt.id && gezeigt.ms === abschnitt.standMs;
+    if (gleichesBild && gezeigt.fassung === fassung) return;
+    const k = bildIndex(abschnitt.standMs, schrittMs);
+    const liste = maskenJetzt.current;
+    const z = bildDocAn(abschnitt.doc, liste, spuren, k, 'editor', rahmen, speicher);
+    if (z.fehlend.length > 0) spuren.vorziehen(k);
     setGezeigt({
       id: abschnitt.id,
       ms: abschnitt.standMs,
-      blob: standbild.blob,
-      doc: abschnitt.doc,
+      /*
+       * Dasselbe Bild in einer neuen Hülle: Der Editor lädt nur neu, wenn
+       * sich sein Bild ändert. So bleibt es eine Sitzung – samt Rückgängig,
+       * siehe `verlaufAnpassen` –, und das neue Dokument kommt trotzdem an.
+       */
+      blob: gleichesBild
+        ? new Blob([standbild.blob], { type: standbild.blob.type })
+        : standbild.blob,
+      doc: z.doc,
+      fassung,
+      stand: { k, z, vorSitzung: liste },
     });
-  }, [abschnitt, beschaeftigt, gezeigt, standbild, stillBereit]);
+  }, [abschnitt, fassung, gezeigt, rahmen, schrittMs, speicher, spuren, standbild, stillBereit]);
   const bereit =
     gezeigt !== null &&
     abschnitt !== undefined &&
     gezeigt.id === abschnitt.id &&
     gezeigt.ms === abschnitt.standMs &&
-    !beschaeftigt;
+    gezeigt.fassung === fassung;
   const bereitRef = useRef(bereit);
   bereitRef.current = bereit;
 
@@ -211,7 +245,7 @@ export function SchnittEditor({
       if (!ort) return;
       if (ort.nummer !== aktiv) schnitt.setAktiv(ort.nummer);
       const ziel = abschnitte[ort.nummer];
-      if (!ziel || schnitt.beschaeftigt.has(ziel.id)) return;
+      if (!ziel) return;
       const neu = standImRaster(ziel, ort.quelleMs, schrittMs);
       /*
        * Verglichen wird Rasterbild mit Rasterbild, nicht mit dem gespeicherten
@@ -220,7 +254,9 @@ export function SchnittEditor({
        * sonst als ein anderes.
        */
       if (Math.abs(neu - standImRaster(ziel, ziel.standMs, schrittMs)) < 0.5) return;
-      if (!haengtAmBild(ziel.doc)) schnitt.standSetzen(ziel.id, neu);
+      // Das Stellbild wandert immer mit: Die Masken hängen nicht an ihm,
+      // sie werden über den Film verfolgt.
+      schnitt.standSetzen(ziel.id, neu);
     },
     [abschnitte, aktiv, schnitt, schrittMs],
   );
@@ -233,26 +269,50 @@ export function SchnittEditor({
     spielteVorher.current = wiedergabe.spielt;
   }, [ankommen, wiedergabe.spielkopfMs, wiedergabe.spielt, zieht]);
 
-  const ort = filmZuQuelle(abschnitte, wiedergabe.spielkopfMs);
-  const hierMs =
-    abschnitt && ort && ort.nummer === aktiv
-      ? standImRaster(abschnitt, ort.quelleMs, schrittMs)
-      : null;
+  const ueberlagert = wiedergabe.spielt || zieht || !bereit;
+
+  /* ---------- Die Verfolgung ---------- */
+
   /*
-   * Nur wo etwas am Bild hängt, ist „anderswo stehen" eine Frage. Ohne
-   * Masken und Formen wandert das Stellbild beim Loslassen mit; steht die
-   * Wiedergabe nach einem Kürzen oder Verschieben woanders, ist das kein
-   * Grund, das Bild zuzudecken.
+   * Sie ruht, solange ein Finger auf der Leiste liegt oder der Film läuft:
+   * Beide brauchen den Dekodierer und die Rechenzeit, und ein Wischen, das
+   * ruckelt, wiegt schwerer als eine Maske, die eine Sekunde später fertig
+   * ist.
    */
-  const abweichend =
-    !wiedergabe.spielt &&
-    !zieht &&
-    !beschaeftigt &&
-    abschnitt !== undefined &&
-    haengtAmBild(abschnitt.doc) &&
-    hierMs !== null &&
-    Math.abs(hierMs - standImRaster(abschnitt, abschnitt.standMs, schrittMs)) >= 0.5;
-  const ueberlagert = wiedergabe.spielt || zieht || abweichend || beschaeftigt || !bereit;
+  useEffect(() => {
+    spuren.verfolgungRuhen('zug', zieht);
+  }, [spuren, zieht]);
+  useEffect(() => {
+    spuren.verfolgungRuhen('wiedergabe', wiedergabe.spielt);
+  }, [spuren, wiedergabe.spielt]);
+  useEffect(
+    () => () => {
+      spuren.verfolgungRuhen('zug', false);
+      spuren.verfolgungRuhen('wiedergabe', false);
+    },
+    [spuren],
+  );
+
+  /*
+   * Eine Maske, die am Stellbild noch fehlte (oder erst grob war), ist
+   * inzwischen da: dann dasselbe Bild neu zusammensetzen. Geprüft wird nur,
+   * wenn die Verfolgung etwas Neues meldet – höchstens viermal je Sekunde.
+   */
+  const version = schnitt.spurstand.version;
+  useEffect(() => {
+    if (!gezeigt || !rahmen || !abschnitt || gezeigt.id !== abschnitt.id) return;
+    const { k, z } = gezeigt.stand;
+    if (z.fehlend.length === 0 && z.grob.length === 0) return;
+    const liste = maskenJetzt.current;
+    const jetzt = bildDocAn(abschnitt.doc, liste, spuren, k, 'editor', rahmen, speicher);
+    const gibtEs = (id: string) => liste.some((maske) => maske.id === id);
+    const besser =
+      z.fehlend.some((id) => gibtEs(id) && !jetzt.fehlend.includes(id)) ||
+      z.grob.some((id) => gibtEs(id) && !jetzt.grob.includes(id) && !jetzt.fehlend.includes(id));
+    if (besser) setNeuLaden((zahl) => zahl + 1);
+    // Nur die Meldung der Verfolgung löst das aus – siehe oben.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [version]);
 
   /* ---------- Die beiden Steckplätze ---------- */
 
@@ -276,47 +336,19 @@ export function SchnittEditor({
 
   /*
    * Die Vorschau zeigt das Video MIT der Bearbeitung des Abschnitts, in dem
-   * das jeweilige Bild liegt – siehe `vorschau.ts`.
-   *
-   * Noch ohne Bereiche: Deren Masken gehören zu EINEM Bild (dem Stellbild).
-   * Über ein anderes Bild gelegt, sässen sie falsch – lieber gar nicht als
-   * falsch. Das ändert sich, sobald die Masken als Spuren über den Film
-   * verfolgt werden.
+   * das jeweilige Bild liegt, und mit den Masken des Films, so weit sie dort
+   * verfolgt sind – siehe `vorschau.ts` und `filmDoc.ts`.
    */
   const leinwandRef = useRef<HTMLCanvasElement | null>(null);
   const [videoMass, setVideoMass] = useState<{ b: number; h: number } | null>(null);
-  const ohneBereiche = useRef(new WeakMap<BildDoc, BildDoc>());
   const lage = useRef({ spielt: false, nummer: 0, filmMs: 0 });
   lage.current = {
     spielt: wiedergabe.spielt,
     nummer: wiedergabe.nummer,
     filmMs: wiedergabe.spielkopfMs,
   };
-  const docFuer = useCallback(
-    (quelleMs: number): BildDoc | null => {
-      const { spielt, nummer, filmMs } = lage.current;
-      // Welcher Abschnitt? Beim Abspielen der laufende, sonst der unter der
-      // Wiedergabestelle – und nur, wenn das Bild auch wirklich in ihm liegt.
-      // Ein Abschnitt kann dieselbe Stelle des Videos zeigen wie ein anderer.
-      const vermutet = spielt ? nummer : (filmZuQuelle(abschnitte, filmMs)?.nummer ?? nummer);
-      const liegtIn = (i: number) => {
-        const a = abschnitte[i];
-        return a !== undefined && quelleMs >= a.vonMs - 1 && quelleMs < a.bisMs + 1;
-      };
-      let treffer = liegtIn(vermutet) ? vermutet : abschnitte.findIndex((_, i) => liegtIn(i));
-      if (treffer < 0) treffer = vermutet;
-      const doc = abschnitte[treffer]?.doc ?? null;
-      if (!doc) return null;
-      if (doc.bereiche.length === 0) return doc;
-      let ohne = ohneBereiche.current.get(doc);
-      if (!ohne) {
-        ohne = { ...doc, bereiche: [] };
-        ohneBereiche.current.set(doc, ohne);
-      }
-      return ohne;
-    },
-    [abschnitte],
-  );
+  const docFuer = useVorschauDoc(schnitt, lage);
+  const neuZeichnen = useMemo(() => [abschnitte, masken, version], [abschnitte, masken, version]);
   const bearbeiteteVorschau = useBearbeiteteVorschau({
     video: videoRef,
     leinwand: leinwandRef,
@@ -325,52 +357,26 @@ export function SchnittEditor({
     art: 'ansicht',
     aktiv: ueberlagert,
     schrittMs,
-    neuZeichnen: abschnitte,
+    neuZeichnen,
   });
-  const maskenFehlen =
-    bearbeiteteVorschau.bearbeitet &&
-    abschnitte.some((eintrag) => (eintrag.doc?.bereiche.length ?? 0) > 0);
+  /** Gibt es eine eingeschaltete Maske, die noch nicht überall verfolgt ist? */
+  const nochNichtUeberall = masken.some(
+    (maske) => maske.aktiv && (schnitt.spurstand.jeMaske.get(maske.id)?.anteil ?? 0) < 1,
+  );
 
-  const zeile = beschaeftigt ? (
-    <div className="bild-wiedergabe-zeile">
-      <span>
-        <span className="spinner" aria-hidden="true" /> Masken und Formen werden an das Stellbild
-        bei {zeitText(abschnitt?.standMs ?? 0)} mitgenommen …
-      </span>
-    </div>
-  ) : abweichend && abschnitt && hierMs !== null ? (
-    <div className="bild-wiedergabe-zeile">
-      <span>
-        Eingestellt wird bei {zeitText(abschnitt.standMs)} – Masken und Formen dieses Abschnitts
-        gehören zu jenem Bild.
-      </span>
-      <button
-        type="button"
-        className="btn btn-sm btn-primary"
-        onClick={() => schnitt.standSetzen(abschnitt.id, hierMs)}
-      >
-        Masken hierher mitnehmen
-      </button>
-      <button
-        type="button"
-        className="btn btn-sm"
-        onClick={() => wiedergabe.setzen(quelleZuFilm(abschnitte, aktiv, abschnitt.standMs))}
-      >
-        Zum Stellbild
-      </button>
-    </div>
-  ) : wiedergabe.spielt && bearbeiteteVorschau.guete === 2 ? (
-    <div className="bild-wiedergabe-zeile">
-      <span>
-        Wiedergabe ohne Bearbeitung – dieses Gerät ist dafür zu langsam. Angehalten und beim Wischen
-        siehst du sie.
-      </span>
-    </div>
-  ) : (wiedergabe.spielt || zieht) && maskenFehlen ? (
-    <div className="bild-wiedergabe-zeile">
-      <span>Mit Bearbeitung, aber noch ohne Masken und Formen – die zeigt das Standbild.</span>
-    </div>
-  ) : null;
+  const zeile =
+    wiedergabe.spielt && bearbeiteteVorschau.guete === 2 ? (
+      <div className="bild-wiedergabe-zeile">
+        <span>
+          Wiedergabe ohne Bearbeitung – dieses Gerät ist dafür zu langsam. Angehalten und beim
+          Wischen siehst du sie.
+        </span>
+      </div>
+    ) : (wiedergabe.spielt || zieht) && bearbeiteteVorschau.bearbeitet && nochNichtUeberall ? (
+      <div className="bild-wiedergabe-zeile">
+        <span>Wo eine Maske noch verfolgt wird, fehlt sie hier noch.</span>
+      </div>
+    ) : null;
 
   const wiedergabeFlaeche = (
     <div className="bild-wiedergabe" hidden={!ueberlagert}>
@@ -403,6 +409,89 @@ export function SchnittEditor({
     </div>
   );
 
+  /* ---------- Die Masken in der Zeitleiste ---------- */
+
+  const maskenLeiste: MaskenLeiste = {
+    masken,
+    gewaehlt: schnitt.gewaehlt,
+    quelle: spuren,
+    version,
+    jeMaske: schnitt.spurstand.jeMaske,
+    mass,
+    zurueckMoeglich: schnitt.leisteZurueckMoeglich,
+    onWaehlen: schnitt.waehlen,
+    onGeltung: schnitt.geltungSetzen,
+    onAn: schnitt.maskeAn,
+    onLoeschen: schnitt.maskeLoeschen,
+    onTrennen: schnitt.maskeTrennen,
+    onZurueck: schnitt.leisteZurueck,
+    onGriffZug: (filmMs, fertig) => {
+      // Das Video folgt dem Griff, und beim Loslassen steht das Stellbild
+      // dort – man sieht, wo die Maske jetzt anfängt oder endet.
+      if (wiedergabe.spielt) wiedergabe.anhalten();
+      wiedergabe.setzen(filmMs);
+      setZieht(!fertig);
+      if (fertig) ankommen(filmMs);
+    },
+  };
+
+  /*
+   * Was über die Masken an DIESEM Bild zu sagen ist – eine Zeile über der
+   * Zeitleiste, solange der Editor zu sehen ist.
+   */
+  const maskenLage = (() => {
+    if (!gezeigt || ueberlagert) return null;
+    const { z } = gezeigt.stand;
+    const namen = (ids: readonly string[]) =>
+      aufzaehlen(
+        ids
+          .map((maskeId) => masken.find((maske) => maske.id === maskeId)?.name)
+          .filter((name): name is string => Boolean(name)),
+      );
+    const fehlend = z.fehlend.filter((maskeId) => masken.some((maske) => maske.id === maskeId));
+    if (fehlend.length > 0) {
+      return (
+        <p className="mb-lage" role="status">
+          <span className="spinner" aria-hidden="true" />
+          {namen(fehlend)} {fehlend.length === 1 ? 'wird' : 'werden'} an diesem Bild noch verfolgt
+          und {fehlend.length === 1 ? 'erscheint' : 'erscheinen'}, sobald es so weit ist.
+        </p>
+      );
+    }
+    const grob = z.grob.filter((maskeId) => masken.some((maske) => maske.id === maskeId));
+    if (grob.length > 0) {
+      return (
+        <p className="mb-lage" role="status">
+          {namen(grob)} {grob.length === 1 ? 'ist' : 'sind'} hier erst grob verfolgt – genauer folgt
+          gleich.
+        </p>
+      );
+    }
+    const gewaehlt = masken.find((maske) => maske.id === schnitt.gewaehlt);
+    if (gewaehlt && z.enthalten.has(gewaehlt.id) && gewaehlt.geltung.art === 'ganz') {
+      return (
+        <p className="mb-lage">
+          „{gewaehlt.name}“ gilt im ganzen Film – Änderungen wirken überall. In der Zeitleiste lässt
+          sie sich trennen.
+        </p>
+      );
+    }
+    const laufend = masken
+      .map((maske) => schnitt.spurstand.jeMaske.get(maske.id))
+      .filter((stand) => stand?.laeuft);
+    if (laufend.length > 0) {
+      const anteil = Math.min(...laufend.map((stand) => stand?.anteil ?? 0));
+      const rest = restText(Math.max(...laufend.map((stand) => stand?.restMs ?? 0)));
+      return (
+        <p className="mb-lage" role="status">
+          <span className="spinner" aria-hidden="true" />
+          Masken werden verfolgt · {Math.round(anteil * 100)} %{rest && ` · ${rest}`}
+        </p>
+      );
+    }
+    return null;
+  })();
+
   /** Eine Änderung an der Folge der Abschnitte hält die Wiedergabe an – sie liefe sonst gegen sie. */
   const umbauen = (tun: () => void) => {
     if (wiedergabe.spielt) wiedergabe.anhalten();
@@ -418,8 +507,8 @@ export function SchnittEditor({
       schrittMs={schrittMs}
       vorschau={vorschau}
       spielt={wiedergabe.spielt}
-      beschaeftigt={schnitt.beschaeftigt}
       stellbildMs={stellbildImFilm(abschnitte, aktiv)}
+      masken={maskenLeiste}
       onSpielkopf={(filmMs, fertig) => {
         wiedergabe.setzen(filmMs);
         setZieht(!fertig);
@@ -467,7 +556,7 @@ export function SchnittEditor({
    * nichts ändert – sonst rechnete `RuhigerEditor` doch wieder bei jedem
    * Bild der Wiedergabe.
    */
-  const { docSetzen } = schnitt;
+  const { routen } = schnitt;
   const aenderung = useCallback(
     (doc: BildDoc, herkunft: { quelle: Blob; sitzung?: string }) => {
       // Nur, solange Bild, Dokument und Abschnitt zusammenpassen – siehe
@@ -475,9 +564,24 @@ export function SchnittEditor({
       // wurde, nicht für das vorige, das beim Laden noch dasteht.
       if (!bereitRef.current || !gezeigt) return;
       if (herkunft.quelle !== gezeigt.blob || herkunft.sitzung !== gezeigt.id) return;
-      docSetzen(gezeigt.id, doc);
+      const erg = routen(doc, gezeigt.stand, gezeigt.id);
+      if (erg.abgelehnt) {
+        // Der Editor zeigt, was abgelehnt wurde – also neu laden, was gilt.
+        toast(erg.abgelehnt, 'info');
+        setNeuLaden((zahl) => zahl + 1);
+      }
     },
-    [docSetzen, gezeigt],
+    [gezeigt, routen],
+  );
+  /*
+   * Wie viele Bereiche der Editor noch anlegen darf: An einem Bild wirken
+   * höchstens vier Masken, im Film höchstens acht – und eine neue Maske
+   * gilt zunächst im ganzen Film, also auch dort, wo schon vier wirken.
+   */
+  const platz = useMemo(
+    () =>
+      gezeigt ? bereichePlatz(masken, gezeigt.stand, { abschnitte, s: schrittMs }) : undefined,
+    [abschnitte, gezeigt, masken, schrittMs],
   );
   const schliessenRef = useRef(onClose);
   schliessenRef.current = onClose;
@@ -496,7 +600,13 @@ export function SchnittEditor({
       {createPortal(
         <>
           {createPortal(wiedergabeFlaeche, ueberKnoten)}
-          {createPortal(zeitleiste, unterKnoten)}
+          {createPortal(
+            <>
+              {maskenLage}
+              {zeitleiste}
+            </>,
+            unterKnoten,
+          )}
         </>,
         document.body,
       )}
@@ -509,6 +619,9 @@ export function SchnittEditor({
           ohneEntwurf
           titel={titel}
           gesperrt={!bereit}
+          bereicheMax={platz?.max}
+          bereicheGrund={platz?.grund}
+          verlaufAnpassen={verlaufMitMasken}
           onAenderung={aenderung}
           onClose={schliessen}
           onDokument={nichts}
@@ -547,6 +660,38 @@ export function SchnittEditor({
 
 /** Der Fotoeditor, der nur neu rechnet, wenn sich seine Angaben ändern. */
 const RuhigerEditor = memo(BildEditor);
+
+/** Was der Editor gerade zeigt – Bild, Dokument und Abschnitt, siehe oben. */
+interface Anzeige {
+  readonly id: string;
+  readonly ms: number;
+  /** Was der Editor als Bild bekommt – nach einem Neuladen eine neue Hülle. */
+  readonly blob: Blob;
+  readonly doc: BildDoc;
+  /** Für welche `fassung` zusammengesetzt wurde. */
+  readonly fassung: string;
+  readonly stand: Gezeigt;
+}
+
+/**
+ * Der Rückgängig-Verlauf über einen Bildwechsel: Jeder alte Stand behält
+ * Licht, Farbe und Zuschnitt, bekommt aber die Masken des neuen Bildes.
+ *
+ * Die Masken eines alten Stands gehörten zu einem anderen Bild; über dieses
+ * gelegt, sässen sie falsch. Und sie zurückzuholen hiesse für `routen`
+ * nichts: Die Teile sind dieselben wie ausgegeben, also bleibt alles, wie es
+ * ist.
+ */
+function verlaufMitMasken(eintrag: BildDoc, neu: BildDoc): BildDoc {
+  return { ...eintrag, bereiche: neu.bereiche };
+}
+
+/** „A", „A und B", „A, B und C" – mit Anführungszeichen. */
+function aufzaehlen(namen: readonly string[]): string {
+  const mit = namen.map((name) => `„${name}“`);
+  if (mit.length <= 1) return mit[0] ?? '';
+  return `${mit.slice(0, -1).join(', ')} und ${mit[mit.length - 1]}`;
+}
 
 const nichts = () => undefined;
 

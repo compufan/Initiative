@@ -603,6 +603,189 @@
   z-index: 3;
 }
 
+/* ---------- Die Masken in der Zeitleiste – siehe `Maskenbahnen.tsx` ---------- */
+
+/*
+ * Die Bahnen liegen unter den Abschnitten, genau so breit wie sie: Jede
+ * Spalte der Leinwand ist dieselbe Filmzeit wie darüber. Nichts wird
+ * abgeschnitten – die Griffe reichen mit ihrem Trefferfeld über die Bahn
+ * hinaus, und ein schmaler Streifen soll trotzdem zu treffen sein.
+ */
+.mb {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  touch-action: none;
+  cursor: pointer;
+}
+
+.mb.ist-lesend {
+  cursor: default;
+}
+
+.mb-zeile {
+  position: relative;
+  border-radius: 3px;
+  background: var(--surface-2);
+}
+
+.mb-zeile.ist-gewaehlt {
+  box-shadow: 0 0 0 1px var(--mb-farbe, var(--accent));
+}
+
+.mb-leinwand {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+}
+
+/* Die Farbe der Maske am linken Rand – auch dort, wo sie nirgends gilt. */
+.mb-streifen {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  border-radius: 3px 0 0 3px;
+  background: var(--mb-farbe, var(--accent));
+  pointer-events: none;
+}
+
+/* Breiter als er aussieht – wie `.zl-griff`. */
+.mb-griff {
+  position: absolute;
+  top: -9px;
+  bottom: -9px;
+  width: 26px;
+  margin-left: -13px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: ew-resize;
+  touch-action: none;
+  z-index: 2;
+}
+
+.mb-griff::before {
+  content: '';
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  left: 10px;
+  width: 6px;
+  border-radius: var(--radius-full);
+  background: var(--mb-farbe, var(--accent));
+  box-shadow: 0 0 0 1px rgba(4, 8, 20, 0.6);
+}
+
+.mb-griff:focus-visible::before {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mb-farbe, var(--accent)) 45%, transparent);
+}
+
+/* Ein Ende, das über den Film hinausreicht: nur ein Zeichen, kein Griff. */
+.mb-ueber {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  color: var(--mb-farbe, var(--accent));
+  font-size: 0.7rem;
+  line-height: 1;
+  pointer-events: none;
+}
+
+/*
+ * Die Einstellungen der gewählten Maske – statt der Knopfzeile. Auf einem
+ * Telefon passen sie nicht in eine Zeile; sie lassen sich seitlich
+ * schieben, statt die Bühne um eine zweite Zeile zu kürzen.
+ */
+.zl-leiste.mb-chips {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.zl-leiste.mb-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.mb-chips .btn {
+  flex: none;
+  white-space: nowrap;
+}
+
+.mb-chips .btn.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.mb-name {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 45vw;
+  overflow: hidden;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mb-punkt {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--mb-farbe, var(--accent));
+}
+
+.mb-stand {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.mb-wahl {
+  flex: none;
+  display: inline-flex;
+}
+
+.mb-wahl .btn:first-child {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.mb-wahl .btn:last-child {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.mb-hinweis,
+.mb-lage {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.3;
+  color: var(--text-muted);
+}
+
+.mb-hinweis {
+  color: var(--warning);
+}
+
+.mb-lage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mb-lage .spinner {
+  width: 10px;
+  height: 10px;
+  border-width: 2px;
+}
+
 /* ---------- Die Zeitleiste im Editor ---------- */
 
 .bild-zeitleiste {
@@ -717,6 +900,36 @@
   .zl-leiste .btn {
     min-width: 32px;
     padding-inline: 6px;
+  }
+}
+
+/*
+ * Kleine Telefone hochkant (375 × 667 und ähnlich): Kopf und Fuss des
+ * Editors nehmen schon 185 Punkte, und mit Masken wird die Zeitleiste
+ * höher. Werkzeuge, Leiste und Knöpfe geben je ein wenig ab, damit das
+ * Bild nicht zu einem Streifen wird – gemessen: mit vier Masken und offenem
+ * Werkzeug bleiben so gut 180 Punkte Bühne statt 66.
+ */
+@media (max-height: 740px) {
+  .bild-editor.mit-zeitleiste .bild-panel,
+  .bild-editor.mit-zeitleiste .bild-panel.ist-ton {
+    max-height: 26vh;
+  }
+
+  .bild-zeitleiste {
+    padding-block: 4px;
+  }
+
+  .bild-zeitleiste .zl {
+    gap: 4px;
+  }
+
+  .bild-zeitleiste .zl-bahn {
+    height: 40px;
+  }
+
+  .bild-zeitleiste .zl-leiste .btn {
+    min-height: 32px;
   }
 }
 

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { Sheet } from '../../components/Sheet.js';
 import { toast } from '../../state/ui.js';
-import { neuesDoc, type BildDoc } from '../bild/doc.js';
+import { neuesDoc } from '../bild/doc.js';
 import { errorMessage } from '../media/helpers.js';
 import { AbbruchError } from '../stickers/engines/index.js';
 import {
@@ -12,18 +12,21 @@ import {
   filmZeitpunkte,
 } from './ausschnitt.js';
 import { masse, videoBilderLesen } from './bilderLesen.js';
-import { hatFormTeile, inhaltsTeile } from './bildweise.js';
 import {
   MAX_BILDER_FILM,
   dauerText,
   filmDauerSchaetzenMs,
   maxBilderFuer,
 } from './einstellungen.js';
+import { useVorschauDoc } from './filmDoc.js';
 import { springenZu, useFilmWiedergabe } from './filmWiedergabe.js';
+import { maskenStand, type MaskenLeiste } from './Maskenbahnen.js';
+import { bildDocAn } from './masken.js';
+import { bildIndex } from './raster.js';
 import { SchnittEditor } from './SchnittEditor.js';
 import { useBearbeiteteVorschau } from './vorschau.js';
 import { filmZuQuelle } from './schnitt.js';
-import { nochOffen, useSchnitt } from './schnittZustand.js';
+import { useSchnitt } from './schnittZustand.js';
 import { videoTauglich } from './schreiben.js';
 import {
   BAUSCHRITT_TITEL,
@@ -136,37 +139,21 @@ export function VideoEditorSheet({
 
   /*
    * Auch das Blatt zeigt den Film MIT Bearbeitung – so, wie er herauskommt:
-   * zugeschnitten und in die Filmgrösse eingepasst. Noch ohne Bereiche; deren
-   * Masken gehören zu je einem Stellbild (siehe `SchnittEditor`).
+   * zugeschnitten, in die Filmgrösse eingepasst und mit den Masken, so weit
+   * sie verfolgt sind (`filmDoc.ts`).
    */
   const leinwandRef = useRef<HTMLCanvasElement | null>(null);
-  const ohneBereiche = useRef(new WeakMap<BildDoc, BildDoc>());
   const lage = useRef({ spielt: false, nummer: 0, filmMs: 0 });
   lage.current = {
     spielt: wiedergabe.spielt,
     nummer: wiedergabe.nummer,
     filmMs: wiedergabe.spielkopfMs,
   };
-  const docFuer = useCallback(
-    (quelleMs: number): BildDoc | null => {
-      const { spielt, nummer, filmMs } = lage.current;
-      const vermutet = spielt ? nummer : (filmZuQuelle(abschnitte, filmMs)?.nummer ?? nummer);
-      const liegtIn = (i: number) => {
-        const a = abschnitte[i];
-        return a !== undefined && quelleMs >= a.vonMs - 1 && quelleMs < a.bisMs + 1;
-      };
-      let treffer = liegtIn(vermutet) ? vermutet : abschnitte.findIndex((_, i) => liegtIn(i));
-      if (treffer < 0) treffer = vermutet;
-      const doc = abschnitte[treffer]?.doc ?? null;
-      if (!doc || doc.bereiche.length === 0) return doc;
-      let ohne = ohneBereiche.current.get(doc);
-      if (!ohne) {
-        ohne = { ...doc, bereiche: [] };
-        ohneBereiche.current.set(doc, ohne);
-      }
-      return ohne;
-    },
-    [abschnitte],
+  const docFuer = useVorschauDoc(schnitt, lage);
+  const { masken, spuren, spurstand } = schnitt;
+  const neuZeichnen = useMemo(
+    () => [abschnitte, masken, spurstand.version],
+    [abschnitte, masken, spurstand.version],
   );
   const vorschauFilm = useMemo(() => {
     if (!rechenmass) return null;
@@ -182,8 +169,35 @@ export function VideoEditorSheet({
     film: vorschauFilm,
     aktiv: !editorAuf,
     schrittMs,
-    neuZeichnen: abschnitte,
+    neuZeichnen,
   });
+
+  /*
+   * Die Verfolgung ruht, solange der Film im Blatt läuft – wie im Editor.
+   * Solange der Editor offen ist, entscheidet er; sein Video ist dann das
+   * einzige.
+   */
+  useEffect(() => {
+    if (editorAuf) return;
+    spuren.verfolgungRuhen('wiedergabe', wiedergabe.spielt);
+  }, [editorAuf, spuren, wiedergabe.spielt]);
+
+  /* Die Masken im Blatt: nur ansehen – eingestellt wird im Editor. */
+  const maskenLeiste: MaskenLeiste = {
+    masken,
+    gewaehlt: null,
+    quelle: spuren,
+    version: spurstand.version,
+    jeMaske: spurstand.jeMaske,
+    mass: rechenmass,
+    lesend: true,
+    onWaehlen: nichts,
+    onGeltung: () => false,
+    onAn: nichts,
+    onLoeschen: nichts,
+    onTrennen: nichts,
+    onZurueck: nichts,
+  };
 
   /*
    * Zurück aus dem Editor steht das Video des Blatts neu da – auf seinem
@@ -274,16 +288,8 @@ export function VideoEditorSheet({
 
   /* ---------- Was daraus wird ---------- */
 
-  /*
-   * Je Dokument EINMAL gezählt: Nach einem Teilen tragen beide Hälften
-   * dasselbe, und ein Bereich stünde sonst zweimal da.
-   */
-  const teile = [...new Set(abschnitte.map((abschnitt) => abschnitt.doc))].reduce(
-    (summe, doc) => summe + (doc ? inhaltsTeile(doc).length : 0),
-    0,
-  );
-  const formen = abschnitte.some((abschnitt) => abschnitt.doc && hatFormTeile(abschnitt.doc));
-  const bearbeitet = abschnitte.some((abschnitt) => abschnitt.doc !== null);
+  const bearbeitet = abschnitte.some((abschnitt) => abschnitt.doc !== null) || masken.length > 0;
+  const aktiveMasken = masken.filter((maske) => maske.aktiv);
   /*
    * Zwei Grenzen: eine für den ganzen Film (die Wartezeit) und eine für jede
    * Gruppe, deren Bilder zum Verfolgen gesammelt werden (der Speicher).
@@ -293,7 +299,6 @@ export function VideoEditorSheet({
    * die eine andere Grenze verspricht als die, die beim Bauen gilt, zeigt
    * einen Film an, der dann nicht herauskommt.
    */
-  const mitForm = teile > 0 || formen;
   const maxBilder = MAX_BILDER_FILM;
   const maxGepuffert = rechenmass ? maxBilderFuer(rechenmass.b, rechenmass.h) : 1;
   const plan = useMemo(
@@ -305,13 +310,6 @@ export function VideoEditorSheet({
     [abschnitte, bildrate, maxBilder, maxGepuffert],
   );
   const anzahl = plan.zeitpunkte.length;
-  /** Die Bilder, die durch ein Modell gehen – nur die zählen für die Masken. */
-  const unterMaske = plan.stueckJeBild.filter((stueck) => {
-    const doc = abschnitte[stueck]?.doc;
-    return doc ? inhaltsTeile(doc).length > 0 : false;
-  });
-  const maskenBilder = unterMaske.length;
-  const maskenAbschnitte = new Set(unterMaske).size;
 
   /*
    * Der Schlüsselbildabstand hängt an der Bildrate, nicht an einer festen
@@ -321,15 +319,22 @@ export function VideoEditorSheet({
    */
   const schluesselAbstand = Math.max(1, Math.min(4, Math.round(bildrate / 2)));
   /*
-   * Lesen und Schreiben kostet jedes Bild, die Modelle nur die Bilder unter
-   * einer Maske. Jeder Abschnitt mit Maske setzt an beiden Enden neu an –
-   * das zählt wie eine Schnittkante.
+   * Lesen und Schreiben kostet jedes Bild. Die Modelle der Masken laufen
+   * schon vorher, im Hintergrund – was davon noch fehlt, steht darunter.
    */
-  const dauerSchaetzung =
-    filmDauerSchaetzenMs(anzahl - maskenBilder, false, schluesselAbstand) +
-    filmDauerSchaetzenMs(maskenBilder, true, schluesselAbstand, maskenAbschnitte);
-  /** Masken, die noch an ein neues Stellbild mitgenommen werden – bis dahin wird nicht gebaut. */
-  const offen = nochOffen(abschnitte);
+  const dauerSchaetzung = filmDauerSchaetzenMs(anzahl, false, schluesselAbstand);
+  /** Die Verfolgung aller eingeschalteten Masken, zusammengefasst. */
+  const verfolgung = (() => {
+    const staende = aktiveMasken.map((maske) => spurstand.jeMaske.get(maske.id));
+    if (staende.length === 0) return null;
+    const fehler = staende.find((stand) => stand?.fehler)?.fehler;
+    const anteil = Math.min(...staende.map((stand) => stand?.anteil ?? 0));
+    const langsamste = staende.reduce(
+      (bisher, stand) => ((stand?.restMs ?? 0) > (bisher?.restMs ?? 0) ? stand : bisher),
+      staende[0],
+    );
+    return { fehler, anteil, text: maskenStand(langsamste) };
+  })();
 
   /* ---------- Rechnen ---------- */
 
@@ -364,7 +369,7 @@ export function VideoEditorSheet({
 
   const starten = useCallback(
     async (nurBilder?: number) => {
-      if (lauf || abschnitte.length === 0 || nochOffen(abschnitte)) return;
+      if (lauf || abschnitte.length === 0) return;
       wiedergabe.anhalten();
       setNachAbbruch(null);
       const steuer = new AbortController();
@@ -372,6 +377,20 @@ export function VideoEditorSheet({
       setLauf({ anteil: 0, abschnitt: 'lesen', text: 'Bilder holen …' });
       await wachePruefen(true);
       try {
+        /*
+         * Erst müssen die Masken überall verfolgt sein – gebaut wird nur mit
+         * fertigen Spuren, sonst hätte der Film Bilder ohne Maske. Meist ist
+         * das längst geschehen, während geschnitten und eingestellt wurde.
+         */
+        if (aktiveMasken.length > 0) {
+          setLauf({ anteil: 0, abschnitt: 'masken', text: 'Masken werden fertig verfolgt …' });
+          await spuren.spurenFertig(steuer.signal, (anteil, text) =>
+            setLauf({ anteil, abschnitt: 'masken', text }),
+          );
+        }
+        const rahmen = rechenmass
+          ? { abschnitte, s: schrittMs, b: rechenmass.b, h: rechenmass.h }
+          : null;
         const fertig = await videoAusVideo({
           datei: video,
           stuecke: abschnitte,
@@ -391,6 +410,12 @@ export function VideoEditorSheet({
           maxGepuffert,
           fortschritt: (anteil, abschnitt, text) => setLauf({ anteil, abschnitt, text }),
           abbruch: steuer.signal,
+          // Je Bild die Masken des Films dazu – verfolgt, nicht geschätzt.
+          bildDoc:
+            masken.length > 0 && rahmen
+              ? (zeitMs, _stueck, doc) =>
+                  bildDocAn(doc, masken, spuren, bildIndex(zeitMs, schrittMs), 'bild', rahmen).doc
+              : undefined,
         });
         setErgebnis({
           url: URL.createObjectURL(fertig.blob),
@@ -426,9 +451,14 @@ export function VideoEditorSheet({
       bildrate,
       kante,
       lauf,
+      aktiveMasken.length,
+      masken,
       maxBilder,
       maxGepuffert,
+      rechenmass,
       schluesselAbstand,
+      schrittMs,
+      spuren,
       video,
       wachePruefen,
       wiedergabe,
@@ -566,7 +596,6 @@ export function VideoEditorSheet({
                 vorschau={vorschau}
                 spielt={wiedergabe.spielt}
                 gesperrt={lauf !== null}
-                beschaeftigt={schnitt.beschaeftigt}
                 onSpielkopf={(filmMs, fertig) => {
                   wiedergabe.setzen(filmMs);
                   if (!fertig) return;
@@ -608,6 +637,7 @@ export function VideoEditorSheet({
                   wiedergabe.anhalten();
                   schnitt.dazu();
                 }}
+                masken={maskenLeiste}
               />
               <p className="vg-hinweis">
                 {abschnitte.length > 1 && `${abschnitte.length} Abschnitte · `}
@@ -702,33 +732,23 @@ export function VideoEditorSheet({
 
           <p className="vg-hinweis">
             {/*
-                Drei Lagen, und der Unterschied zwischen der zweiten und der
-                dritten ist nicht offensichtlich.
-
-                Bei INHALTSTEILEN (Netz, Tiefe, Antippen) läuft ein Modell, und
-                das kostet Minuten. Dazwischen liegt der Fall, der lange falsch
-                beschrieben war: ein Verlauf, eine Ellipse, ein Pinselstrich.
-                Der hängt nicht am Bildinhalt und braucht kein Modell – aber er
-                muss mit der Kamera mitwandern, und dafür wird die Bewegung
-                über seinen Abschnitt geschätzt. Also liegen dessen Bilder
-                gleichzeitig im Speicher, und genau daran hängt die kleinere
-                Obergrenze je Abschnitt oben.
+                Masken sind keine Sache des Filmbaus mehr: Sie werden
+                verfolgt, während geschnitten und eingestellt wird, und die
+                Zeitleiste zeigt, wo sie zu sehen sind. Hier steht nur noch,
+                wie weit das ist – und dass gebaut wird, sobald es fertig ist.
             */}
             {!bearbeitet
               ? 'Noch nichts eingestellt – der Film käme geschnitten, sonst aber so heraus, wie er hineingeht. Im Editor wird jeder Abschnitt für sich bearbeitet; teilen, kürzen und verschieben geht dort ebenso.'
-              : teile > 0
-                ? `${teile === 1 ? 'Ein Bereich hängt' : `${teile} Bereiche hängen`} am Bildinhalt – Netz, Tiefe oder Antippen. Die werden auf jedem ${schluesselAbstand === 1 ? 'Bild' : `${schluesselAbstand}. Bild`} neu gerechnet und folgen dazwischen dem Gegenstand. Das dauert.`
-                : mitForm
-                  ? 'Ein Bereich beschreibt eine Form – Verlauf, Ellipse oder Pinselstrich. Der wandert mit der Kamera mit, dafür wird die Bewegung über seinen Abschnitt geschätzt. Kein Modell, aber dessen Bilder liegen auf einmal im Speicher.'
-                  : 'Die Bearbeitung gilt für jedes Bild eines Abschnitts gleich. Das geht schnell, und die Bilder werden einzeln durchgereicht statt gesammelt.'}
+              : aktiveMasken.length > 0
+                ? `${aktiveMasken.length === 1 ? 'Eine Maske gilt' : `${aktiveMasken.length} Masken gelten`} im Film und ${aktiveMasken.length === 1 ? 'wird' : 'werden'} im Hintergrund Bild für Bild verfolgt – die Zeitleiste zeigt, wo sie zu sehen ${aktiveMasken.length === 1 ? 'ist' : 'sind'}.${
+                    verfolgung?.fehler
+                      ? ` ${verfolgung.fehler}`
+                      : verfolgung && verfolgung.anteil < 1
+                        ? ` Verfolgt: ${verfolgung.text}. Gebaut wird, sobald alles fertig ist.`
+                        : ' Alles verfolgt.'
+                  }`
+                : 'Die Bearbeitung gilt für jedes Bild eines Abschnitts gleich. Das geht schnell, und die Bilder werden einzeln durchgereicht statt gesammelt.'}
           </p>
-
-          {offen && !lauf && (
-            <p className="vg-hinweis">
-              <span className="spinner" aria-hidden="true" /> Masken werden an ein neues Stellbild
-              mitgenommen – danach lässt sich der Film bauen.
-            </p>
-          )}
 
           {lauf && (
             <div className="stk-lauf">
@@ -766,7 +786,6 @@ export function VideoEditorSheet({
                 <button
                   type="button"
                   className="btn btn-primary"
-                  disabled={offen}
                   onClick={() => void starten(nachAbbruch)}
                 >
                   Ja, aus {nachAbbruch} Bildern
@@ -779,7 +798,7 @@ export function VideoEditorSheet({
             <button
               type="button"
               className="btn btn-primary"
-              disabled={absage !== null || anzahl === 0 || abschnitte.length === 0 || offen}
+              disabled={absage !== null || anzahl === 0 || abschnitte.length === 0}
               onClick={() => void starten()}
             >
               Film bauen
@@ -790,6 +809,8 @@ export function VideoEditorSheet({
     </>
   );
 }
+
+const nichts = () => undefined;
 
 /** Sekunden mit einer Nachkommastelle, deutsch – und nie „0". */
 function sekundenText(sekunden: number): string {
