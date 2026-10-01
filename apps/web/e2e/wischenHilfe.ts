@@ -533,6 +533,11 @@ export async function schreiberEinsetzen(
         return Math.max(d[0], d[1], d[2]) - Math.min(d[0], d[1], d[2]);
       };
 
+      fe.__maskenProbe = (wahl: string, k: number): number => {
+        const flaeche = document.querySelector(wahl) as HTMLCanvasElement | null;
+        return flaeche ? maskenProbe(flaeche, k) : -1;
+      };
+
       const sicht = (el: Element | null) => (el && !(el as HTMLElement).hidden ? 1 : 0);
       let letztes = -1;
       // Gelesen wird NACH dem Anzeigetakt (setTimeout 0 im Rückruf): Dann haben alle Rückrufe des Takts

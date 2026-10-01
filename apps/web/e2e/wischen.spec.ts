@@ -12,6 +12,7 @@ import {
   abschnitteDazu,
   auswerten,
   editorOeffnen,
+  lageLesen,
   bitmapEntfernen,
   maskeAnlegen,
   maskeFertig,
@@ -595,6 +596,75 @@ test.describe('Wischen aus dem Speicher – mit Masken', () => {
       ).toBeGreaterThanOrEqual(0.9);
       expect(l.a.verfolgerLesen ?? 0, `${name}: Lesungen der Verfolgung im Zug`).toBe(0);
     }
+  });
+  test('im Zug sitzt die Maske wie am Standbild – an denselben Bildern', async () => {
+    test.setTimeout(240_000);
+    if (!aufbau) return;
+    /*
+     * Bild und Maske gehören zum selben Rasterbild: Was der Zug an Bild k
+     * zeigt, ist dieselbe Zeichnung wie das Standbild des Editors an Bild k –
+     * mit der Maske, wo die Verfolgung sie hat, ohne sie, wo nicht (auf
+     * diesem Film läuft die Verfolgung zwischen Bild 30 und 160 an dem
+     * Quadrat vorbei: Beides kommt vor). Verglichen wird die Sättigung in
+     * der Mitte des Quadrats.
+     */
+    await maskeVerfolgt(aufbau.editor, 300_000);
+    await sprungSetzen(page, 0);
+    const lage = await lageLesen(page);
+    const film = lage.gesamtMs / lage.umfangMs;
+    const xFuer = (k: number) =>
+      lage.links + 1 + ((k * S + S / 2) / lage.gesamtMs) * film * (lage.breite - 2);
+    const probe = (wahl: string) =>
+      page.evaluate((w) => {
+        const f = window as unknown as {
+          __maskenProbe: (w: string, k: number) => number;
+          __vorschau: { letzteK: number; aus: string };
+        };
+        return {
+          k: f.__vorschau.letzteK,
+          aus: f.__vorschau.aus,
+          px: f.__maskenProbe(w, f.__vorschau.letzteK),
+        };
+      }, wahl);
+    const gesehen: Array<{ k: number; zug: number; still: number }> = [];
+    for (const k of [60, 110, 150, 210, 250]) {
+      await page.mouse.move(xFuer(Math.max(2, k - 40)), lage.y);
+      await page.mouse.down();
+      for (let i = 1; i <= 8; i += 1) {
+        await page.mouse.move(
+          xFuer(Math.max(2, k - 40) + ((k - Math.max(2, k - 40)) * i) / 8),
+          lage.y,
+        );
+        await page.waitForTimeout(20);
+      }
+      // Kurz nach dem letzten Ereignis: das Bild aus dem Speicher – oder, wenn der Treiber länger
+      // brauchte, schon das scharfe aus dem Video; die Maske muss an beiden sitzen.
+      await page.waitForTimeout(50);
+      const zug = await probe('.bild-editor canvas.bild-wiedergabe-bild');
+      await page.mouse.up();
+      await expect(aufbau.editor.locator('.bild-wiedergabe')).toBeHidden({ timeout: 30_000 });
+      await page.waitForTimeout(300);
+      const still = await page.evaluate(
+        ([w, bild]) =>
+          (window as unknown as { __maskenProbe: (w: string, k: number) => number }).__maskenProbe(
+            w as string,
+            bild as number,
+          ),
+        ['.bild-editor canvas.bild-leinwand', zug.k] as const,
+      );
+      gesehen.push({ k: zug.k, zug: zug.px, still });
+    }
+    const text = JSON.stringify(gesehen);
+    for (const g of gesehen) {
+      expect(g.zug >= 40, `Bild ${g.k}: Zug ${g.zug}, Standbild ${g.still} – ${text}`).toBe(
+        g.still >= 40,
+      );
+    }
+    // Beides kommt vor: mit und ohne Maske – sonst prüfte der Vergleich nichts.
+    expect(
+      gesehen.some((g) => g.still < 40),
+      text,
+    ).toBe(true);
   });
 });
 
