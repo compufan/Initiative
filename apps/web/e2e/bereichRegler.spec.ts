@@ -446,24 +446,35 @@ test('im gebauten Film wirken Weichzeichnen und Bokeh in jedem Bild – im Berei
       probe.height = video.videoHeight;
       const pctx = probe.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D;
       const aus: { mitte: number; rand: number }[] = [];
+      const zeile = (x0: number, x1: number) => {
+        const y = Math.floor(probe.height / 2);
+        const d = pctx.getImageData(0, y, probe.width, 1).data;
+        let summe = 0;
+        let n = 0;
+        for (let x = Math.floor(probe.width * x0); x < Math.floor(probe.width * x1) - 1; x += 1) {
+          summe += Math.abs(d[x * 4] - d[(x + 1) * 4]);
+          n += 1;
+        }
+        return summe / n;
+      };
       for (const bild of [0, 2, 4]) {
         await new Promise<void>((auf) => {
           video.onseeked = () => auf();
           video.currentTime = bild / 10 + 0.001;
         });
-        pctx.drawImage(video, 0, 0);
-        const zeile = (x0: number, x1: number) => {
-          const y = Math.floor(probe.height / 2);
-          const d = pctx.getImageData(0, y, probe.width, 1).data;
-          let summe = 0;
-          let n = 0;
-          for (let x = Math.floor(probe.width * x0); x < Math.floor(probe.width * x1) - 1; x += 1) {
-            summe += Math.abs(d[x * 4] - d[(x + 1) * 4]);
-            n += 1;
-          }
-          return summe / n;
-        };
-        aus.push({ mitte: zeile(0.4, 0.6), rand: zeile(0.02, 0.15) });
+        /*
+         * Ein Bild, das der Browser noch nicht dekodiert hat, kommt als leere
+         * Fläche heraus – auf einem ausgelasteten Rechner gar nicht so selten.
+         * Der Rand trägt in jedem echten Bild Streifen; ist er glatt, wird
+         * kurz gewartet und noch einmal gelesen.
+         */
+        let mass = { mitte: 0, rand: 0 };
+        for (let versuch = 0; versuch < 20 && mass.rand === 0; versuch += 1) {
+          if (versuch > 0) await new Promise((auf) => setTimeout(auf, 100));
+          pctx.drawImage(video, 0, 0);
+          mass = { mitte: zeile(0.4, 0.6), rand: zeile(0.02, 0.15) };
+        }
+        aus.push(mass);
       }
       return aus;
     };
