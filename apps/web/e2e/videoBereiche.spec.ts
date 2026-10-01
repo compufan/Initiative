@@ -194,8 +194,6 @@ interface Probe {
   readonly b: number[];
   /** Zwei Stellen des Grunds, die nie ein Quadrat berühren. */
   readonly grund: number[][];
-  /** Ob A zu dieser Zeit noch mit seinem Kern im Bild ist. */
-  readonly aImBild: boolean;
 }
 
 /**
@@ -239,10 +237,10 @@ async function filmAbtasten(page: Page, zeiten: number[], bx: number): Promise<P
         const n = Math.floor(t * 10 + 1e-6);
         raus.push({
           t,
-          a: punkt(30 + 8 * n, 80),
+          // Die Mitte des SICHTBAREN Teils: Läuft A hinaus, liegt seine Mitte schon draussen.
+          a: punkt(Math.floor((10 + 8 * n + Math.min(50 + 8 * n, 319)) / 2), 80),
           b: punkt(bx + 20, 30 + 4 * n),
           grund: [punkt(10, 230), punkt(150, 235)],
-          aImBild: 30 + 8 * n < 316,
         });
       }
       return raus;
@@ -259,7 +257,8 @@ const aufgehellt = ([, g]: number[]) => g > 225;
 /** B unbearbeitet (#f0b040) – kräftig gelb-orange, nicht grau, nicht aufgehellt. */
 const unveraendert = ([r, g, b]: number[]) => r > 200 && g > 150 && g < 205 && b < 110;
 
-const ZEITEN = [0.05, 0.45, 0.85, 1.25, 1.65, 2.05, 2.45, 2.85, 3.25];
+/** Bis 3,65 s: Dann ist A (bei 3,9 s ganz draussen) noch zu mehr als der Hälfte im Bild. */
+const ZEITEN = [0.05, 0.45, 0.85, 1.25, 1.65, 2.05, 2.45, 2.85, 3.25, 3.65];
 
 test('zwei Bereiche, zwei Gegenstände: im fertigen Film trägt jeder seine eigene Bearbeitung', async ({
   page,

@@ -156,9 +156,12 @@ async function messen(szene: Szene, art: 'netz' | 'tipp', anzahl = 40) {
     // Das Netz wird an seiner eigenen Wahrheit gemessen (alles Rote), die
     // Flutung an der Flutung von der wahren Mitte aus – beide mit derselben
     // Kante wie das, was sie prüfen.
+    // Liegt die Mitte schon draussen, gibt es nichts zu fluten – dann gilt, was
+    // von der Scheibe noch zu sehen ist.
+    const mitteDrin = m !== null && m.x >= 0 && m.x < B && m.y >= 0 && m.y < H;
     const wahr = !m
       ? new Uint8Array(B * H)
-      : art === 'tipp'
+      : art === 'tipp' && mitteDrin
         ? flutmaske(b.daten, [m], 40)
         : rot(b.daten);
     const maske = jeBild[n].get(eintrag.teil.id)?.werte ?? new Uint8Array(B * H);
@@ -262,8 +265,12 @@ describe('Masken folgen ihrem Gegenstand', () => {
     /*
      * Die Punkte blieben am Rand stehen, auf dem Hintergrund; die Flutung
      * griff von dort nach allem, was ähnlich aussah, und nach drei
-     * Ablehnungen galt das: 83 % des Bildes, bis zum Ende. Jetzt fallen
-     * Punkte, die das Bild verlassen, weg.
+     * Ablehnungen galt das: 83 % des Bildes, bis zum Ende. Jetzt wandern
+     * Punkte, die das Bild verlassen, in den noch sichtbaren Teil der
+     * Vorhersage – oder fallen weg, wenn dort nichts mehr ist.
+     *
+     * Ab Bild 18 ist die Scheibe ganz draussen: Dann darf nichts stehen
+     * bleiben, auch kein Streifen, der der Vorhersage noch gefolgt wäre.
      */
     const szene: Szene = {
       mitte: (n) => (n < 20 ? { x: 200 + 8 * n, y: 90 } : null),
@@ -272,8 +279,31 @@ describe('Masken folgen ihrem Gegenstand', () => {
     };
     const erg = await messen(szene, 'tipp', 40);
     const text = erg.werte.map((w) => w.toFixed(2)).join(' ');
-    expect(Math.min(...erg.werte.slice(15)), text).toBe(1);
+    expect(Math.min(...erg.werte.slice(18)), text).toBe(1);
     expect(Math.min(...erg.werte.slice(0, 14)), text).toBeGreaterThan(0.9);
+  }, 30_000);
+
+  it('bleibt auf dem sichtbaren Rest, solange ein Gegenstand halb hinaus ist', async () => {
+    /*
+     * Die Mitte, an der angetippt wurde, verlässt das Bild, wenn die Scheibe
+     * erst zur Hälfte draussen ist. Vorher fielen die Punkte dann weg und
+     * die Maske verschwand bei 20 von 40 Spalten noch im Bild – gemessen mit
+     * einem Quadrat: Deckung 0,00 ab da, obwohl die Hälfte zu sehen war.
+     *
+     * Hier läuft die Scheibe nach und nach hinaus (Mitte bei 150 + 8n; ab
+     * Bild 22 liegt sie draussen, ab 24 ist nichts mehr von ihr im Bild).
+     */
+    const szene: Szene = {
+      mitte: (n) => ({ x: 150 + 8 * n, y: 90 }),
+      kamera: ruhig,
+      gemustert: true,
+    };
+    const erg = await messen(szene, 'tipp', 36);
+    const text = erg.werte.map((w) => w.toFixed(2)).join(' ');
+    // Solange mindestens ein Drittel der Scheibe zu sehen ist (bis Bild 22), sitzt die Maske darauf.
+    expect(Math.min(...erg.werte.slice(0, 23)), text).toBeGreaterThan(0.5);
+    // Und danach bleibt nichts zurück.
+    expect(Math.min(...erg.werte.slice(25)), text).toBe(1);
   }, 30_000);
 
   it('folgt einem Gegenstand, der ins Bild hereinkommt', async () => {
