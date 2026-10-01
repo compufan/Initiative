@@ -325,11 +325,3 @@ export function appsFuer(plattform: Plattform, modus: Modus, ziel: Ziel): Karten
     .filter((app): app is KartenApp => app !== undefined && app.plattformen.includes(plattform))
     .filter((app) => modus === 'karte' || routeUrl(app.key, ziel) !== null);
 }
-
-export function kartenApp(key: KartenAppKey): KartenApp {
-  const app = KARTEN_APPS.find((eintrag) => eintrag.key === key);
-  // `KartenAppKey` ist die Vereinigung der Schlüssel der Tabelle oben; ein
-  // Fehlen wäre ein Programmierfehler und kein Zustand, den man abfangen soll.
-  if (!app) throw new Error(`Unbekannte Karten-App: ${key}`);
-  return app;
-}

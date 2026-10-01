@@ -235,6 +235,7 @@ test('Anna legt einen Termin mit Adresse an, Bodo sieht Karte und Chatkarte', as
   await expect(bodo.page).toHaveURL(new RegExp(`/chats/${s.gruppe.id}$`));
   await bodo.page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
+  await verlaufBereinigt(bodo.page);
 
   // Der Tipp auf den Kartenkopf führt weiter zum Termin.
   await karte.locator('.cal-bubble-head').click();
@@ -357,6 +358,7 @@ test('Detailansicht: Blatt, Links, OpenStreetMap ohne Referer, Wahl wird gemerkt
   expect(await gemerkt(bodo.page)).toBe('osm');
 
   // ---- Wahl gemerkt: Neuladen, die Adresse ist jetzt ein echter Link ----
+  await verlaufBereinigt(bodo.page);
   await bodo.page.reload();
   const link = bodo.page.locator('.cal-detail-facts a.ort-link');
   await expect(link).toBeVisible({ timeout: 15_000 });
@@ -603,6 +605,7 @@ test('Orte ohne Adresse: Suchangebot, kein Kartenelement, Web-Link in den Browse
   );
   await bodo.page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
+  await verlaufBereinigt(bodo.page);
 
   // ---- Zoom, Online: ein Wort, kein Kartenelement ----
   for (const [termin, wort] of [

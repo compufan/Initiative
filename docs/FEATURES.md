@@ -744,8 +744,9 @@ muss.
   mit einem Namen davor („Vereinsheim, Hauptstr. 5, …"), oder **Koordinaten**
   wie „48.13743, 11.57549" –, erkennt die App sie und macht daraus einen Link.
   Das gilt in der **Detailansicht** und auf der **Chatkarte**, bei allen
-  Eingeladenen. Der Name und Beiwerk wie „3. OG" bleiben Text; verlinkt wird
-  die Adresse.
+  Eingeladenen. Ein Name davor bleibt Text; verlinkt wird die Adresse. Etage
+  oder Aufgang dazwischen („Hauptstr. 5, 3. OG, 12345 Berlin") liegen im Link,
+  gehen aber nicht an die Karten-App – strenge Suchen scheitern daran.
 - Ein Tipp auf die Adresse öffnet das Blatt **„Öffnen mit"**. Es zeigt die
   Karten-Apps, die auf deinem Gerät in Frage kommen: die **Standard-Karten-App**
   (nur Android, dort fragt das System bei mehreren nach), **Apple Karten**

@@ -174,7 +174,7 @@ const LAENDER = String.raw`(?:Deutschland|Germany|Österreich|Austria|Schweiz|Sw
  * Karte geht: Etage, Aufgang, Raum, ein Klammerzusatz. Der Link liegt trotzdem über der ganzen
  * Adresse, wie der Mensch sie geschrieben hat.
  */
-const BEIWERK = String.raw`^(?:[\s,;–-]*(?:\d{1,2}\.?\s*(?:OG|Stock|Etage|Obergeschoss)|[EU]G|Hinterhaus|Vorderhaus|Aufgang\s*\w|Haus\s*\w|Raum\s*[\d.]+|Zimmer\s*[\d.]+|Eingang\s*\w|\([^()]{1,40}\)))*[\s,;–-]*$`;
+const BEIWERK = String.raw`^(?:[\s,;–/|·•-]*(?:\d{1,2}\.?\s*(?:OG|Stock|Etage|Obergeschoss)|[EU]G|Hinterhaus|Vorderhaus|Aufgang\s*\w|Haus\s*\w|Raum\s*[\d.]+|Zimmer\s*[\d.]+|Eingang\s*\w|\([^()]{1,40}\)))*[\s,;–/|·•-]*$`;
 
 /* ---------- Das Regelwerk, erst beim ersten Gebrauch gebaut ---------- */
 

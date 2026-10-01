@@ -5,7 +5,6 @@ import {
   appsFuer,
   bereinige,
   karteUrl,
-  kartenApp,
   kodiere,
   plattformErkennen,
   punktGueltig,
@@ -340,10 +339,5 @@ describe('Tabelle der Apps', () => {
     for (const app of KARTEN_APPS.filter((eintrag) => eintrag.imBrowser)) {
       expect(karteUrl(app.key, ADRESSE).startsWith('https://')).toBe(true);
     }
-  });
-
-  it('kennt jeden Schlüssel', () => {
-    for (const key of ALLE) expect(kartenApp(key).key).toBe(key);
-    expect(() => kartenApp('nirgends' as KartenAppKey)).toThrow();
   });
 });

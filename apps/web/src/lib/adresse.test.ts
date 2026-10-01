@@ -178,6 +178,30 @@ const ADRESSEN: [string, Sicherheit, string, string][] = [
   ['Lindenweg 4 Hintereingang', 'sicher', 'Lindenweg 4', 'Lindenweg 4'],
   ['Hauptstr. 5, Hinterhaus', 'sicher', 'Hauptstr. 5', 'Hauptstr. 5'],
   // Trenner zwischen Strasse und Postleitzahl
+  [
+    'Hauptstr. 5 / 12345 Berlin',
+    'sicher',
+    'Hauptstr. 5 / 12345 Berlin',
+    'Hauptstr. 5, 12345 Berlin',
+  ],
+  [
+    'Hauptstr. 5 | 12345 Berlin',
+    'sicher',
+    'Hauptstr. 5 | 12345 Berlin',
+    'Hauptstr. 5, 12345 Berlin',
+  ],
+  [
+    'Hauptstr. 5 · 12345 Berlin',
+    'sicher',
+    'Hauptstr. 5 · 12345 Berlin',
+    'Hauptstr. 5, 12345 Berlin',
+  ],
+  [
+    'Hauptstr. 5 (Hinterhof), 12345 Berlin',
+    'sicher',
+    'Hauptstr. 5 (Hinterhof), 12345 Berlin',
+    'Hauptstr. 5, 12345 Berlin',
+  ],
   ['Hauptstr. 5 12345 Berlin', 'sicher', 'Hauptstr. 5 12345 Berlin', 'Hauptstr. 5, 12345 Berlin'],
   [
     'Hauptstr. 5 - 12345 Berlin',
@@ -410,6 +434,13 @@ describe('Was keine Adresse ist', () => {
     it('Strassen ohne Typwort und ohne bekanntes Beiwort werden nicht erkannt', () => {
       // bekannte Grenze
       expect(ortAnalysieren('Hafenkante 3').sicherheit).toBe('offen');
+    });
+
+    it('Ein Beiwort auf -er vor einer zusammengesetzten Strasse bleibt aussen', () => {
+      // bekannte Grenze: „Rosenheimer“ gehört zum Namen, ist aber von einem
+      // Namen vor der Adresse („Becker Hauptstr. 5“) nicht zu unterscheiden.
+      // Lieber die Strasse allein verlinken als einen Namen in die Suche ziehen.
+      expect(adressFund('Rosenheimer Landstraße 23').text).toBe('Landstraße 23');
     });
 
     it('Ort VOR der Strasse: der Kern ist dann nur die Strasse', () => {
