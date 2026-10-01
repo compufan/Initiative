@@ -18,8 +18,14 @@ import {
   type Maske,
 } from './masken.js';
 import { leserDienst, type Leserdienst } from './leserDienst.js';
-import { filmRaster } from './raster.js';
-import { leereSpuren, spurdienstFuer, type Spurdienst, type Spurstand } from './spurdienst.js';
+import { filmRaster, type Filmbild } from './raster.js';
+import {
+  leereSpuren,
+  spurdienstFuer,
+  type Ruhegrund,
+  type Spurdienst,
+  type Spurstand,
+} from './spurdienst.js';
 import {
   abschnittDazu,
   abschnittEntfernen,
@@ -32,6 +38,8 @@ import {
   verlegungVermerken,
   type Abschnitt,
 } from './schnitt.js';
+import { SPEICHER_VOLL } from './verfolger.js';
+import { Wischspeicher, type WischStand } from './wischspeicher.js';
 
 /**
  * Die Abschnitte eines Films samt allem, was an ihnen gerechnet wird.
@@ -91,6 +99,25 @@ export interface SchnittZustand {
    */
   readonly leser: Leserdienst;
   readonly spurstand: Spurstand;
+  /**
+   * Alle Bilder des Films in Filmreihenfolge – `{ stelle, nummer, k }` –,
+   * genau die, die der Filmbau holt (`filmRaster`). Der Massstab für „welches
+   * Bild liegt unter dem Finger": Er läuft über den Film und nicht über das
+   * `mediaTime` eines Videobildes.
+   */
+  readonly filmBilder: readonly Filmbild[];
+  /**
+   * Die kleinen Bilder des Films für das Wischen (`wischspeicher.ts`) – `null`
+   * bis zum Effekt. Gefüllt aus dem EINEN Dekodierer der Sitzung (`leser`).
+   */
+  readonly wisch: Wischspeicher | null;
+  readonly wischStand: WischStand;
+  /**
+   * Verfolgung UND Wischspeicher innehalten lassen, solange ein Grund
+   * besteht – ein Aufruf statt zwei, damit keine Stelle einen von beiden
+   * vergisst.
+   */
+  ruhen(grund: Ruhegrund, an: boolean): void;
   /** Geteilt von Editor und Vorschau: dieselben Teile für dasselbe Bild. */
   readonly speicher: Kompositspeicher;
   /**
@@ -173,6 +200,24 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
   const leser = useMemo(() => leserDienst(datei, kante, schrittMs), [datei, kante, schrittMs]);
   useEffect(() => () => leser.schliessen(), [leser]);
   /*
+   * Die Bilder des Films, so wie der Filmbau sie holt. Nach den GRENZEN der
+   * Abschnitte gerechnet und nicht nach jeder Änderung der Liste: Jeder
+   * Reglerschritt ersetzt die Abschnitte, an den Bildern ändert er nichts.
+   */
+  const grenzenSchluessel = useMemo(
+    () =>
+      abschnitte
+        .map((abschnitt) => `${abschnitt.id}:${abschnitt.vonMs}:${abschnitt.bisMs}`)
+        .join('|'),
+    [abschnitte],
+  );
+  const raster = useMemo(
+    () => filmRaster(liste.current, schrittMs, MAX_BILDER_FILM),
+    // `liste.current` ist die Liste zu diesem Schlüssel; `abschnitte` selbst gehört nicht hinein.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [grenzenSchluessel, schrittMs],
+  );
+  /*
    * Angelegt in einem Effekt, nicht in `useMemo`: Der Verfolger rechnet ab
    * seiner Geburt und muss geschlossen werden. Aus `useMemo` käme im
    * Entwicklungsmodus (StrictMode) ein zweiter, der nie geschlossen wird,
@@ -188,6 +233,56 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
     return () => dienst.schliessen();
   }, [leser, schrittMs, rahmenMass]);
   const spurstand = useSyncExternalStore(spuren.abonnieren, spuren.stand, spuren.stand);
+
+  /*
+   * Der Wischspeicher, im selben Effekt-Schlüssel wie der Dekodierer: Eine
+   * andere Datei, Rechengrösse oder Bildrate heisst ein anderer Leser und
+   * andere Rasterbilder. Aus demselben Grund wie der Verfolger im Effekt und
+   * nicht in `useMemo` (StrictMode: Fabrik und Aufräumen laufen doppelt).
+   */
+  const [wisch, setWisch] = useState<Wischspeicher | null>(null);
+  useEffect(() => {
+    const speicher = new Wischspeicher({ leser, s: schrittMs });
+    setWisch(speicher);
+    return () => speicher.schliessen();
+  }, [leser, schrittMs]);
+  useEffect(() => {
+    wisch?.setzen(raster.bilder);
+  }, [raster, wisch]);
+  const wischStand = useSyncExternalStore(
+    wisch?.abonnieren ?? keineMeldung,
+    wisch?.stand ?? leererWischStand,
+    wisch?.stand ?? leererWischStand,
+  );
+  /* Hält die Verfolgung wegen des Speichers an, sind auch die entpackten Bilder zu viel. */
+  const verfolgungVoll = [...spurstand.jeMaske.values()].some(
+    (stand) => stand.fehler === SPEICHER_VOLL,
+  );
+  useEffect(() => {
+    wisch?.speicherKnapp(verfolgungVoll);
+  }, [verfolgungVoll, wisch]);
+
+  /*
+   * Zug und Finger werden getrennt gezählt (wie in `spurdienst.ts`), damit das
+   * Loslassen der Leiste nicht die Ruhe für den Pinselstrich aufhebt – beim
+   * Speicher ist beides `'zug'`.
+   */
+  const wischRuht = useRef({ zug: false, finger: false });
+  const ruhen = useCallback(
+    (grund: Ruhegrund, an: boolean) => {
+      spuren.verfolgungRuhen(grund, an);
+      if (!wisch) return;
+      if (grund === 'zug' || grund === 'finger') {
+        wischRuht.current[grund] = an;
+        wisch.ruhen('zug', wischRuht.current.zug || wischRuht.current.finger);
+      } else if (grund === 'bau') {
+        wisch.ruhen('bauen', an);
+      } else {
+        wisch.ruhen(grund, an);
+      }
+    },
+    [spuren, wisch],
+  );
   /*
    * Der Verfolgung nur melden, was sie angeht: Grenzen der Abschnitte und
    * Teile, Geltung, Schalter und Namen der Masken. Jeder Reglerschritt im
@@ -213,8 +308,8 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
       return;
     }
     zuletztGemeldet.current = { spuren, grenzen, masken };
-    spuren.setzen(masken, abschnitte, filmRaster(abschnitte, schrittMs, MAX_BILDER_FILM).menge);
-  }, [abschnitte, masken, schrittMs, spuren]);
+    spuren.setzen(masken, abschnitte, raster.menge);
+  }, [abschnitte, masken, raster, schrittMs, spuren]);
 
   /*
    * Bereiche, die noch in einem Abschnittsdokument stehen, werden Masken.
@@ -637,6 +732,10 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
     spuren,
     leser,
     spurstand,
+    filmBilder: raster.bilder,
+    wisch,
+    wischStand,
+    ruhen,
     speicher,
     leistenFassung,
     leisteZurueckMoeglich,
@@ -651,6 +750,18 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
     leisteZurueckHalten,
   };
 }
+
+const keineMeldung = () => () => undefined;
+const LEERER_WISCHSTAND: WischStand = {
+  version: 0,
+  bilder: 0,
+  von: 0,
+  bytes: 0,
+  stufe: -1,
+  fertig: false,
+  verfuegbar: true,
+};
+const leererWischStand = () => LEERER_WISCHSTAND;
 
 /**
  * Sind zwei Dokumente gleich bis auf die Bereiche? Verglichen wird Feld für

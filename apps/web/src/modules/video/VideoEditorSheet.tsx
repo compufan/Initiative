@@ -19,12 +19,12 @@ import {
   maxBilderFuer,
 } from './einstellungen.js';
 import { useVorschauDoc } from './filmDoc.js';
-import { springenZu, useFilmWiedergabe } from './filmWiedergabe.js';
+import { useFilmWiedergabe } from './filmWiedergabe.js';
 import { maskenStand, type MaskenLeiste } from './Maskenbahnen.js';
 import { bildDocAn } from './masken.js';
 import { bildIndex } from './raster.js';
 import { SchnittEditor } from './SchnittEditor.js';
-import { useBearbeiteteVorschau } from './vorschau.js';
+import { useBearbeiteteVorschau, type Wischer } from './vorschau.js';
 import { filmZuQuelle } from './schnitt.js';
 import { useSchnitt } from './schnittZustand.js';
 import { videoTauglich } from './schreiben.js';
@@ -135,7 +135,18 @@ export function VideoEditorSheet({
     mass: rechenmass,
   });
   const { abschnitte } = schnitt;
-  const wiedergabe = useFilmWiedergabe(videoRef, abschnitte);
+  /*
+   * Das Wischen kommt aus dem Wischspeicher (`wischspeicher.ts`), den dieses
+   * Blatt und der Editor teilen. Das Blatt hat kein Standbild: Beim
+   * Loslassen springt das Video auf das genaue Bild und wird dort scharf.
+   */
+  const wischer = useRef<Wischer | null>(null);
+  const wiedergabe = useFilmWiedergabe(videoRef, abschnitte, {
+    filmBilder: schnitt.filmBilder,
+    s: schrittMs,
+    wischer,
+    springenBeimLoslassen: true,
+  });
 
   /*
    * Auch das Blatt zeigt den Film MIT Bearbeitung – so, wie er herauskommt:
@@ -149,7 +160,7 @@ export function VideoEditorSheet({
     nummer: wiedergabe.nummer,
     filmMs: wiedergabe.spielkopfMs,
   };
-  const docFuer = useVorschauDoc(schnitt, lage);
+  const { docFuer, docFuerBild } = useVorschauDoc(schnitt, lage);
   const { masken, spuren, spurstand } = schnitt;
   const neuZeichnen = useMemo(
     () => [abschnitte, masken, spurstand.version],
@@ -164,12 +175,16 @@ export function VideoEditorSheet({
     video: videoRef,
     leinwand: leinwandRef,
     docFuer,
+    docFuerBild,
     mass: rechenmass,
     art: 'ausgabe',
     film: vorschauFilm,
     aktiv: !editorAuf,
     schrittMs,
     neuZeichnen,
+    speicher: schnitt.wisch,
+    filmBilder: schnitt.filmBilder,
+    wischer,
   });
 
   /*
@@ -177,10 +192,11 @@ export function VideoEditorSheet({
    * Solange der Editor offen ist, entscheidet er; sein Video ist dann das
    * einzige.
    */
+  const { ruhen } = schnitt;
   useEffect(() => {
     if (editorAuf) return;
-    spuren.verfolgungRuhen('wiedergabe', wiedergabe.spielt);
-  }, [editorAuf, spuren, wiedergabe.spielt]);
+    ruhen('wiedergabe', wiedergabe.spielt);
+  }, [editorAuf, ruhen, wiedergabe.spielt]);
 
   /* Die Masken im Blatt: nur ansehen – eingestellt wird im Editor. */
   const maskenLeiste: MaskenLeiste = {
@@ -392,11 +408,14 @@ export function VideoEditorSheet({
           ? { abschnitte, s: schrittMs, b: rechenmass.b, h: rechenmass.h }
           : null;
         /*
-         * Der Filmbau liest selbst. Die Verfolgung ruht so lange (abgeschaltete
-         * Masken rechnete sie sonst weiter), und ihr Dekodierer wird frei –
-         * zwei nebeneinander kosteten auf einem Telefon Speicher und Zeit.
+         * Der Filmbau liest selbst. Die Verfolgung und das Füllen des
+         * Wischspeichers ruhen so lange (abgeschaltete Masken rechnete die
+         * Verfolgung sonst weiter), und der Dekodierer wird frei – zwei
+         * nebeneinander kosteten auf einem Telefon Speicher und Zeit. ERST
+         * ruhen, dann schliessen: Ein Auftrag, der nach dem Schliessen kommt,
+         * öffnete den Leser sofort wieder.
          */
-        spuren.verfolgungRuhen('bau', true);
+        ruhen('bau', true);
         schnitt.leser.schliessen();
         const fertig = await videoAusVideo({
           datei: video,
@@ -447,7 +466,7 @@ export function VideoEditorSheet({
           toast(errorMessage(ausfall, 'Das Video ging nicht'), 'error');
         }
       } finally {
-        spuren.verfolgungRuhen('bau', false);
+        ruhen('bau', false);
         await wachePruefen(false);
         steuerung.current = null;
         setLauf(null);
@@ -466,6 +485,7 @@ export function VideoEditorSheet({
       rechenmass,
       schluesselAbstand,
       schnitt.leser,
+      ruhen,
       schrittMs,
       spuren,
       video,
@@ -605,7 +625,7 @@ export function VideoEditorSheet({
                 spielt={wiedergabe.spielt}
                 gesperrt={lauf !== null}
                 onSpielkopf={(filmMs, fertig) => {
-                  wiedergabe.setzen(filmMs);
+                  wiedergabe.wischen(filmMs, fertig);
                   if (!fertig) return;
                   const ort = filmZuQuelle(abschnitte, filmMs);
                   if (ort) schnitt.setAktiv(ort.nummer);
@@ -615,11 +635,12 @@ export function VideoEditorSheet({
                   // gezogene Kante für das Ende und spränge weiter.
                   if (wiedergabe.spielt) wiedergabe.anhalten();
                   if (!fertig) {
-                    // Beim Ziehen zeigt das Video die Kante, an der man ist.
-                    const element = videoRef.current;
+                    // Beim Ziehen zeigt die Vorschau die Kante, an der man ist – aus dem
+                    // Wischspeicher, wo er sie hat, sonst springt das Video dorthin.
                     const alt = abschnitte[nummer];
-                    if (element && alt) {
-                      springenZu(element, (vonMs !== alt.vonMs ? vonMs : bisMs) / 1000);
+                    if (alt) {
+                      const von = vonMs !== alt.vonMs;
+                      wiedergabe.zeigeKante(nummer, von ? vonMs : bisMs, von ? 'von' : 'bis');
                     }
                     return;
                   }

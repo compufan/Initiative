@@ -562,6 +562,8 @@ export class Wischspeicher {
    * Meldung – dort zählt die kleine Gesamtgrösse.
    */
   speicherKnapp(an: boolean): void {
+    // Wiederholt gerufen (jede Meldung der Verfolgung): nichts Neues.
+    if (an === this.ruhegruende.has('speicher')) return;
     if (an) {
       this.entpackt.leeren(true);
       this.entpackend.clear();

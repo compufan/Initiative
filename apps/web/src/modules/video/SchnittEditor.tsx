@@ -9,14 +9,14 @@ import { errorMessage } from '../media/helpers.js';
 import { AbbruchError } from '../stickers/engines/index.js';
 import { masse } from './bilderLesen.js';
 import { useVorschauDoc } from './filmDoc.js';
-import { springenZu, useFilmWiedergabe } from './filmWiedergabe.js';
+import { useFilmWiedergabe } from './filmWiedergabe.js';
 import { restText, type MaskenLeiste } from './Maskenbahnen.js';
 import { bereichePlatz, bildDocAn, type Gezeigt } from './masken.js';
 import { bildIndex, bildMitte } from './raster.js';
 import { MAX_BILDER_FILM } from './einstellungen.js';
 import { filmZuQuelle, standImRaster } from './schnitt.js';
 import type { SchnittZustand } from './schnittZustand.js';
-import { useBearbeiteteVorschau } from './vorschau.js';
+import { useBearbeiteteVorschau, type Wischer } from './vorschau.js';
 import { Zeitleiste, stellbildImFilm } from './Zeitleiste.js';
 
 /**
@@ -85,7 +85,19 @@ export function SchnittEditor({
   const { abschnitte, aktiv } = schnitt;
   const abschnitt = abschnitte[aktiv];
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const wiedergabe = useFilmWiedergabe(videoRef, abschnitte);
+  /*
+   * Das Wischen kommt aus dem Wischspeicher (`wischspeicher.ts`): Wiedergabe
+   * und Vorschau sprechen über `wischer`. Beim Loslassen springt das
+   * sichtbare Video hier nicht – der Editor zeigt danach sein Standbild, und
+   * der Dekodierer des Lesers soll es ohne Wettlauf holen.
+   */
+  const wischer = useRef<Wischer | null>(null);
+  const wiedergabe = useFilmWiedergabe(videoRef, abschnitte, {
+    filmBilder: schnitt.filmBilder,
+    s: schrittMs,
+    wischer,
+    springenBeimLoslassen: false,
+  });
   const [zieht, setZieht] = useState(false);
 
   /* ---------- Das Standbild ---------- */
@@ -279,20 +291,22 @@ export function SchnittEditor({
    * Sie ruht, solange ein Finger auf der Leiste liegt oder der Film läuft:
    * Beide brauchen den Dekodierer und die Rechenzeit, und ein Wischen, das
    * ruckelt, wiegt schwerer als eine Maske, die eine Sekunde später fertig
-   * ist.
+   * ist. Mit ihr ruht das Füllen des Wischspeichers (`schnitt.ruhen`): Das
+   * Standbild beim Loslassen braucht den Dekodierer sofort.
    */
+  const { ruhen } = schnitt;
   useEffect(() => {
-    spuren.verfolgungRuhen('zug', zieht);
-  }, [spuren, zieht]);
+    ruhen('zug', zieht);
+  }, [ruhen, zieht]);
   useEffect(() => {
-    spuren.verfolgungRuhen('wiedergabe', wiedergabe.spielt);
-  }, [spuren, wiedergabe.spielt]);
+    ruhen('wiedergabe', wiedergabe.spielt);
+  }, [ruhen, wiedergabe.spielt]);
   useEffect(
     () => () => {
-      spuren.verfolgungRuhen('zug', false);
-      spuren.verfolgungRuhen('wiedergabe', false);
+      ruhen('zug', false);
+      ruhen('wiedergabe', false);
     },
-    [spuren],
+    [ruhen],
   );
 
   /*
@@ -342,9 +356,9 @@ export function SchnittEditor({
     const an = (ereignis: PointerEvent) => {
       const ziel = ereignis.target instanceof Element ? ereignis.target : null;
       if (!ziel?.closest('.bild-editor') || ziel.closest('.bild-zeitleiste')) return;
-      spuren.verfolgungRuhen('finger', true);
+      ruhen('finger', true);
     };
-    const aus = () => spuren.verfolgungRuhen('finger', false);
+    const aus = () => ruhen('finger', false);
     document.addEventListener('pointerdown', an, true);
     document.addEventListener('pointerup', aus, true);
     document.addEventListener('pointercancel', aus, true);
@@ -352,9 +366,9 @@ export function SchnittEditor({
       document.removeEventListener('pointerdown', an, true);
       document.removeEventListener('pointerup', aus, true);
       document.removeEventListener('pointercancel', aus, true);
-      spuren.verfolgungRuhen('finger', false);
+      ruhen('finger', false);
     };
-  }, [spuren]);
+  }, [ruhen]);
 
   /* ---------- Die beiden Steckplätze ---------- */
 
@@ -389,17 +403,21 @@ export function SchnittEditor({
     nummer: wiedergabe.nummer,
     filmMs: wiedergabe.spielkopfMs,
   };
-  const docFuer = useVorschauDoc(schnitt, lage);
+  const { docFuer, docFuerBild } = useVorschauDoc(schnitt, lage);
   const neuZeichnen = useMemo(() => [abschnitte, masken, version], [abschnitte, masken, version]);
   const bearbeiteteVorschau = useBearbeiteteVorschau({
     video: videoRef,
     leinwand: leinwandRef,
     docFuer,
+    docFuerBild,
     mass: videoMass,
     art: 'ansicht',
     aktiv: ueberlagert,
     schrittMs,
     neuZeichnen,
+    speicher: schnitt.wisch,
+    filmBilder: schnitt.filmBilder,
+    wischer,
   });
   /** Gibt es eine eingeschaltete Maske, die noch nicht überall verfolgt ist? */
   const nochNichtUeberall = masken.some((maske) => {
@@ -407,6 +425,15 @@ export function SchnittEditor({
     return maske.aktiv && !stand?.fehler && (stand?.anteil ?? 0) < 1;
   });
 
+  /*
+   * Was über dem Bild steht, in dieser Reihenfolge: das Gerät ist zu
+   * langsam, der Speicher ist noch nicht gefüllt, eine Maske fehlt gerade an
+   * DIESEM Bild.
+   */
+  const fehlendNamen = bearbeiteteVorschau.fehlend
+    .map((maskeId) => masken.find((maske) => maske.id === maskeId)?.name)
+    .filter((eintrag): eintrag is string => Boolean(eintrag));
+  const { wischStand } = schnitt;
   const zeile =
     wiedergabe.spielt && bearbeiteteVorschau.guete === 2 ? (
       <div className="bild-wiedergabe-zeile">
@@ -415,7 +442,30 @@ export function SchnittEditor({
           Wischen siehst du sie.
         </span>
       </div>
-    ) : (wiedergabe.spielt || zieht) && bearbeiteteVorschau.bearbeitet && nochNichtUeberall ? (
+    ) : zieht && bearbeiteteVorschau.notstufe ? (
+      <div className="bild-wiedergabe-zeile">
+        <span>
+          Dieses Gerät ist zum Wischen mit Bearbeitung zu langsam – sie erscheint, sobald du
+          anhältst.
+        </span>
+      </div>
+    ) : zieht && wischStand.verfuegbar && wischStand.von > 0 && wischStand.stufe < 2 ? (
+      <div className="bild-wiedergabe-zeile">
+        <span>
+          Die Wischvorschau wird noch vorbereitet (
+          {Math.round((100 * wischStand.bilder) / wischStand.von)} %) – bis dahin läuft sie
+          ruckliger.
+        </span>
+      </div>
+    ) : zieht && bearbeiteteVorschau.bearbeitet && fehlendNamen.length > 0 ? (
+      <div className="bild-wiedergabe-zeile">
+        <span>
+          {aufzaehlen(fehlendNamen)} {fehlendNamen.length === 1 ? 'wird' : 'werden'} an diesem Bild
+          noch verfolgt und {fehlendNamen.length === 1 ? 'erscheint' : 'erscheinen'} kurz nach dem
+          Loslassen.
+        </span>
+      </div>
+    ) : wiedergabe.spielt && bearbeiteteVorschau.bearbeitet && nochNichtUeberall ? (
       <div className="bild-wiedergabe-zeile">
         <span>Wo eine Maske noch verfolgt wird, fehlt sie hier noch.</span>
       </div>
@@ -473,7 +523,7 @@ export function SchnittEditor({
       // Das Video folgt dem Griff, und beim Loslassen steht das Stellbild
       // dort – man sieht, wo die Maske jetzt anfängt oder endet.
       if (wiedergabe.spielt) wiedergabe.anhalten();
-      wiedergabe.setzen(filmMs);
+      wiedergabe.wischen(filmMs, fertig);
       setZieht(!fertig);
       if (fertig) ankommen(filmMs);
     },
@@ -596,7 +646,7 @@ export function SchnittEditor({
       stellbildMs={stellbildImFilm(abschnitte, aktiv)}
       masken={maskenLeiste}
       onSpielkopf={(filmMs, fertig) => {
-        wiedergabe.setzen(filmMs);
+        wiedergabe.wischen(filmMs, fertig);
         setZieht(!fertig);
         if (fertig) ankommen(filmMs);
       }}
@@ -608,12 +658,15 @@ export function SchnittEditor({
          * „spielt" stehen – mit angehaltenem Video und zugedecktem Bild.
          */
         if (wiedergabe.spielt) wiedergabe.anhalten();
-        const element = videoRef.current;
         if (!fertig) {
-          // Beim Ziehen zeigt das Video die Kante, an der man gerade ist.
+          // Beim Ziehen zeigt die Vorschau die Kante, an der man gerade ist – aus dem
+          // Wischspeicher, wo er sie hat, sonst springt das Video dorthin.
           setZieht(true);
           const alt = abschnitte[nummer];
-          if (element && alt) springenZu(element, (vonMs !== alt.vonMs ? vonMs : bisMs) / 1000);
+          if (alt) {
+            const von = vonMs !== alt.vonMs;
+            wiedergabe.zeigeKante(nummer, von ? vonMs : bisMs, von ? 'von' : 'bis');
+          }
           return;
         }
         setZieht(false);
