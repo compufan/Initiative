@@ -391,6 +391,16 @@ Anmeldung abrufbar, damit Kalenderprogramme überhaupt damit umgehen können. We
 weitergibt, gibt seinen Kalender weiter. Du kannst sie in den Einstellungen neu
 erzeugen lassen.</p>
 
+<h2>Karten-Links</h2>
+<p>Steht bei einem Termin ein Ort, erkennt die App Adressen und Koordinaten im Text
+<strong>in deinem Gerät</strong> und macht daraus einen Link. Dabei geht nichts an uns
+oder an Dritte. Erst wenn du den Link antippst und eine Karten-App wählst, wird die
+Adresse an diese App beziehungsweise ihren Dienst übergeben (Apple, Google,
+Microsoft/Bing, Waze, die OpenStreetMap Foundation oder die Karten-App deines
+Android-Geräts). Dann gelten deren Bedingungen; wir haben mit ihnen keinen Vertrag und
+können keinen schliessen. Wir laden keine Karten und keine Vorschaubilder. Welche App
+du gewählt hast, merkt sich nur dein Gerät.</p>
+
 <h2>Was auf deinem Gerät bleibt</h2>
 <p>Die App legt in deinem Browser ab: den Anmelde-Token, deine noch nicht gesendeten
 Nachrichten, einen Zwischenspeicher der Chats für den Betrieb ohne Netz, deine

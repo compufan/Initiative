@@ -63,6 +63,42 @@ keine – weil man sich darauf verlässt.
   Bereinigung greift nur bei erkannten MP4-Strukturen und lässt alles andere
   lieber unverändert durch, als es kaputtzumachen.
 
+### 2b. Was aus Text ein Link wird: der Ort eines Termins
+
+Der Ort eines Termins ist ein freier Text, den ein Mitglied schreibt und alle
+Eingeladenen sehen. Die App erkennt darin Adressen und Webadressen und macht
+Links daraus (`lib/adresse.ts`, `lib/karten.ts`) – also verwandelt sie
+fremden Text in etwas, das andere antippen. Dagegen:
+
+- **Alles Veränderliche geht durch eine einzige Funktion in eine Adresse**
+  (`kodiere`). Hosts, Pfade und Parameternamen der Karten-Apps sind
+  Konstanten, Koordinaten geprüfte Zahlen. Ein Ort wie `x&api=2#frag~adr.Evil`
+  bleibt ein Parameterwert; `~` (bei Bing der Wegpunkt-Trenner) und
+  Steuer- und Richtungszeichen werden mitkodiert beziehungsweise entfernt.
+  Ein Test schleust genau solche Eingaben durch alle Apps und prüft Host,
+  Parameternamen und Hash.
+- **Webadressen nur mit `http` und `https`, ohne Zugangsdaten.** `javascript:`,
+  `data:`, `intent:`, `file:` und `ftp:` werden nie zum Link;
+  `https://bank.de@fremd.example` auch nicht, weil es vorn einen Namen zeigt
+  und zu einem anderen Rechner führt. Angezeigt wird, was aus der Adresse
+  abgeleitet ist – nicht der Text, den der Schreiber gewählt hat.
+- **`rel="noopener noreferrer"`** an jedem fremden Link: Ohne `noreferrer` ginge
+  die Herkunft (unser Server) an die Karten-App, ohne `noopener` bekäme die
+  geöffnete Seite einen Zugriff auf unser Fenster.
+- **Nichts vor dem Tipp.** Die Links sind `<a href>`; der Browser holt nichts,
+  bis jemand tippt. Es gibt kein `prefetch`, kein `preconnect`, keine Karte und
+  keine Vorschau von einem fremden Server. Die Inhaltsrichtlinie (CSP) bleibt
+  deshalb unverändert. Der Browsertest zeichnet alle Anfragen auf und verlangt:
+  keine an Google, Apple, OpenStreetMap, Waze oder Bing, solange niemand
+  getippt hat – und beim Tippen keinen `Referer`.
+- **Die Erkennung kann nicht hängen.** Die Muster sind ohne verschachtelte
+  Wiederholungen gebaut, die Eingabe ist auf 300 Zeichen begrenzt, und ein Test
+  hält bösartige Eingaben unter 50 ms.
+
+Was bleibt: Nach dem Tipp geht die Adresse an den Dienst, den der Anwender
+gewählt hat. Dafür haben wir mit ihm keinen Vertrag; die Datenschutzerklärung
+sagt es.
+
 ### 3. Was hinausgeht — die Lücke, die der Umzug aufgemacht hat
 
 Solange die App auf Vercel lag und die Dateien bei Cloudflare, waren das zwei

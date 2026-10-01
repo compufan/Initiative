@@ -738,6 +738,53 @@ muss.
 - Ist die Adresse irgendwo gelandet, wo sie nicht hingehört, erzeugst du mit
   einem Tipp eine neue – die alte funktioniert danach nicht mehr.
 
+### Adressen und Karten
+
+- Steht beim Termin ein **Ort mit Adresse** – „Hauptstr. 5, 12345 Berlin", auch
+  mit einem Namen davor („Vereinsheim, Hauptstr. 5, …"), oder **Koordinaten**
+  wie „48.13743, 11.57549" –, erkennt die App sie und macht daraus einen Link.
+  Das gilt in der **Detailansicht** und auf der **Chatkarte**, bei allen
+  Eingeladenen. Der Name und Beiwerk wie „3. OG" bleiben Text; verlinkt wird
+  die Adresse.
+- Ein Tipp auf die Adresse öffnet das Blatt **„Öffnen mit"**. Es zeigt die
+  Karten-Apps, die auf deinem Gerät in Frage kommen: die **Standard-Karten-App**
+  (nur Android, dort fragt das System bei mehreren nach), **Apple Karten**
+  (nur iPhone, iPad und Mac), **Google Maps**, **OpenStreetMap**, **Waze** und
+  **Bing Karten**. Oben schaltest du zwischen **„Karte zeigen"** und **„Route
+  hierher"** um; bei der Route stehen nur die Apps, die sich per Link dazu
+  auffordern lassen.
+- **Jeder wählt seine eigene App.** Mit „Diese Wahl merken" (vorgewählt) öffnet
+  der nächste Tipp die App direkt; daneben steht **„⋯"** für „anders öffnen"
+  (andere App, Route). Zurücknehmen kannst du es im Blatt mit „Jedes Mal
+  fragen" oder unter **Profil → Einstellungen → Karten-App**. Die Wahl gilt nur
+  für **dieses Gerät** – wer iPhone und Android-Tablet hat, will nicht auf
+  beiden dieselbe App.
+- **„Adresse kopieren"** legt den verlinkten Teil in die Zwischenablage.
+- **Ohne erkennbare Adresse** („Stadtpark, Eingang Nord") bleibt der Ort Text,
+  dahinter steht gedämpft **„Auf Karte suchen"**; das Blatt warnt dann, dass
+  die Suche ins Leere laufen kann. „Zoom", „Online", „bei mir" und Ähnliches
+  bekommen gar kein Kartenelement. **Webadressen** (Zoom, Teams, Meet, ein Link
+  zur Anfahrt) werden zu einem Link, der im Browser aufgeht.
+- Unter dem Ortsfeld von Termin, Terminfindung und Umfrage sagt eine Zeile,
+  **was die App erkannt hat** – und was für ein genaueres Finden fehlt
+  („Mit Postleitzahl und Ort findet die Karte sie genauer").
+- **Agenda und Monatsliste** zeigen den Ort als Text: Die ganze Zeile öffnet
+  den Termin, und ein Link darin wäre ein Link im Link. Die Adresse ist einen
+  Tipp tiefer, in der Detailansicht.
+- **Was dabei weder passiert noch kostet:** Die Erkennung läuft im Gerät, ohne
+  Netz und ohne Schlüssel; es gibt keine eigene Geokodierung und keine Karte
+  von einem fremden Server. Die Seite lädt nichts vor, bevor du tippst – erst
+  dann geht die Adresse an die gewählte App. Das Kalender-Abo ist unverändert:
+  Dort steht der Ort als Text, und die Kalender-App macht daraus selbst einen
+  Kartenlink.
+- **Grenzen:** Ohne Verzeichnis der Postleitzahlen und Straßen ist die
+  Erkennung eine Näherung. Sie kennt deutsche, österreichische, Schweizer,
+  französische, italienische, spanische, niederländische und englische
+  Schreibweisen; Polen, Tschechien und Skandinavien bleiben bei „Auf Karte
+  suchen". Ob ein Link aus einer auf dem Startbildschirm installierten App
+  wirklich in der Karten-App landet, hängt vom System ab – dafür gibt es
+  „Adresse kopieren".
+
 ## Umfragen
 
 - Umfrage direkt im Chat: **Frage, beliebig viele Antwortmöglichkeiten**.
@@ -896,6 +943,9 @@ ein altes auf dem Startbildschirm.
   kein Zählpixel. Es gibt genau eine Ausnahme, und die schaltest du selbst
   ein: das Skript für Chromecast (siehe _Auf den Fernseher_). Solange du das
   nicht tust, gilt der Satz ohne Einschränkung.
+- **Karten-Links geben die Adresse erst nach deinem Tipp weiter**, an die App,
+  die du gewählt hast (siehe _Adressen und Karten_). Die Seite lädt nie eine
+  Karte oder ein Vorschaubild von sich aus.
 - **Impressum und Datenschutzerklärung** sind ohne Anmeldung erreichbar, direkt
   aus der Fusszeile des Anmeldebildschirms.
 - **Verwendete fremde Software** steht vollständig in der App unter
