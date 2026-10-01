@@ -58,8 +58,7 @@ export type { Guete } from './wischweg.js';
  *
  * # Warum der `readyState`-Wächter nicht gelockert werden darf
  *
- * `zeichnen` bricht bei `readyState < 2` ab. Gemessen (Messung vorher,
- * Befund 1 und 7): Die Sprungkette setzt im `seeked`-Rückruf sofort den
+ * `zeichnen` bricht bei `readyState < 2` ab. Gemessen im Browser: Die Sprungkette setzt im `seeked`-Rückruf sofort den
  * nächsten Sprung; bis der Bildrückruf einen bis zwei Anzeigetakte später
  * läuft, steht das Video wieder im Sprung – an allen 275 Bildrückrufen der
  * Messzüge war `readyState` 1. Darum zeichnete die Vorschau beim Wischen

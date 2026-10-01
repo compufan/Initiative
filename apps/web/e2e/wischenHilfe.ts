@@ -26,8 +26,9 @@ import { expect, type CDPSession, type Locator, type Page } from '@playwright/te
  * ablesen, wie viele Dekodierer springen – und merkt sich alle Adressen, die
  * `URL.createObjectURL` ausgegeben und noch nicht freigegeben wurden.
  *
- * Die Auswertung (`auswerten`) ist dieselbe wie im Messgerüst, mit dem die
- * Zahlen von `messung-vorher.md` und `messung-nachher.md` entstanden sind.
+ * Die Auswertung (`auswerten`) rechnet je Anzeigetakt, welches Bild zu sehen
+ * ist, wie weit es vom Finger entfernt ist und wie alt es ist – dieselben
+ * Kenngrössen vor und nach dem Umbau.
  */
 
 /** Der Schalter für langsame Sprünge und die Zähler – wird vor jedem Laden der Seite eingesetzt. */
@@ -1030,7 +1031,7 @@ const quantil = (a: number[], q: number) => {
 };
 
 /**
- * Wertet einen Lauf aus – dieselbe Rechnung wie das Messgerüst (`mess/auswerten.mjs`).
+ * Wertet einen Lauf aus.
  * `toleranz`: wie viele Filmbilder neben dem Finger noch als „nahe" zählen.
  */
 export function auswerten(

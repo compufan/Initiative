@@ -41,7 +41,7 @@ import {
  *
  * # Was vorher war
  *
- * Gemessen (`messung-vorher.md`): Das Bild unter dem Finger kam im Mittel 6 –
+ * Gemessen vor dem Umbau: Das Bild unter dem Finger kam im Mittel 6 –
  * 126 Filmbilder zu spät, 2 – 11-mal je Sekunde; die bearbeitete Vorschau
  * zeichnete beim Wischen GAR NICHT (an jedem Bildrückruf stand das Video im
  * Sprung), Masken erschienen erst, wenn der Finger ruhte.
@@ -518,7 +518,7 @@ test.describe('Wischen aus dem Speicher – mit Masken', () => {
       baseURL: info.project.use.baseURL,
       viewport: { width: 412, height: 880 },
     });
-    // 1280 × 720 wie in der Messung: Bei der halben Auflösung verlor die Verfolgung das Quadrat zeitweise.
+    // 1280 × 720: Bei der halben Auflösung verlor die Verfolgung das Quadrat zeitweise.
     aufbau = await aufbauen(page, {
       bearbeitet: false,
       maske: true,

@@ -13,8 +13,8 @@ import { Ruhetor, WEITER_MS } from './ruhetor.js';
  * Weil ein `<video>` ein Dekodierer ist und kein Bildspeicher. Ein Sprung
  * kostet 87 – 233 ms, bei langem Schlüsselbildabstand bis 584 ms; der Finger
  * legt beim schnellen Wischen 300 Bilder in der Sekunde zurück. Gemessen
- * (`messung-vorher.md`): Das Bild unter dem Finger kam im Mittel 6 – 126
- * Filmbilder zu spät, 2 – 11-mal je Sekunde. Schneller wird das mit
+ * im Browser (720p, Sprünge bis 250 ms): Das Bild unter dem Finger kam im
+ * Mittel 6 – 126 Filmbilder zu spät, 2 – 11-mal je Sekunde. Schneller wird das mit
  * Sprüngen nie. Kleine Bilder aus dem Speicher dagegen: Entpacken 1 – 5 ms,
  * Zeichnen 0,2 – 2 ms – bis zum Anzeigetakt des Schirms.
  *
@@ -525,7 +525,7 @@ export class Wischspeicher {
 
   /**
    * Das Bild entpacken, damit es beim Zeichnen schon da ist – beim
-   * Zeigerereignis, nicht im Anzeigetakt. Gemessen (Messung 4.5): Entpacken
+   * Zeigerereignis, nicht im Anzeigetakt. Gemessen: Entpacken
    * IM Takt gibt 35 – 46 Bilder/s mit Bildalter bis 400 ms; beim Ereignis
    * entpacken und im Takt zeichnen schafft den Takt des Schirms (49 – 59/s,
    * Bildalter Ø 9 – 14 ms).

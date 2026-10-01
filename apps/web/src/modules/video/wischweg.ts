@@ -76,7 +76,7 @@ export function videobildDarf(
  * Dann wird die Leinwand verborgen, und das rohe Video zeigt, was es hat.
  * Ein Bild, das nicht mehr zum Finger gehört, bleibt nie stehen: Gemessen
  * hat die bearbeitete Leinwand ein einziges Bild 3 s lang gezeigt, während
- * der Finger über den ganzen Film zog (Befund 4 der Messung).
+ * der Finger über den ganzen Film zog.
  */
 export function leinwandVeraltet(
   gezeigt: number | null,
