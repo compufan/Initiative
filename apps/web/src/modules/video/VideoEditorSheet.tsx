@@ -383,7 +383,7 @@ export function VideoEditorSheet({
          * das längst geschehen, während geschnitten und eingestellt wurde.
          */
         if (aktiveMasken.length > 0) {
-          setLauf({ anteil: 0, abschnitt: 'masken', text: 'Masken werden fertig verfolgt …' });
+          setLauf({ anteil: 0, abschnitt: 'masken', text: 'Bereiche werden fertig verfolgt …' });
           await spuren.spurenFertig(steuer.signal, (anteil, text) =>
             setLauf({ anteil, abschnitt: 'masken', text }),
           );
@@ -750,7 +750,7 @@ export function VideoEditorSheet({
             {!bearbeitet
               ? 'Noch nichts eingestellt – der Film käme geschnitten, sonst aber so heraus, wie er hineingeht. Im Editor wird jeder Abschnitt für sich bearbeitet; teilen, kürzen und verschieben geht dort ebenso.'
               : aktiveMasken.length > 0
-                ? `${aktiveMasken.length === 1 ? 'Eine Maske gilt' : `${aktiveMasken.length} Masken gelten`} im Film und ${aktiveMasken.length === 1 ? 'wird' : 'werden'} im Hintergrund Bild für Bild verfolgt – die Zeitleiste zeigt, wo sie zu sehen ${aktiveMasken.length === 1 ? 'ist' : 'sind'}.${
+                ? `${aktiveMasken.length === 1 ? 'Ein Bereich gilt' : `${aktiveMasken.length} Bereiche gelten`} im Film und ${aktiveMasken.length === 1 ? 'wird' : 'werden'} im Hintergrund Bild für Bild verfolgt – die Zeitleiste zeigt, wo ${aktiveMasken.length === 1 ? 'er' : 'sie'} zu sehen ${aktiveMasken.length === 1 ? 'ist' : 'sind'}.${
                     verfolgung?.fehler
                       ? ` ${verfolgung.fehler}`
                       : verfolgung && verfolgung.anteil < 1

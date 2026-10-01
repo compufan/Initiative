@@ -451,7 +451,7 @@ export function Maskenbahnen({
       ref={rahmen}
       className={`mb${lesend ? ' ist-lesend' : ''}${gesperrt ? ' ist-aus' : ''}`}
       role="group"
-      aria-label={`Masken: ${masken.map((maske) => maske.name).join(', ')}`}
+      aria-label={`Bahnen: ${masken.map((maske) => maske.name).join(', ')}`}
       onPointerDown={(ereignis) => {
         if (gesperrt || (ereignis.target as HTMLElement).closest('.mb-griff')) return;
         zug.current = { x: ereignis.clientX, wischt: false, letzte: filmAus(ereignis.clientX) };
@@ -598,7 +598,7 @@ function Bahnzeile({
 
   const maske = masken[0];
   const beschreibung = sammel
-    ? `${masken.length} Masken – antippen, um eine zu wählen`
+    ? `${masken.length} Bereiche – antippen, um einen zu wählen`
     : zusammenfassen(werte.get(maske.id) ?? new Uint8Array(), umfangMs, gesamtMs);
   const geltungText =
     maske.geltung.art === 'ganz'
@@ -612,7 +612,7 @@ function Bahnzeile({
       className={`mb-zeile${gewaehlt ? ' ist-gewaehlt' : ''}${sammel ? ' ist-sammel' : ''}`}
       style={{ height: `${hoehe}px`, ['--mb-farbe' as string]: `var(--maske-${maske.farbe % 8})` }}
       role="group"
-      aria-label={sammel ? 'Masken' : `Maske ${maske.name}, ${geltungText}`}
+      aria-label={sammel ? 'Masken' : `Bereich ${maske.name}, ${geltungText}`}
     >
       {!sammel && <span className="mb-streifen" aria-hidden="true" />}
       <canvas ref={leinwand} className="mb-leinwand" role="img" aria-label={beschreibung} />
@@ -871,7 +871,7 @@ export function MaskenChips({
 
   return (
     <>
-      <div className="zl-leiste mb-chips" role="toolbar" aria-label={`Maske ${maske.name}`}>
+      <div className="zl-leiste mb-chips" role="toolbar" aria-label={`Bereich ${maske.name}`}>
         {/*
             Reihenfolge nach Gewicht, nicht nach Entstehung: Vorne steht, was
             man ständig braucht (Abspielen, welche Maske, wo sie gilt, ob sie
@@ -892,7 +892,7 @@ export function MaskenChips({
             {maske.name}
             {stand && <span className="mb-stand"> · {stand}</span>}
           </span>
-          <div className="mb-wahl" role="radiogroup" aria-label="Wo die Maske gilt">
+          <div className="mb-wahl" role="radiogroup" aria-label="Wo der Bereich gilt">
             <button
               type="button"
               role="radio"
@@ -928,7 +928,7 @@ export function MaskenChips({
             className="btn btn-sm"
             aria-pressed={maske.aktiv}
             onClick={() => leiste.onAn(maske.id, !maske.aktiv)}
-            title={maske.aktiv ? 'Maske ausschalten' : 'Maske einschalten'}
+            title={maske.aktiv ? 'Bereich ausschalten' : 'Bereich einschalten'}
             aria-label={`„${maske.name}" wirkt`}
           >
             {maske.aktiv ? '👁' : '🚫'}
@@ -937,7 +937,7 @@ export function MaskenChips({
             type="button"
             className="btn btn-sm"
             onClick={() => leiste.onLoeschen(maske.id)}
-            aria-label={`Maske „${maske.name}" löschen`}
+            aria-label={`Bereich „${maske.name}" löschen`}
           >
             🗑
           </button>
@@ -957,7 +957,7 @@ export function MaskenChips({
             type="button"
             className="btn btn-sm"
             onClick={() => setzen(geltungAbHier(g, bezug, spielkopfMs))}
-            title="Die Maske gilt ab der Wiedergabestelle"
+            title="Der Bereich gilt ab der Wiedergabestelle"
           >
             Ab hier
           </button>
@@ -965,18 +965,18 @@ export function MaskenChips({
             type="button"
             className="btn btn-sm"
             onClick={() => setzen(geltungBisHier(g, bezug, spielkopfMs))}
-            title="Die Maske gilt bis zur Wiedergabestelle"
+            title="Der Bereich gilt bis zur Wiedergabestelle"
           >
             Bis hier
           </button>
           <button type="button" className="btn btn-sm" onClick={zurMaske}>
-            Zur Maske
+            Zum Bereich
           </button>
           <button
             type="button"
             className="btn btn-sm"
             onClick={() => leiste.onTrennen(maske.id, spielkopfMs)}
-            title="Zwei Masken daraus machen, getrennt an der Wiedergabestelle – dann lassen sie sich verschieden einstellen"
+            title="Zwei Bereiche daraus machen, getrennt an der Wiedergabestelle – dann lassen sie sich verschieden einstellen"
           >
             Hier trennen
           </button>
@@ -985,7 +985,7 @@ export function MaskenChips({
               type="button"
               className="btn btn-sm"
               onClick={leiste.onZurueck}
-              aria-label="Letzte Änderung an den Masken zurücknehmen"
+              aria-label="Letzte Änderung an den Bereichen zurücknehmen"
               {...halten}
             >
               ↺
@@ -1001,7 +1001,7 @@ export function MaskenChips({
            * schliesst. Zwei gleich benannte Knöpfe liessen eine Vorlesehilfe
            * raten, welcher was tut.
            */
-          aria-label="Maske fertig – zurück zu den Knöpfen der Zeitleiste"
+          aria-label="Bereich fertig – zurück zu den Knöpfen der Zeitleiste"
         >
           Fertig
         </button>
@@ -1013,7 +1013,7 @@ export function MaskenChips({
       )}
       {leer && (
         <p className="mb-hinweis" role="status">
-          Der Abschnitt dieser Maske ist nicht mehr im Film – sie wirkt nirgends.
+          Der Abschnitt dieses Bereichs ist nicht mehr im Film – er wirkt nirgends.
         </p>
       )}
     </>
@@ -1038,7 +1038,7 @@ export function MaskenNamen({
     erster.current?.focus();
   }, []);
   return (
-    <div className="zl-leiste mb-chips" role="toolbar" aria-label="Maske wählen">
+    <div className="zl-leiste mb-chips" role="toolbar" aria-label="Bereich wählen">
       {vorne}
       {leiste.masken.map((maske, i) => (
         <button

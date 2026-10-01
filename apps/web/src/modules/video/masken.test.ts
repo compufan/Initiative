@@ -1011,14 +1011,14 @@ describe('bildDocAn', () => {
     const nachher = abschnittKuerzen(vorher, 1, 30 * S, 100 * S, 10000, S).abschnitte;
     const bezug = { abschnitte: nachher, s: S };
     // Die Prüfung, die nach jedem Kürzen gehört, sieht es …
-    expect(grenzeVerletzt(masken, bezug)).toMatch(/5 Masken/);
+    expect(grenzeVerletzt(masken, bezug)).toMatch(/5 Bereiche/);
     // … die Bahn kann es zeigen …
     expect(zuvielAn(masken, bezug)).toEqual([{ vonK: 30, bisK: 50 }]);
     // … und der Filmbau wirft, statt eine Maske still wegzulassen.
     const quelle = new Karten();
     quelle.lageSonst = { stand: 'fein', lage: { s: 1, w: 0, tx: 0, ty: 0, sicher: 9 }, faktor: 1 };
     const rahmen = { ...bezug, b: B, h: H };
-    expect(() => bildDocAn(null, masken, quelle, 40, 'bild', rahmen)).toThrow(/5 Masken/);
+    expect(() => bildDocAn(null, masken, quelle, 40, 'bild', rahmen)).toThrow(/5 Bereiche/);
     expect(bildDocAn(null, masken, quelle, 40, 'editor', rahmen).ueberzaehlig).toEqual(['f']);
     // Wo es nur vier sind, geht es.
     expect(bildDocAn(null, masken, quelle, 70, 'bild', rahmen).doc.bereiche).toHaveLength(1);
@@ -1531,7 +1531,7 @@ describe('editorAenderung', () => {
     const z = bildDocAn(null, masken, new Karten(), 20, 'editor', RAHMEN);
     const platz = bereichePlatz(masken, { k: 20, z, vorSitzung: masken }, bezug);
     expect(platz.max).toBe(3);
-    expect(platz.grund).toMatch(/schon 4 Masken/);
+    expect(platz.grund).toMatch(/schon 4 Bereiche/);
   });
 
   it('ordnet Masken in der Reihenfolge des Editors – auf ihren alten Plätzen', () => {

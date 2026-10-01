@@ -424,7 +424,7 @@ export function SchnittEditor({
       </div>
     ) : (wiedergabe.spielt || zieht) && bearbeiteteVorschau.bearbeitet && nochNichtUeberall ? (
       <div className="bild-wiedergabe-zeile">
-        <span>Wo eine Maske noch verfolgt wird, fehlt sie hier noch.</span>
+        <span>Wo ein Bereich noch verfolgt wird, fehlt er hier noch.</span>
       </div>
     ) : null;
 
@@ -590,7 +590,7 @@ export function SchnittEditor({
       return (
         <p className="mb-lage" role="status">
           <span className="spinner" aria-hidden="true" />
-          Masken werden verfolgt · {Math.round(anteil * 100)} %{rest && ` · ${rest}`}
+          Bereiche werden verfolgt · {Math.round(anteil * 100)} %{rest && ` · ${rest}`}
         </p>
       );
     }
@@ -713,7 +713,7 @@ export function SchnittEditor({
     const wann = zeit
       ? ` – sie ist von ${sekundenText(zeit.vonMs)} bis ${sekundenText(zeit.bisMs)} zu sehen`
       : '';
-    return `„${maske.name}“ gilt an diesem Bild nicht${wann}. „Zur Maske“ in der Zeitleiste bringt dich hin.`;
+    return `„${maske.name}“ gilt an diesem Bild nicht${wann}. „Zum Bereich“ in der Zeitleiste bringt dich hin.`;
   }, [abschnitte, gezeigt, masken, schnitt.gewaehlt, schrittMs]);
   const bereichFarbe = useCallback(
     (maskeId: string) => {

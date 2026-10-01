@@ -320,8 +320,8 @@ export function Zeitleiste({
               className="btn btn-sm"
               onClick={masken.onZurueck}
               disabled={gesperrt}
-              aria-label="Letzte Änderung an den Masken zurücknehmen"
-              title="Letzte Änderung an den Masken zurücknehmen"
+              aria-label="Letzte Änderung an den Bereichen zurücknehmen"
+              title="Letzte Änderung an den Bereichen zurücknehmen"
               onFocus={() => masken.onZurueckHalten?.(true)}
               onBlur={() => masken.onZurueckHalten?.(false)}
               onPointerEnter={() => masken.onZurueckHalten?.(true)}
@@ -340,8 +340,8 @@ export function Zeitleiste({
               type="button"
               className="btn btn-sm"
               onClick={() => setNamenOffen(true)}
-              aria-label="Maske wählen"
-              title="Eine Maske wählen – für Zeitraum, Ausschalten, Trennen, Löschen"
+              aria-label="Bereich wählen"
+              title="Einen Bereich wählen – für Zeitraum, Ausschalten, Trennen, Löschen"
             >
               ◐
             </button>

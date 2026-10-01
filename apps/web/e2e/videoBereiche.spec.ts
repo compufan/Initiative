@@ -104,7 +104,7 @@ function bereichsKnoepfe(editor: Locator): Locator {
 }
 
 function einstellungen(editor: Locator): Locator {
-  return editor.getByRole('toolbar', { name: /^Maske / });
+  return editor.getByRole('toolbar', { name: /^Bereich / });
 }
 
 function teileChips(editor: Locator): Locator {
@@ -158,7 +158,7 @@ async function bahnAntippen(page: Page, editor: Locator, nummer: number) {
 
 /** Der Name in der Zeile der Einstellungen – ohne Stand der Verfolgung. */
 async function leistenName(editor: Locator): Promise<string> {
-  const name = editor.getByRole('toolbar', { name: /^Maske / }).locator('.mb-name');
+  const name = editor.getByRole('toolbar', { name: /^Bereich / }).locator('.mb-name');
   const text = (await name.textContent()) ?? '';
   return text.replace(/\s·\s.*$/, '').trim();
 }
@@ -342,7 +342,7 @@ test('ein Bereich mit Zeitraum: Satz statt Leerzustand, kein stiller neuer Berei
   await expect(bereichsKnoepfe(editor)).toHaveCount(2);
 
   // „Zur Maske" bringt die Wiedergabestelle in den Zeitraum: Der Chip erscheint und ist gewählt.
-  await einstellungen(editor).getByRole('button', { name: 'Zur Maske' }).click();
+  await einstellungen(editor).getByRole('button', { name: 'Zum Bereich' }).click();
   await expect(editor.locator('.bild-wiedergabe')).toBeHidden({ timeout: 30_000 });
   await expect(bereichsKnoepfe(editor)).toHaveCount(3, { timeout: 30_000 });
   await expect(bereichsKnoepfe(editor).nth(1)).toHaveAttribute('aria-pressed', 'true');
@@ -413,7 +413,7 @@ test('Bereich im Editor und Maske in der Zeitleiste sind EINE Auswahl – in bei
 
   // „Fertig" in der Zeitleiste bringt die Schnittknöpfe zurück und lässt die Wahl im Editor stehen.
   await einstellungen(editor)
-    .getByRole('button', { name: /Maske fertig/ })
+    .getByRole('button', { name: /Bereich fertig/ })
     .click();
   await expect(
     editor.getByRole('button', { name: 'An der Wiedergabestelle teilen' }),
@@ -582,7 +582,7 @@ for (const [breite, hoehe] of [
     await ganzSichtbar(leiste.getByRole('radio', { name: 'Ganzer Film' }), true);
     await ganzSichtbar(leiste.getByRole('radio', { name: 'Zeitraum' }), true);
     await ganzSichtbar(leiste.getByRole('button', { name: /wirkt/ }), true);
-    await ganzSichtbar(leiste.getByRole('button', { name: /Maske fertig/ }), false);
+    await ganzSichtbar(leiste.getByRole('button', { name: /Bereich fertig/ }), false);
     // Auf dem breiteren Telefon passt auch „Löschen" noch dazu.
     if (breite >= 412) await ganzSichtbar(leiste.getByRole('button', { name: /löschen/ }), true);
 
@@ -591,7 +591,7 @@ for (const [breite, hoehe] of [
       e.scrollLeft = e.scrollWidth;
     });
     await ganzSichtbar(leiste.getByRole('button', { name: 'Hier trennen' }), true);
-    const fertig = leiste.getByRole('button', { name: /Maske fertig/ });
+    const fertig = leiste.getByRole('button', { name: /Bereich fertig/ });
     await ganzSichtbar(fertig, false);
     // Nichts schiebt sich darüber: An seiner Mitte liegt „Fertig" selbst.
     const mitte = await fertig.boundingBox();
@@ -600,7 +600,7 @@ for (const [breite, hoehe] of [
       ([x, y]) => document.elementFromPoint(x, y)?.closest('button')?.getAttribute('aria-label'),
       [mitte.x + mitte.width / 2, mitte.y + mitte.height / 2],
     );
-    expect(oben).toMatch(/Maske fertig/);
+    expect(oben).toMatch(/Bereich fertig/);
 
     // Ein Satz in der Zeile: Die Bühne bleibt gross genug.
     const buehne = await editor.locator('.bild-buehne').boundingBox();
@@ -648,7 +648,10 @@ test('jeder Bereich trägt seine Farbe als Punkt – und lässt sich umbenennen'
   await name.fill('Läufer');
   await expect(bereichsKnoepfe(editor).nth(0)).toContainText('Läufer');
   expect(await leistenName(editor)).toBe('Läufer');
-  await expect(editor.locator('.mb-zeile').nth(0)).toHaveAttribute('aria-label', /^Maske Läufer,/);
+  await expect(editor.locator('.mb-zeile').nth(0)).toHaveAttribute(
+    'aria-label',
+    /^Bereich Läufer,/,
+  );
   // Der Zweite bleibt, wie er heisst.
   await expect(bereichsKnoepfe(editor).nth(1)).toHaveText('Bereich 2');
 
@@ -657,7 +660,7 @@ test('jeder Bereich trägt seine Farbe als Punkt – und lässt sich umbenennen'
   await expect(bereichsKnoepfe(editor).nth(0)).toHaveText('Bereich 1');
   await expect(editor.locator('.mb-zeile').nth(0)).toHaveAttribute(
     'aria-label',
-    /^Maske Bereich 1,/,
+    /^Bereich Bereich 1,/,
   );
 
   // Ein leerer Name bleibt nicht leer: Nach dem Verlassen des Feldes steht wieder der Standardname da.
@@ -690,14 +693,14 @@ test('„＋ Bereich" gibt es auch an der Zeitleiste – von jedem Reiter aus', 
   await reiterBereiche(editor);
   await neuerBereich(editor, 1);
   await einstellungen(editor)
-    .getByRole('button', { name: /Maske fertig/ })
+    .getByRole('button', { name: /Bereich fertig/ })
     .click();
 
   // Auf einem anderen Reiter: ◐ → Namenswahl → „＋ Bereich".
   await editor.locator('.bild-reiter').getByRole('button', { name: /Ton/ }).click();
   await expect(editor.getByRole('group', { name: 'Bereiche' })).toHaveCount(0);
-  await editor.getByRole('button', { name: 'Maske wählen' }).click();
-  const wahl = editor.getByRole('toolbar', { name: 'Maske wählen' });
+  await editor.getByRole('button', { name: 'Bereich wählen' }).click();
+  const wahl = editor.getByRole('toolbar', { name: 'Bereich wählen' });
   await wahl.getByRole('button', { name: '＋ Bereich' }).click();
 
   // Der Reiter „Bereiche" ist aufgegangen, der neue Bereich da und überall gewählt.
@@ -710,12 +713,12 @@ test('„＋ Bereich" gibt es auch an der Zeitleiste – von jedem Reiter aus', 
   // Bei vier Bereichen fehlt der Knopf – er brächte nur eine Absage.
   await neuerBereich(editor, 2, 2);
   await einstellungen(editor)
-    .getByRole('button', { name: /Maske fertig/ })
+    .getByRole('button', { name: /Bereich fertig/ })
     .click();
-  await editor.getByRole('button', { name: 'Maske wählen' }).click();
+  await editor.getByRole('button', { name: 'Bereich wählen' }).click();
   await expect(
     editor
-      .getByRole('toolbar', { name: 'Maske wählen' })
+      .getByRole('toolbar', { name: 'Bereich wählen' })
       .getByRole('button', { name: '＋ Bereich' }),
   ).toHaveCount(0);
 });

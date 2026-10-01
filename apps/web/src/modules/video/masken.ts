@@ -603,13 +603,13 @@ export function hoechstJeBild(
  */
 export function grenzeVerletzt(masken: readonly Maske[], bezug: Bezug): string | null {
   if (masken.length > MASKEN_MAX) {
-    return `Höchstens ${MASKEN_MAX} Masken im ganzen Film – lösch eine, wenn du eine neue brauchst.`;
+    return `Höchstens ${MASKEN_MAX} Bereiche im ganzen Film – lösch einen, wenn du einen neuen brauchst.`;
   }
   const { anzahl, k } = hoechstJeBild(masken, bezug);
   if (anzahl > BEREICHE_MAX) {
     return (
-      `Bei ${quellZeitText(bildMitte(k, bezug.s))} wirkten dann ${anzahl} Masken – an einem Bild ` +
-      `gehen höchstens ${BEREICHE_MAX}. Grenz eine in der Zeitleiste ein oder lösch sie.`
+      `Bei ${quellZeitText(bildMitte(k, bezug.s))} wirkten dann ${anzahl} Bereiche – an einem Bild ` +
+      `gehen höchstens ${BEREICHE_MAX}. Grenz einen in der Zeitleiste ein oder lösch ihn.`
     );
   }
   return null;
@@ -667,16 +667,16 @@ export function bereichePlatz(
   }
   const warten =
     z.fehlend.length > 0
-      ? `${z.fehlend.length === 1 ? 'Eine Maske wirkt' : `${z.fehlend.length} Masken wirken`} hier noch nicht – sie werden verfolgt. `
+      ? `${z.fehlend.length === 1 ? 'Ein Bereich wirkt hier noch nicht – er wird' : `${z.fehlend.length} Bereiche wirken hier noch nicht – sie werden`} verfolgt. `
       : '';
   const draussen =
     z.jenseits.length > 0
-      ? `${z.jenseits.length === 1 ? 'Eine Maske fehlt' : `${z.jenseits.length} Masken fehlen`} hier – das Bild liegt hinter dem Ende des Films. `
+      ? `${z.jenseits.length === 1 ? 'Ein Bereich fehlt' : `${z.jenseits.length} Bereiche fehlen`} hier – das Bild liegt hinter dem Ende des Films. `
       : '';
   const grund =
     imFilm <= 0
-      ? `${MASKEN_MAX} Masken im Film – mehr gehen nicht. In der Zeitleiste eine löschen.`
-      : `An einer Stelle im Film wirken schon ${BEREICHE_MAX} Masken – eine neue gälte auch dort. In der Zeitleiste eine eingrenzen oder löschen.`;
+      ? `${MASKEN_MAX} Bereiche im Film – mehr gehen nicht. In der Zeitleiste einen löschen.`
+      : `An einer Stelle im Film wirken schon ${BEREICHE_MAX} Bereiche – ein neuer gälte auch dort. In der Zeitleiste einen eingrenzen oder löschen.`;
   return { max: imEditor, grund: warten + draussen + grund };
 }
 
@@ -1906,8 +1906,8 @@ export function bildDocAn(
       if (art === 'bild') {
         const anzahl = masken.filter((m) => m.aktiv && giltAn(m.geltung, k, rahmen)).length;
         throw new Error(
-          `Bei ${quellZeitText(bildMitte(k, rahmen.s))} wirken ${anzahl} Masken – an einem Bild ` +
-            `gehen höchstens ${BEREICHE_MAX}. Grenz eine in der Zeitleiste ein oder lösch sie.`,
+          `Bei ${quellZeitText(bildMitte(k, rahmen.s))} wirken ${anzahl} Bereiche – an einem Bild ` +
+            `gehen höchstens ${BEREICHE_MAX}. Grenz einen in der Zeitleiste ein oder lösch ihn.`,
         );
       }
       ueberzaehlig.push(maske.id);
@@ -1919,7 +1919,7 @@ export function bildDocAn(
     const fehlt = staende.some((stand) => !nimmt(art, stand));
     if (art === 'bild' && (fehlt || staende.includes('grob'))) {
       throw new Error(
-        `Die Maske ‚${maske.name}' ist bei ${quellZeitText(bildMitte(k, rahmen.s))} noch nicht fertig.`,
+        `Der Bereich ‚${maske.name}' ist bei ${quellZeitText(bildMitte(k, rahmen.s))} noch nicht fertig.`,
       );
     }
     if (fehlt) {
@@ -2586,7 +2586,7 @@ export function editorAenderung(
         masken,
         geloescht,
         neu: [],
-        abgelehnt: 'Die Masken passten nicht mehr zum Bild – es wird neu geladen.',
+        abgelehnt: 'Die Bereiche passten nicht mehr zum Bild – es wird neu geladen.',
       };
     } else {
       const vergeben = [...aktuell.values(), ...geordnet];
@@ -2821,10 +2821,10 @@ export function maskeTrennen(
 ): { masken: readonly Maske[]; neu: string } | { abgelehnt: string } {
   const stelle = masken.findIndex((maske) => maske.id === id);
   const maske = masken[stelle];
-  if (!maske) return { abgelehnt: 'Diese Maske gibt es nicht mehr.' };
+  if (!maske) return { abgelehnt: 'Diesen Bereich gibt es nicht mehr.' };
   if (masken.length >= MASKEN_MAX) {
     return {
-      abgelehnt: `Höchstens ${MASKEN_MAX} Masken im ganzen Film – zum Trennen erst eine löschen.`,
+      abgelehnt: `Höchstens ${MASKEN_MAX} Bereiche im ganzen Film – zum Trennen erst einen löschen.`,
     };
   }
   const stellen = stellenVon(bezug);
@@ -2834,7 +2834,7 @@ export function maskeTrennen(
   const hinten = stueckeSchnitt(alle, filmStrecke(stellen, hier, stellen.gesamt - 1));
   const vorn = stueckeOhne(stueckeSchnitt(alle, filmStrecke(stellen, 0, hier - 1)), hinten);
   if (vorn.length === 0 || hinten.length === 0) {
-    return { abgelehnt: 'Hier gibt es nichts zu trennen – die Maske gilt nur auf einer Seite.' };
+    return { abgelehnt: 'Hier gibt es nichts zu trennen – der Bereich gilt nur auf einer Seite.' };
   }
   const erste: Maske = { ...maske, geltung: { art: 'stuecke', stuecke: vorn } };
   const zweite: Maske = {

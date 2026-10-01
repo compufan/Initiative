@@ -231,7 +231,7 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
     setMasken(erg.masken);
     if (erg.verworfen > 0) {
       toast(
-        `${erg.verworfen} ${erg.verworfen === 1 ? 'Bereich passte' : 'Bereiche passten'} nicht mehr in den Film – höchstens 4 Masken wirken an einem Bild.`,
+        `${erg.verworfen} ${erg.verworfen === 1 ? 'Bereich passte' : 'Bereiche passten'} nicht mehr in den Film – höchstens 4 Bereiche wirken an einem Bild.`,
         'info',
       );
     }
