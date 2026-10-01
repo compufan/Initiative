@@ -11,6 +11,7 @@ import { PaymentProfileCard } from '../expenses/PaymentProfileCard.js';
 import { PasskeyCard } from './PasskeyCard.js';
 import { AppearanceCard } from './AppearanceCard.js';
 import { CalendarCard } from './CalendarCard.js';
+import { KartenAppCard } from './KartenAppCard.js';
 import { InstallCard } from './InstallCard.js';
 import { NotificationsCard } from './NotificationsCard.js';
 
@@ -35,6 +36,7 @@ export function SettingsScreen() {
       <NotificationsCard />
       <InstallCard />
       <CalendarCard />
+      <KartenAppCard />
       <CutoutCard />
       <TiefeCard />
       <PaymentProfileCard />

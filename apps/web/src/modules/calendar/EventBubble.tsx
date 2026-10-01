@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { OrtZeile } from '../../components/OrtZeile.js';
 import type { MessageRendererProps } from '../types.js';
 import { RsvpButtons } from './RsvpButtons.js';
 import { useLiveEvent } from './useCalendarEvents.js';
@@ -59,10 +60,17 @@ export function EventBubble({ message, isMine }: MessageRendererProps) {
         <span className="cal-bubble-main">
           <span className="cal-bubble-title">{event.title}</span>
           <span className="cal-bubble-line">🕒 {formatOccurrenceTime(occurrence)}</span>
-          {event.location && <span className="cal-bubble-line truncate">📍 {event.location}</span>}
           {repeat && <span className="cal-bubble-line">🔁 {repeat}</span>}
         </span>
       </Link>
+
+      {/* Außerhalb des Kartenkopfes: Ein Link im Link gibt es nicht, und der
+          Tipp auf den Kopf soll weiter zum Termin führen. */}
+      {event.location?.trim() && (
+        <div className="cal-bubble-ort">
+          <OrtZeile ort={event.location} variante="inline" />
+        </div>
+      )}
 
       {message.body && message.body.trim().length > 0 && (
         <p className="cal-bubble-body">{message.body}</p>

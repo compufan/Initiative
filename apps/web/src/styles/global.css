@@ -992,3 +992,219 @@ body {
    */
   background-attachment: fixed, fixed, fixed;
 }
+
+/* ---------- Orte und Karten ---------- */
+
+/*
+ * Der Ort eines Termins als Inhalt (`OrtZeile`) und das Blatt „Öffnen mit“
+ * (`KartenBlatt`). Beides steht hier und nicht im Kalendermodul, weil es in
+ * Terminen, Chatkarten und Einstellungen vorkommt.
+ */
+.ort {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.ort-symbol {
+  flex: none;
+}
+
+.ort-text {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+/* Knopf (ohne gemerkte Wahl) oder Link (mit): sieht gleich aus, ist beides ein Ziel zum Tippen. */
+.ort-link,
+.ort-suchen {
+  display: inline-block;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.ort-link:hover,
+.ort-suchen:hover {
+  text-decoration-color: currentColor;
+}
+
+/*
+ * „Auf Karte suchen“: ein Angebot, keine Erkennung. Gedämpft und kleiner, und
+ * unterstrichen erst beim Zeigen oder im Fokus – der Text davor ist schliesslich
+ * nicht als Adresse erkannt worden.
+ */
+.ort-suchen {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  text-decoration: none;
+}
+
+.ort-suchen:hover,
+.ort-suchen:focus-visible {
+  text-decoration: underline;
+}
+
+/* „Anders öffnen“ neben dem direkten Link. */
+.ort-mehr {
+  display: inline-grid;
+  place-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  vertical-align: middle;
+  border-radius: var(--radius-full);
+  color: var(--text-muted);
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.ort-mehr:hover,
+.ort-mehr:focus-visible {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+/* Detailansicht: eine Zeile, mindestens eine Daumenbreite hoch. */
+.ort-zeile {
+  align-items: center;
+  min-height: 44px;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+
+.ort-zeile .ort-link,
+.ort-zeile .ort-suchen {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+/*
+ * Chatkarte: auf zwei Zeilen begrenzt, kleiner. Die Berührungsfläche des
+ * Links reicht über sein Textfeld hinaus (Auffüllung gegen Gegenrand), ohne
+ * die Zeile aufzublähen; „⋯“ ist hier eine 32-px-Fläche innerhalb der Karte.
+ */
+.ort-inline {
+  align-items: baseline;
+  font-size: 0.8rem;
+}
+
+.ort-inline .ort-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.ort-inline .ort-link,
+.ort-inline .ort-suchen {
+  padding: 6px 0;
+  margin: -6px 0;
+}
+
+.ort-inline .ort-mehr {
+  min-width: 32px;
+  min-height: 32px;
+  margin: -6px 0;
+}
+
+/* In der Sprechblase liegt die Akzentfarbe auf der Akzentfarbe: Dort erbt der Link den Text. */
+.cal-bubble .ort-link,
+.cal-bubble .ort-suchen {
+  color: inherit;
+}
+
+.cal-bubble .ort-suchen {
+  opacity: 0.8;
+}
+
+.cal-bubble .ort-mehr {
+  color: inherit;
+}
+
+.karten-ziel {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+/* Zwei Knöpfe statt der drei, für die `.prf-segment` gebaut ist. */
+.karten-modus {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.karten-liste {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.karten-liste li + li {
+  border-top: 1px solid var(--border);
+}
+
+.karten-app {
+  min-height: 56px;
+  text-decoration: none;
+}
+
+.karten-app-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.karten-app-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.karten-app-standard {
+  color: var(--accent);
+}
+
+.karten-app-hinweis {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.karten-merken-zeile {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.karten-merken {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.karten-merken input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+
+.karten-aendern {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  font-size: 0.85rem;
+}

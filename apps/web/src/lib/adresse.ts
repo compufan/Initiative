@@ -727,7 +727,8 @@ function sicherheitVon(fund: KartenFund): Sicherheit {
   return fund.art === 'koordinate' ? 'sicher' : fund.sicherheit;
 }
 
-function zielVon(fund: KartenFund): Ziel {
+/** Was an die Karten-App geht, wenn jemand diesen Fund antippt. */
+export function zielVonFund(fund: KartenFund): Ziel {
   return fund.art === 'koordinate'
     ? { art: 'punkt', breite: fund.breite, laenge: fund.laenge }
     : { art: 'text', text: fund.suche };
@@ -788,7 +789,7 @@ export function ortAnalysieren(ort: string | null | undefined): OrtAnalyse {
     if (!hauptfund || RANG[sicherheitVon(fund)] > RANG[sicherheitVon(hauptfund)]) hauptfund = fund;
   }
 
-  let ziel: Ziel | null = hauptfund ? zielVon(hauptfund) : null;
+  let ziel: Ziel | null = hauptfund ? zielVonFund(hauptfund) : null;
   if (!ziel) {
     const suche = suchtextOffen(text, alle);
     if (suche) ziel = { art: 'text', text: suche };

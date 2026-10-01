@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { googleCalendarUrl, type RsvpStatus } from '@initiative/shared';
 import { Avatar } from '../../components/Avatar.js';
 import { EmptyState, Spinner } from '../../components/Feedback.js';
+import { OrtZeile } from '../../components/OrtZeile.js';
 import { Screen } from '../../components/Screen.js';
 import { Sheet } from '../../components/Sheet.js';
 import { api } from '../../lib/api.js';
@@ -209,7 +210,7 @@ export function EventDetailScreen() {
         <div className="cal-detail-facts">
           <h2 className="cal-detail-title">{event.title}</h2>
           <p className="cal-detail-line">🕒 {formatOccurrenceTime(occurrence)}</p>
-          {event.location && <p className="cal-detail-line">📍 {event.location}</p>}
+          {event.location && <OrtZeile ort={event.location} variante="zeile" />}
           {repeat && <p className="cal-detail-line">🔁 {repeat}</p>}
           {chatLabel && event.conversationId && (
             <p className="cal-detail-line">

@@ -352,6 +352,14 @@
   color: var(--text-muted);
 }
 
+/* Erkannt (Adresse, Koordinate, Link): ein Haken davor, damit es nicht an der Farbe hängt. */
+.cal-hint-ok::before {
+  content: '✓ ';
+  content: '✓ ' / '';
+  color: var(--success);
+  font-weight: 700;
+}
+
 .cal-error {
   margin: 0;
   font-size: 0.82rem;
@@ -688,6 +696,11 @@
 .cal-bubble-line {
   font-size: 0.8rem;
   opacity: 0.85;
+}
+
+/* Die Ortszeile unter dem Kartenkopf, siehe `OrtZeile`. */
+.cal-bubble-ort {
+  min-width: 0;
 }
 
 .cal-bubble-body {

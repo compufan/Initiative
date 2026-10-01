@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { LIMITS, describeRrule, type CalendarEventDto } from '@initiative/shared';
 import { Sheet } from '../../components/Sheet.js';
+import { OrtHinweis } from '../../components/OrtHinweis.js';
 import { PersonenWahl, type Person } from '../../components/PersonenWahl.js';
 import { ApiError, api } from '../../lib/api.js';
 import { useChat } from '../../state/chat.js';
@@ -353,8 +354,10 @@ export function EventEditor(props: EventEditorProps) {
           maxLength={300}
           placeholder="z. B. Stadtpark, Eingang Nord"
           autoComplete="off"
+          aria-describedby="cal-location-hint"
           onChange={(changed) => patch({ location: changed.target.value })}
         />
+        <OrtHinweis ort={form.location} id="cal-location-hint" />
       </div>
 
       <label className="cal-switch">
