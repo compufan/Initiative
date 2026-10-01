@@ -127,7 +127,11 @@ Mitgliedschaft in einem Chat, in dem der Termin als Karte steht, verleiht nichts
 (`0023_einladen.sql`). Das gilt einheitlich für Liste, Detail, Zusage, Notizen,
 Unterlagen, Ausgaben am Termin, Kalender-Abo, den Zugriff auf Dateien des Termins
 und den Rundruf; wer nicht eingeladen ist, bekommt `404` und erfährt auch die
-Existenz nicht.
+Existenz nicht. Das gilt auch für die **schreibenden** Wege (Ändern, Löschen,
+Ausladen, Zustellung, Sammlung verknüpfen, Terminfindung bestätigen): Dort wird
+zuerst die Sichtbarkeit geprüft und erst danach die Rolle (`403`). Bekannte und
+unbekannte Kennung sehen für einen Nicht-Eingeladenen gleich aus. Wer eingeladen
+ist, darf sich selbst austragen; andere ausladen darf nur der Ersteller.
 
 Die Karte im Chat zeigt jedem Betrachter seinen **eigenen** Zustand. Wer nicht
 eingeladen ist (später beigetreten, nicht ausgewählt, ausgeladen), sieht nur
@@ -150,8 +154,18 @@ Was offen bleibt, und warum:
   auftauchen. Den Direktchat mit jedem Konto gab es schon vorher; neu ist, dass
   eine Einladung ihn als Nebenwirkung auslöst. Begrenzt wird das durch die
   Drossel (`EINLADEN`: 30 Anfragen, `EINZELCHATS_NEU`: 300 neue Chats je Stunde
-  und Konto) und die Obergrenze von 200 Eingeladenen. Eine Sperrliste gibt es
-  nicht; `einzelchats_sichern` ist die eine Stelle, an der sie einzuhängen wäre.
+  und Konto) und die Obergrenze von 200 Eingeladenen. Die Drossel
+  `EINZELCHATS_NEU` gilt nur für Einladungen mit `zustellung`; `POST /conversations`
+  und der alte Weg (`conversationId` ohne `zustellung`) legen Einzelchats ohne sie
+  an – bewusst: Der Direktchat mit jedem Konto war vorher möglich, begrenzt werden
+  soll die _neue_ Nebenwirkung, nicht der alte Weg. Eine Sperrliste gibt es nicht;
+  `einzelchats_sichern` ist die eine Stelle, an der sie einzuhängen wäre. Wer
+  eingeladen wird, ohne es zu wollen, kann sich austragen – lädt der Absender ihn
+  wieder ein, muss er es wiederholen (begrenzt durch `EINLADEN`).
+- Ort (300 Zeichen) und Beschreibung (4000) sind beim Anlegen **und** beim
+  Ändern begrenzt: Beide stecken in jeder Karte und jeder Chatliste der
+  Eingeladenen, und ohne Grenze trüge ein Fremder mit einer Einladung Megabytes in
+  fremde Chats.
 
 ### 4. Die abgelegten Dateien
 

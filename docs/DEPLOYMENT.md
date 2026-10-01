@@ -987,18 +987,38 @@ Was zu wissen ist:
 - Sie ist wiederholbar (`if not exists`, `on conflict do nothing`); ein zweiter
   Durchlauf ändert nichts. Der Test `tests/einladen_migration.rs` belegt das an
   einem nachgestellten Altbestand.
-- Das Nachtragen der Karten liest die Tabelle `messages` einmal sequentiell
-  (es gibt keinen Index auf `type`). Bei Millionen Nachrichten sind das einmalig
-  Sekunden; währenddessen läuft die Migration in ihrer Transaktion.
+- **Sperren bis zum Ende des Laufs.** sqlx führt die Datei in *einer* Transaktion
+  aus, und ihre Sperren gelten bis zum Commit – also bis nach Schritt 6, dem
+  Nachtragen der Karten: `ACCESS EXCLUSIVE` auf `calendar_events`, `conversations`
+  und `event_attendees` (der Tausch des Fremdschlüssels in Schritt 3 hängt
+  Trigger an die referenzierte Tabelle) und `SHARE ROW EXCLUSIVE` auf `messages`
+  (Fremdschlüssel von `event_placements`). Solange der Lauf dauert, warten alle
+  Zugriffe auf `conversations` – praktisch jede Anfrage – und alle Schreibzugriffe
+  auf `messages`. Die Zeit bestimmt Schritt 6: Er liest `messages` einmal
+  sequentiell (es gibt keinen Index auf `type`). Gemessen an einer synthetischen
+  Tabelle mit 2 Millionen Nachrichten (2000 Termin-Karten) dauerte er knapp
+  3,5 Sekunden; die Zeit wächst mit der Tabelle. Darum: außerhalb der
+  Hauptzeit einspielen, bei Beständen im zweistelligen Millionenbereich im
+  Wartungsfenster. Die Schritte umzustellen (die Daten zuerst, den
+  Fremdschlüssel zuletzt) würde die Sperre auf `conversations` kürzen, ändert
+  aber die Prüfsumme der Datei – siehe „Wenn Migrationen blockieren“.
 - Der Fremdschlüssel `calendar_events.conversation_id` wird auf
-  `on delete set null` umgestellt und nimmt dafür kurz eine Sperre auf die
-  Tabelle.
-- Wer die Anwendung auf einen älteren Stand zurückrollt, hat eine lauffähige
-  Datenbank (die alten Spalten sind unverändert) – nur der Chat reisst den
-  Termin nicht mehr mit.
+  `on delete set null` umgestellt (Schritt 3, im Katalog gesucht, nicht über
+  seinen Namen).
+- **Zurückrollen braucht einen Handgriff.** Die alten Spalten bleiben, die
+  Datenbank ist für einen älteren Stand lesbar und beschreibbar – aber ein
+  älteres Abbild kennt Version 23 nicht. sqlx meldet dann `VersionMissing(23)`
+  („Migrationen fehlgeschlagen“), die Anwendung startet mit Startproblem,
+  `/healthz` antwortet `degraded`, und die Gesundheitsprüfung des Hosters
+  scheitert: Das Zurückrollen hängt. Zwei Wege: im älteren Abbild den Migrator mit
+  `set_ignore_missing(true)` bauen, oder vorher die Zeile entfernen –
+  `delete from _sqlx_migrations where version = 23;`. Die Datenbank bleibt dabei
+  kompatibel; im älteren Stand gilt allerdings wieder die Mitgliedschaft im Chat
+  als Zugang zu Terminen (er kennt `event_placements` nicht). Wer später wieder
+  vorwärts geht, spielt 0023 erneut ein – sie ist wiederholbar.
 - Mit `REALTIME_BUS=postgres` wird die Empfängerliste eines Rundrufs in Stücken
   zu höchstens 100 Personen verschickt, und ein zu grosser Termin-Rundruf wird
-  zu einem `sync.hint` mit der Kennung des Termins. Ohne diese Änderung gingen
+  zu einem `sync.hint` mit Kennung und Stand des Termins. Ohne diese Änderung gingen
   Live-Zusagen bei mehr als rund 70 Eingeladenen verloren. Mit `memory` tritt
   das Problem nicht auf.
 

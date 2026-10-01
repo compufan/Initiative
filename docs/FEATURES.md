@@ -742,16 +742,32 @@ muss.
   Wer neu dazukommt, bekommt Karte und Benachrichtigung, wer schon dabei war,
   nichts davon. Wer ausgeladen wird, verliert sofort den Zugang; seine Karte im
   Einzelchat wird gelöscht. Eine Karte im Gruppenchat bleibt stehen, zeigt dem
-  Ausgeladenen aber nichts.
+  Ausgeladenen aber nichts. Auch eine Zusage, die genau dann eintrifft, holt
+  niemanden zurück.
+- **Sich selbst austragen** kann jede eingeladene Person: auf der Terminseite
+  „Aus dem Termin austragen“. Der Termin verschwindet aus ihrem Kalender und ihren
+  Chats, der Zugang endet sofort. Mit „Nein“ bliebe er stehen.
 - **Zeit oder Ort ändern** benachrichtigt alle Eingeladenen (der Titel nicht;
   höchstens dreimal in zehn Minuten je Termin, weitere Änderungen stehen still
   in den Karten). Bisherige Zu- und Absagen bleiben.
 - **Absagen** lässt den Termin und seine Karten stehen („Abgesagt“), sperrt
-  Zusagen und benachrichtigt alle; man kann ihn wieder aufnehmen. **Löschen**
-  räumt auf: Der Termin und alle seine Karten verschwinden.
+  Zusagen und benachrichtigt alle (höchstens dreimal in zehn Minuten je Termin,
+  wer im Wechsel absagt und wieder aufnimmt, klingelt nicht beliebig oft); man
+  kann ihn wieder aufnehmen. Im Kalender-Abo und in der `.ics`-Datei steht er mit
+  derselben Kennung als abgesagt (`STATUS:CANCELLED`), damit Kalender-Apps ihn
+  nachführen. **Löschen** räumt auf: Der Termin und alle seine Karten
+  verschwinden – auch Karten, die eine laufende Zustellung gerade noch anlegt.
+- Wird eine Karte im Chat mit „Für alle löschen“ entfernt, gilt sie auch im
+  Editor als weg; der Termin lässt sich dort wieder in diesen Gruppenchat posten.
 - Konnten Karten nicht zugestellt werden (Verbindung weg mitten im Senden), bleibt
   der Termin gültig; auf der Terminseite steht dann „Einladungen nicht
-  zugestellt“ mit „Erneut zustellen“.
+  zugestellt“ mit „Erneut zustellen“ – auch gleich nach dem Einladen dort, nicht
+  erst nach dem Neuladen. Wer denselben Termin wegen eines Funklochs noch einmal
+  sendet, bekommt ihn zurück, sobald die erste Zustellung durch ist.
+- **Nach einer Lücke holt die App nach**: Reißt die Verbindung ab (Bildschirm aus,
+  Funkloch) oder war die App länger im Hintergrund, holt sie die Termine neu, die
+  Karten, Kalender und Terminseite zeigen. Karten weit oben im Verlauf, die aus dem
+  Zwischenspeicher stammen, werden einmal je Sitzung geprüft.
 
 Was nicht geht, ehrlich:
 
@@ -767,9 +783,17 @@ Was nicht geht, ehrlich:
 - Eine Karte im Gruppenchat, die jemandem bisher nichts zeigte, füllt sich nach
   seiner Einladung beim nächsten Öffnen des Chats, nicht schon live.
 - Ein Termin aus einer **Umfrage** oder **Terminfindung** lädt weiter alle
-  Mitglieder des Chats ein und postet nur dort eine Karte.
-- Höchstens 200 Eingeladene je Termin. Benachrichtigungen kommen nur an, wenn die
-  Person sie erlaubt hat.
+  Mitglieder des Chats ein und postet nur dort eine Karte. Solange über den
+  Zeitpunkt abgestimmt wird, lassen sich keine weiteren Personen einladen (sie
+  könnten nicht abstimmen); wer ausgeladen wurde, wird beim Festlegen nicht wieder
+  aufgenommen, auch wenn er mit abgestimmt hat.
+- Höchstens 200 Eingeladene je Termin – ein Altbestand mit mehr lässt sich
+  verkleinern, aber nicht vergrößern. Der Ort darf 300, die Beschreibung 4000
+  Zeichen lang sein, beim Anlegen wie beim Ändern. Benachrichtigungen kommen nur
+  an, wenn die Person sie erlaubt hat.
+- Wer von einem Fremden eingeladen wird, kann sich austragen, aber nicht vorab
+  ablehnen oder den Absender sperren; lädt der ihn erneut ein, muss er sich erneut
+  austragen (begrenzt durch die Drossel, 30 Einladungen je Stunde).
 
 ### Notizen und Listen am Termin
 
