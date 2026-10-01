@@ -16,17 +16,19 @@ interface RsvpButtonsProps {
   /** The updated event coming back from the API. */
   onChanged: (event: CalendarEventDto) => void;
   compact?: boolean;
+  /** Der Termin ist abgesagt: Zu- und Absagen sind gesperrt (der Server antwortet sonst mit 409). */
+  gesperrt?: boolean;
 }
 
 /** Zu-/Absagen with an optimistic state that snaps back when the call fails. */
-export function RsvpButtons({ event, onChanged, compact }: RsvpButtonsProps) {
+export function RsvpButtons({ event, onChanged, compact, gesperrt }: RsvpButtonsProps) {
   const myId = useMyId();
   const [pending, setPending] = useState<RsvpStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const active = pending ?? myRsvp(event, myId);
 
   async function choose(status: RsvpStatus) {
-    if (busy) return;
+    if (busy || gesperrt) return;
     setBusy(true);
     setPending(status);
     try {
@@ -52,7 +54,7 @@ export function RsvpButtons({ event, onChanged, compact }: RsvpButtonsProps) {
           className={`cal-rsvp-btn cal-rsvp-${choice.status} ${active === choice.status ? 'is-active' : ''}`}
           aria-pressed={active === choice.status}
           aria-label={choice.label}
-          disabled={busy}
+          disabled={busy || gesperrt}
           onClick={() => void choose(choice.status)}
         >
           <span className="cal-rsvp-icon" aria-hidden="true">

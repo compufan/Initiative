@@ -98,15 +98,15 @@ export function KalenderScreen() {
       {
         key: 'chat',
         label: 'Chat',
-        werte: (vorkommen) =>
-          vorkommen.event.conversationId
-            ? [
-                {
-                  id: vorkommen.event.conversationId,
-                  label: chatNamen(vorkommen.event.conversationId),
-                },
-              ]
-            : [{ id: 'ohne', label: 'Nur für mich' }],
+        werte: (vorkommen) => {
+          const { conversationId, attendees } = vorkommen.event;
+          if (conversationId) return [{ id: conversationId, label: chatNamen(conversationId) }];
+          // Ohne Gruppenkarte hat ein Termin keinen Chat – auch nicht, wenn er
+          // viele Eingeladene und Einzelkarten hat.
+          return attendees.length > 1
+            ? [{ id: 'ohne-gruppe', label: 'Ohne Gruppenchat' }]
+            : [{ id: 'ohne', label: 'Nur für mich' }];
+        },
       },
       {
         key: 'antwort',

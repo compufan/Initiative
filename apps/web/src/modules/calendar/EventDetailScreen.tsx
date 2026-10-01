@@ -15,8 +15,10 @@ import { EventNotes } from './EventNotes.js';
 import { EventPollCard } from './EventPollCard.js';
 import { EventExpenses } from './EventExpenses.js';
 import { EventCollection } from './EventCollection.js';
-import { PersonenWahl, type Person } from '../../components/PersonenWahl.js';
+import { EinladungsWahl } from './EinladungsWahl.js';
+import { LEERE_AUSWAHL, terminOhneZustellung, type Auswahl } from './einladung.js';
 import { RsvpButtons } from './RsvpButtons.js';
+import { ZustellungHinweis } from './ZustellungHinweis.js';
 import { useLiveEvent } from './useCalendarEvents.js';
 import {
   absoluteUrl,
@@ -41,11 +43,15 @@ export function EventDetailScreen() {
   const navigate = useNavigate();
   const myId = useMyId();
   const eventId = params.eventId ?? '';
-  const { event, setEvent, loading, failed, deleted } = useLiveEvent(eventId || null);
+  const { event, setEvent, loading, failed, deleted, grund } = useLiveEvent(eventId || null);
 
   const [editorOpen, setEditorOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [absagenOpen, setAbsagenOpen] = useState(false);
+  const [absagend, setAbsagend] = useState(false);
+  /** Wen der Ersteller gerade ausladen will und der schon zugesagt hatte – die Rückfrage. */
+  const [ausladenFrage, setAusladenFrage] = useState<string | null>(null);
 
   const attendeeIds = useMemo(
     () => (event ? event.attendees.map((attendee) => attendee.userId) : []),
@@ -56,30 +62,36 @@ export function EventDetailScreen() {
     (state) => state.conversations.find((item) => item.id === event?.conversationId) ?? null,
   );
 
-  /** Wer noch nicht dabei ist – aus dem Chat des Termins. */
-  const einladbar = useMemo<Person[]>(() => {
-    const dabei = new Set(event?.attendees.map((teilnehmer) => teilnehmer.userId) ?? []);
-    return (conversation?.members ?? [])
-      .filter((member) => !dabei.has(member.userId))
-      .map((member) => ({ id: member.userId, displayName: member.user.displayName }));
-  }, [conversation, event]);
+  /*
+   * Wer neu eingeladen werden soll. Die Liste kommt aus den Kontakten (alle, mit
+   * denen man einen Chat teilt), nicht mehr aus dem einen Chat des Termins: Ein
+   * Termin hat nicht mehr „seinen“ Chat, und wer schon dabei ist, steht nicht
+   * zur Wahl.
+   */
+  const bisher = useMemo(() => {
+    const antworten: Record<string, RsvpStatus> = {};
+    for (const teilnehmer of event?.attendees ?? []) {
+      if (teilnehmer.userId !== event?.createdBy) antworten[teilnehmer.userId] = teilnehmer.status;
+    }
+    return antworten;
+  }, [event]);
 
-  const [einladenAuswahl, setEinladenAuswahl] = useState<string[]>([]);
+  const [einladenAuswahl, setEinladenAuswahl] = useState<Auswahl>(LEERE_AUSWAHL);
   const [laedtEin, setLaedtEin] = useState(false);
 
-  async function einladen(ids: string[]) {
-    if (!event || ids.length === 0) return;
+  async function einladen(neue: string[]) {
+    if (!event || neue.length === 0) return;
     setLaedtEin(true);
     try {
-      setEvent(
-        await api.calendar.invite(
-          event.id,
-          event.attendees.map((teilnehmer) => teilnehmer.userId),
-          ids,
-        ),
+      const antwort = await api.calendar.invite(
+        event.id,
+        event.attendees.map((teilnehmer) => teilnehmer.userId),
+        neue,
+        event.createdBy,
       );
-      setEinladenAuswahl([]);
-      toast(ids.length === 1 ? 'Eingeladen.' : `${ids.length} eingeladen.`, 'success');
+      setEvent(terminOhneZustellung(antwort));
+      setEinladenAuswahl(LEERE_AUSWAHL);
+      toast(neue.length === 1 ? 'Eingeladen.' : `${neue.length} eingeladen.`, 'success');
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Einladen fehlgeschlagen', 'error');
     } finally {
@@ -90,9 +102,37 @@ export function EventDetailScreen() {
   async function ausladen(userId: string) {
     if (!event) return;
     try {
-      setEvent(await api.calendar.uninvite(event.id, userId));
+      setEvent(terminOhneZustellung(await api.calendar.uninvite(event.id, userId)));
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Ausladen fehlgeschlagen', 'error');
+    }
+  }
+
+  /**
+   * Absagen lässt den Termin und seine Karten stehen („Abgesagt“) und
+   * benachrichtigt alle; Löschen räumt auf. `wiederaufnehmen` nimmt es zurück.
+   */
+  async function absagen(wiederaufnehmen: boolean) {
+    if (!event || absagend) return;
+    setAbsagend(true);
+    try {
+      const antwort = wiederaufnehmen
+        ? await api.calendar.wiederaufnehmen(event.id)
+        : await api.calendar.absagen(event.id);
+      setEvent(terminOhneZustellung(antwort));
+      toast(wiederaufnehmen ? 'Termin findet wieder statt' : 'Termin abgesagt', 'success');
+      setAbsagenOpen(false);
+    } catch (error) {
+      toast(
+        error instanceof Error && error.message
+          ? error.message
+          : wiederaufnehmen
+            ? 'Termin konnte nicht wieder aufgenommen werden'
+            : 'Termin konnte nicht abgesagt werden',
+        'error',
+      );
+    } finally {
+      setAbsagend(false);
     }
   }
 
@@ -131,12 +171,28 @@ export function EventDetailScreen() {
   }
 
   if (deleted) {
+    // Der Grund kommt aus dem Rundruf. Ohne ihn (ein Nachladen, das mit 403 oder
+    // 404 endete) weiss man nur, dass der Termin nicht mehr erreichbar ist.
+    const ausgeladen = grund === 'ausgeladen';
+    const unbekannt = grund === undefined;
     return (
       <Screen title="Termin" back="/kalender">
         <EmptyState
-          emoji="🗑️"
-          title="Termin gelöscht"
-          description="Dieser Termin existiert nicht mehr."
+          emoji={ausgeladen || unbekannt ? '📅' : '🗑️'}
+          title={
+            ausgeladen
+              ? 'Nicht mehr eingeladen'
+              : unbekannt
+                ? 'Termin nicht mehr verfügbar'
+                : 'Termin gelöscht'
+          }
+          description={
+            ausgeladen
+              ? 'Du bist nicht mehr zu diesem Termin eingeladen.'
+              : unbekannt
+                ? 'Dieser Termin ist für dich nicht mehr sichtbar.'
+                : 'Dieser Termin existiert nicht mehr.'
+          }
           action={
             <Link className="btn btn-primary" to="/kalender">
               Zum Kalender
@@ -234,9 +290,17 @@ export function EventDetailScreen() {
         </p>
       )}
 
+      {event.status === 'cancelled' && (
+        <p className="cal-note" role="status">
+          ⛔ Dieser Termin ist abgesagt. Zu- und Absagen sind gesperrt.
+        </p>
+      )}
+
       {event.status === 'planning' && (
         <EventPollCard event={event} canManage={isCreator} onConfirmed={setEvent} />
       )}
+
+      {isCreator && <ZustellungHinweis eventId={event.id} />}
 
       <section className="card cal-block" aria-label="Deine Antwort">
         <h2 className="cal-block-title">
@@ -244,7 +308,7 @@ export function EventDetailScreen() {
               falsche Frage - beantwortet wird sie in der Abstimmung. */}
           {event.status === 'planning' ? 'Grundsätzlich dabei?' : 'Bist du dabei?'}
         </h2>
-        <RsvpButtons event={event} onChanged={setEvent} />
+        <RsvpButtons event={event} onChanged={setEvent} gesperrt={event.status === 'cancelled'} />
         <p className="cal-hint">
           {mine && mine !== 'pending'
             ? `Du hast ${rsvpMeta(mine).label.toLowerCase()}.`
@@ -284,7 +348,11 @@ export function EventDetailScreen() {
                       className="icon-btn"
                       aria-label={`${name} ausladen`}
                       title="Ausladen"
-                      onClick={() => void ausladen(attendee.userId)}
+                      onClick={() =>
+                        attendee.status === 'yes' || attendee.status === 'maybe'
+                          ? setAusladenFrage(attendee.userId)
+                          : void ausladen(attendee.userId)
+                      }
                     >
                       ✕
                     </button>
@@ -311,21 +379,26 @@ export function EventDetailScreen() {
                 stand weiter auf „0 Personen“ – man sah nicht einmal, was man
                 gerade getan hatte.
             */}
-            <PersonenWahl
-              label="Nachträglich einladen"
-              vorschlaege={einladbar}
-              gewaehlt={einladenAuswahl}
+            <EinladungsWahl
+              myId={myId}
+              auswahl={einladenAuswahl}
               onChange={setEinladenAuswahl}
+              senden
+              onSenden={() => {}}
+              einzelchats
+              onEinzelchats={() => {}}
+              bisher={bisher}
+              nurNeue
             />
             <button
               type="button"
               className="btn btn-primary btn-block"
-              disabled={einladenAuswahl.length === 0 || laedtEin}
-              onClick={() => void einladen(einladenAuswahl)}
+              disabled={einladenAuswahl.personen.length === 0 || laedtEin}
+              onClick={() => void einladen(einladenAuswahl.personen)}
             >
-              {einladenAuswahl.length <= 1
+              {einladenAuswahl.personen.length <= 1
                 ? 'Einladen'
-                : `${einladenAuswahl.length} Personen einladen`}
+                : `${einladenAuswahl.personen.length} Personen einladen`}
             </button>
           </details>
         )}
@@ -363,6 +436,24 @@ export function EventDetailScreen() {
           <button type="button" className="btn btn-block" onClick={() => setEditorOpen(true)}>
             ✎ Termin bearbeiten
           </button>
+          {/* Absagen ist der freundliche Weg, Löschen der Aufräumweg: Beides
+              steht nebeneinander, damit klar ist, was welches tut. */}
+          {event.status === 'cancelled' ? (
+            <button
+              type="button"
+              className="btn btn-block"
+              disabled={absagend}
+              onClick={() => void absagen(true)}
+            >
+              ↩ Termin findet doch statt
+            </button>
+          ) : (
+            event.status === 'confirmed' && (
+              <button type="button" className="btn btn-block" onClick={() => setAbsagenOpen(true)}>
+                ⛔ Termin absagen
+              </button>
+            )
+          )}
           <button
             type="button"
             className="btn btn-danger btn-block"
@@ -387,8 +478,9 @@ export function EventDetailScreen() {
         title="Termin löschen?"
       >
         <p className="muted">
-          „{event.title}“ wird für alle Teilnehmenden entfernt. Das lässt sich nicht rückgängig
-          machen.
+          „{event.title}“ wird für alle Teilnehmenden entfernt, auch die Karten in den Chats. Das
+          lässt sich nicht rückgängig machen. Findet der Termin nur nicht statt, nimm „Absagen“:
+          Dann bleibt er sichtbar.
         </p>
         <div className="cal-confirm-actions">
           <button type="button" className="btn" onClick={() => setConfirmOpen(false)}>
@@ -401,6 +493,60 @@ export function EventDetailScreen() {
             onClick={() => void remove()}
           >
             {deleting ? 'Wird gelöscht …' : 'Löschen'}
+          </button>
+        </div>
+      </Sheet>
+
+      <Sheet
+        open={absagenOpen}
+        onClose={() => setAbsagenOpen(false)}
+        variant="modal"
+        title="Termin absagen?"
+      >
+        <p className="muted">
+          „{event.title}“ bleibt in den Chats und im Kalender stehen, als abgesagt gekennzeichnet.
+          Alle Eingeladenen werden benachrichtigt und können nicht mehr zu- oder absagen. Du kannst
+          den Termin später wieder aufnehmen.
+        </p>
+        <div className="cal-confirm-actions">
+          <button type="button" className="btn" onClick={() => setAbsagenOpen(false)}>
+            Abbrechen
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger"
+            disabled={absagend}
+            onClick={() => void absagen(false)}
+          >
+            {absagend ? 'Wird abgesagt …' : 'Absagen'}
+          </button>
+        </div>
+      </Sheet>
+
+      <Sheet
+        open={ausladenFrage != null}
+        onClose={() => setAusladenFrage(null)}
+        variant="modal"
+        title="Wirklich ausladen?"
+      >
+        <p className="muted">
+          {ausladenFrage ? (users[ausladenFrage]?.displayName ?? 'Diese Person') : ''} hatte
+          zugesagt. Der Zugang endet sofort, die Karte im Einzelchat wird gelöscht.
+        </p>
+        <div className="cal-confirm-actions">
+          <button type="button" className="btn" onClick={() => setAusladenFrage(null)}>
+            Abbrechen
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger"
+            onClick={() => {
+              const wen = ausladenFrage;
+              setAusladenFrage(null);
+              if (wen) void ausladen(wen);
+            }}
+          >
+            Ausladen
           </button>
         </div>
       </Sheet>

@@ -11,10 +11,35 @@ import {
   rsvpCounts,
 } from './helpers.js';
 
-/** Chat bubble for an announced event: date block, facts and the RSVP row. */
+/** Was eine Karte sagt, deren Termin nicht mehr zu sehen ist. */
+function wegText(grund: 'geloescht' | 'ausgeladen' | undefined): string {
+  if (grund === 'geloescht') return 'Dieser Termin wurde gelöscht.';
+  if (grund === 'ausgeladen') return 'Du bist nicht mehr zu diesem Termin eingeladen.';
+  return 'Termin nicht verfügbar.';
+}
+
+/**
+ * Chat bubble for an announced event: date block, facts and the RSVP row.
+ *
+ * Die Karte hält keinen eigenen Stand: Sie zeigt den Termin, den der
+ * Chat-Speicher ihr gibt (`message.event`), und der wird bei jeder Änderung des
+ * Termins in allen Chats nachgeführt – auch in nicht geöffneten. Eine Zusage in
+ * einem anderen Chat steht damit hier schon, wenn man zurückkehrt.
+ *
+ * Fünf Zustände: gelöscht (die Nachricht selbst), Termin nicht (mehr) sichtbar
+ * – ohne Kennung, wenn man nie eingeladen war –, abgesagt, geladen und der
+ * Normalfall.
+ */
 export function EventBubble({ message, isMine }: MessageRendererProps) {
-  const eventId = message.metadata.eventId ?? message.event?.id ?? null;
-  const { event, setEvent, loading, deleted } = useLiveEvent(eventId, message.event ?? null);
+  // Ist der Termin schon als nicht mehr sichtbar bekannt, wird er nicht noch
+  // einmal abgerufen: Es gäbe nur ein 404.
+  const eventId = message.terminGrund
+    ? null
+    : (message.metadata.eventId ?? message.event?.id ?? null);
+  const { event, setEvent, loading, deleted, grund } = useLiveEvent(
+    eventId,
+    message.terminGrund ? null : (message.event ?? null),
+  );
   const tone = isMine ? 'is-mine' : '';
 
   if (message.deletedAt) {
@@ -27,10 +52,10 @@ export function EventBubble({ message, isMine }: MessageRendererProps) {
     );
   }
 
-  if (deleted) {
+  if (message.terminGrund || deleted) {
     return (
       <div className={`cal-bubble ${tone}`}>
-        <p className="cal-bubble-note">Dieser Termin wurde gelöscht.</p>
+        <p className="cal-bubble-note">{wegText(message.terminGrund ?? grund)}</p>
       </div>
     );
   }
@@ -48,9 +73,13 @@ export function EventBubble({ message, isMine }: MessageRendererProps) {
   const occurrence = nextOccurrence(event);
   const repeat = recurrenceHint(event.rrule);
   const counts = rsvpCounts(event);
+  const abgesagt = event.status === 'cancelled';
 
   return (
-    <div className={`cal-bubble ${tone}`} style={{ borderLeftColor: eventColor(event) }}>
+    <div
+      className={`cal-bubble ${tone} ${abgesagt ? 'is-abgesagt' : ''}`}
+      style={{ borderLeftColor: eventColor(event) }}
+    >
       <Link className="cal-bubble-head" to={`/kalender/termin/${event.id}`}>
         <span className="cal-date-block">
           <span className="cal-date-day">{occurrence.start.getDate()}</span>
@@ -58,6 +87,7 @@ export function EventBubble({ message, isMine }: MessageRendererProps) {
         </span>
         <span className="cal-bubble-main">
           <span className="cal-bubble-title">{event.title}</span>
+          {abgesagt && <span className="cal-bubble-abgesagt">⛔ Abgesagt</span>}
           <span className="cal-bubble-line">🕒 {formatOccurrenceTime(occurrence)}</span>
           {event.location && <span className="cal-bubble-line truncate">📍 {event.location}</span>}
           {repeat && <span className="cal-bubble-line">🔁 {repeat}</span>}
@@ -72,7 +102,8 @@ export function EventBubble({ message, isMine }: MessageRendererProps) {
         {counts.yes} zugesagt · {counts.maybe} vielleicht · {counts.no} abgesagt
       </p>
 
-      <RsvpButtons event={event} onChanged={setEvent} compact />
+      {/* Bei einem abgesagten Termin gibt es nichts mehr zu beantworten. */}
+      {!abgesagt && <RsvpButtons event={event} onChanged={setEvent} compact />}
     </div>
   );
 }

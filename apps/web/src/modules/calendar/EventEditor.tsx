@@ -1,11 +1,28 @@
-import { useEffect, useState } from 'react';
-import { LIMITS, describeRrule, type CalendarEventDto } from '@initiative/shared';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  LIMITS,
+  describeRrule,
+  uuidv7,
+  type CalendarEventDto,
+  type RsvpStatus,
+} from '@initiative/shared';
 import { Sheet } from '../../components/Sheet.js';
-import { PersonenWahl, type Person } from '../../components/PersonenWahl.js';
 import { ApiError, api } from '../../lib/api.js';
+import { aktualisiert } from '../../lib/terminEreignisse.js';
 import { useChat } from '../../state/chat.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
+import { EinladungsWahl } from './EinladungsWahl.js';
+import {
+  aendernBody,
+  anlegenBody,
+  niemand,
+  speichernText,
+  vorbelegung,
+  zeitOrtGeaendert,
+  zeitOrtHinweis,
+  type Auswahl,
+} from './einladung.js';
 import {
   DAY_MS,
   EVENT_COLORS,
@@ -17,7 +34,6 @@ import {
   type RepeatState,
   addDays,
   buildRrule,
-  conversationLabel,
   defaultRepeat,
   fromInputs,
   isSameDay,
@@ -40,18 +56,6 @@ interface FormState {
   color: string | null;
   reminders: number[];
   repeat: RepeatState;
-  conversationId: string | null;
-  announce: boolean;
-  /**
-   * Wer eingeladen ist.
-   *
-   * Leer heisst: alle aus dem gewählten Chat – so war es bisher immer, weil
-   * die Oberfläche `attendeeIds` schlicht nie mitschickte. Der Server nimmt
-   * sie seit jeher entgegen; es gab nur kein Feld dafür. Folge: Ein Termin
-   * ohne Chat konnte niemanden einladen, und seine Notizen und Unterlagen
-   * waren damit für niemanden sonst erreichbar.
-   */
-  attendeeIds: string[];
 }
 
 interface EventEditorProps {
@@ -59,10 +63,12 @@ interface EventEditorProps {
   onClose: () => void;
   /** Existing event – the editor switches to "bearbeiten". */
   event?: CalendarEventDto | null;
-  /** Preselected chat, e.g. when the editor is opened from the composer. */
+  /**
+   * Preselected chat, e.g. when the editor is opened from the composer: Im
+   * Gruppenchat sind alle Mitglieder gewählt und der Chat steht als Ziel da, im
+   * Einzelchat das Gegenüber. Alles bleibt sichtbar und abwählbar.
+   */
   conversationId?: string | null;
-  /** Hide the chat picker (the chat is fixed by the context). */
-  lockConversation?: boolean;
   /** Day tapped in the month grid. */
   initialDate?: Date | null;
   onSaved?: (event: CalendarEventDto) => void;
@@ -96,9 +102,6 @@ function emptyForm(props: EventEditorProps): FormState {
     color: null,
     reminders: [],
     repeat: defaultRepeat(start),
-    conversationId: props.conversationId ?? null,
-    announce: props.conversationId != null,
-    attendeeIds: [],
   };
 }
 
@@ -117,10 +120,24 @@ function formFromEvent(event: CalendarEventDto): FormState {
     color: event.color ?? null,
     reminders: [...event.reminderMinutes].sort((a, b) => a - b),
     repeat: repeatFromRrule(event.rrule, start),
-    conversationId: event.conversationId,
-    attendeeIds: event.attendees?.map((teilnehmer) => teilnehmer.userId) ?? [],
-    announce: false,
   };
+}
+
+/** Die Wahl beim Öffnen: beim Bearbeiten die heutigen Eingeladenen, sonst die Vorbelegung des Chats. */
+function startAuswahl(
+  event: CalendarEventDto | null,
+  props: EventEditorProps,
+  myId: string,
+): Auswahl {
+  if (event) {
+    return {
+      ...niemand(),
+      personen: event.attendees
+        .map((teilnehmer) => teilnehmer.userId)
+        .filter((userId) => userId !== myId && userId !== event.createdBy),
+    };
+  }
+  return vorbelegung(useChat.getState().conversations, props.conversationId, myId);
 }
 
 /**
@@ -131,9 +148,8 @@ function formFromEvent(event: CalendarEventDto): FormState {
  * recurrence) is built from touch-sized chips.
  */
 export function EventEditor(props: EventEditorProps) {
-  const { open, onClose, event = null, lockConversation = false, onSaved } = props;
+  const { open, onClose, event = null, onSaved } = props;
   const myId = useMyId();
-  const conversations = useChat((state) => state.conversations);
   const [form, setForm] = useState<FormState>(() =>
     event ? formFromEvent(event) : emptyForm(props),
   );
@@ -141,62 +157,41 @@ export function EventEditor(props: EventEditorProps) {
   const [saving, setSaving] = useState(false);
 
   /*
-   * Vorschlaege sind die Leute aus dem gewaehlten Chat UND die bereits
-   * Eingeladenen – gesucht werden darf darueber hinaus, siehe PersonenWahl.
+   * Die Einladung: wer, in welche Gruppenchats, und ob überhaupt eine Nachricht
+   * hinausgeht. Die Liste, die Schnellwahl und die Vorschau stehen in
+   * `EinladungsWahl`; hier liegt nur, was beim Speichern gebraucht wird.
    *
-   * Die Eingeladenen mussten dazu: PersonenWahl zeigt eine gewaehlte Person
-   * nur, wenn sie ihr schon einmal begegnet ist (aus Vorschlaegen oder aus der
-   * Suche). Wer eingeladen war, aber nicht im Chat sitzt – jemand, den man
-   * beim letzten Mal ueber die Suche dazugeholt hat –, blieb deshalb
-   * unsichtbar. `PersonenWahl` laedt Gewaehlte inzwischen selbst nach, wenn
-   * sie ihr sonst nirgends begegnet sind – hier stehen sie trotzdem, weil das
-   * die Namen ohne Umweg liefert und der Zaehler damit von vornherein zur
-   * Liste passt.
+   * Nur der Ersteller ändert Einladungen – der Server lässt sonst niemanden
+   * zu, und für alle anderen bliebe das Feld eine Falle.
    */
-  const [chatLeute, setChatLeute] = useState<Person[]>([]);
-  // Die Kennungen als Zeichenkette: `event.attendees` bekommt bei jedem Laden
-  // ein neues Feld, der Inhalt bleibt aber derselbe.
-  const eingeladeneIds = (event?.attendees ?? [])
-    .map((teilnehmer) => teilnehmer.userId)
-    .sort()
-    .join(',');
-  /*
-   * Die Mitglieder als Zeichenkette, und nur bei offenem Blatt.
-   *
-   * `conversations` im Abhaengigkeitsfeld war eine Falle: Der Zustand
-   * ersetzt das Feld bei JEDER eingehenden Nachricht, auch aus fremden Chats.
-   * Solange der Effekt ohne gewaehlten Chat sofort abbrach, blieb das
-   * folgenlos. Seit die Eingeladenen dazukommen, gilt das nicht mehr: Ein
-   * persoenlicher Termin ohne Chat, aber mit zwoelf Eingeladenen, fragte bei
-   * jeder Nachricht irgendwo in der App zwoelf Mal `GET /users/:id` ab – fuer
-   * ein Blatt, das gar nicht offen ist. Derselbe Kniff wie in `ExpenseSheet`:
-   * Aus der Liste wird eine Zeichenkette, die sich nur aendert, wenn sich
-   * wirklich jemand aendert.
+  const istErsteller = event == null || event.createdBy === myId;
+  const [auswahl, setAuswahl] = useState<Auswahl>(() => startAuswahl(event, props, myId));
+  const [senden, setSenden] = useState(true);
+  const [einzelchats, setEinzelchats] = useState(true);
+  /**
+   * Wo der Termin schon als Karte steht. `null`, solange das nicht geladen ist:
+   * Bis dahin schickt der Editor `gruppenChatIds` NICHT mit, sonst wählte er
+   * bestehende Gruppenkarten versehentlich ab.
    */
-  const chatMitglieder = conversations
-    .find((eintrag) => eintrag.id === form.conversationId)
-    ?.members.map((member) => member.userId)
-    .sort()
-    .join(',');
+  const [bestehendeGruppen, setBestehendeGruppen] = useState<string[] | null>(null);
+  const [gruppenFehler, setGruppenFehler] = useState(false);
+  /**
+   * Wiederholungsschutz: Wer wegen eines Funklochs oder Doppeltippens noch
+   * einmal sendet, bekommt denselben Termin zurück statt eines zweiten. Der
+   * Schlüssel entsteht beim Öffnen und bleibt für alle Wiederholungen derselben
+   * Eingabe.
+   */
+  const [clientId, setClientId] = useState(() => uuidv7());
 
-  useEffect(() => {
-    if (!open) return undefined;
-    const ids = new Set<string>(eingeladeneIds ? eingeladeneIds.split(',') : []);
-    for (const userId of chatMitglieder ? chatMitglieder.split(',') : []) ids.add(userId);
-    if (ids.size === 0) {
-      setChatLeute([]);
-      return undefined;
+  // Wer schon eingeladen ist, mit seiner Antwort – ohne den Ersteller, der immer dabei ist.
+  const bisher = useMemo<Record<string, RsvpStatus> | undefined>(() => {
+    if (!event) return undefined;
+    const antworten: Record<string, RsvpStatus> = {};
+    for (const teilnehmer of event.attendees) {
+      if (teilnehmer.userId !== event.createdBy) antworten[teilnehmer.userId] = teilnehmer.status;
     }
-    let abgebrochen = false;
-    void Promise.all([...ids].map((userId) => api.users.byId(userId).catch(() => null))).then(
-      (ergebnis) => {
-        if (!abgebrochen) setChatLeute(ergebnis.filter((person) => person != null));
-      },
-    );
-    return () => {
-      abgebrochen = true;
-    };
-  }, [open, chatMitglieder, eingeladeneIds]);
+    return antworten;
+  }, [event]);
 
   const eventId = event?.id ?? null;
   const eventStamp = event?.updatedAt ?? null;
@@ -206,9 +201,36 @@ export function EventEditor(props: EventEditorProps) {
   useEffect(() => {
     if (!open) return;
     setForm(event ? formFromEvent(event) : emptyForm(props));
+    setAuswahl(startAuswahl(event, props, myId));
+    setSenden(true);
+    setEinzelchats(true);
+    setClientId(uuidv7());
+    setBestehendeGruppen(null);
+    setGruppenFehler(false);
     setErrors({});
     setSaving(false);
   }, [open, eventId, eventStamp]);
+
+  // Beim Bearbeiten: in welchen Gruppenchats steht der Termin schon? Daraus
+  // füllen sich die Chips, und erst danach darf der Editor die Gruppen mitschicken.
+  useEffect(() => {
+    if (!open || !eventId || !istErsteller) return undefined;
+    let abgebrochen = false;
+    api.calendar
+      .zustellung(eventId)
+      .then((stand) => {
+        if (abgebrochen) return;
+        const ids = stand.gruppen.map((karte) => karte.conversationId);
+        setBestehendeGruppen(ids);
+        setAuswahl((jetzt) => ({ ...jetzt, gruppen: [...new Set([...ids, ...jetzt.gruppen])] }));
+      })
+      .catch(() => {
+        if (!abgebrochen) setGruppenFehler(true);
+      });
+    return () => {
+      abgebrochen = true;
+    };
+  }, [open, eventId, eventStamp, istErsteller]);
 
   const patch = (changes: Partial<FormState>) => setForm((current) => ({ ...current, ...changes }));
   const patchRepeat = (changes: Partial<RepeatState>) =>
@@ -295,21 +317,38 @@ export function EventEditor(props: EventEditorProps) {
       rrule: buildRrule(form.repeat),
       color: form.color,
       reminderMinutes: form.reminders,
-      // Leer lassen heisst weiterhin „alle aus dem Chat“ – so bleibt der
-      // haeufige Fall ein Handgriff.
-      ...(form.attendeeIds.length > 0 ? { attendeeIds: form.attendeeIds } : {}),
     };
+
+    // Die Einladung geht immer ausdrücklich mit: Ohne `zustellung` gälte der alte
+    // Weg („alle aus dem Chat“), und die Wahl in der Liste wäre wirkungslos. Beim
+    // Bearbeiten nur, was sich geändert hat – wer die Einladungen nicht anfasst,
+    // sendet nichts dazu.
+    const einladung = event
+      ? istErsteller
+        ? aendernBody(
+            auswahl,
+            { senden, einzelchats },
+            { teilnehmer: Object.keys(bisher ?? {}), gruppen: bestehendeGruppen },
+            myId,
+          )
+        : {}
+      : anlegenBody(auswahl, { senden, einzelchats }, clientId, myId);
 
     setSaving(true);
     try {
-      const saved = event
-        ? await api.calendar.update(event.id, body)
-        : await api.calendar.create({
-            ...body,
-            conversationId: form.conversationId,
-            announce: form.conversationId != null && form.announce,
-          });
-      toast(event ? 'Termin gespeichert' : 'Termin erstellt', 'success');
+      const antwort = event
+        ? await api.calendar.update(event.id, { ...body, ...einladung })
+        : await api.calendar.create({ ...body, ...einladung });
+      // `zustellung` gehört in die Meldung, nicht in den Termin, den die
+      // Ansichten halten.
+      const { zustellung, ...saved } = antwort;
+      // Auch an den Trichter: Die Karten in den Chats und der Kalender bekommen
+      // die Fassung, selbst wenn der Rundruf nie ankommt.
+      aktualisiert(saved);
+      toast(
+        speichernText(!event, zustellung),
+        zustellung && zustellung.ausstehend > 0 ? 'error' : 'success',
+      );
       onSaved?.(saved);
       onClose();
     } catch (error) {
@@ -325,8 +364,25 @@ export function EventEditor(props: EventEditorProps) {
 
   const repeatOption = REPEAT_OPTIONS.find((option) => option.value === form.repeat.freq);
   const repeatPreview = describeRrule(buildRrule(form.repeat));
-  const selectedConversation =
-    conversations.find((item) => item.id === form.conversationId) ?? null;
+
+  // Wer Zeit oder Ort ändert, benachrichtigt alle Eingeladenen – der Editor sagt
+  // es vor dem Speichern, nicht erst danach.
+  const zusatzZeilen = useMemo(() => {
+    if (!event) return [];
+    const startsAt = form.allDay
+      ? noonOf(form.startDate)
+      : fromInputs(form.startDate, form.startTime);
+    const endsAt = form.allDay ? noonOf(form.endDate) : fromInputs(form.endDate, form.endTime);
+    if (!startsAt || !endsAt) return [];
+    const art = zeitOrtGeaendert(event, {
+      startsAt: startsAt.toISOString(),
+      endsAt: endsAt.toISOString(),
+      allDay: form.allDay,
+      rrule: buildRrule(form.repeat),
+      location: form.location.trim() || null,
+    });
+    return art ? [zeitOrtHinweis(art)] : [];
+  }, [event, form]);
 
   return (
     <Sheet open={open} onClose={onClose} title={event ? 'Termin bearbeiten' : 'Neuer Termin'}>
@@ -598,79 +654,22 @@ export function EventEditor(props: EventEditorProps) {
         </div>
       )}
 
-      {!event && !lockConversation && (
-        <div className="field">
-          <label htmlFor="cal-conversation">Chat</label>
-          <select
-            id="cal-conversation"
-            className="select"
-            value={form.conversationId ?? ''}
-            onChange={(changed) =>
-              patch({
-                conversationId: changed.target.value || null,
-                announce: changed.target.value.length > 0,
-              })
-            }
-          >
-            <option value="">Nur für mich</option>
-            {conversations
-              .filter((conversation) => !conversation.archived)
-              .map((conversation) => (
-                <option key={conversation.id} value={conversation.id}>
-                  {conversationLabel(conversation, myId)}
-                </option>
-              ))}
-          </select>
-        </div>
-      )}
-
-      {!event && lockConversation && selectedConversation && (
-        <p className="cal-hint">
-          Der Termin gehört zu <strong>{conversationLabel(selectedConversation, myId)}</strong>.
-        </p>
-      )}
-
-      {/*
-        Eingeladene. Vorher gab es dieses Feld gar nicht – der Teilnehmerkreis
-        war immer „alle aus dem gewaehlten Chat“, weil die App `attendeeIds`
-        nie mitschickte. Ein persoenlicher Termin ohne Chat konnte damit
-        niemanden einladen, und seine Notizen erreichten niemanden.
-
-        Leer lassen bleibt erlaubt und heisst weiterhin „alle aus dem Chat“ –
-        der haeufige Fall soll ein Handgriff bleiben.
-      */}
-      <fieldset className="field">
-        <legend>Eingeladen</legend>
-        {/* Ehrlich sein, was hier passiert: Bei einem Termin MIT Chat laedt der
-            Server ohnehin alle Chatmitglieder ein (services/calendar.rs,
-            create_event) – die Auswahl kann dort nur erweitern, nicht
-            einschraenken. Frueher stand hier „Wer hier steht, sieht den
-            Termin", was eine Einschraenkung versprach, die es nicht gibt. */}
-        <p className="cal-hint">
-          {form.conversationId
-            ? 'Alle aus dem Chat sind eingeladen. Wer hier zusätzlich steht, kommt dazu – auch jemand von ausserhalb.'
-            : 'Wer hier steht, sieht den Termin, die Notizen und die Unterlagen.'}
-        </p>
-        <PersonenWahl
-          label="Eingeladene"
-          vorschlaege={chatLeute}
-          gewaehlt={form.attendeeIds}
-          onChange={(ids) => patch({ attendeeIds: ids })}
-          fest={[myId]}
+      {/* Eingeladen. Der Teilnehmerkreis ist die Wahl hier – ein Chat verleiht
+          keinen Zugang mehr, er ist nur ein Ort, an dem eine Karte steht. */}
+      {istErsteller && (
+        <EinladungsWahl
+          myId={myId}
+          auswahl={auswahl}
+          onChange={setAuswahl}
+          senden={senden}
+          onSenden={setSenden}
+          einzelchats={einzelchats}
+          onEinzelchats={setEinzelchats}
+          bisher={bisher}
+          bestehendeGruppen={event ? bestehendeGruppen : undefined}
+          gruppenFehler={gruppenFehler}
+          zusatzZeilen={zusatzZeilen}
         />
-      </fieldset>
-
-      {!event && form.conversationId && (
-        <label className="cal-switch">
-          <span>Im Chat ankündigen</span>
-          <input
-            type="checkbox"
-            role="switch"
-            checked={form.announce}
-            onChange={(changed) => patch({ announce: changed.target.checked })}
-          />
-          <span className="cal-switch-track" aria-hidden="true" />
-        </label>
       )}
 
       <button
