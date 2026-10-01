@@ -1,0 +1,190 @@
+import { describe, expect, it } from 'vitest';
+
+import { flutmaske } from '../stickers/engines/flutung.js';
+import type { InhaltsTeil } from './bildweise.js';
+import type { GelesenesBild } from './bilderLesen.js';
+import { folgeTeile } from './folgeTeile.js';
+
+/*
+ * Messung (nicht für das Repo): Zwei Quadrate, A wandert nach rechts, B nach unten.
+ * Zeichenreihenfolge: A, dann B (B liegt oben).
+ */
+const B = 320;
+const H = 180;
+const KANTE = 40;
+type Farbe = [number, number, number];
+
+interface Film {
+  readonly a: (n: number) => { x: number; y: number } | null;
+  readonly b: (n: number) => { x: number; y: number } | null;
+  readonly farbeA: Farbe;
+  readonly farbeB: Farbe;
+}
+
+function bild(n: number, film: Film): GelesenesBild {
+  const data = new Uint8ClampedArray(B * H * 4);
+  const a = film.a(n);
+  const b = film.b(n);
+  for (let y = 0; y < H; y += 1) {
+    for (let x = 0; x < B; x += 1) {
+      const at = (y * B + x) * 4;
+      const g = 128 + 40 * Math.sin(x / 5.3 + Math.cos(y / 7.1)) * Math.cos(y / 4.7 - x / 13);
+      void g;
+      let c: Farbe = [36, 64, 92];
+      if (a && x >= a.x && x < a.x + KANTE && y >= a.y && y < a.y + KANTE) c = film.farbeA;
+      if (b && x >= b.x && x < b.x + KANTE && y >= b.y && y < b.y + KANTE) c = film.farbeB;
+      data[at] = c[0];
+      data[at + 1] = c[1];
+      data[at + 2] = c[2];
+      data[at + 3] = 255;
+    }
+  }
+  return { zeitMs: n * 40, daten: { data, width: B, height: H, colorSpace: 'srgb' } as ImageData };
+}
+
+function wahrheit(n: number, film: Film, wer: 'a' | 'b' | 'ab'): Uint8Array {
+  const m = new Uint8Array(B * H);
+  const a = film.a(n);
+  const b = film.b(n);
+  for (let y = 0; y < H; y += 1) {
+    for (let x = 0; x < B; x += 1) {
+      const inB = !!b && x >= b.x && x < b.x + KANTE && y >= b.y && y < b.y + KANTE;
+      const inA = !!a && x >= a.x && x < a.x + KANTE && y >= a.y && y < a.y + KANTE && !inB;
+      if ((wer !== 'b' && inA) || (wer !== 'a' && inB)) m[y * B + x] = 255;
+    }
+  }
+  return m;
+}
+
+function deckung(a: Uint8Array, b: Uint8Array): number {
+  let s = 0;
+  let v = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    const x = a[i] >= 128;
+    const y = b[i] >= 128;
+    if (x && y) s += 1;
+    if (x || y) v += 1;
+  }
+  return v === 0 ? 1 : s / v;
+}
+
+function tippTeil(id: string, punkte: { x: number; y: number }[]): InhaltsTeil {
+  return {
+    bereich: 'b1',
+    art: 'tipp',
+    teil: {
+      id,
+      modus: 'dazu',
+      umkehren: false,
+      art: 'tipp',
+      mitNetz: false,
+      punkte,
+      toleranz: 25,
+      breite: B,
+      hoehe: H,
+      alpha: new Uint8Array(B * H),
+      marke: 1,
+    },
+  };
+}
+
+const kreuzend: Film = {
+  a: (n) => ({ x: 20 + 4 * n, y: 50 }),
+  b: (n) => ({ x: 140, y: 10 + 2 * n }),
+  farbeA: [16, 112, 48],
+  farbeB: [240, 176, 64],
+};
+const getrennt: Film = { ...kreuzend, b: (n) => ({ x: 230, y: 10 + 2 * n }) };
+
+async function lauf(film: Film, teile: InhaltsTeil[], anzahl = 50) {
+  const bilder = Array.from({ length: anzahl }, (_, n) => bild(n, film));
+  const { jeBild } = await folgeTeile(bilder, { teile, schluesselAbstand: 4 });
+  return { bilder, jeBild };
+}
+
+function zeile(werte: number[]) {
+  return werte.map((w) => w.toFixed(2)).join(' ');
+}
+
+describe('Messung: zwei Gegenstände', () => {
+  it('A allein, Wege kreuzen sich', async () => {
+    const a0 = kreuzend.a(0)!;
+    const teil = tippTeil('tA', [{ x: a0.x + 20, y: a0.y + 20 }]);
+    const { jeBild } = await lauf(kreuzend, [teil]);
+    const werte = jeBild.map((m, n) => deckung(m.get('tA')?.werte ?? new Uint8Array(B * H), wahrheit(n, kreuzend, 'a')));
+    console.log('KREUZEND A allein   :', zeile(werte));
+    const flaeche = jeBild.map((m) => {
+      const v = m.get('tA')?.werte ?? new Uint8Array(B * H);
+      let n = 0;
+      for (let i = 0; i < v.length; i += 1) if (v[i] >= 128) n += 1;
+      return n;
+    });
+    const aufB = jeBild.map((m, n) => {
+      const v = m.get('tA')?.werte ?? new Uint8Array(B * H);
+      const w = wahrheit(n, kreuzend, 'b');
+      let drin = 0;
+      let ges = 0;
+      for (let i = 0; i < v.length; i += 1) if (v[i] >= 128) { ges += 1; if (w[i] >= 128) drin += 1; }
+      return ges === 0 ? 0 : drin / ges;
+    });
+    console.log('KREUZEND A allein, Fläche der Maske:', flaeche.join(' '));
+    console.log('KREUZEND A allein, Anteil der Maske auf B:', zeile(aufB));
+    expect(true).toBe(true);
+  }, 120_000);
+
+  it('B allein, Wege kreuzen sich', async () => {
+    const b0 = kreuzend.b(0)!;
+    const teil = tippTeil('tB', [{ x: b0.x + 20, y: b0.y + 20 }]);
+    const { jeBild } = await lauf(kreuzend, [teil]);
+    const werte = jeBild.map((m, n) => deckung(m.get('tB')?.werte ?? new Uint8Array(B * H), wahrheit(n, kreuzend, 'b')));
+    console.log('KREUZEND B allein   :', zeile(werte));
+    expect(true).toBe(true);
+  }, 120_000);
+
+  it('zwei Teile (je ein Gegenstand), getrennte Wege', async () => {
+    const a0 = getrennt.a(0)!;
+    const b0 = getrennt.b(0)!;
+    const tA = tippTeil('tA', [{ x: a0.x + 20, y: a0.y + 20 }]);
+    const tB = tippTeil('tB', [{ x: b0.x + 20, y: b0.y + 20 }]);
+    const { jeBild } = await lauf(getrennt, [tA, tB]);
+    const wa = jeBild.map((m, n) => deckung(m.get('tA')?.werte ?? new Uint8Array(B * H), wahrheit(n, getrennt, 'a')));
+    const wb = jeBild.map((m, n) => deckung(m.get('tB')?.werte ?? new Uint8Array(B * H), wahrheit(n, getrennt, 'b')));
+    console.log('GETRENNT Teil A     :', zeile(wa));
+    console.log('GETRENNT Teil B     :', zeile(wb));
+    expect(true).toBe(true);
+  }, 120_000);
+
+  it('EIN Teil mit zwei Punkten, getrennte Wege', async () => {
+    const a0 = getrennt.a(0)!;
+    const b0 = getrennt.b(0)!;
+    const teil = tippTeil('tAB', [
+      { x: a0.x + 20, y: a0.y + 20 },
+      { x: b0.x + 20, y: b0.y + 20 },
+    ]);
+    const { jeBild } = await lauf(getrennt, [teil]);
+    const maske = (n: number) => jeBild[n].get('tAB')?.werte ?? new Uint8Array(B * H);
+    const wa = jeBild.map((_, n) => deckung(maske(n), wahrheit(n, getrennt, 'a')));
+    const wab = jeBild.map((_, n) => deckung(maske(n), wahrheit(n, getrennt, 'ab')));
+    console.log('GETRENNT 1 Teil/2 Punkte, Deckung mit A∪B:', zeile(wab));
+    const anteile = jeBild.map((_, n) => {
+      const w = wahrheit(n, getrennt, 'a');
+      const m = maske(n);
+      let drin = 0;
+      let ges = 0;
+      for (let i = 0; i < w.length; i += 1) if (w[i] >= 128) { ges += 1; if (m[i] >= 128) drin += 1; }
+      return ges === 0 ? 1 : drin / ges;
+    });
+    const anteileB = jeBild.map((_, n) => {
+      const w = wahrheit(n, getrennt, 'b');
+      const m = maske(n);
+      let drin = 0;
+      let ges = 0;
+      for (let i = 0; i < w.length; i += 1) if (w[i] >= 128) { ges += 1; if (m[i] >= 128) drin += 1; }
+      return ges === 0 ? 1 : drin / ges;
+    });
+    console.log('GETRENNT 1 Teil/2 Punkte, Anteil von A gedeckt:', zeile(anteile));
+    console.log('GETRENNT 1 Teil/2 Punkte, Anteil von B gedeckt:', zeile(anteileB));
+    void wa;
+    expect(true).toBe(true);
+  }, 120_000);
+});

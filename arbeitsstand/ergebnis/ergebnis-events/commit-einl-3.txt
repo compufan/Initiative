@@ -1,0 +1,64 @@
+Termine: Einladungen in Gruppen- und Einzelchats, Sichtbarkeit nur über die Einladung
+
+Bisher band ein Termin an EINEN Chat: Der Server lud dann immer alle
+Mitglieder ein, stellte eine Karte in diesen Chat, und wer im Chat sass,
+sah den Termin – auch wenn er abgewählt war oder erst später beigetreten ist.
+Damit liess sich weder „nur die Gewählten“ noch „Gruppenkarte UND Einzelkarten“
+ausdrücken, und Eingeladene von ausserhalb des Chats kamen nicht an ihren
+Termin (Detail und Zusage gaben 403).
+
+Sichtbarkeit (Migration 0023)
+- Wer den Termin sieht, bestimmt allein die Teilnehmerzeile (und der
+  Ersteller): Liste, Detail, Zusage, Notizen, Unterlagen, Ausgaben, Kalender-Abo,
+  Datei-Zugriff, Rundruf. Nicht Eingeladene bekommen 404.
+- Die Karte im Chat ist ein Ort, kein Zugang. Wer nicht eingeladen ist, sieht
+  „Termin nicht verfügbar“ – ohne event und ohne metadata.eventId, in der Liste
+  wie im Rundruf. Mit der Kennung liefert event.ics den ganzen Termin ohne
+  Anmeldung. Der Nachrichtenweg für Termin-Karten ist zu, der Expander prüft
+  den Betrachter.
+- Die Migration trägt die heutigen Chatmitglieder als Teilnehmer nach und legt
+  für jede vorhandene Karte eine Zeile in event_placements an (aus den
+  Nachrichten selbst, nicht aus message_id, das nur die erste kennt). Sie ist
+  wiederholbar und durch tests/einladen_migration.rs an einem nachgestellten
+  Altbestand belegt.
+
+Wohin eine Einladung geht
+- Neues Feld zustellung (senden, einzelchats, gruppenChatIds): Einzelkarten für
+  alle Eingeladenen, die Gruppenkarte nur in einen ausdrücklich gewählten
+  Gruppenchat, in dem ALLE Mitglieder eingeladen sind – sonst steht er unter
+  ausgelassen. „Alle einladen“ postet nie in einen nicht gewählten Gruppenchat.
+  Die Rechnung ist eine reine Funktion (einladen::planen); die Oberfläche
+  rechnet dieselbe vor dem Senden, beide Seiten lesen dieselben Testfälle.
+- Fehlt zustellung, gilt der alte Weg Wort für Wort (Termin aus Umfrage,
+  Terminfindung, ältere App-Stände). Auch er trägt seine Karte ein.
+- Fehlende Einzelchats legt der Server an, sortiert gesperrt je Paar; der
+  älteste Chat gilt, archivierte zählen. POST /conversations nutzt für den
+  Direktfall denselben Dienst.
+- Anlegen in zwei Phasen: eine Transaktion für Termin, Teilnehmer, Chats und
+  reservierte Karten (je Anweisung eine, unabhängig von der Zahl der Personen –
+  gezählt in tests/einladen_viele.rs), danach die Nachrichten, begrenzt
+  parallel. Bricht Phase 2 ab, nennt die Antwort ausstehend, und
+  POST …/zustellung/nachliefern holt nach. Wiederholungsschutz über clientId.
+
+Benachrichtigungen, Ändern, Absagen, Löschen
+- Alle Einladungskarten sind stumm; die Einladung meldet sich genau einmal je
+  Person, über den Einzelchat, sonst den ersten Gruppenchat – nie über einen
+  stummgeschalteten.
+- PATCH: attendeeIds ist der Sollzustand. Hinzugefügte bekommen Karte und
+  Mitteilung, Entfernte verlieren den Zugang und ihre Einzelkarte; eine
+  Gruppenkarte bleibt (sonst verlören die anderen ihre einzige Karte).
+  Zeit/Ort-Änderungen benachrichtigen, gedrosselt, ohne neue Karte.
+- Absagen (status) hält die Karten und sperrt Zusagen (409); Löschen nimmt
+  alle Karten mit. Einladungen ändern darf nur der Ersteller.
+
+Synchron
+- Jede Änderung, auch Zu- und Absagen, zählt calendar_events.stand hoch; der
+  Rundruf trägt ihn, der Client nimmt nur Fassungen mit gleichem oder höherem
+  Stand. event.updated geht an die Teilnehmer, nicht mehr an die Chatmitglieder.
+
+Lesezugriffe innerhalb einer Transaktion nehmen deren Verbindung: Wer darin
+eine zweite anforderte, liess bei gleichzeitigen Änderungen den Vorrat
+leerlaufen (tests/einladen_vorrat.rs mit zwei Verbindungen).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XgRwauwg73maopdhZbXcy7

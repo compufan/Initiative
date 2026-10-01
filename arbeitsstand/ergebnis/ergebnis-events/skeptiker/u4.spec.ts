@@ -1,0 +1,20 @@
+import { expect, request, test } from '@playwright/test';
+import { API, als, registrieren, seiteFuer } from './lib';
+test('U28e: Esc im Gruppenfeld', async ({ browser, baseURL }) => {
+  const http = await request.newContext();
+  const a = await registrieren(http, 'sk28ea');
+  const b = await registrieren(http, 'sk28eb');
+  await http.post(`${API}/conversations`, { headers: als(a), data: { type: 'group', title: 'G28e', memberIds: [b.user.id] } });
+  const seite = await seiteFuer(browser, a, baseURL!);
+  await seite.goto(`${baseURL}/kalender`);
+  await seite.getByRole('button', { name: /Neuer Termin/ }).click();
+  const dlg = seite.getByRole('dialog');
+  await expect(dlg).toBeVisible();
+  await seite.locator('#cal-title').fill('Esc-Probe');
+  await dlg.getByRole('button', { name: /Gruppenchat …/ }).click({ timeout: 15000 });
+  await expect(dlg.getByRole('group', { name: 'Gruppenchat wählen' })).toBeVisible();
+  await seite.keyboard.press('Escape');
+  await seite.waitForTimeout(500);
+  console.log('U28e Dialoge nach Esc:', await seite.getByRole('dialog').count(), ' Panel:', await seite.getByRole('group', { name: 'Gruppenchat wählen' }).count());
+  console.log('U28e Anzeige-Knöpfe sichtbarer Text vs Name wird aus Code geprüft');
+});

@@ -1,0 +1,186 @@
+[
+ {
+  "art": "sprung",
+  "gop": 25,
+  "name": "stufen-16-8-4-2-1, toBlob abwarten",
+  "bilder": 300,
+  "gesamtMs": 17956,
+  "msJeBild": 59.9,
+  "sprungMedianMs": 37.4,
+  "sprungP95Ms": 65.6,
+  "bytesGesamt": 3150734,
+  "bytesJeBild": 10502,
+  "zwischenstaende": [
+   1104,
+   2157,
+   4254,
+   8747,
+   17895,
+   17955
+  ]
+ },
+ {
+  "art": "sprung",
+  "gop": 25,
+  "name": "stufen-16-8-4-2-1, toBlob nebenher",
+  "bilder": 300,
+  "gesamtMs": 15116,
+  "msJeBild": 50.4,
+  "sprungMedianMs": 43.8,
+  "sprungP95Ms": 70.7,
+  "bytesGesamt": 3150734,
+  "bytesJeBild": 10502,
+  "zwischenstaende": [
+   1003,
+   1947,
+   3811,
+   7608,
+   15025,
+   15102
+  ]
+ },
+ {
+  "art": "sprung",
+  "gop": 25,
+  "name": "ein Durchlauf +1, toBlob nebenher",
+  "bilder": 300,
+  "gesamtMs": 17921,
+  "msJeBild": 59.7,
+  "sprungMedianMs": 49.9,
+  "sprungP95Ms": 95.5,
+  "bytesGesamt": 3150734,
+  "bytesJeBild": 10502,
+  "zwischenstaende": [
+   818,
+   1633,
+   3845,
+   9246,
+   17846,
+   17907
+  ]
+ },
+ {
+  "art": "wiedergabe",
+  "gop": 25,
+  "rate": 1,
+  "gesamtMs": 11989,
+  "verschiedeneBilder": 299,
+  "von": 300
+ },
+ {
+  "art": "wiedergabe",
+  "gop": 25,
+  "rate": 2,
+  "gesamtMs": 5998,
+  "verschiedeneBilder": 240,
+  "von": 300
+ },
+ {
+  "art": "wiedergabe",
+  "gop": 25,
+  "rate": 4,
+  "gesamtMs": 3132,
+  "verschiedeneBilder": 172,
+  "von": 300
+ },
+ {
+  "art": "wiedergabe",
+  "gop": 25,
+  "rate": 8,
+  "gesamtMs": 1531,
+  "verschiedeneBilder": 89,
+  "von": 300
+ },
+ {
+  "art": "sprung",
+  "gop": 100,
+  "name": "stufen-16-8-4-2-1, toBlob abwarten",
+  "bilder": 300,
+  "gesamtMs": 42212,
+  "msJeBild": 140.7,
+  "sprungMedianMs": 109.1,
+  "sprungP95Ms": 268.5,
+  "bytesGesamt": 3109250,
+  "bytesJeBild": 10364,
+  "zwischenstaende": [
+   2359,
+   4598,
+   10535,
+   21225,
+   42034,
+   42212
+  ]
+ },
+ {
+  "art": "sprung",
+  "gop": 100,
+  "name": "stufen-16-8-4-2-1, toBlob nebenher",
+  "bilder": 300,
+  "gesamtMs": 43836,
+  "msJeBild": 146.1,
+  "sprungMedianMs": 118.9,
+  "sprungP95Ms": 331.7,
+  "bytesGesamt": 3109250,
+  "bytesJeBild": 10364,
+  "zwischenstaende": [
+   2027,
+   4176,
+   8406,
+   20312,
+   43430,
+   43819
+  ]
+ },
+ {
+  "art": "sprung",
+  "gop": 100,
+  "name": "ein Durchlauf +1, toBlob nebenher",
+  "bilder": 300,
+  "gesamtMs": 57287,
+  "msJeBild": 191,
+  "sprungMedianMs": 173.8,
+  "sprungP95Ms": 347.1,
+  "bytesGesamt": 3109250,
+  "bytesJeBild": 10364,
+  "zwischenstaende": [
+   1098,
+   3618,
+   12251,
+   26690,
+   57058,
+   57272
+  ]
+ },
+ {
+  "art": "wiedergabe",
+  "gop": 100,
+  "rate": 1,
+  "gesamtMs": 11993,
+  "verschiedeneBilder": 300,
+  "von": 300
+ },
+ {
+  "art": "wiedergabe",
+  "gop": 100,
+  "rate": 2,
+  "gesamtMs": 6000,
+  "verschiedeneBilder": 236,
+  "von": 300
+ },
+ {
+  "art": "wiedergabe",
+  "gop": 100,
+  "rate": 4,
+  "gesamtMs": 3009,
+  "verschiedeneBilder": 179,
+  "von": 300
+ },
+ {
+  "art": "wiedergabe",
+  "gop": 100,
+  "rate": 8,
+  "gesamtMs": 1592,
+  "verschiedeneBilder": 87,
+  "von": 300
+ }
+]

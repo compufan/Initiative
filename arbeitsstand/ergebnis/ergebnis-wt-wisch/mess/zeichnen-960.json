@@ -1,0 +1,314 @@
+{
+ "zeichnenMs": [
+  {
+   "masken": 0,
+   "maxKante": 640,
+   "frischeMasken": false,
+   "ohneSync": {
+    "mittel": 54.19,
+    "p50": 52.8,
+    "p95": 63.2,
+    "max": 66.9
+   },
+   "mitSync": {
+    "mittel": 54.83,
+    "p50": 53.5,
+    "p95": 63.9,
+    "max": 67.7
+   },
+   "ziel": "640x360",
+   "weg": "gpu"
+  },
+  {
+   "masken": 1,
+   "maxKante": 640,
+   "frischeMasken": false,
+   "ohneSync": {
+    "mittel": 75.28,
+    "p50": 75.4,
+    "p95": 85.7,
+    "max": 93.5
+   },
+   "mitSync": {
+    "mittel": 75.97,
+    "p50": 76.2,
+    "p95": 86.4,
+    "max": 94.2
+   },
+   "ziel": "640x360",
+   "weg": "gpu"
+  },
+  {
+   "masken": 1,
+   "maxKante": 640,
+   "frischeMasken": true,
+   "ohneSync": {
+    "mittel": 72.65,
+    "p50": 71.6,
+    "p95": 83.3,
+    "max": 107.5
+   },
+   "mitSync": {
+    "mittel": 73.28,
+    "p50": 72.2,
+    "p95": 83.8,
+    "max": 108.1
+   },
+   "ziel": "640x360",
+   "weg": "gpu"
+  },
+  {
+   "masken": 4,
+   "maxKante": 640,
+   "frischeMasken": false,
+   "ohneSync": {
+    "mittel": 113.98,
+    "p50": 111.2,
+    "p95": 143.8,
+    "max": 148.6
+   },
+   "mitSync": {
+    "mittel": 114.68,
+    "p50": 111.8,
+    "p95": 144.3,
+    "max": 150.5
+   },
+   "ziel": "640x360",
+   "weg": "gpu"
+  },
+  {
+   "masken": 4,
+   "maxKante": 640,
+   "frischeMasken": true,
+   "ohneSync": {
+    "mittel": 158.95,
+    "p50": 150.4,
+    "p95": 198.8,
+    "max": 274
+   },
+   "mitSync": {
+    "mittel": 160.97,
+    "p50": 152.5,
+    "p95": 204.4,
+    "max": 274.7
+   },
+   "ziel": "640x360",
+   "weg": "gpu"
+  },
+  {
+   "masken": 0,
+   "maxKante": 512,
+   "frischeMasken": false,
+   "ohneSync": {
+    "mittel": 51.11,
+    "p50": 49.3,
+    "p95": 60,
+    "max": 70
+   },
+   "mitSync": {
+    "mittel": 51.62,
+    "p50": 49.8,
+    "p95": 60.3,
+    "max": 70.5
+   },
+   "ziel": "512x288",
+   "weg": "gpu"
+  },
+  {
+   "masken": 1,
+   "maxKante": 512,
+   "frischeMasken": false,
+   "ohneSync": {
+    "mittel": 63.64,
+    "p50": 61.6,
+    "p95": 77.7,
+    "max": 98.9
+   },
+   "mitSync": {
+    "mittel": 64.15,
+    "p50": 62.1,
+    "p95": 78.4,
+    "max": 99.3
+   },
+   "ziel": "512x288",
+   "weg": "gpu"
+  },
+  {
+   "masken": 1,
+   "maxKante": 512,
+   "frischeMasken": true,
+   "ohneSync": {
+    "mittel": 56.63,
+    "p50": 55.6,
+    "p95": 67,
+    "max": 81.6
+   },
+   "mitSync": {
+    "mittel": 57.13,
+    "p50": 56,
+    "p95": 67.5,
+    "max": 82.1
+   },
+   "ziel": "512x288",
+   "weg": "gpu"
+  },
+  {
+   "masken": 4,
+   "maxKante": 512,
+   "frischeMasken": false,
+   "ohneSync": {
+    "mittel": 71.87,
+    "p50": 69.5,
+    "p95": 85.3,
+    "max": 91.5
+   },
+   "mitSync": {
+    "mittel": 72.37,
+    "p50": 70,
+    "p95": 85.8,
+    "max": 94.2
+   },
+   "ziel": "512x288",
+   "weg": "gpu"
+  },
+  {
+   "masken": 4,
+   "maxKante": 512,
+   "frischeMasken": true,
+   "ohneSync": {
+    "mittel": 89.53,
+    "p50": 86.2,
+    "p95": 104.7,
+    "max": 116.3
+   },
+   "mitSync": {
+    "mittel": 89.96,
+    "p50": 86.6,
+    "p95": 105.3,
+    "max": 116.9
+   },
+   "ziel": "512x288",
+   "weg": "gpu"
+  },
+  {
+   "masken": 0,
+   "maxKante": 384,
+   "frischeMasken": false,
+   "ohneSync": {
+    "mittel": 35.98,
+    "p50": 34.8,
+    "p95": 45.4,
+    "max": 48.4
+   },
+   "mitSync": {
+    "mittel": 36.3,
+    "p50": 35.1,
+    "p95": 45.7,
+    "max": 48.7
+   },
+   "ziel": "384x216",
+   "weg": "gpu"
+  },
+  {
+   "masken": 1,
+   "maxKante": 384,
+   "frischeMasken": false,
+   "ohneSync": {
+    "mittel": 51.96,
+    "p50": 48.2,
+    "p95": 80.7,
+    "max": 89.2
+   },
+   "mitSync": {
+    "mittel": 52.25,
+    "p50": 48.5,
+    "p95": 81.1,
+    "max": 89.5
+   },
+   "ziel": "384x216",
+   "weg": "gpu"
+  },
+  {
+   "masken": 1,
+   "maxKante": 384,
+   "frischeMasken": true,
+   "ohneSync": {
+    "mittel": 57.65,
+    "p50": 54,
+    "p95": 82.6,
+    "max": 84.3
+   },
+   "mitSync": {
+    "mittel": 58.11,
+    "p50": 54.4,
+    "p95": 82.9,
+    "max": 84.6
+   },
+   "ziel": "384x216",
+   "weg": "gpu"
+  },
+  {
+   "masken": 4,
+   "maxKante": 384,
+   "frischeMasken": false,
+   "ohneSync": {
+    "mittel": 74.68,
+    "p50": 66.7,
+    "p95": 115.6,
+    "max": 138.1
+   },
+   "mitSync": {
+    "mittel": 74.98,
+    "p50": 67.1,
+    "p95": 116,
+    "max": 138.5
+   },
+   "ziel": "384x216",
+   "weg": "gpu"
+  },
+  {
+   "masken": 4,
+   "maxKante": 384,
+   "frischeMasken": true,
+   "ohneSync": {
+    "mittel": 83.42,
+    "p50": 79.6,
+    "p95": 100.5,
+    "max": 166.1
+   },
+   "mitSync": {
+    "mittel": 83.72,
+    "p50": 79.9,
+    "p95": 100.8,
+    "max": 166.3
+   },
+   "ziel": "384x216",
+   "weg": "gpu"
+  }
+ ],
+ "speicherbild": {
+  "bytesJeBild": 12460.4,
+  "dekodieren": {
+   "mittel": 14.93,
+   "p50": 15.1,
+   "p95": 16.6,
+   "max": 17.1
+  },
+  "hochskalieren": {
+   "mittel": 0.03,
+   "p50": 0,
+   "p95": 0.1,
+   "max": 0.1
+  }
+ },
+ "rle": {
+  "kodiertBytes": 5101,
+  "dekodieren": {
+   "mittel": 0.07,
+   "p50": 0.1,
+   "p95": 0.2,
+   "max": 0.5
+  }
+ },
+ "tonTypVorhanden": "object"
+}

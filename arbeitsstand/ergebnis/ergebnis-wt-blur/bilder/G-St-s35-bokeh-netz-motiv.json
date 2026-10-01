@@ -1,0 +1,615 @@
+{
+ "massnahmen": {
+  "jetzt-gpu": {
+   "gruppen": [
+    0,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    1000000000
+   ],
+   "aussen": [
+    {
+     "bis": 2,
+     "n": 7810,
+     "mitteMaske": 42.9,
+     "mittelAbw": 86.46,
+     "anteilUeber2": 0.8556,
+     "max": 180
+    },
+    {
+     "bis": 4,
+     "n": 7153,
+     "mitteMaske": 0.2,
+     "mittelAbw": 0.12,
+     "anteilUeber2": 0.0098,
+     "max": 21
+    },
+    {
+     "bis": 8,
+     "n": 14669,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 16,
+     "n": 29317,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 32,
+     "n": 59316,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 64,
+     "n": 123497,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 1000000000,
+     "n": 580418,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    }
+   ],
+   "innen": [
+    {
+     "bis": 2,
+     "n": 7769,
+     "fremdAnteil": 0.1275,
+     "abweichOrig": 19.68
+    },
+    {
+     "bis": 4,
+     "n": 7056,
+     "fremdAnteil": 0.0837,
+     "abweichOrig": 16.18
+    },
+    {
+     "bis": 8,
+     "n": 10667,
+     "fremdAnteil": 0.0577,
+     "abweichOrig": 14.18
+    },
+    {
+     "bis": 16,
+     "n": 19957,
+     "fremdAnteil": 0.039,
+     "abweichOrig": 13.4
+    },
+    {
+     "bis": 32,
+     "n": 36141,
+     "fremdAnteil": 0.0362,
+     "abweichOrig": 13.1
+    },
+    {
+     "bis": 64,
+     "n": 56657,
+     "fremdAnteil": 0.0362,
+     "abweichOrig": 13.16
+    },
+    {
+     "bis": 1000000000,
+     "n": 119573,
+     "fremdAnteil": 0.0362,
+     "abweichOrig": 13.05
+    }
+   ],
+   "maskeNull": {
+    "n": 813275,
+    "geaendert": 0,
+    "ueber2": 0,
+    "max": 0
+   },
+   "kleinerGleich3": {
+    "n": 814856,
+    "ueber2": 93
+   },
+   "kleinerGleich15": {
+    "n": 816808,
+    "geaendert": 2527,
+    "max": 82
+   },
+   "reichweiteAussen": 2
+  },
+  "jetzt-cpu": {
+   "gruppen": [
+    0,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    1000000000
+   ],
+   "aussen": [
+    {
+     "bis": 2,
+     "n": 7810,
+     "mitteMaske": 42.9,
+     "mittelAbw": 60.17,
+     "anteilUeber2": 0.9659,
+     "max": 167
+    },
+    {
+     "bis": 4,
+     "n": 7153,
+     "mitteMaske": 0.2,
+     "mittelAbw": 0.39,
+     "anteilUeber2": 0.0397,
+     "max": 14
+    },
+    {
+     "bis": 8,
+     "n": 14669,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 16,
+     "n": 29317,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 32,
+     "n": 59316,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 64,
+     "n": 123497,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 1000000000,
+     "n": 580418,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    }
+   ],
+   "innen": [
+    {
+     "bis": 2,
+     "n": 7769,
+     "fremdAnteil": 0.4468,
+     "abweichOrig": 48.73
+    },
+    {
+     "bis": 4,
+     "n": 7056,
+     "fremdAnteil": 0.4484,
+     "abweichOrig": 49.6
+    },
+    {
+     "bis": 8,
+     "n": 10667,
+     "fremdAnteil": 0.4086,
+     "abweichOrig": 46.51
+    },
+    {
+     "bis": 16,
+     "n": 19957,
+     "fremdAnteil": 0.3693,
+     "abweichOrig": 43.09
+    },
+    {
+     "bis": 32,
+     "n": 36141,
+     "fremdAnteil": 0.275,
+     "abweichOrig": 33.68
+    },
+    {
+     "bis": 64,
+     "n": 56657,
+     "fremdAnteil": 0.091,
+     "abweichOrig": 17.54
+    },
+    {
+     "bis": 1000000000,
+     "n": 119573,
+     "fremdAnteil": 0.036,
+     "abweichOrig": 13.35
+    }
+   ],
+   "maskeNull": {
+    "n": 813275,
+    "geaendert": 0,
+    "ueber2": 0,
+    "max": 0
+   },
+   "kleinerGleich3": {
+    "n": 814856,
+    "ueber2": 510
+   },
+   "kleinerGleich15": {
+    "n": 816808,
+    "geaendert": 3523,
+    "max": 29
+   },
+   "reichweiteAussen": 4
+  },
+  "neu-gpu": {
+   "gruppen": [
+    0,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    1000000000
+   ],
+   "aussen": [
+    {
+     "bis": 2,
+     "n": 7810,
+     "mitteMaske": 42.9,
+     "mittelAbw": 40.79,
+     "anteilUeber2": 0.4078,
+     "max": 155
+    },
+    {
+     "bis": 4,
+     "n": 7153,
+     "mitteMaske": 0.2,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 8,
+     "n": 14669,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 16,
+     "n": 29317,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 32,
+     "n": 59316,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 64,
+     "n": 123497,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 1000000000,
+     "n": 580418,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    }
+   ],
+   "innen": [
+    {
+     "bis": 2,
+     "n": 7769,
+     "fremdAnteil": 0.0341,
+     "abweichOrig": 14.74
+    },
+    {
+     "bis": 4,
+     "n": 7056,
+     "fremdAnteil": 0.0341,
+     "abweichOrig": 13.34
+    },
+    {
+     "bis": 8,
+     "n": 10667,
+     "fremdAnteil": 0.0345,
+     "abweichOrig": 13.14
+    },
+    {
+     "bis": 16,
+     "n": 19957,
+     "fremdAnteil": 0.0342,
+     "abweichOrig": 13.6
+    },
+    {
+     "bis": 32,
+     "n": 36141,
+     "fremdAnteil": 0.0325,
+     "abweichOrig": 13.35
+    },
+    {
+     "bis": 64,
+     "n": 56657,
+     "fremdAnteil": 0.0323,
+     "abweichOrig": 13.46
+    },
+    {
+     "bis": 1000000000,
+     "n": 119573,
+     "fremdAnteil": 0.0323,
+     "abweichOrig": 13.32
+    }
+   ],
+   "maskeNull": {
+    "n": 813275,
+    "geaendert": 0,
+    "ueber2": 0,
+    "max": 0
+   },
+   "kleinerGleich3": {
+    "n": 814856,
+    "ueber2": 0
+   },
+   "kleinerGleich15": {
+    "n": 816808,
+    "geaendert": 0,
+    "max": 0
+   },
+   "reichweiteAussen": 2
+  },
+  "neu-cpu": {
+   "gruppen": [
+    0,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    1000000000
+   ],
+   "aussen": [
+    {
+     "bis": 2,
+     "n": 7810,
+     "mitteMaske": 42.9,
+     "mittelAbw": 40.79,
+     "anteilUeber2": 0.4078,
+     "max": 155
+    },
+    {
+     "bis": 4,
+     "n": 7153,
+     "mitteMaske": 0.2,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 8,
+     "n": 14669,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 16,
+     "n": 29317,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 32,
+     "n": 59316,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 64,
+     "n": 123497,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 1000000000,
+     "n": 580418,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    }
+   ],
+   "innen": [
+    {
+     "bis": 2,
+     "n": 7769,
+     "fremdAnteil": 0.0341,
+     "abweichOrig": 14.74
+    },
+    {
+     "bis": 4,
+     "n": 7056,
+     "fremdAnteil": 0.0341,
+     "abweichOrig": 13.34
+    },
+    {
+     "bis": 8,
+     "n": 10667,
+     "fremdAnteil": 0.0345,
+     "abweichOrig": 13.14
+    },
+    {
+     "bis": 16,
+     "n": 19957,
+     "fremdAnteil": 0.0342,
+     "abweichOrig": 13.6
+    },
+    {
+     "bis": 32,
+     "n": 36141,
+     "fremdAnteil": 0.0325,
+     "abweichOrig": 13.35
+    },
+    {
+     "bis": 64,
+     "n": 56657,
+     "fremdAnteil": 0.0323,
+     "abweichOrig": 13.46
+    },
+    {
+     "bis": 1000000000,
+     "n": 119573,
+     "fremdAnteil": 0.0323,
+     "abweichOrig": 13.32
+    }
+   ],
+   "maskeNull": {
+    "n": 813275,
+    "geaendert": 0,
+    "ueber2": 0,
+    "max": 0
+   },
+   "kleinerGleich3": {
+    "n": 814856,
+    "ueber2": 0
+   },
+   "kleinerGleich15": {
+    "n": 816808,
+    "geaendert": 0,
+    "max": 0
+   },
+   "reichweiteAussen": 2
+  }
+ },
+ "kante": {
+  "maske": {
+   "innen": 1,
+   "aussen": 0,
+   "breite1090": 3.1664184984712582,
+   "lage50": 0.2430685094328777,
+   "steilheit": 0.3185881351336447,
+   "maxAussen": 0.007614150925283335,
+   "minInnen": 0.9978593762960436,
+   "rand4": 0.9976154623756829
+  },
+  "orig": {
+   "innen": 0.9990833422701411,
+   "aussen": 0.0006400490722709814,
+   "breite1090": 1.624543913802846,
+   "lage50": 0.36926149616139753,
+   "steilheit": 0.6162892828630246,
+   "maxAussen": 0.0059020283785252235,
+   "minInnen": 0.9912262481416813,
+   "rand4": 0.9985496389663744
+  },
+  "jetzt-gpu": {
+   "innen": 0.963538704049471,
+   "aussen": 0.0006400490722709814,
+   "breite1090": 3.0127636812240324,
+   "lage50": 1.5502794505002135,
+   "steilheit": 0.47698029894750194,
+   "maxAussen": 0.0059020283785252235,
+   "minInnen": 0.9167990885861824,
+   "rand4": 0.9321402601196874
+  },
+  "jetzt-cpu": {
+   "innen": 0.642167898359914,
+   "aussen": 0.0006400490722709814,
+   "breite1090": 7.024307698037713,
+   "lage50": 1.4017770627995834,
+   "steilheit": 0.279981137051873,
+   "maxAussen": 0.017315346444985134,
+   "minInnen": 0.5720573200523672,
+   "rand4": 0.5741025550650156
+  },
+  "neu-gpu": {
+   "innen": 0.9667960752051896,
+   "aussen": 0.0006400490722709814,
+   "breite1090": 1.730063992319078,
+   "lage50": 0.9583488316238928,
+   "steilheit": 0.5521448211978188,
+   "maxAussen": 0.0059020283785252235,
+   "minInnen": 0.965464120606828,
+   "rand4": 0.9689068292602703
+  },
+  "neu-cpu": {
+   "innen": 0.9667950471221789,
+   "aussen": 0.0006400490722709814,
+   "breite1090": 1.7301138577466846,
+   "lage50": 0.9583301832723068,
+   "steilheit": 0.5521277761390122,
+   "maxAussen": 0.0059020283785252235,
+   "minInnen": 0.965470778756246,
+   "rand4": 0.9689159903255408
+  }
+ },
+ "lichter": {},
+ "ms": {
+  "jetzt-gpu": 527,
+  "jetzt-cpu": 1044,
+  "neu-cpu": 1620
+ },
+ "gleichNeuGpuCpu": {
+  "mittel": 0.001,
+  "max": 1,
+  "anteilUeber4": 0
+ },
+ "fall": {
+  "name": "St-s35-bokeh-netz-motiv",
+  "opt": {
+   "art": "A",
+   "maske": "netz",
+   "ziel": "motiv",
+   "W": 1200,
+   "H": 900
+  },
+  "par": {
+   "bokeh": 1,
+   "faktor": 2
+  },
+  "straffung": [
+   0.35,
+   0.65
+  ]
+ }
+}

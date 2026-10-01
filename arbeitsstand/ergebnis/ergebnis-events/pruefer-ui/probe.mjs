@@ -1,0 +1,11 @@
+const API='http://localhost:8080/api/v1';
+const suffix=Math.random().toString(36).slice(2,8);
+const r=await fetch(API+'/auth/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'prup'+suffix,password:'passwort123',displayName:'Probe '+suffix})});
+console.log(r.status);
+const s=await r.json();
+console.log(JSON.stringify(s.user));
+const s2 = await (await fetch(API+'/auth/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'prux'+suffix,password:'passwort123',displayName:'Probe2 '+suffix})})).json();
+const c=await fetch(API+'/conversations',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+s.accessToken},body:JSON.stringify({type:'group',title:'Probe',memberIds:[s2.user.id]})});
+console.log(c.status);
+const l=await (await fetch(API+'/conversations',{headers:{authorization:'Bearer '+s.accessToken}})).json();
+console.log(JSON.stringify(l.items[0],null,1));

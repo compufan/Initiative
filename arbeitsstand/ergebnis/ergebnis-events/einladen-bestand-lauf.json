@@ -1,0 +1,490 @@
+{
+  "szenarien": {
+    "S1": {
+      "beschreibung": "S1: conversationId=G, ohne attendeeIds",
+      "eingabe": {
+        "conversationId": "01a0f46e-9970-78e0-8e91-5276a0771f65",
+        "attendeeIds": [],
+        "announce": "(Vorgabe)"
+      },
+      "teilnehmer": "A:yes B:pending C:pending",
+      "karteInChats": {
+        "G": 1
+      },
+      "sicht": {
+        "A": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "B": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "C": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "D": {
+          "liste": false,
+          "detail": 403,
+          "notizen": 404
+        }
+      },
+      "echtzeit": {
+        "A": {
+          "message.new": 1,
+          "event.updated": 1
+        },
+        "B": {
+          "message.new": 1,
+          "event.updated": 1
+        },
+        "C": {
+          "message.new": 1,
+          "event.updated": 1
+        },
+        "D": {}
+      },
+      "eventId": "01a0f46e-9c5a-7e81-8573-c9659e219fc3",
+      "messageIdInDb": "01a0f46e-9c62-7c10-9fa7-49bd45f765a3"
+    },
+    "S2": {
+      "beschreibung": "S2: conversationId=G, attendeeIds=[D] (D ist nicht in G)",
+      "eingabe": {
+        "conversationId": "01a0f46e-9970-78e0-8e91-5276a0771f65",
+        "attendeeIds": [
+          "D"
+        ],
+        "announce": "(Vorgabe)"
+      },
+      "teilnehmer": "A:yes B:pending C:pending D:pending",
+      "karteInChats": {
+        "G": 1
+      },
+      "sicht": {
+        "A": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "B": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "C": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "D": {
+          "liste": true,
+          "detail": 403,
+          "notizen": 200
+        }
+      },
+      "echtzeit": {
+        "A": {
+          "message.new": 1,
+          "event.updated": 1
+        },
+        "B": {
+          "message.new": 1,
+          "event.updated": 1
+        },
+        "C": {
+          "message.new": 1,
+          "event.updated": 1
+        },
+        "D": {
+          "event.updated": 1
+        }
+      },
+      "eventId": "01a0f46e-9f9c-7b43-8748-3790eefbbc8a",
+      "messageIdInDb": "01a0f46e-9fa5-7d03-a74b-aeeda7b4b88f"
+    },
+    "S3": {
+      "beschreibung": "S3: conversationId=G, attendeeIds=[B] (C nicht genannt)",
+      "eingabe": {
+        "conversationId": "01a0f46e-9970-78e0-8e91-5276a0771f65",
+        "attendeeIds": [
+          "B"
+        ],
+        "announce": "(Vorgabe)"
+      },
+      "teilnehmer": "A:yes B:pending C:pending",
+      "karteInChats": {
+        "G": 1
+      },
+      "sicht": {
+        "A": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "B": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "C": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "D": {
+          "liste": false,
+          "detail": 403,
+          "notizen": 404
+        }
+      },
+      "echtzeit": {
+        "A": {
+          "message.new": 1,
+          "event.updated": 1
+        },
+        "B": {
+          "message.new": 1,
+          "event.updated": 1
+        },
+        "C": {
+          "message.new": 1,
+          "event.updated": 1
+        },
+        "D": {}
+      },
+      "eventId": "01a0f46e-a2e6-72e0-afbb-9577ef458ddb",
+      "messageIdInDb": "01a0f46e-a2eb-7133-92e2-1e49e3530733"
+    },
+    "S4": {
+      "beschreibung": "S4: kein Chat, attendeeIds=[B,C], announce=true",
+      "eingabe": {
+        "conversationId": null,
+        "attendeeIds": [
+          "B",
+          "C"
+        ],
+        "announce": true
+      },
+      "teilnehmer": "A:yes B:pending C:pending",
+      "karteInChats": "(keine)",
+      "sicht": {
+        "A": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "B": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "C": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "D": {
+          "liste": false,
+          "detail": 403,
+          "notizen": 404
+        }
+      },
+      "echtzeit": {
+        "A": {
+          "event.updated": 1
+        },
+        "B": {
+          "event.updated": 1
+        },
+        "C": {
+          "event.updated": 1
+        },
+        "D": {}
+      },
+      "eventId": "01a0f46e-a620-74a0-b862-9033676a00f9",
+      "messageIdInDb": null
+    },
+    "S5": {
+      "beschreibung": "S5: kein Chat, keine attendeeIds",
+      "eingabe": {
+        "conversationId": null,
+        "attendeeIds": [],
+        "announce": "(Vorgabe)"
+      },
+      "teilnehmer": "A:yes",
+      "karteInChats": "(keine)",
+      "sicht": {
+        "A": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "B": {
+          "liste": false,
+          "detail": 403,
+          "notizen": 404
+        },
+        "C": {
+          "liste": false,
+          "detail": 403,
+          "notizen": 404
+        },
+        "D": {
+          "liste": false,
+          "detail": 403,
+          "notizen": 404
+        }
+      },
+      "echtzeit": {
+        "A": {
+          "event.updated": 1
+        },
+        "B": {},
+        "C": {},
+        "D": {}
+      },
+      "eventId": "01a0f46e-a958-74b2-8f78-21b4c982549a",
+      "messageIdInDb": null
+    },
+    "S6": {
+      "beschreibung": "S6: conversationId=AB, attendeeIds=[C,D]",
+      "eingabe": {
+        "conversationId": "01a0f46e-99a1-74d0-b47b-905552b26ef4",
+        "attendeeIds": [
+          "C",
+          "D"
+        ],
+        "announce": "(Vorgabe)"
+      },
+      "teilnehmer": "A:yes B:pending C:pending D:pending",
+      "karteInChats": {
+        "AB": 1
+      },
+      "sicht": {
+        "A": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "B": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "C": {
+          "liste": true,
+          "detail": 403,
+          "notizen": 200
+        },
+        "D": {
+          "liste": true,
+          "detail": 403,
+          "notizen": 200
+        }
+      },
+      "echtzeit": {
+        "A": {
+          "message.new": 1,
+          "event.updated": 1
+        },
+        "B": {
+          "message.new": 1,
+          "event.updated": 1
+        },
+        "C": {
+          "event.updated": 1
+        },
+        "D": {
+          "event.updated": 1
+        }
+      },
+      "eventId": "01a0f46e-ac83-7cd3-adfd-40eb4183c5dd",
+      "messageIdInDb": "01a0f46e-ac8a-7a13-9ef9-11279ba9d786"
+    },
+    "S7": {
+      "beschreibung": "S7: conversationId=G, announce=false",
+      "eingabe": {
+        "conversationId": "01a0f46e-9970-78e0-8e91-5276a0771f65",
+        "attendeeIds": [],
+        "announce": false
+      },
+      "teilnehmer": "A:yes B:pending C:pending",
+      "karteInChats": "(keine)",
+      "sicht": {
+        "A": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "B": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "C": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "D": {
+          "liste": false,
+          "detail": 403,
+          "notizen": 404
+        }
+      },
+      "echtzeit": {
+        "A": {
+          "event.updated": 1
+        },
+        "B": {
+          "event.updated": 1
+        },
+        "C": {
+          "event.updated": 1
+        },
+        "D": {}
+      },
+      "eventId": "01a0f46e-afc6-7e83-b96e-e57502631583",
+      "messageIdInDb": null
+    },
+    "S7b": {
+      "D in S2 (Chat G)": {
+        "detail": 403,
+        "rsvp": 403,
+        "meldung": "Du bist kein Mitglied dieses Chats"
+      },
+      "C in S6 (Chat AB)": {
+        "detail": 403,
+        "rsvp": 403,
+        "meldung": "Du bist kein Mitglied dieses Chats"
+      },
+      "D in S6 (Chat AB)": {
+        "detail": 403,
+        "rsvp": 403,
+        "meldung": "Du bist kein Mitglied dieses Chats"
+      }
+    },
+    "S7c": {
+      "teilnehmer": "A:yes B:pending C:pending D:pending",
+      "karten": {},
+      "echtzeit": {
+        "A": {
+          "event.updated": 1
+        },
+        "B": {
+          "event.updated": 1
+        },
+        "C": {
+          "event.updated": 1
+        },
+        "D": {
+          "event.updated": 1
+        }
+      }
+    },
+    "S8": {
+      "zweiteKarteStatus": 201,
+      "karteG": "A:yes B:maybe C:pending",
+      "karteAB": "A:yes B:maybe C:pending",
+      "echtzeit": {
+        "A": {
+          "event.updated": 1
+        },
+        "B": {
+          "event.updated": 1
+        },
+        "C": {
+          "event.updated": 1
+        },
+        "D": {}
+      }
+    },
+    "S9": {
+      "teilnehmerNachAbwahl": "A:yes",
+      "sichtNachAbwahl": {
+        "A": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "B": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "C": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "D": {
+          "liste": false,
+          "detail": 403,
+          "notizen": 404
+        }
+      },
+      "rsvpNachAbwahl": {
+        "status": 200,
+        "teilnehmer": "A:yes B:yes"
+      }
+    },
+    "S10": {
+      "teilnehmer": "A:yes C:pending",
+      "sicht": {
+        "A": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "B": {
+          "liste": false,
+          "detail": 403,
+          "notizen": 404
+        },
+        "C": {
+          "liste": true,
+          "detail": 200,
+          "notizen": 200
+        },
+        "D": {
+          "liste": false,
+          "detail": 403,
+          "notizen": 404
+        }
+      }
+    },
+    "S11": {
+      "cListe": true,
+      "cDetail": 200,
+      "cNotizen": 200,
+      "cKartenImVerlauf": 0
+    },
+    "S12": {
+      "direktabruf": 403,
+      "karteStatus": 201,
+      "karteTraegtTermin": true
+    },
+    "S13": {
+      "status": 204,
+      "kartenDanach": {
+        "G": [
+          {
+            "gibtEsNoch": true,
+            "traegtTermin": false
+          }
+        ],
+        "AB": [
+          {
+            "gibtEsNoch": true,
+            "traegtTermin": false
+          }
+        ]
+      }
+    }
+  },
+  "funde": []
+}

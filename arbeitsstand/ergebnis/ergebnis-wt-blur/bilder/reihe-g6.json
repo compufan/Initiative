@@ -1,0 +1,370 @@
+{
+ "jetzt": [
+  {
+   "cv": 0.02,
+   "seiteLR": 1,
+   "m": 0.07,
+   "rErwartet": 0.4,
+   "r25": 4.4,
+   "zentrum": 0,
+   "ebene": 0,
+   "verh": null
+  },
+  {
+   "cv": 0.005,
+   "seiteLR": 1.01,
+   "m": 0.18,
+   "rErwartet": 3.4,
+   "r25": 6.9,
+   "zentrum": 0,
+   "ebene": 85,
+   "verh": 0
+  },
+  {
+   "cv": 0.01,
+   "seiteLR": 1,
+   "m": 0.29,
+   "rErwartet": 6.3,
+   "r25": 8.9,
+   "zentrum": 0,
+   "ebene": 115,
+   "verh": 0
+  },
+  {
+   "cv": 0.024,
+   "seiteLR": 1,
+   "m": 0.39,
+   "rErwartet": 9.3,
+   "r25": 11.4,
+   "zentrum": 0,
+   "ebene": 119,
+   "verh": 0
+  },
+  {
+   "cv": 0.03,
+   "seiteLR": 1.01,
+   "m": 0.5,
+   "rErwartet": 12.2,
+   "r25": 13.6,
+   "zentrum": 0,
+   "ebene": 133,
+   "verh": 0
+  },
+  {
+   "cv": 0.087,
+   "seiteLR": 1.02,
+   "m": 0.6,
+   "rErwartet": 15.2,
+   "r25": 16.4,
+   "zentrum": 0,
+   "ebene": 135,
+   "verh": 0
+  },
+  {
+   "cv": 0.185,
+   "seiteLR": 1.02,
+   "m": 0.71,
+   "rErwartet": 18.1,
+   "r25": 18.1,
+   "zentrum": 0,
+   "ebene": 132,
+   "verh": 0
+  },
+  {
+   "cv": 0.345,
+   "seiteLR": 1.05,
+   "m": 0.82,
+   "rErwartet": 21.1,
+   "r25": 21.1,
+   "zentrum": 0,
+   "ebene": 117,
+   "verh": 0
+  },
+  {
+   "cv": 0.509,
+   "seiteLR": 1.03,
+   "m": 0.92,
+   "rErwartet": 24,
+   "r25": 22.9,
+   "zentrum": 0,
+   "ebene": 102,
+   "verh": 0
+  }
+ ],
+ "gpu-K6-ohneSumme-f2": [
+  {
+   "cv": 0,
+   "seiteLR": 1,
+   "m": 0.07,
+   "rErwartet": 0.4,
+   "r25": 2.9,
+   "zentrum": 0,
+   "ebene": 0,
+   "verh": null
+  },
+  {
+   "cv": 0.095,
+   "seiteLR": 1,
+   "m": 0.18,
+   "rErwartet": 3.4,
+   "r25": 7.9,
+   "zentrum": 0,
+   "ebene": 93,
+   "verh": 0
+  },
+  {
+   "cv": 0.132,
+   "seiteLR": 0.99,
+   "m": 0.29,
+   "rErwartet": 6.3,
+   "r25": 11.1,
+   "zentrum": 0,
+   "ebene": 119,
+   "verh": 0
+  },
+  {
+   "cv": 0.048,
+   "seiteLR": 0.99,
+   "m": 0.39,
+   "rErwartet": 9.3,
+   "r25": 11.1,
+   "zentrum": 0,
+   "ebene": 142,
+   "verh": 0
+  },
+  {
+   "cv": 0.008,
+   "seiteLR": 0.99,
+   "m": 0.5,
+   "rErwartet": 12.2,
+   "r25": 14.6,
+   "zentrum": 0,
+   "ebene": 180,
+   "verh": 0
+  },
+  {
+   "cv": 0.004,
+   "seiteLR": 1,
+   "m": 0.6,
+   "rErwartet": 15.2,
+   "r25": 18.4,
+   "zentrum": 0,
+   "ebene": 181,
+   "verh": 0
+  },
+  {
+   "cv": 0.022,
+   "seiteLR": 1,
+   "m": 0.71,
+   "rErwartet": 18.1,
+   "r25": 18.1,
+   "zentrum": 0,
+   "ebene": 192,
+   "verh": 0
+  },
+  {
+   "cv": 0.008,
+   "seiteLR": 1,
+   "m": 0.82,
+   "rErwartet": 21.1,
+   "r25": 21.9,
+   "zentrum": 0,
+   "ebene": 189,
+   "verh": 0
+  },
+  {
+   "cv": 0.004,
+   "seiteLR": 1,
+   "m": 0.92,
+   "rErwartet": 24,
+   "r25": 25.1,
+   "zentrum": 0,
+   "ebene": 177,
+   "verh": 0
+  }
+ ],
+ "gpu-K6s-f2": [
+  {
+   "cv": 0,
+   "seiteLR": 1,
+   "m": 0.07,
+   "rErwartet": 0.4,
+   "r25": 2.9,
+   "zentrum": 0,
+   "ebene": 0,
+   "verh": null
+  },
+  {
+   "cv": 0.095,
+   "seiteLR": 1,
+   "m": 0.18,
+   "rErwartet": 3.4,
+   "r25": 7.9,
+   "zentrum": 0,
+   "ebene": 93,
+   "verh": 0
+  },
+  {
+   "cv": 0.132,
+   "seiteLR": 0.99,
+   "m": 0.29,
+   "rErwartet": 6.3,
+   "r25": 11.1,
+   "zentrum": 0,
+   "ebene": 119,
+   "verh": 0
+  },
+  {
+   "cv": 0.048,
+   "seiteLR": 0.99,
+   "m": 0.39,
+   "rErwartet": 9.3,
+   "r25": 11.1,
+   "zentrum": 0,
+   "ebene": 142,
+   "verh": 0
+  },
+  {
+   "cv": 0.008,
+   "seiteLR": 0.99,
+   "m": 0.5,
+   "rErwartet": 12.2,
+   "r25": 14.6,
+   "zentrum": 0,
+   "ebene": 180,
+   "verh": 0
+  },
+  {
+   "cv": 0.004,
+   "seiteLR": 1,
+   "m": 0.6,
+   "rErwartet": 15.2,
+   "r25": 18.4,
+   "zentrum": 0,
+   "ebene": 181,
+   "verh": 0
+  },
+  {
+   "cv": 0.022,
+   "seiteLR": 1,
+   "m": 0.71,
+   "rErwartet": 18.1,
+   "r25": 18.1,
+   "zentrum": 0,
+   "ebene": 192,
+   "verh": 0
+  },
+  {
+   "cv": 0.008,
+   "seiteLR": 1,
+   "m": 0.82,
+   "rErwartet": 21.1,
+   "r25": 21.9,
+   "zentrum": 0,
+   "ebene": 189,
+   "verh": 0
+  },
+  {
+   "cv": 0.004,
+   "seiteLR": 1,
+   "m": 0.92,
+   "rErwartet": 24,
+   "r25": 25.1,
+   "zentrum": 0,
+   "ebene": 177,
+   "verh": 0
+  }
+ ],
+ "gpu-K8s-f2": [
+  {
+   "cv": 0,
+   "seiteLR": 1,
+   "m": 0.07,
+   "rErwartet": 0.4,
+   "r25": 2.9,
+   "zentrum": 0,
+   "ebene": 0,
+   "verh": null
+  },
+  {
+   "cv": 0.095,
+   "seiteLR": 1,
+   "m": 0.18,
+   "rErwartet": 3.4,
+   "r25": 7.1,
+   "zentrum": 0,
+   "ebene": 93,
+   "verh": 0
+  },
+  {
+   "cv": 0.132,
+   "seiteLR": 0.99,
+   "m": 0.29,
+   "rErwartet": 6.3,
+   "r25": 9.6,
+   "zentrum": 0,
+   "ebene": 120,
+   "verh": 0
+  },
+  {
+   "cv": 0.047,
+   "seiteLR": 0.99,
+   "m": 0.39,
+   "rErwartet": 9.3,
+   "r25": 12.1,
+   "zentrum": 0,
+   "ebene": 141,
+   "verh": 0
+  },
+  {
+   "cv": 0.008,
+   "seiteLR": 0.99,
+   "m": 0.5,
+   "rErwartet": 12.2,
+   "r25": 14.6,
+   "zentrum": 0,
+   "ebene": 180,
+   "verh": 0
+  },
+  {
+   "cv": 0.006,
+   "seiteLR": 1,
+   "m": 0.6,
+   "rErwartet": 15.2,
+   "r25": 17.4,
+   "zentrum": 0,
+   "ebene": 183,
+   "verh": 0
+  },
+  {
+   "cv": 0.006,
+   "seiteLR": 1,
+   "m": 0.71,
+   "rErwartet": 18.1,
+   "r25": 20.1,
+   "zentrum": 0,
+   "ebene": 186,
+   "verh": 0
+  },
+  {
+   "cv": 0.005,
+   "seiteLR": 1,
+   "m": 0.82,
+   "rErwartet": 21.1,
+   "r25": 22.6,
+   "zentrum": 0,
+   "ebene": 186,
+   "verh": 0
+  },
+  {
+   "cv": 0.007,
+   "seiteLR": 1,
+   "m": 0.92,
+   "rErwartet": 24,
+   "r25": 25.1,
+   "zentrum": 0,
+   "ebene": 177,
+   "verh": 0
+  }
+ ]
+}

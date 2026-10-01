@@ -1,0 +1,50 @@
+Einladen: Vorschau, Auswahl und Terminseite sagen, was geschieht
+
+Die Wahl „Eingeladen“ und die Terminseite behaupteten Dinge, die nicht stimmten,
+oder verschluckten, was schiefging:
+
+- Nachträglich einladen (Terminseite): Die Vorschau verglich die Neuen mit allen
+  schon Eingeladenen und meldete sofort „Entfernt: N“ – es wird niemand
+  ausgeladen. Jetzt steht ohne Auswahl keine Zeile, mit Auswahl nur „Neu
+  eingeladen“. „Du hast noch keine Kontakte“ erschien auch, wenn alle schon
+  eingeladen waren; jetzt „Alle deine Kontakte sind schon eingeladen“.
+- Ohne Karte im Einzelchat verspricht die Vorschau keine Benachrichtigung mehr:
+  Der Server benachrichtigt nur über eine zugestellte Karte. Wer in einem neu
+  gewählten Gruppenchat mit Karte sitzt, wird über diese erreicht, und die Zeile
+  sagt es. „Entfernt“ nennt jetzt immer die Namen.
+- Die Ansicht „Gewählt“ blieb hängen, wenn der Umschalter verschwand (leere Liste
+  ohne Text); abgewählte Zeilen verschwanden samt Fokus. Jetzt springt die Ansicht
+  zurück, ein leeres „Gewählt“ sagt „Niemand gewählt“, und abgewählte Zeilen
+  bleiben bis zum Verlassen der Ansicht stehen.
+- Abgewählte Personen von außerhalb der Kontakte verschwanden aus der Liste und
+  ließen sich nicht zurückwählen; jetzt bleiben sie stehen.
+- Die Vorschau „davon N neu angelegt“ kannte keine archivierten Einzelchats
+  (der Chat-Speicher lädt sie nicht), der Server nimmt sie aber. Die Wahl holt sie
+  einmal beim Öffnen.
+- Schlug das Laden der bestehenden Gruppenkarten fehl, stand „werden geladen“ für
+  immer, und eine gewählte Gruppe wurde beim Speichern still verworfen. Jetzt
+  steht der Fehler da, mit „Erneut versuchen“, und die Gruppenwahl ist gesperrt,
+  solange unbekannt ist, wo der Termin steht.
+- Beim kalten Start stand „Du hast noch keine Kontakte“, während die Chatliste
+  noch lud (`initialised` gilt schon nach dem Zwischenspeicher). Jetzt zeigt die
+  Wahl den Ladezustand, bei Fehlschlag „Erneut versuchen“.
+- Terminseite: Meldet der Server auf das Einladen „Karte nicht zugestellt“, kam
+  nur ein grünes „Eingeladen.“, und der Hinweis erschien erst nach dem Neuladen.
+  Jetzt meldet es der Ton, und der Hinweis richtet sich nach der Antwort und dem
+  Stand des Termins.
+- Rückfrage bei „Niemand“: Einzahl, als Hinweis mit Fokus; die Vorschau ist eine
+  Liste in einer Live-Region statt einer Liste als Live-Region; die Beschriftung
+  der Anzeige-Knöpfe beginnt mit dem sichtbaren Text; Esc schließt im offenen
+  Gruppenfeld nur das Feld.
+
+Neu auf der Terminseite: Eingeladene können sich selbst austragen. Bei einer
+Terminfindung gibt es kein nachträgliches Einladen mehr (der Server lehnt es ab).
+
+Die Browser-Tests der Einladungen sind voneinander unabhängig: Jeder Test hat
+seine eigene Welt mit eigenen Konten und legt seine Termine selbst an (meist über
+die API). Ein einzelner Test lässt sich allein laufen, ein früher Fehler verdeckt
+keinen anderen. Dazu je ein Test für jeden behobenen Fehler und für die
+Synchronität nach Lücken, späten Antworten und Zwischenspeicher.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XgRwauwg73maopdhZbXcy7

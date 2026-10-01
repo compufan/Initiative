@@ -1,0 +1,85 @@
+# Lauf: Einladen, Bestand
+Nutzer: A=caef56 B=9e5704 C=3254ff D=745cab
+Chats: G=771f65 AB=b26ef4 AC=fb8f85 BC=a9f997 AD=ea20ed
+
+## S1: conversationId=G, ohne attendeeIds
+  Teilnehmer laut Server:   A:yes B:pending C:pending
+  Karte (Nachricht) in:     {"G":1}   (calendar_events.message_id gesetzt: ja)
+  Sicht (Liste/Detail/Notizen): A=L/200/200  B=L/200/200  C=L/200/200  D=-/403/404
+  Echtzeit je Nutzer:       {"A":{"message.new":1,"event.updated":1},"B":{"message.new":1,"event.updated":1},"C":{"message.new":1,"event.updated":1},"D":{}}
+
+## S2: conversationId=G, attendeeIds=[D] (D ist nicht in G)
+  Teilnehmer laut Server:   A:yes B:pending C:pending D:pending
+  Karte (Nachricht) in:     {"G":1}   (calendar_events.message_id gesetzt: ja)
+  Sicht (Liste/Detail/Notizen): A=L/200/200  B=L/200/200  C=L/200/200  D=L/403/200
+  Echtzeit je Nutzer:       {"A":{"message.new":1,"event.updated":1},"B":{"message.new":1,"event.updated":1},"C":{"message.new":1,"event.updated":1},"D":{"event.updated":1}}
+
+## S3: conversationId=G, attendeeIds=[B] (C nicht genannt)
+  Teilnehmer laut Server:   A:yes B:pending C:pending
+  Karte (Nachricht) in:     {"G":1}   (calendar_events.message_id gesetzt: ja)
+  Sicht (Liste/Detail/Notizen): A=L/200/200  B=L/200/200  C=L/200/200  D=-/403/404
+  Echtzeit je Nutzer:       {"A":{"message.new":1,"event.updated":1},"B":{"message.new":1,"event.updated":1},"C":{"message.new":1,"event.updated":1},"D":{}}
+
+## S4: kein Chat, attendeeIds=[B,C], announce=true
+  Teilnehmer laut Server:   A:yes B:pending C:pending
+  Karte (Nachricht) in:     "(keine)"   (calendar_events.message_id gesetzt: nein)
+  Sicht (Liste/Detail/Notizen): A=L/200/200  B=L/200/200  C=L/200/200  D=-/403/404
+  Echtzeit je Nutzer:       {"A":{"event.updated":1},"B":{"event.updated":1},"C":{"event.updated":1},"D":{}}
+
+## S5: kein Chat, keine attendeeIds
+  Teilnehmer laut Server:   A:yes
+  Karte (Nachricht) in:     "(keine)"   (calendar_events.message_id gesetzt: nein)
+  Sicht (Liste/Detail/Notizen): A=L/200/200  B=-/403/404  C=-/403/404  D=-/403/404
+  Echtzeit je Nutzer:       {"A":{"event.updated":1},"B":{},"C":{},"D":{}}
+
+## S6: conversationId=AB, attendeeIds=[C,D]
+  Teilnehmer laut Server:   A:yes B:pending C:pending D:pending
+  Karte (Nachricht) in:     {"AB":1}   (calendar_events.message_id gesetzt: ja)
+  Sicht (Liste/Detail/Notizen): A=L/200/200  B=L/200/200  C=L/403/200  D=L/403/200
+  Echtzeit je Nutzer:       {"A":{"message.new":1,"event.updated":1},"B":{"message.new":1,"event.updated":1},"C":{"event.updated":1},"D":{"event.updated":1}}
+
+## S7: conversationId=G, announce=false
+  Teilnehmer laut Server:   A:yes B:pending C:pending
+  Karte (Nachricht) in:     "(keine)"   (calendar_events.message_id gesetzt: nein)
+  Sicht (Liste/Detail/Notizen): A=L/200/200  B=L/200/200  C=L/200/200  D=-/403/404
+  Echtzeit je Nutzer:       {"A":{"event.updated":1},"B":{"event.updated":1},"C":{"event.updated":1},"D":{}}
+
+## S7b: Zusage durch Eingeladene, die NICHT Mitglied des Chats sind, an den der Termin gebunden ist
+  D in S2 (Chat G): Detail 403, Zusage 403 (Du bist kein Mitglied dieses Chats)
+  C in S6 (Chat AB): Detail 403, Zusage 403 (Du bist kein Mitglied dieses Chats)
+  D in S6 (Chat AB): Detail 403, Zusage 403 (Du bist kein Mitglied dieses Chats)
+
+## S7c: nachtraeglich einladen: A ladet D in S7 ein (PATCH attendeeIds), D ist nicht im Chat G
+  PATCH: Status 200; Teilnehmer: A:yes B:pending C:pending D:pending
+  Neue Nachrichten/Karten zu diesem Termin irgendwo: "(keine)"
+  Echtzeit je Nutzer: {"A":{"event.updated":1},"B":{"event.updated":1},"C":{"event.updated":1},"D":{"event.updated":1}}  (D bekommt nur event.updated, keine Nachricht, keinen Push)
+
+## S8: dieselbe Einladung als Karte in G UND in AB (zweite Karte per Nachrichtenweg)
+  A postet type=event, metadata.eventId=S1 in AB: Status 201; Karte traegt event=ja, calendar_events.message_id zeigt weiter auf die erste Karte: t (t = ja)
+  Echtzeit nach der zweiten Karte, je Nutzer: {"A":{"message.new":1},"B":{"message.new":1},"C":{},"D":{}}
+  -> jede Karte ist eine eigene Nachricht: zwei message.new, bei aktivem Push zwei Benachrichtigungen (Kennzeichen conversation:<Chat>).
+  B sagt "vielleicht" zu (RSVP ueber den Termin): Status 200
+  Karte in G  (frisch geladen): A:yes B:maybe C:pending
+  Karte in AB (frisch geladen): A:yes B:maybe C:pending
+  Echtzeit je Nutzer nach der Zusage: {"A":{"event.updated":1},"B":{"event.updated":1},"C":{"event.updated":1},"D":{}}
+  event.updated traegt: eventId=219fc3 (Schluessel: event) - KEIN message.updated, die Karte wird nur ueber die Termin-Kennung nachgefuehrt
+
+## S9: Abwaehlen bei einem Termin MIT Chat (S3: Anna entfernt B und C aus attendeeIds)
+  PATCH attendeeIds=[A]: Status 200; Teilnehmer danach: A:yes
+  Sicht danach (Liste/Detail/Notizen): A=L/200/200  B=L/200/200  C=L/200/200  D=-/403/404
+  B (nicht mehr eingeladen, aber Chatmitglied) sagt trotzdem zu: Status 200; Teilnehmer: A:yes B:yes
+
+## S10: Ausladen bei einem Termin OHNE Chat (S4: Anna ladet B aus)
+  DELETE attendee B: Status 200; Teilnehmer danach: A:yes C:pending
+  Sicht danach: A=L/200/200  B=-/403/404  C=L/200/200  D=-/403/404
+  Echtzeit danach (B erfaehrt vom Ausladen nichts): {"A":{"event.updated":1},"B":{},"C":{"event.updated":1},"D":{}}
+
+## S11: Gruppe G2 (A, B), Termin mit Karte, danach kommt C als Mitglied dazu
+  C (spaeter Mitglied, sieht den Verlauf nicht): Liste=true Detail=200 Notizen=200; Karten im Verlauf sichtbar: 0; Teilnehmerliste des Termins: A:yes B:pending
+
+## S12: D (unbeteiligt) legt die Kennung eines fremden Termins (S5: nur A) in eine Karte im Chat AD
+  Direktabruf durch D: 403; ueber die Karte: Status 201, event="S5 xqrr" mit 1 Teilnehmer(n)
+
+## S13: Termin S1 loeschen (Karten in G und AB)
+  DELETE: Status 204; Karten danach: {"G":[{"gibtEsNoch":true,"traegtTermin":false}],"AB":[{"gibtEsNoch":true,"traegtTermin":false}]}
+  Echtzeit je Nutzer: {"A":{"event.deleted":1},"B":{"event.deleted":1},"C":{"event.deleted":1},"D":{}}

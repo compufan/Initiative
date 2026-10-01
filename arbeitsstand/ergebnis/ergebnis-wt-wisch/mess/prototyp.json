@@ -1,0 +1,150 @@
+{
+ "bytesGesamt": 2076024,
+ "bytesJeBild": 6920,
+ "liste": [
+  {
+   "name": "A entpacken im Takt",
+   "dauerMs": 1000,
+   "bilderJeS": 46,
+   "zeichnungenJeS": 46,
+   "verspaetungBilder": {
+    "mittel": 11.1,
+    "p95": 49,
+    "max": 59
+   },
+   "bildalterMs": {
+    "mittel": 46,
+    "p95": 165.39999999990687,
+    "max": 199.79999999981374
+   }
+  },
+  {
+   "name": "B entpacken beim Ereignis, LRU 8",
+   "dauerMs": 1000,
+   "bilderJeS": 59,
+   "zeichnungenJeS": 60,
+   "verspaetungBilder": {
+    "mittel": 0.3,
+    "p95": 5,
+    "max": 6
+   },
+   "bildalterMs": {
+    "mittel": 14.4,
+    "p95": 16.700000000186265,
+    "max": 18.899999999906868
+   }
+  },
+  {
+   "name": "C B + 2 Bilder voraus, LRU 12",
+   "dauerMs": 1000,
+   "bilderJeS": 59,
+   "zeichnungenJeS": 60,
+   "verspaetungBilder": {
+    "mittel": 2.5,
+    "p95": 5,
+    "max": 5
+   },
+   "bildalterMs": {
+    "mittel": 16,
+    "p95": 16.899999999906868,
+    "max": 17
+   }
+  },
+  {
+   "name": "A entpacken im Takt",
+   "dauerMs": 3000,
+   "bilderJeS": 38,
+   "zeichnungenJeS": 38,
+   "verspaetungBilder": {
+    "mittel": 7.9,
+    "p95": 41,
+    "max": 55
+   },
+   "bildalterMs": {
+    "mittel": 79,
+    "p95": 400,
+    "max": 533.2000000001863
+   }
+  },
+  {
+   "name": "B entpacken beim Ereignis, LRU 8",
+   "dauerMs": 3000,
+   "bilderJeS": 58.3,
+   "zeichnungenJeS": 60,
+   "verspaetungBilder": {
+    "mittel": 0.1,
+    "p95": 0,
+    "max": 4
+   },
+   "bildalterMs": {
+    "mittel": 8.6,
+    "p95": 12,
+    "max": 25.5
+   }
+  },
+  {
+   "name": "C B + 2 Bilder voraus, LRU 12",
+   "dauerMs": 3000,
+   "bilderJeS": 58,
+   "zeichnungenJeS": 60,
+   "verspaetungBilder": {
+    "mittel": 0,
+    "p95": 0,
+    "max": 2
+   },
+   "bildalterMs": {
+    "mittel": 11.3,
+    "p95": 15.599999999627471,
+    "max": 17.300000000279397
+   }
+  },
+  {
+   "name": "A entpacken im Takt",
+   "dauerMs": 6000,
+   "bilderJeS": 35.2,
+   "zeichnungenJeS": 45,
+   "verspaetungBilder": {
+    "mittel": 1.5,
+    "p95": 4,
+    "max": 6
+   },
+   "bildalterMs": {
+    "mittel": 19.2,
+    "p95": 65.89999999990687,
+    "max": 99.59999999962747
+   }
+  },
+  {
+   "name": "B entpacken beim Ereignis, LRU 8",
+   "dauerMs": 6000,
+   "bilderJeS": 48.5,
+   "zeichnungenJeS": 59,
+   "verspaetungBilder": {
+    "mittel": 0.3,
+    "p95": 1,
+    "max": 2
+   },
+   "bildalterMs": {
+    "mittel": 8.8,
+    "p95": 16.600000000093132,
+    "max": 31.90000000037253
+   }
+  },
+  {
+   "name": "C B + 2 Bilder voraus, LRU 12",
+   "dauerMs": 6000,
+   "bilderJeS": 49,
+   "zeichnungenJeS": 59,
+   "verspaetungBilder": {
+    "mittel": 0.3,
+    "p95": 1,
+    "max": 1
+   },
+   "bildalterMs": {
+    "mittel": 8.6,
+    "p95": 16.600000000093132,
+    "max": 36.799999999813735
+   }
+  }
+ ]
+}

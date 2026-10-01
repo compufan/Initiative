@@ -1,0 +1,16 @@
+import { call, konto, in3Tagen, msgs } from './lib.mjs';
+const a = await konto('pfls'), b = await konto('pflsb'), d = await konto('pflsd');
+const g = (await call('POST', '/conversations', a.token, { type: 'group', title: 'PFL', memberIds: [b.id, d.id] })).body;
+let r = await call('POST', '/calendar/events', a.token, { title: 'Geheim', ...in3Tagen(), attendeeIds: [b.id, d.id], zustellung: { gruppenChatIds: [g.id] } });
+const id = r.body.id;
+r = await call('PATCH', `/calendar/events/${id}`, a.token, { attendeeIds: [b.id] });
+console.log('ausladen D', r.status);
+const liste = (await call('GET', '/conversations', d.token)).body.items;
+const chat = liste.find(c => c.id === g.id);
+console.log('D lastMessage:', JSON.stringify({ type: chat.lastMessage?.type, metadata: chat.lastMessage?.metadata, event: chat.lastMessage?.event ? 'da' : null, body: chat.lastMessage?.body }));
+const one = (await call('GET', `/conversations/${g.id}`, d.token)).body;
+console.log('D einzeln lastMessage metadata:', JSON.stringify(one.lastMessage?.metadata));
+const ms = (await msgs(d, g.id)).filter(m => m.type === 'event');
+console.log('D Nachrichtenliste metadata:', JSON.stringify(ms.map(m => m.metadata)));
+const ics = await fetch(`http://localhost:8080/api/v1/calendar/events/${id}/event.ics`);
+console.log('ics ohne Anmeldung', ics.status);

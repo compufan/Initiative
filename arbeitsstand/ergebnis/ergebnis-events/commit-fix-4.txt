@@ -1,0 +1,16 @@
+Doku: Einladen nach der Gegenprüfung – Sperren, Zurückrollen, Austragen
+
+- DEPLOYMENT.md: Die Migration 0023 hält ihre Sperren bis zum Ende des Laufs,
+  nicht „kurz“: ACCESS EXCLUSIVE auf conversations und calendar_events, dazu
+  SHARE ROW EXCLUSIVE auf messages. Gemessen: knapp 3,5 Sekunden bei 2 Millionen
+  Nachrichten. Die Reihenfolge der Schritte bleibt, weil jede Änderung der Datei
+  ihre Prüfsumme ändert. Zurückrollen hängt, solange das ältere Abbild Version 23
+  nicht kennt (VersionMissing, /healthz „degraded“); beide Auswege stehen da.
+- SICHERHEIT.md: Auch die schreibenden Wege antworten Nicht-Eingeladenen mit 404;
+  die Drossel für neue Einzelchats gilt nur mit `zustellung`, und warum; Grenzen
+  für Ort und Beschreibung; Eingeladene können sich austragen.
+- FEATURES.md: Austragen, Absagen im Wechsel, abgesagt im Kalender-Abo, gelöschte
+  Karten, Nachholen nach Lücken, Terminfindung, Altbestand über 200, Längen.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XgRwauwg73maopdhZbXcy7

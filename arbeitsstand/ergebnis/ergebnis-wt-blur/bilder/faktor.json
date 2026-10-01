@@ -1,0 +1,30 @@
+{
+ "f1": {
+  "ms": 3306,
+  "innen": 172,
+  "randZuInnen": 0.99,
+  "aussenZuInnen": 0.118,
+  "streu": 0.085
+ },
+ "f2": {
+  "ms": 559,
+  "innen": 172,
+  "randZuInnen": 0.98,
+  "aussenZuInnen": 0.167,
+  "streu": 0.085
+ },
+ "f4": {
+  "ms": 162,
+  "innen": 172,
+  "randZuInnen": 0.94,
+  "aussenZuInnen": 0.306,
+  "streu": 0.086
+ },
+ "f8": {
+  "ms": 105,
+  "innen": 169,
+  "randZuInnen": 0.91,
+  "aussenZuInnen": 0.529,
+  "streu": 0.087
+ }
+}

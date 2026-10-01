@@ -1,0 +1,10 @@
+Test: ohne Karte im Einzelchat keine Mitteilung, nur über die Gruppenkarte
+
+Die Vorschau der Oberfläche sagt seit der Korrektur: Wer keine Karte bekommt,
+wird nicht benachrichtigt; wer in einem neu gewählten Gruppenchat mit Karte
+sitzt, wird über diese erreicht. Der Test hält das Verhalten des Servers fest,
+auf das sich dieser Satz stützt, damit Vorschau und Server nicht wieder
+auseinanderlaufen.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XgRwauwg73maopdhZbXcy7

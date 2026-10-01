@@ -1,0 +1,124 @@
+{
+ "1200x900": {
+  "R": 24,
+  "heute": 1769,
+  "heuteOhneBlur": 288,
+  "hoch-sil-K3-f2": {
+   "gpu": 795,
+   "cpu": 1944
+  },
+  "hoch-tiefe-K8-f2": {
+   "gpu": 1865,
+   "cpu": 4407
+  },
+  "hoch-weich-f4": {
+   "gpu": 215,
+   "cpu": 424
+  },
+  "mittel-sil-K3-f4": {
+   "gpu": 462,
+   "cpu": 634
+  },
+  "mittel-tiefe-K6-f4": {
+   "gpu": 706,
+   "cpu": 863
+  },
+  "mittel-weich-f8": {
+   "gpu": 129,
+   "cpu": 244
+  },
+  "niedrig-sil-K2-f8": {
+   "gpu": 231,
+   "cpu": 407
+  },
+  "niedrig-tiefe-K4-f8": {
+   "gpu": 385,
+   "cpu": 573
+  },
+  "niedrig-weich-f8": {
+   "gpu": 117,
+   "cpu": 256
+  }
+ },
+ "1920x1080": {
+  "R": 38.4,
+  "heute": 2945,
+  "heuteOhneBlur": 503,
+  "hoch-sil-K3-f4": {
+   "gpu": 552,
+   "cpu": 1323
+  },
+  "hoch-tiefe-K8-f4": {
+   "gpu": 1208,
+   "cpu": 3422
+  },
+  "hoch-weich-f8": {
+   "gpu": 159,
+   "cpu": 569
+  },
+  "mittel-sil-K3-f8": {
+   "gpu": 428,
+   "cpu": 843
+  },
+  "mittel-tiefe-K6-f8": {
+   "gpu": 586,
+   "cpu": 1062
+  },
+  "mittel-weich-f8": {
+   "gpu": 160,
+   "cpu": 596
+  },
+  "niedrig-sil-K2-f8": {
+   "gpu": 266,
+   "cpu": 733
+  },
+  "niedrig-tiefe-K4-f8": {
+   "gpu": 434,
+   "cpu": 966
+  },
+  "niedrig-weich-f8": {
+   "gpu": 143,
+   "cpu": 514
+  }
+ },
+ "2560x1920": {
+  "R": 51.2,
+  "heuteOhneBlur": null,
+  "hoch-sil-K3-f8": {
+   "gpu": 1507,
+   "cpu": 2429
+  },
+  "hoch-tiefe-K8-f8": {
+   "gpu": 3046,
+   "cpu": 3094
+  },
+  "hoch-weich-f8": {
+   "gpu": 553,
+   "cpu": 1187
+  },
+  "mittel-sil-K3-f8": {
+   "gpu": 846,
+   "cpu": 1930
+  },
+  "mittel-tiefe-K6-f8": {
+   "gpu": 1405,
+   "cpu": 2615
+  },
+  "mittel-weich-f8": {
+   "gpu": 438,
+   "cpu": 1196
+  },
+  "niedrig-sil-K2-f8": {
+   "gpu": 830,
+   "cpu": 1539
+  },
+  "niedrig-tiefe-K4-f8": {
+   "gpu": 1351,
+   "cpu": 2105
+  },
+  "niedrig-weich-f8": {
+   "gpu": 635,
+   "cpu": 1286
+  }
+ }
+}

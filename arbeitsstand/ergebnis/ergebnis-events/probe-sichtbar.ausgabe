@@ -1,0 +1,13 @@
+Carl=01a0f46d-da6b-7a20-8064-57a6a3d16e5f (kein Mitglied des Einzelchats 01a0f46d-8e83-7f42-9dfb-5a58e3f19acb)
+--- Anna laedt Carl ein (PATCH attendeeIds):
+[{"userId":"01a0f46d-8958-7993-8b9a-712e0cad9ff0","status":"yes"},{"userId":"01a0f46d-8d94-72d0-840d-ccd989ce8f82","status":"yes"},{"userId":"01a0f46d-da6b-7a20-8064-57a6a3d16e5f","status":"pending"}]
+--- Nachrichten im Einzelchat nach dem Einladen (kommt eine neue Karte/Benachrichtigung?):
+["event"]
+--- Carl: Liste, Einzelabruf, Zusage:
+["Probe"]
+GET by id: 403
+{"error":{"code":"forbidden","message":"Du bist kein Mitglied dieses Chats"}}
+POST rsvp: 403
+--- Carl legt einen Chat mit sich und Anna an und postet eine Karte mit fremder eventId:
+(Probe ohne Einladung: Dritter ohne jede Beziehung)
+{"type":"event","event":{"title":"Probe","attendees":3,"createdBy":"01a0f46d-8958-7993-8b9a-712e0cad9ff0"}}

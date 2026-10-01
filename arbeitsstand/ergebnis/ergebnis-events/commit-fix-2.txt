@@ -1,0 +1,34 @@
+Termin-Karten: nach Lücken nachholen, nichts doppeln, nichts beleben
+
+Mehrere Wege ließen Karten und Seiten dauerhaft veraltet oder falsch stehen:
+
+- Nach einem Verbindungsabbruch holte der Client nichts nach: Eine Zusage in
+  der Lücke ging verloren, die Karte zeigte den alten Zähler, bis man die Seite
+  neu lud. Jetzt sagt der Trichter beim Wiederverbinden (und wenn die App länger
+  im Hintergrund war) allen Hörern „nachholen“: Chat-Speicher, Kalender und
+  Terminseite holen, was sie zeigen, über einen gemeinsamen Abruf (je Termin
+  einmal, höchstens vier zugleich, zeitlich gestreut).
+- Karten hinter der ersten Seite eines Chats stammen aus dem Zwischenspeicher
+  und wurden nie geprüft; ihre Termine werden jetzt einmal je Sitzung
+  nachgeprüft.
+- `loadMessages` hängte Zwischenspeicher und Speicher aneinander; dieselbe
+  Nachricht stand kurz doppelt im Speicher, und React behielt die Geisterzeilen:
+  Der ganze Verlauf erschien doppelt. Jetzt wird je Kennung zusammengeführt.
+- Eine bisher leere Karte (Person war nicht eingeladen) füllte sich nur, wenn
+  man den Chat verließ und wieder betrat – und verdoppelte dabei den Verlauf.
+  Jetzt wird der Chat gezielt neu geladen, für jeden geladenen Chat mit leerer
+  Karte, höchstens alle dreißig Sekunden.
+- Eine späte Antwort der Terminseite belebte einen eben gelöschten Termin
+  wieder, weil der Trichter seinen Stand beim Entfernen vergaß. Jetzt bleibt ein
+  Grabstein: Antworten auf Anfragen, die vor dem Entfernen losgingen, und
+  Rundrufe mit nicht höherem Stand werden verworfen.
+- Der Hinweis „zu groß, lade nach“ trägt jetzt den Stand der gekürzten Fassung.
+  Geräte am selben Server bekommen die volle Fassung vor dem Hinweis; der alte
+  Vergleich über die Ankunftszeit überging das, und jedes Gerät rief nach jeder
+  Zusage zusätzlich den Termin ab.
+
+Die Tests bilden die wirkliche Reihenfolge nach (erst Fassung, dann Hinweis),
+prüfen den Zwischenzustand beim Zusammenführen und stellen die Abläufe nach.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XgRwauwg73maopdhZbXcy7

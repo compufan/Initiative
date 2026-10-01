@@ -1,0 +1,16 @@
+import { call, konto, msgs } from './lib.mjs';
+const a = await konto('pfcf'), b = await konto('pfcfb'), c = await konto('pfcfc');
+const g = (await call('POST', '/conversations', a.token, { type: 'group', title: 'PFC', memberIds: [b.id, c.id] })).body;
+const s = new Date(Date.now() + 5 * 864e5).toISOString(), s2 = new Date(Date.now() + 6 * 864e5).toISOString();
+let r = await call('POST', '/calendar/planning', a.token, { conversationId: g.id, title: 'Wann?', slots: [{ startsAt: s }, { startsAt: s2 }] });
+const id = r.body.id, pollId = r.body.pollId;
+const poll = (await call('GET', `/polls/${pollId}`, a.token)).body;
+const opt = poll.options[0].id;
+r = await call('POST', `/polls/${pollId}/vote`, b.token, { votes: [{ optionId: opt, value: 'yes' }] });
+console.log('B stimmt', r.status);
+r = await call('DELETE', `/calendar/events/${id}/attendees/${b.id}`, a.token);
+console.log('A laedt B aus', r.status, 'B noch Teilnehmer:', r.body.attendees?.some(x => x.userId === b.id));
+console.log('B Detail vor confirm', (await call('GET', `/calendar/events/${id}`, b.token)).status);
+r = await call('POST', `/calendar/events/${id}/confirm`, a.token, { optionId: opt });
+console.log('confirm', r.status, 'B wieder Teilnehmer:', r.body.attendees?.find(x => x.userId === b.id)?.status);
+console.log('B Detail nach confirm', (await call('GET', `/calendar/events/${id}`, b.token)).status);

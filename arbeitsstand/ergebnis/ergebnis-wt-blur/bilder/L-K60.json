@@ -1,0 +1,193 @@
+{
+ "opt": {
+  "art": "B",
+  "maske": "hart",
+  "ziel": "grund",
+  "W": 600
+ },
+ "par": {
+  "bokeh": 1,
+  "K": 60,
+  "reinheit": "maske",
+  "reichweite": true,
+  "ebenen": 3,
+  "ebenenModus": "naechste"
+ },
+ "ms": 2561,
+ "massnahmen": {
+  "proto": {
+   "gruppen": [
+    0,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    1000000000
+   ],
+   "aussen": [
+    {
+     "bis": 2,
+     "n": 3870,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 4,
+     "n": 2716,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 8,
+     "n": 5004,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 16,
+     "n": 9047,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 32,
+     "n": 14066,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 64,
+     "n": 19493,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 1000000000,
+     "n": 10442,
+     "mitteMaske": 0,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    }
+   ],
+   "innen": [
+    {
+     "bis": 2,
+     "n": 3905,
+     "fremdAnteil": 0.0694,
+     "abweichOrig": 4.24
+    },
+    {
+     "bis": 4,
+     "n": 3587,
+     "fremdAnteil": 0.0774,
+     "abweichOrig": 3.2
+    },
+    {
+     "bis": 8,
+     "n": 7366,
+     "fremdAnteil": 0.0686,
+     "abweichOrig": 2.96
+    },
+    {
+     "bis": 16,
+     "n": 14871,
+     "fremdAnteil": 0.0283,
+     "abweichOrig": 3.47
+    },
+    {
+     "bis": 32,
+     "n": 30859,
+     "fremdAnteil": 0.0217,
+     "abweichOrig": 2.77
+    },
+    {
+     "bis": 64,
+     "n": 58727,
+     "fremdAnteil": 0.0408,
+     "abweichOrig": 4.61
+    },
+    {
+     "bis": 1000000000,
+     "n": 86047,
+     "fremdAnteil": 0.0282,
+     "abweichOrig": 3.68
+    }
+   ],
+   "maskeNull": {
+    "n": 64638,
+    "geaendert": 0,
+    "ueber2": 0,
+    "max": 0
+   },
+   "kleinerGleich3": {
+    "n": 64638,
+    "ueber2": 0
+   },
+   "kleinerGleich15": {
+    "n": 64638,
+    "geaendert": 0,
+    "max": 0
+   },
+   "reichweiteAussen": 0
+  }
+ },
+ "kante": {
+  "maske": {
+   "innen": 0,
+   "aussen": 1,
+   "breite1090": 1.5301804299844926,
+   "lage50": 0.34332019051610646,
+   "steilheit": 0.6535462569426899,
+   "maxAussen": 1,
+   "minInnen": 0,
+   "rand4": -1
+  },
+  "orig": {
+   "innen": 0.9990778697493797,
+   "aussen": 0.004471083170771561,
+   "breite1090": 1.6876107783850758,
+   "lage50": 0.5986681377884836,
+   "steilheit": 0.594777509555536,
+   "maxAussen": 0.02472437224831385,
+   "minInnen": 0.99486394049459,
+   "rand4": 0.9887578142660973
+  },
+  "proto": {
+   "innen": 0.9990778697493797,
+   "aussen": 0.13044606115074212,
+   "breite1090": 1.758826460634333,
+   "lage50": 0.281098342850234,
+   "steilheit": 0.5585640962632119,
+   "maxAussen": 0.21232762844849967,
+   "minInnen": 0.99486394049459,
+   "rand4": 0.8048158811520982
+  }
+ },
+ "lichter": {
+  "proto": {
+   "spitze": 115,
+   "innen": 105.0833333333333,
+   "rand": 104.51588541666663,
+   "aussen": 15.84972117003367,
+   "randZuInnen": 0.9946000198255353,
+   "aussenZuInnen": 0.15083001906455518,
+   "streuungInnen": 0.08966053127060104
+  }
+ },
+ "jetzt": null
+}

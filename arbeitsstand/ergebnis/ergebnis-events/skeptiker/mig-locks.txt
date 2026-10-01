@@ -1,0 +1,17 @@
+ locktype |       rel        |         mode          
+----------+------------------+-----------------------
+ relation | conversations    | ShareRowExclusiveLock
+ relation | conversations    | AccessExclusiveLock
+ relation | messages         | ShareRowExclusiveLock
+ relation | calendar_events  | ShareRowExclusiveLock
+ relation | calendar_events  | AccessExclusiveLock
+ relation | event_attendees  | AccessExclusiveLock
+ relation | event_placements | ShareRowExclusiveLock
+ relation | event_placements | AccessExclusiveLock
+(8 rows)
+
+ pg_sleep 
+----------
+ 
+(1 row)
+

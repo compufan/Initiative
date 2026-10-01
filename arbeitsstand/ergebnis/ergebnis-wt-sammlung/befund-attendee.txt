@@ -1,0 +1,4 @@
+['01a0f4dc:yes', '01a0f4dc:pending']
+Bodo: 200
+Cleo: 404
+{"error":{"code":"forbidden","message":"Nur der Ersteller darf den Termin ändern"}} -> Bodo verknüpft: 403

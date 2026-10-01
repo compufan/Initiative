@@ -1,0 +1,350 @@
+{
+  "pruefungen": [
+    {
+      "name": "201 und zustellung in der Antwort",
+      "ok": true,
+      "einzelheit": "{\"id\":\"01a0f4b6-aa5b-70c2-a5ce-e0e3e76182bf\",\"conversationId\":\"01a0f4b6-a8e9-7122-b84d-9d1d7c517600\",\"createdBy\":\"01a0f4b6-a0d0-71b3-9447-ff4b87c0d3fa\",\"title\":\"Grillen 6nwt\",\"description\":null,\"locat"
+    },
+    {
+      "name": "conversationId = G",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "Gruppenkarte genannt",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "drei Einzelkarten, drei neue Chats",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "nichts ausgelassen, nichts ausstehend",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "eine Karte in G",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "eine Karte im Einzelchat A–B",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "eine Karte im Einzelchat A–C",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "eine Karte im Einzelchat A–D",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "B sieht ihre Karte mit dem Termin darin",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "201",
+      "ok": true,
+      "einzelheit": "{\"id\":\"01a0f4b6-ad83-7950-a494-954fc344059e\",\"conversationId\":null,\"createdBy\":\"01a0f4b6-a0d0-71b3-9447-ff4b87c0d3fa\",\"title\":\"Nur zu dritt dyw9\",\"description\":null,\"location\":null,\"startsAt\":\"2026-10"
+    },
+    {
+      "name": "G ausgelassen, D fehlt",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "keine Karte in G",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "conversationId leer",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "Karten in AB und AC",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "keine Karte in AD",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "D: Detail 404",
+      "ok": true,
+      "einzelheit": "404"
+    },
+    {
+      "name": "D: Zusage 404",
+      "ok": true,
+      "einzelheit": "404"
+    },
+    {
+      "name": "D: Notizen 404",
+      "ok": true,
+      "einzelheit": "404"
+    },
+    {
+      "name": "D: Liste ohne diesen Termin",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "D bekam keinen Rundruf zu diesem Termin",
+      "ok": true,
+      "einzelheit": "{}"
+    },
+    {
+      "name": "200",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "Karte in G zeigt B: yes",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "Karte in AC zeigt B: yes",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "Karte in AD zeigt B: yes",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "A, B, C, D bekamen je EINEN event.updated mit gleichem Stand",
+      "ok": true,
+      "einzelheit": "{\"A\":[2],\"B\":[2],\"C\":[2],\"D\":[2]}"
+    },
+    {
+      "name": "E (nicht eingeladen) bekam nichts",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "200",
+      "ok": true,
+      "einzelheit": "{\"id\":\"01a0f4b6-aa5b-70c2-a5ce-e0e3e76182bf\",\"conversationId\":\"01a0f4b6-a8e9-7122-b84d-9d1d7c517600\",\"createdBy\":\"01a0f4b6-a0d0-71b3-9447-ff4b87c0d3fa\",\"title\":\"Grillen 6nwt\",\"description\":null,\"locat"
+    },
+    {
+      "name": "D ist kein Teilnehmer mehr",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "D: Detail 404",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "Einzelkarte A–D gelöscht",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "Gruppenkarte bleibt, zeigt D aber nichts",
+      "ok": true,
+      "einzelheit": "{\"id\":\"01a0f4b6-ab1d-75c0-be89-6090f37a1aa4\",\"conversationId\":\"01a0f4b6-a8e9-7122-b84d-9d1d7c517600\",\"senderId\":\"01a0f4b6-a0d0-71b3-9447-ff4b87c0d3fa\",\"type\":\"event\",\"body\":null,\"attachments\":[],\"repl"
+    },
+    {
+      "name": "B sieht die Gruppenkarte weiter mit Termin",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "D bekam event.deleted mit Grund \"ausgeladen\"",
+      "ok": true,
+      "einzelheit": "{\"event.deleted\":1}"
+    },
+    {
+      "name": "D bekam kein event.updated",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "200",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "keine zusätzliche Karte in AB",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "Antworten bleiben (B: yes)",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "200, status cancelled",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "Karte in G zeigt \"cancelled\"",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "Zusage: 409",
+      "ok": true,
+      "einzelheit": "{\"error\":{\"code\":\"conflict\",\"message\":\"Der Termin ist abgesagt.\"}}"
+    },
+    {
+      "name": "Wiederaufnehmen",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "Zusage geht wieder",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "204",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "keine Karte mehr in G, AB, AC",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "C bekam message.deleted für G und AC",
+      "ok": true,
+      "einzelheit": "2"
+    },
+    {
+      "name": "C bekam event.deleted mit Grund \"geloescht\"",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "201, keine zustellung in der Antwort",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "alle vier Mitglieder eingeladen",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "eine Karte in G",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "keine Einzelkarte",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "201 dann 200, derselbe Termin",
+      "ok": true,
+      "einzelheit": "201/200"
+    },
+    {
+      "name": "nur eine Karte in AB",
+      "ok": true,
+      "einzelheit": ""
+    },
+    {
+      "name": "201, 151 Einzelkarten zugestellt, nichts ausstehend",
+      "ok": true,
+      "einzelheit": "{\"id\":\"01a0f4b6-b6c7-7681-9dc1-01eaf1b1c140\",\"conversationId\":null,\"createdBy\":\"01a0f4b6-a0d0-71b3-9447-ff4b87c0d3fa\",\"title\":\"Grosses Fest ahwj\",\"description\":null,\"location\":null,\"startsAt\":\"2026-10-05T23:46:50.176Z\",\"endsAt\":\"2026-10-06T00:46:50.176Z\",\"allDay\":false,\"rrule\":null,\"color\":null,\"sou"
+    },
+    {
+      "name": "E (eingeladen) bekam den Termin-Rundruf: event.updated oder sync.hint mit Kennung",
+      "ok": true,
+      "einzelheit": "{\"message.new\":1,\"event.updated\":1,\"sync.hint\":1}"
+    }
+  ],
+  "szenarien": {
+    "s1": {
+      "zustellung": {
+        "gruppen": [
+          {
+            "conversationId": "01a0f4b6-a8e9-7122-b84d-9d1d7c517600",
+            "nachrichtId": "01a0f4b6-ab1d-75c0-be89-6090f37a1aa4"
+          }
+        ],
+        "einzelchats": 3,
+        "neueEinzelchats": 3,
+        "ausgelassen": [],
+        "ausstehend": 0,
+        "benachrichtigt": 0
+      },
+      "echtzeit": {
+        "A": {
+          "message.new": 4,
+          "event.updated": 1
+        },
+        "B": {
+          "message.new": 2,
+          "event.updated": 1
+        },
+        "C": {
+          "message.new": 2,
+          "event.updated": 1
+        },
+        "D": {
+          "message.new": 2,
+          "event.updated": 1
+        },
+        "E": {}
+      }
+    },
+    "s3": {
+      "staende": {
+        "A": [
+          2
+        ],
+        "B": [
+          2
+        ],
+        "C": [
+          2
+        ],
+        "D": [
+          2
+        ]
+      }
+    },
+    "s10": {
+      "dauerMs": 3185,
+      "eTypen": {
+        "message.new": 1,
+        "event.updated": 1,
+        "sync.hint": 1
+      },
+      "hinweise": [
+        {
+          "conversationId": "01a0f4b6-b6ca-7152-a99d-31707d59bf94",
+          "scope": "message.new"
+        },
+        {
+          "conversationId": null,
+          "eventId": "01a0f4b6-b6c7-7681-9dc1-01eaf1b1c140",
+          "scope": "event.updated"
+        }
+      ]
+    }
+  }
+}

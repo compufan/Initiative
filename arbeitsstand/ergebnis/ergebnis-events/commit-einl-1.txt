@@ -1,0 +1,19 @@
+Echtzeit: Empfängerliste gestückelt, Hinweis trägt die Kennung
+
+Mit REALTIME_BUS=postgres wird aus jeder Nutzlast über 7000 Byte ein
+sync.hint. Zwei Dinge gingen dabei verloren:
+
+- Die Empfängerliste steht im selben NOTIFY wie die Nutzlast, 39 Byte je
+  Person. Ein Termin mit 180 Eingeladenen sprengte die Grenze allein durch
+  die Liste, nicht einmal der gekürzte Hinweis kam durch. Jetzt geht die
+  Zustellung in Stücken zu höchstens 100 Personen.
+- Der Hinweis kannte nur die conversationId von oberster Ebene. Bei einem
+  Termin-Rundruf steht die Kennung in payload.event.id, bei einer Nachricht
+  der Chat in payload.message.conversationId – der Client wusste nach dem
+  Hinweis nicht, was er nachladen soll. Jetzt tragen die Hinweise beides.
+
+Dazu event.deleted mit Grund (geloescht, ausgeladen): Ältere Clients lesen
+nur eventId und behandeln beides gleich.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XgRwauwg73maopdhZbXcy7

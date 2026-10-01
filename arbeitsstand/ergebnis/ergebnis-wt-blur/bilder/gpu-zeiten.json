@@ -1,0 +1,26 @@
+{
+ "1200x900": {
+  "heute": 1258,
+  "heuteOhneRegler": 242,
+  "bokehK1": 94,
+  "bokehK3": 183,
+  "bokehK6": 297,
+  "bokehK3_halb": 373,
+  "cpuK3": 543,
+  "cpuK6": 603,
+  "weich": 105,
+  "weichKlein": 197
+ },
+ "1920x1080": {
+  "heute": 2387,
+  "heuteOhneRegler": 455,
+  "bokehK1": 137,
+  "bokehK3": 221,
+  "bokehK6": 342,
+  "bokehK3_halb": 343,
+  "cpuK3": 552,
+  "cpuK6": 771,
+  "weich": 121,
+  "weichKlein": 465
+ }
+}

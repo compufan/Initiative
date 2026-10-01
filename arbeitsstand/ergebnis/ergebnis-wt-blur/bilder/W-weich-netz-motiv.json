@@ -1,0 +1,344 @@
+{
+ "opt": {
+  "art": "A",
+  "maske": "netz",
+  "ziel": "motiv",
+  "W": 600
+ },
+ "par": {
+  "weich": 1,
+  "reinheit": "maske"
+ },
+ "ms": 197,
+ "massnahmen": {
+  "proto": {
+   "gruppen": [
+    0,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    1000000000
+   ],
+   "aussen": [
+    {
+     "bis": 2,
+     "n": 3900,
+     "mitteMaske": 81.5,
+     "mittelAbw": 60.03,
+     "anteilUeber2": 0.9992,
+     "max": 111
+    },
+    {
+     "bis": 4,
+     "n": 3585,
+     "mitteMaske": 21.7,
+     "mittelAbw": 11.22,
+     "anteilUeber2": 0.5573,
+     "max": 57
+    },
+    {
+     "bis": 8,
+     "n": 7364,
+     "mitteMaske": 6,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 16,
+     "n": 14856,
+     "mitteMaske": 5.7,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 32,
+     "n": 30834,
+     "mitteMaske": 5.6,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 64,
+     "n": 58740,
+     "mitteMaske": 5.6,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 1000000000,
+     "n": 86096,
+     "mitteMaske": 5.5,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    }
+   ],
+   "innen": [
+    {
+     "bis": 2,
+     "n": 3866,
+     "fremdAnteil": 0.0447,
+     "abweichOrig": 8.81
+    },
+    {
+     "bis": 4,
+     "n": 2703,
+     "fremdAnteil": 0.0142,
+     "abweichOrig": 11.2
+    },
+    {
+     "bis": 8,
+     "n": 5006,
+     "fremdAnteil": 0.0135,
+     "abweichOrig": 12.35
+    },
+    {
+     "bis": 16,
+     "n": 9030,
+     "fremdAnteil": 0.0154,
+     "abweichOrig": 12.41
+    },
+    {
+     "bis": 32,
+     "n": 14061,
+     "fremdAnteil": 0.0152,
+     "abweichOrig": 12.73
+    },
+    {
+     "bis": 64,
+     "n": 19534,
+     "fremdAnteil": 0.0154,
+     "abweichOrig": 12.63
+    },
+    {
+     "bis": 1000000000,
+     "n": 10425,
+     "fremdAnteil": 0.0153,
+     "abweichOrig": 12.67
+    }
+   ],
+   "maskeNull": {
+    "n": 2013,
+    "geaendert": 0,
+    "ueber2": 0,
+    "max": 0
+   },
+   "kleinerGleich3": {
+    "n": 42233,
+    "ueber2": 0
+   },
+   "kleinerGleich15": {
+    "n": 199220,
+    "geaendert": 0,
+    "max": 0
+   },
+   "reichweiteAussen": 4
+  }
+ },
+ "kante": {
+  "maske": {
+   "innen": 0.9582115867936478,
+   "aussen": 0.021760138771691282,
+   "breite1090": 5.930933374566745,
+   "lage50": 0.28785733496369903,
+   "steilheit": 0.1481732899099888,
+   "maxAussen": 0.13671021243496778,
+   "minInnen": 0.8891384814800044,
+   "rand4": 0.8547587506945058
+  },
+  "orig": {
+   "innen": 0.9827041957894466,
+   "aussen": -0.0027372588896341617,
+   "breite1090": 1.664206720588469,
+   "lage50": 0.3790949144267844,
+   "steilheit": 0.5718565211657876,
+   "maxAussen": 0.008919693451879257,
+   "minInnen": 0.9685216119556846,
+   "rand4": 1.020600136784041
+  },
+  "proto": {
+   "innen": 0.9838825679947928,
+   "aussen": -0.0027372588896341617,
+   "breite1090": 3.7949665034868367,
+   "lage50": 1.2452611772909896,
+   "steilheit": 0.298616581044042,
+   "maxAussen": 0.19980584941089113,
+   "minInnen": 0.9834044084590685,
+   "rand4": 0.9188248224555485
+  }
+ },
+ "jetzt": {
+  "massnahmen": {
+   "gpu": {
+    "gruppen": [
+     0,
+     2,
+     4,
+     8,
+     16,
+     32,
+     64,
+     1000000000
+    ],
+    "aussen": [
+     {
+      "bis": 2,
+      "n": 3900,
+      "mitteMaske": 81.5,
+      "mittelAbw": 115.21,
+      "anteilUeber2": 0.9954,
+      "max": 175
+     },
+     {
+      "bis": 4,
+      "n": 3585,
+      "mitteMaske": 21.7,
+      "mittelAbw": 5.35,
+      "anteilUeber2": 0.566,
+      "max": 79
+     },
+     {
+      "bis": 8,
+      "n": 7364,
+      "mitteMaske": 6,
+      "mittelAbw": 1.66,
+      "anteilUeber2": 0.1788,
+      "max": 17
+     },
+     {
+      "bis": 16,
+      "n": 14856,
+      "mitteMaske": 5.7,
+      "mittelAbw": 1.58,
+      "anteilUeber2": 0.1697,
+      "max": 16
+     },
+     {
+      "bis": 32,
+      "n": 30834,
+      "mitteMaske": 5.6,
+      "mittelAbw": 1.56,
+      "anteilUeber2": 0.1709,
+      "max": 16
+     },
+     {
+      "bis": 64,
+      "n": 58740,
+      "mitteMaske": 5.6,
+      "mittelAbw": 1.56,
+      "anteilUeber2": 0.1704,
+      "max": 16
+     },
+     {
+      "bis": 1000000000,
+      "n": 86096,
+      "mitteMaske": 5.5,
+      "mittelAbw": 1.54,
+      "anteilUeber2": 0.1676,
+      "max": 17
+     }
+    ],
+    "innen": [
+     {
+      "bis": 2,
+      "n": 3866,
+      "fremdAnteil": 0.2649,
+      "abweichOrig": 27.39
+     },
+     {
+      "bis": 4,
+      "n": 2703,
+      "fremdAnteil": 0.1445,
+      "abweichOrig": 20.19
+     },
+     {
+      "bis": 8,
+      "n": 5006,
+      "fremdAnteil": 0.0439,
+      "abweichOrig": 14.04
+     },
+     {
+      "bis": 16,
+      "n": 9030,
+      "fremdAnteil": 0.0362,
+      "abweichOrig": 12.35
+     },
+     {
+      "bis": 32,
+      "n": 14061,
+      "fremdAnteil": 0.0362,
+      "abweichOrig": 13.21
+     },
+     {
+      "bis": 64,
+      "n": 19534,
+      "fremdAnteil": 0.0362,
+      "abweichOrig": 12.81
+     },
+     {
+      "bis": 1000000000,
+      "n": 10425,
+      "fremdAnteil": 0.0361,
+      "abweichOrig": 12.98
+     }
+    ],
+    "maskeNull": {
+     "n": 2013,
+     "geaendert": 0,
+     "ueber2": 0,
+     "max": 0
+    },
+    "kleinerGleich3": {
+     "n": 42233,
+     "ueber2": 2602
+    },
+    "kleinerGleich15": {
+     "n": 199220,
+     "geaendert": 137247,
+     "max": 26
+    },
+    "reichweiteAussen": 64
+   }
+  },
+  "kante": {
+   "maske": {
+    "innen": 0.9582115867936478,
+    "aussen": 0.021760138771691282,
+    "breite1090": 5.930933374566745,
+    "lage50": 0.28785733496369903,
+    "steilheit": 0.1481732899099888,
+    "maxAussen": 0.13671021243496778,
+    "minInnen": 0.8891384814800044,
+    "rand4": 0.8547587506945058
+   },
+   "orig": {
+    "innen": 0.9827041957894466,
+    "aussen": -0.0027372588896341617,
+    "breite1090": 1.664206720588469,
+    "lage50": 0.3790949144267844,
+    "steilheit": 0.5718565211657876,
+    "maxAussen": 0.008919693451879257,
+    "minInnen": 0.9685216119556846,
+    "rand4": 1.020600136784041
+   },
+   "gpu": {
+    "innen": 0.963714328525306,
+    "aussen": -0.002026654112794812,
+    "breite1090": 5.940718748530884,
+    "lage50": 1.9497145503602162,
+    "steilheit": 0.39480394803957297,
+    "maxAussen": 0.09856476443822895,
+    "minInnen": 0.8705818966433583,
+    "rand4": 0.8958362241771387
+   }
+  },
+  "gpuMs": 471
+ }
+}

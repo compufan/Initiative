@@ -1,0 +1,350 @@
+{
+ "faehig": {
+  "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.7922.34 Safari/537.36",
+  "VideoEncoder": "function",
+  "VideoDecoder": "function",
+  "ImageDecoder": "function",
+  "OffscreenCanvas": "function",
+  "createImageBitmap": "function",
+  "rvfc": "function",
+  "memory": {
+   "genutzt": 34529643,
+   "grenze": 4294705152
+  },
+  "hardwareConcurrency": 4,
+  "deviceMemory": 8
+ },
+ "rafMs": 16.666666666666668,
+ "kosten": [
+  {
+   "bildName": "einfach",
+   "kante": 320,
+   "typ": "image/webp",
+   "echt": "image/webp",
+   "guete": 0.6,
+   "bytes": 2034,
+   "verkleinernMs": 0.27,
+   "kodierenMs": 9.98,
+   "dekodierenMs": 1.36,
+   "hochskalierenMs": 1.04
+  },
+  {
+   "bildName": "einfach",
+   "kante": 320,
+   "typ": "image/webp",
+   "echt": "image/webp",
+   "guete": 0.8,
+   "bytes": 2522,
+   "verkleinernMs": 0.27,
+   "kodierenMs": 49.52,
+   "dekodierenMs": 1.39,
+   "hochskalierenMs": 2.05
+  },
+  {
+   "bildName": "einfach",
+   "kante": 320,
+   "typ": "image/jpeg",
+   "echt": "image/jpeg",
+   "guete": 0.7,
+   "bytes": 3441,
+   "verkleinernMs": 0.27,
+   "kodierenMs": 55.32,
+   "dekodierenMs": 5.49,
+   "hochskalierenMs": 2.2
+  },
+  {
+   "bildName": "einfach",
+   "kante": 320,
+   "typ": "image/jpeg",
+   "echt": "image/jpeg",
+   "guete": 0.85,
+   "bytes": 4532,
+   "verkleinernMs": 0.27,
+   "kodierenMs": 48.64,
+   "dekodierenMs": 1.21,
+   "hochskalierenMs": 2.15
+  },
+  {
+   "bildName": "einfach",
+   "kante": 320,
+   "typ": "bitmap-aus-canvas",
+   "rohBytes": 230400,
+   "bitmapMs": 0.03
+  },
+  {
+   "bildName": "einfach",
+   "kante": 480,
+   "typ": "image/webp",
+   "echt": "image/webp",
+   "guete": 0.6,
+   "bytes": 2906,
+   "verkleinernMs": 0.33,
+   "kodierenMs": 60.84,
+   "dekodierenMs": 1.46,
+   "hochskalierenMs": 2.11
+  },
+  {
+   "bildName": "einfach",
+   "kante": 480,
+   "typ": "image/webp",
+   "echt": "image/webp",
+   "guete": 0.8,
+   "bytes": 3576,
+   "verkleinernMs": 0.33,
+   "kodierenMs": 53.08,
+   "dekodierenMs": 1.6,
+   "hochskalierenMs": 0.24
+  },
+  {
+   "bildName": "einfach",
+   "kante": 480,
+   "typ": "image/jpeg",
+   "echt": "image/jpeg",
+   "guete": 0.7,
+   "bytes": 5213,
+   "verkleinernMs": 0.33,
+   "kodierenMs": 46.54,
+   "dekodierenMs": 1.25,
+   "hochskalierenMs": 2.1
+  },
+  {
+   "bildName": "einfach",
+   "kante": 480,
+   "typ": "image/jpeg",
+   "echt": "image/jpeg",
+   "guete": 0.85,
+   "bytes": 6925,
+   "verkleinernMs": 0.33,
+   "kodierenMs": 46.2,
+   "dekodierenMs": 1.32,
+   "hochskalierenMs": 1.52
+  },
+  {
+   "bildName": "einfach",
+   "kante": 480,
+   "typ": "bitmap-aus-canvas",
+   "rohBytes": 518400,
+   "bitmapMs": 0.02
+  },
+  {
+   "bildName": "einfach",
+   "kante": 640,
+   "typ": "image/webp",
+   "echt": "image/webp",
+   "guete": 0.6,
+   "bytes": 3684,
+   "verkleinernMs": 0.53,
+   "kodierenMs": 66.22,
+   "dekodierenMs": 1.74,
+   "hochskalierenMs": 2.09
+  },
+  {
+   "bildName": "einfach",
+   "kante": 640,
+   "typ": "image/webp",
+   "echt": "image/webp",
+   "guete": 0.8,
+   "bytes": 4384,
+   "verkleinernMs": 0.53,
+   "kodierenMs": 57.78,
+   "dekodierenMs": 1.94,
+   "hochskalierenMs": 2.32
+  },
+  {
+   "bildName": "einfach",
+   "kante": 640,
+   "typ": "image/jpeg",
+   "echt": "image/jpeg",
+   "guete": 0.7,
+   "bytes": 7010,
+   "verkleinernMs": 0.53,
+   "kodierenMs": 50.56,
+   "dekodierenMs": 1.52,
+   "hochskalierenMs": 2.37
+  },
+  {
+   "bildName": "einfach",
+   "kante": 640,
+   "typ": "image/jpeg",
+   "echt": "image/jpeg",
+   "guete": 0.85,
+   "bytes": 9195,
+   "verkleinernMs": 0.53,
+   "kodierenMs": 50.52,
+   "dekodierenMs": 2.26,
+   "hochskalierenMs": 0.19
+  },
+  {
+   "bildName": "einfach",
+   "kante": 640,
+   "typ": "bitmap-aus-canvas",
+   "rohBytes": 921600,
+   "bitmapMs": 0.01
+  },
+  {
+   "bildName": "textur",
+   "kante": 320,
+   "typ": "image/webp",
+   "echt": "image/webp",
+   "guete": 0.6,
+   "bytes": 3746,
+   "verkleinernMs": 0.08,
+   "kodierenMs": 55.04,
+   "dekodierenMs": 1.2,
+   "hochskalierenMs": 0.21
+  },
+  {
+   "bildName": "textur",
+   "kante": 320,
+   "typ": "image/webp",
+   "echt": "image/webp",
+   "guete": 0.8,
+   "bytes": 6252,
+   "verkleinernMs": 0.08,
+   "kodierenMs": 52.14,
+   "dekodierenMs": 1.36,
+   "hochskalierenMs": 0.21
+  },
+  {
+   "bildName": "textur",
+   "kante": 320,
+   "typ": "image/jpeg",
+   "echt": "image/jpeg",
+   "guete": 0.7,
+   "bytes": 6337,
+   "verkleinernMs": 0.08,
+   "kodierenMs": 46.98,
+   "dekodierenMs": 1.31,
+   "hochskalierenMs": 0.2
+  },
+  {
+   "bildName": "textur",
+   "kante": 320,
+   "typ": "image/jpeg",
+   "echt": "image/jpeg",
+   "guete": 0.85,
+   "bytes": 10158,
+   "verkleinernMs": 0.08,
+   "kodierenMs": 46.84,
+   "dekodierenMs": 1.09,
+   "hochskalierenMs": 0.24
+  },
+  {
+   "bildName": "textur",
+   "kante": 320,
+   "typ": "bitmap-aus-canvas",
+   "rohBytes": 230400,
+   "bitmapMs": 0
+  },
+  {
+   "bildName": "textur",
+   "kante": 480,
+   "typ": "image/webp",
+   "echt": "image/webp",
+   "guete": 0.6,
+   "bytes": 8104,
+   "verkleinernMs": 0.04,
+   "kodierenMs": 69.74,
+   "dekodierenMs": 1.92,
+   "hochskalierenMs": 2.03
+  },
+  {
+   "bildName": "textur",
+   "kante": 480,
+   "typ": "image/webp",
+   "echt": "image/webp",
+   "guete": 0.8,
+   "bytes": 17172,
+   "verkleinernMs": 0.04,
+   "kodierenMs": 57.94,
+   "dekodierenMs": 2.75,
+   "hochskalierenMs": 2.04
+  },
+  {
+   "bildName": "textur",
+   "kante": 480,
+   "typ": "image/jpeg",
+   "echt": "image/jpeg",
+   "guete": 0.7,
+   "bytes": 13782,
+   "verkleinernMs": 0.04,
+   "kodierenMs": 45.62,
+   "dekodierenMs": 1.35,
+   "hochskalierenMs": 2.18
+  },
+  {
+   "bildName": "textur",
+   "kante": 480,
+   "typ": "image/jpeg",
+   "echt": "image/jpeg",
+   "guete": 0.85,
+   "bytes": 23917,
+   "verkleinernMs": 0.04,
+   "kodierenMs": 45.92,
+   "dekodierenMs": 1.29,
+   "hochskalierenMs": 2.07
+  },
+  {
+   "bildName": "textur",
+   "kante": 480,
+   "typ": "bitmap-aus-canvas",
+   "rohBytes": 518400,
+   "bitmapMs": 0
+  },
+  {
+   "bildName": "textur",
+   "kante": 640,
+   "typ": "image/webp",
+   "echt": "image/webp",
+   "guete": 0.6,
+   "bytes": 26954,
+   "verkleinernMs": 0.03,
+   "kodierenMs": 80.4,
+   "dekodierenMs": 3.89,
+   "hochskalierenMs": 0.36
+  },
+  {
+   "bildName": "textur",
+   "kante": 640,
+   "typ": "image/webp",
+   "echt": "image/webp",
+   "guete": 0.8,
+   "bytes": 44886,
+   "verkleinernMs": 0.03,
+   "kodierenMs": 72.26,
+   "dekodierenMs": 4.98,
+   "hochskalierenMs": 0.26
+  },
+  {
+   "bildName": "textur",
+   "kante": 640,
+   "typ": "image/jpeg",
+   "echt": "image/jpeg",
+   "guete": 0.7,
+   "bytes": 28534,
+   "verkleinernMs": 0.03,
+   "kodierenMs": 50,
+   "dekodierenMs": 2.04,
+   "hochskalierenMs": 0.2
+  },
+  {
+   "bildName": "textur",
+   "kante": 640,
+   "typ": "image/jpeg",
+   "echt": "image/jpeg",
+   "guete": 0.85,
+   "bytes": 53784,
+   "verkleinernMs": 0.03,
+   "kodierenMs": 50.4,
+   "dekodierenMs": 2.48,
+   "hochskalierenMs": 1.35
+  },
+  {
+   "bildName": "textur",
+   "kante": 640,
+   "typ": "bitmap-aus-canvas",
+   "rohBytes": 921600,
+   "bitmapMs": 0.01
+  }
+ ]
+}

@@ -1,0 +1,18 @@
+Bremsen und Mitschnitt für Einladungen
+
+Drei neue Regeln in der Drossel: Einladungen je Konto (30 je Stunde), neue
+Einzelchats je Konto (300 je Stunde, gezählt je Chat) und Änderungs-
+mitteilungen je Termin (3 je zehn Minuten). Eine Einladung erreicht bis zu
+200 Personen und legt für sie Chats an, die beim Gegenüber auftauchen; die
+Bremse zählt deshalb auch die Wirkung, nicht nur die Anfragen. Dafür gibt
+es erlaubt_menge: mehrere Versuche ganz oder gar nicht, damit eine
+abgelehnte Anfrage nicht den halben Vorrat verbrennt.
+
+Der Push-Dienst bekommt eine Testnaht: Mit mitschneiden() wird nicht
+gesendet, sondern mitgeschrieben. Im Entwicklungsbetrieb gibt es keine
+VAPID-Schlüssel, und am Bildschirm eines Geräts lässt sich nicht zählen,
+wem wie viele Mitteilungen gingen. im_hintergrund() sendet, ohne die
+Anfrage warten zu lassen.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XgRwauwg73maopdhZbXcy7

@@ -1,0 +1,23 @@
+Anna=01a0f46d-8958-7993-8b9a-712e0cad9ff0 Bodo=01a0f46d-8d94-72d0-840d-ccd989ce8f82
+Einzelchat=01a0f46d-8e83-7f42-9dfb-5a58e3f19acb
+Termin=01a0f46d-8f66-7d82-a7a3-7e74a8315c28; Teilnehmer:
+{"userId":"01a0f46d-8958-7993-8b9a-712e0cad9ff0","status":"yes","respondedAt":"2026-09-30T22:26:55.978081Z"}
+{"userId":"01a0f46d-8d94-72d0-840d-ccd989ce8f82","status":"pending","respondedAt":null}
+--- Nachrichten im Einzelchat (Bodo):
+{"type":"event","senderId":"01a0f46d-8958-7993-8b9a-712e0cad9ff0","body":null,"metadata":{"eventId":"01a0f46d-8f66-7d82-a7a3-7e74a8315c28"}}
+--- event.ics (ohne Anmeldung):
+METHOD:PUBLISH
+DTSTART:20261001T012655Z
+SUMMARY:Probe
+BEGIN:VALARM
+TRIGGER:-PT10M
+BEGIN:VALARM
+TRIGGER:-PT60M
+BEGIN:VALARM
+TRIGGER:-PT1440M
+--- Bodo schuldet noch die Antwort; nach 3 s nachsehen, ob der Server von sich aus etwas schreibt:
+["event"]
+--- Zusage durch Bodo und Nachrichtenzahl danach:
+{"userId":"01a0f46d-8958-7993-8b9a-712e0cad9ff0","status":"yes","respondedAt":"2026-09-30T22:26:55.978081Z"}
+{"userId":"01a0f46d-8d94-72d0-840d-ccd989ce8f82","status":"yes","respondedAt":"2026-09-30T22:26:59.122208Z"}
+["event"]

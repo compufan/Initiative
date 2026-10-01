@@ -1,0 +1,179 @@
+{
+ "opt": {
+  "art": "A",
+  "maske": "netzbreit",
+  "ziel": "motiv",
+  "W": 600
+ },
+ "par": {
+  "bokeh": 1,
+  "radiusKonst": true,
+  "T1": 0.92
+ },
+ "ms": 444,
+ "massnahmen": {
+  "proto": {
+   "gruppen": [
+    0,
+    2,
+    4,
+    8,
+    16,
+    32,
+    64,
+    1000000000
+   ],
+   "aussen": [
+    {
+     "bis": 2,
+     "n": 3915,
+     "mitteMaske": 112.5,
+     "mittelAbw": 62.11,
+     "anteilUeber2": 0.9637,
+     "max": 126
+    },
+    {
+     "bis": 4,
+     "n": 3604,
+     "mitteMaske": 86.5,
+     "mittelAbw": 36.72,
+     "anteilUeber2": 0.8904,
+     "max": 109
+    },
+    {
+     "bis": 8,
+     "n": 7330,
+     "mitteMaske": 52.5,
+     "mittelAbw": 3.71,
+     "anteilUeber2": 0.2716,
+     "max": 66
+    },
+    {
+     "bis": 16,
+     "n": 14912,
+     "mitteMaske": 12.3,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 32,
+     "n": 30848,
+     "mitteMaske": 5.6,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 64,
+     "n": 58786,
+     "mitteMaske": 5.6,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    },
+    {
+     "bis": 1000000000,
+     "n": 86217,
+     "mitteMaske": 5.5,
+     "mittelAbw": 0,
+     "anteilUeber2": 0,
+     "max": 0
+    }
+   ],
+   "innen": [
+    {
+     "bis": 2,
+     "n": 3888,
+     "fremdAnteil": 0.0471,
+     "abweichOrig": 6.12
+    },
+    {
+     "bis": 4,
+     "n": 2715,
+     "fremdAnteil": 0.024,
+     "abweichOrig": 9.24
+    },
+    {
+     "bis": 8,
+     "n": 4955,
+     "fremdAnteil": 0.0313,
+     "abweichOrig": 12.43
+    },
+    {
+     "bis": 16,
+     "n": 8999,
+     "fremdAnteil": 0.0368,
+     "abweichOrig": 11.79
+    },
+    {
+     "bis": 32,
+     "n": 14046,
+     "fremdAnteil": 0.0364,
+     "abweichOrig": 13.3
+    },
+    {
+     "bis": 64,
+     "n": 19417,
+     "fremdAnteil": 0.0368,
+     "abweichOrig": 12.71
+    },
+    {
+     "bis": 1000000000,
+     "n": 10368,
+     "fremdAnteil": 0.0366,
+     "abweichOrig": 12.88
+    }
+   ],
+   "maskeNull": {
+    "n": 1888,
+    "geaendert": 0,
+    "ueber2": 0,
+    "max": 0
+   },
+   "kleinerGleich3": {
+    "n": 39320,
+    "ueber2": 0
+   },
+   "kleinerGleich15": {
+    "n": 186365,
+    "geaendert": 0,
+    "max": 0
+   },
+   "reichweiteAussen": 8
+  }
+ },
+ "kante": {
+  "maske": {
+   "innen": 0.9518063123641461,
+   "aussen": 0.026659193042246378,
+   "breite1090": 17.80683828215342,
+   "lage50": 0.266297518055052,
+   "steilheit": 0.04739505967282742,
+   "maxAussen": 0.36387028367685337,
+   "minInnen": 0.640191091529738,
+   "rand4": 0.36569387364495265
+  },
+  "orig": {
+   "innen": 0.9827041957894466,
+   "aussen": -0.0027372588896341617,
+   "breite1090": 1.664206720588469,
+   "lage50": 0.3790949144267844,
+   "steilheit": 0.5718565211657876,
+   "maxAussen": 0.008919693451879257,
+   "minInnen": 0.9685216119556846,
+   "rand4": 1.020600136784041
+  },
+  "proto": {
+   "innen": 0.9623919784873348,
+   "aussen": -0.0027372588896341617,
+   "breite1090": 5.241081768626625,
+   "lage50": 2.042875698305058,
+   "steilheit": 0.24747989486909527,
+   "maxAussen": 0.36509000574496425,
+   "minInnen": 0.9622116982946229,
+   "rand4": 0.7465078380458536
+  }
+ },
+ "jetzt": null
+}

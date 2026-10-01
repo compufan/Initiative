@@ -1,0 +1,12 @@
+import { call, konto, msgs } from './lib.mjs';
+const a = await konto('pfpv'), b = await konto('pfpvb'), w = await konto('pfpvw');
+const g = (await call('POST', '/conversations', a.token, { type: 'group', title: 'PFV', memberIds: [b.id] })).body;
+const s = new Date(Date.now() + 5 * 864e5).toISOString(), s2 = new Date(Date.now() + 6 * 864e5).toISOString();
+let r = await call('POST', '/calendar/planning', a.token, { conversationId: g.id, title: 'Wann?', slots: [{ startsAt: s }, { startsAt: s2 }] });
+const id = r.body.id, pollId = r.body.pollId;
+const ids = r.body.attendees.map(x => x.userId).filter(x => x !== a.id);
+await call('PATCH', `/calendar/events/${id}`, a.token, { attendeeIds: [...ids, w.id] });
+const poll = (await call('GET', `/polls/${pollId}`, a.token)).body;
+const opt = poll.options[0].id;
+r = await call('POST', `/polls/${pollId}/vote`, w.token, { votes: [{ optionId: opt, value: 'yes' }] });
+console.log('W stimmt ab:', r.status, JSON.stringify(r.body?.error));

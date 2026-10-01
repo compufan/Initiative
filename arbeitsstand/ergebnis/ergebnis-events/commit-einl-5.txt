@@ -1,0 +1,12 @@
+Doku: Einladen, Sichtbarkeit von Terminen, Migration 0023
+
+API.md: Feld zustellung, Antwort, Ändern/Absagen/Löschen, die neuen Routen
+(…/zustellung, …/zustellung/nachliefern), Fehlertexte, stand, event.deleted
+mit Grund, sync.hint mit eventId, die Stückelung der Empfängerliste.
+SICHERHEIT.md: Wer einen Termin sieht, und was offen bleibt (event.ics als
+Kennung-als-Berechtigung, Sichtbarkeit der Teilnehmerliste, Einzelchats als
+Nebenwirkung). DEPLOYMENT.md: was die Migration tut, ihre Laufzeit und der
+Hinweis zum Postgres-Bus.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XgRwauwg73maopdhZbXcy7

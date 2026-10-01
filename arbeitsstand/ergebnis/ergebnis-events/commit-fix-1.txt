@@ -1,0 +1,40 @@
+Einladen: Zusage, Ausladen, Löschen und Zustellen ohne Wettlauf
+
+Mehrere Wege holten Personen oder Karten zurück, die eben entfernt worden waren:
+
+- Die Zusage prüfte die Berechtigung und schrieb danach per Upsert; fiel ein
+  Ausladen dazwischen, legte sie die Teilnehmerzeile neu an, und die Person sah
+  Notizen und Unterlagen wieder. Jetzt ändert sie nur eine vorhandene Zeile und
+  meldet sonst 404; nur den Ersteller (den niemand ausladen kann) legt sie an.
+- Das Bestätigen einer Terminfindung nahm jede Stimme als Teilnehmer auf, auch
+  die eines ausgeladenen Gruppenmitglieds. Aufgenommen wird nur, wer schon
+  eingeladen ist oder nicht zur Gruppe gehört (Stimme über einen Einzelchat).
+- Löschen und Ausladen lasen die Karten vor der Transaktion und schrieben erst
+  danach: Eine Zustellung, die gerade lief, legte weiter Nachrichten an, deren
+  Zeile schon weg war – verwaiste Karten, die nie aufgeräumt wurden. Das Löschen
+  liest jetzt unter der Sperre, löscht zuerst die Zeilen und nimmt die Nachricht,
+  die sie dabei trugen. Die Zustellung prüft vor jeder Karte, ob die Zeile noch
+  offen ist, trägt nur in leere Zeilen ein und nimmt jede Nachricht zurück, deren
+  Zeile fehlt oder schon belegt ist.
+- Eine Wiederholung mit gleichem Schlüssel wartet (höchstens acht Sekunden) auf
+  die laufende Zustellung, statt „ausstehend“ zu melden und ein zweites
+  Zustellen nahezulegen.
+- Wird eine Karte per „Für alle löschen“ entfernt, geht ihre Platzierung mit;
+  sonst galt sie im Editor weiter als vorhanden und ließ sich nicht neu zustellen.
+
+Dazu: Ort (300 Zeichen) und beim Ändern auch die Beschreibung haben jetzt eine
+Grenze wie beim Anlegen; Eingeladene können sich selbst austragen; die
+Obergrenze von 200 gilt nur, wenn die Liste wächst (Altbestand ließ sich sonst
+nicht mehr verkleinern); schreibende Termin-Wege antworten Nicht-Eingeladenen
+mit 404 statt 403; Absagen werden wie Änderungen gedrosselt; abgesagte Termine
+tragen im Kalender-Abo und in event.ics STATUS:CANCELLED; zu einer Terminfindung
+lassen sich keine weiteren Personen einladen, solange abgestimmt wird (sie
+könnten nicht abstimmen).
+
+Die Tests stellen jeden Fehler nach (gegen den alten Stand schlugen sie fehl),
+das Kalender-Abo wird jetzt auch auf seinen Inhalt geprüft, und jeder Test
+schließt seinen Verbindungsvorrat: Ohne das hielt jeder bis zum Ende des Laufs
+etwa drei Verbindungen, und bei gut dreißig Tests war der Datenbankserver voll.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XgRwauwg73maopdhZbXcy7

@@ -1,0 +1,108 @@
+{
+ "konstMaske gpu 0": {
+  "mittel": 0,
+  "max": 0,
+  "anteilUeber1": 0
+ },
+ "konstMaske gpu 3": {
+  "mittel": 0.423,
+  "max": 14,
+  "anteilUeber1": 0.0625
+ },
+ "konstMaske gpu 6": {
+  "mittel": 0.928,
+  "max": 31,
+  "anteilUeber1": 0.2036
+ },
+ "konstMaske gpu 10": {
+  "mittel": 1.611,
+  "max": 53,
+  "anteilUeber1": 0.3122
+ },
+ "konstMaske gpu 20": {
+  "mittel": 3.023,
+  "max": 111,
+  "anteilUeber1": 0.4608
+ },
+ "konstMaske gpu 128": {
+  "mittel": 11.935,
+  "max": 161,
+  "anteilUeber1": 0.8824
+ },
+ "konstMaske gpu 255": {
+  "mittel": 18.342,
+  "max": 160,
+  "anteilUeber1": 0.9967
+ },
+ "konstMaske cpu 0": {
+  "mittel": 0,
+  "max": 0,
+  "anteilUeber1": 0
+ },
+ "konstMaske cpu 3": {
+  "mittel": 0.275,
+  "max": 6,
+  "anteilUeber1": 0.0292
+ },
+ "konstMaske cpu 6": {
+  "mittel": 0.712,
+  "max": 12,
+  "anteilUeber1": 0.1366
+ },
+ "konstMaske cpu 10": {
+  "mittel": 1.228,
+  "max": 20,
+  "anteilUeber1": 0.2629
+ },
+ "konstMaske cpu 20": {
+  "mittel": 2.548,
+  "max": 40,
+  "anteilUeber1": 0.4561
+ },
+ "konstMaske cpu 128": {
+  "mittel": 13.598,
+  "max": 166,
+  "anteilUeber1": 0.8788
+ },
+ "konstMaske cpu 255": {
+  "mittel": 19.121,
+  "max": 166,
+  "anteilUeber1": 0.9489
+ },
+ "bokehRgba5": {
+  "mittelwert": 20.23,
+  "helleFlaeche": 449,
+  "max": 187,
+  "nullen": 0,
+  "mitte": 187,
+  "links20": 20,
+  "ecke": 20
+ },
+ "bokehRgba5_33": {
+  "mittelwert": 0.27,
+  "helleFlaeche": 0,
+  "max": 20,
+  "nullen": 266422,
+  "mitte": 0,
+  "links20": 0,
+  "ecke": 20
+ },
+ "bokehRgba6": {
+  "mittelwert": 20.3,
+  "helleFlaeche": 610,
+  "max": 181,
+  "nullen": 0,
+  "mitte": 181,
+  "links20": 20,
+  "ecke": 20
+ },
+ "bokehRgba16": {
+  "mittelwert": 21.39,
+  "helleFlaeche": 3627,
+  "max": 147,
+  "nullen": 0,
+  "mitte": 147,
+  "links20": 133,
+  "ecke": 20
+ }
+}

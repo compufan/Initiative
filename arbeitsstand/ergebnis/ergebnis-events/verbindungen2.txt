@@ -1,0 +1,135 @@
+4|idle|select storage_key, versuche from storag
+1|active|select count(*), state, left(query,40) f
+1|idle|LISTEN "initiative_realtime"
+1|idle|select pg_notify($1, $2)
+---
+4|idle|select storage_key, versuche from storag
+2|idle|insert into users (id, username, display
+2|idle|select id from users where username = $1
+1|active|select count(*), state, left(query,40) f
+1|idle|LISTEN "initiative_realtime"
+1|idle|select pg_notify($1, $2)
+---
+4|idle|select storage_key, versuche from storag
+4|idle|select id from users where username = $1
+2|idle|insert into refresh_tokens (id, user_id,
+2|idle|select * from event_attendees where even
+1|idle|select * from calendar_events where id =
+1|idle|insert into users (id, username, display
+---
+4|idle|select id from users where username = $1
+4|idle|select storage_key, versuche from storag
+4|idle|select * from calendar_events where id =
+4|idle|select * from event_attendees where even
+2|idle|update calendar_events set stand = stand
+1|idle|select * from event_placements where eve
+---
+5|idle|select * from event_attendees where even
+4|idle|select id from users where username = $1
+4|idle|select * from calendar_events where id =
+4|idle|select storage_key, versuche from storag
+3|idle|insert into refresh_tokens (id, user_id,
+2|idle|select art, conversation_id, message_id 
+---
+6|idle|select * from event_attendees where even
+6|idle|select * from calendar_events where id =
+4|idle|select storage_key, versuche from storag
+4|idle|select id from users where username = $1
+3|idle|select * from reactions where message_id
+3|idle|update calendar_events set stand = stand
+---
+6|idle|select * from calendar_events where id =
+6|idle|select * from event_attendees where even
+4|idle|select storage_key, versuche from storag
+4|idle|select * from reactions where message_id
+3|idle|select * from attachments where message_
+3|idle|update calendar_events set stand = stand
+---
+9|idle|select * from calendar_events where id =
+8|idle|select * from event_attendees where even
+4|idle|update calendar_events set stand = stand
+4|idle|select * from reactions where message_id
+4|idle|select storage_key, versuche from storag
+3|idle|select id from users where username = $1
+---
+10|idle|select * from calendar_events where id =
+9|idle|select * from event_attendees where even
+5|idle|select * from reactions where message_id
+4|idle|select * from attachments where message_
+4|idle|select id from users where username = $1
+4|idle|select storage_key, versuche from storag
+---
+10|idle|select * from calendar_events where id =
+9|idle|select * from event_attendees where even
+5|idle|select * from reactions where message_id
+4|idle|select exists (
+               select 1 
+4|idle|select * from attachments where message_
+4|idle|select storage_key, versuche from storag
+---
+11|idle|select * from calendar_events where id =
+11|idle|select * from event_attendees where even
+5|idle|select * from reactions where message_id
+4|idle|select * from attachments where message_
+4|idle|select storage_key, versuche from storag
+4|idle|update calendar_events set stand = stand
+---
+12|idle|select * from calendar_events where id =
+12|idle|select * from event_attendees where even
+5|idle|select * from reactions where message_id
+4|idle|select storage_key, versuche from storag
+4|idle|select * from attachments where message_
+4|idle|update calendar_events set stand = stand
+---
+12|idle|select * from event_attendees where even
+12|idle|select * from calendar_events where id =
+6|idle|select * from reactions where message_id
+5|idle|select * from attachments where message_
+4|idle|select id from users where username = $1
+4|idle|select storage_key, versuche from storag
+---
+14|idle|select * from calendar_events where id =
+12|idle|select * from event_attendees where even
+6|idle|select * from reactions where message_id
+5|idle|select exists (select 1 from event_atten
+5|idle|select * from attachments where message_
+4|idle|select storage_key, versuche from storag
+---
+16|idle|select * from calendar_events where id =
+14|idle|select * from event_attendees where even
+7|idle|select * from reactions where message_id
+6|idle|select * from attachments where message_
+5|idle|select exists (select 1 from event_atten
+5|idle|update calendar_events set stand = stand
+---
+16|idle|select * from calendar_events where id =
+14|idle|select * from event_attendees where even
+8|idle|select * from reactions where message_id
+6|idle|select * from attachments where message_
+5|idle|select exists (select 1 from event_atten
+5|idle|update calendar_events set stand = stand
+---
+---
+---
+---
+---
+---
+---
+---
+---
+---
+---
+---
+---
+---
+---
+---
+---
+---
+---
+---
+---
+---
+---
+---
+---

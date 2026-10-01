@@ -1,0 +1,24 @@
+Termin 01a0f4d6-24d7-7a60-9d8f-167ac2120dd1
+--- Anna legt Sammlung ohne Chat an, verknüpft sie
+collectionId am Termin: 01a0f4d6-24fe-7291-ba2e-d444cb16ce65
+--- Bodo (eingeladen): sieht er den Termin? Sammlung?
+Termin: 200
+{"error":{"code":"not_found","message":"Sammlung nicht gefunden"}}
+Sammlung byId: 404
+Bodos Sammlungsliste: 0
+--- Anna legt Sammlung MIT Chat (member_level edit) an
+":0,"createdAt":"2026-10-01T00:21:10.138488Z","updatedAt":"2026-10-01T00:21:10.138488Z"}
+Bodo byId (Chat-Sammlung): 200
+
+--- Anna legt Unterordner unter C an; erbt Bodo?
+grant: view
+Bodo sieht Unterordner, myLevel: view
+--- Tiefe
+Ebene 2: 01a0f4d6-264a-7bc0-bd31-754ceed21657
+Ebene 3: 01a0f4d6-268e-72f0-b1f8-b0e76158194a
+Ebene 4: 01a0f4d6-26db-74f2-984e-07ff3d36b56b
+Ebene 5: 01a0f4d6-271a-7d12-9680-196a05438b44
+Ebene 6: 01a0f4d6-276b-7251-a563-59084a72100f
+Ebene 7: 01a0f4d6-27b5-7021-abc3-f55f52e33353
+Ebene 8: 01a0f4d6-2802-7080-8d56-58e70812c0a2
+Ebene 9: FEHLER {"error": {"code": "bad_request", "message": "Mehr als 8 Ebenen sind nicht vorgesehen"}}

@@ -1,0 +1,17 @@
+Gemeinsames Paket: Typen, Schema und Vorschau-Rechnung für Einladungen
+
+Die Oberfläche braucht dieselben Verträge wie der Server: stand am Termin,
+die Antwort zustellung (Gruppenkarten, Einzelkarten, ausgelassene Gruppen,
+Ausstehendes), das Feld zustellung und clientId beim Anlegen, zustellung und
+status beim Ändern, den Grund bei event.deleted und die Termin-Kennung im
+sync.hint. Die Grenzen (200 Eingeladene, 10 Gruppenchats, 64 Zeichen
+Schlüssel) stehen gleichlautend in den Konstanten.
+
+Dazu zustellungPlanen, die Spiegelung von einladen::planen: Die Vorschau im
+Editor zeigt vor dem Senden, wohin die Einladung geht, und der Server
+entscheidet danach. Rechnen beide anders, steht in der Vorschau etwas, das
+nicht geschieht. Darum lesen beide Tests dieselbe Datei
+(testdaten/zustellung.json, zwölf Fälle).
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01XgRwauwg73maopdhZbXcy7
