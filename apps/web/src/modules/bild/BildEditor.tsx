@@ -115,7 +115,7 @@ type Werkzeug = 'zuschnitt' | 'ton' | 'bereich' | 'malen' | 'text';
 /**
  * Die Regler eines Bereichs.
  *
- * Dieselben neun Farbregler wie global, plus die Tiefenschärfe – und
+ * Dieselben neun Farbregler wie global, plus zwei Unschärfen – und
  * ausdrücklich OHNE Schärfe und Vignette: Die eine braucht die Nachbarn eines
  * noch ungetönten Bildpunkts, die andere den Bildrand, und einen eigenen
  * Rand hat ein Bereich nicht.
@@ -131,7 +131,7 @@ const BEREICHSREGLER: { key: keyof Bereichston; label: string; min: number; max:
   { key: 'saettigung', label: 'Sättigung', min: -1, max: 1 },
   { key: 'dynamik', label: 'Dynamik', min: -1, max: 1 },
   /*
-   * Die zwei Farbfilter fürs Schwarz-Weiss stehen NICHT hier.
+   * Die Farbfilter fürs Schwarz-Weiss stehen NICHT hier.
    *
    * Sie tun nichts, solange nicht entsättigt wird – ein Regler, der bei jeder
    * normalen Einstellung wirkungslos ist, gehört nicht zwischen die, die
@@ -139,13 +139,18 @@ const BEREICHSREGLER: { key: keyof Bereichston; label: string; min: number; max:
    * ist.
    */
   /*
-   * Die Tiefenschärfe steht als Einzige NICHT im globalen Ton-Reiter.
+   * Die beiden Unschärfen stehen als Einzige NICHT im globalen Ton-Reiter.
    *
-   * Sie ergibt dort keinen Sinn: Ein Bild gleichmässig unscharf zu machen ist
+   * Sie ergeben dort keinen Sinn: Ein Bild gleichmässig unscharf zu machen ist
    * kein Effekt, sondern ein Fehler. Erst mit einer Maske wird daraus das,
    * was ein Objektiv tut – scharf hier, weich dort.
+   *
+   * Zwei Regler, weil es zwei Dinge sind: „Weichzeichnen“ ist eine
+   * Mattscheibe (gleichmässig weich), „Bokeh“ eine Linse (Lichter werden zu
+   * Scheiben, weiter hinten grösser). Beide dürfen zugleich wirken.
    */
   { key: 'unschaerfe', label: 'Weichzeichnen', min: 0, max: 1 },
+  { key: 'bokeh', label: 'Bokeh', min: 0, max: 1 },
 ];
 
 /** Eine Kennung, die sich nicht wiederholt. */
@@ -256,6 +261,10 @@ const REGLER_TIPP: Partial<Record<keyof Anpassung | keyof Bereichston, string>> 
   schaerfeSchwelle:
     'Ab welchem Unterschied überhaupt geschärft wird. Höher heisst: glatte Flächen und Rauschen bleiben in Ruhe.',
   vignette: 'Dunkelt die Ecken ab und zieht den Blick zur Mitte.',
+  unschaerfe:
+    'Macht den Bereich gleichmässig weich wie eine Mattscheibe. Wirkt nur innerhalb der Maske – nichts von draussen wird hereingemischt.',
+  bokeh:
+    'Unschärfe wie von einer Linse: Lichter werden zu hellen Scheiben, weiter hinten grösser. Bleibt in der Maske und holt keine Farbe von draussen herein.',
 };
 
 const FARBEN = [
@@ -2499,7 +2508,7 @@ export function BildEditor({
    * Setzt ein fertig gerechnetes Maskenteil in den gewählten Bereich – oder
    * legt einen neuen an, wenn keiner gewählt ist.
    */
-  function teilEinsetzen(teile: Maskenteil[], standardName: string, unschaerfe = 0) {
+  function teilEinsetzen(teile: Maskenteil[], standardName: string, bokeh = 0) {
     if (teile.length === 0) return;
     merken();
     const bereich = docRef.current?.bereiche.find((b) => b.id === bereichRef.current);
@@ -2520,7 +2529,7 @@ export function BildEditor({
         name: standardName,
         aktiv: true,
         teile,
-        anpassung: { ...BEREICH_NEUTRAL, unschaerfe },
+        anpassung: { ...BEREICH_NEUTRAL, bokeh },
       };
       setDoc((wert) => (wert ? { ...wert, bereiche: [...wert.bereiche, neu] } : wert));
       setBereichId(neu.id);
@@ -3878,7 +3887,7 @@ export function BildEditor({
                     <p className="bild-hinweis">
                       „Fokus“ ist die Entfernung, die scharf bleibt – 100 ist ganz vorne, 0 ganz
                       hinten. „Tiefenbereich“ sagt, wie schnell es davor und dahinter unscharf wird.
-                      Die Unschärfe selbst stellst du unten am Regler „Weichzeichnen“ ein.
+                      Die Unschärfe selbst stellst du unten am Regler „Bokeh“ ein.
                     </p>
                   </>
                 )}
@@ -3997,7 +4006,8 @@ export function BildEditor({
                       <span className="bild-wert">
                         {regler.key === 'belichtung'
                           ? `${wert > 0 ? '+' : ''}${wert.toFixed(2)} EV`
-                          : `${wert > 0 ? '+' : ''}${Math.round(wert * 100)}`}
+                          : // Ein Regler von 0 bis 1 hat kein Vorzeichen: „60“, nicht „+60“.
+                            `${wert > 0 && regler.min < 0 ? '+' : ''}${Math.round(wert * 100)}`}
                       </span>
                     </label>
                   );
