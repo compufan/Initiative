@@ -500,3 +500,278 @@ test('derselbe Gegenstand in zwei Bereichen: beide Bearbeitungen wirken, nicht n
     expect(unveraendert(p.b), `B unberührt ${wo}: ${p.b}`).toBe(true);
   }
 });
+
+/**
+ * Der Fotoeditor auf derselben Bühne – dasselbe Reiter-Gerüst ohne Zeitleiste.
+ * Für die Stellen, an denen Foto und Video gleich sein sollen (oder ausdrücklich nicht).
+ */
+async function fotoEditorOeffnen(page: Page): Promise<Locator> {
+  await page.goto('/');
+  await page.waitForLoadState('networkidle');
+  await page.evaluate(async () => {
+    const leinwand = document.createElement('canvas');
+    leinwand.width = 320;
+    leinwand.height = 240;
+    const ctx = leinwand.getContext('2d') as CanvasRenderingContext2D;
+    ctx.fillStyle = '#24405c';
+    ctx.fillRect(0, 0, 320, 240);
+    ctx.fillStyle = '#f0b040';
+    ctx.fillRect(100, 80, 60, 60);
+    const bild = await new Promise<Blob>((fertig, fehler) =>
+      leinwand.toBlob(
+        (blob) => (blob ? fertig(blob) : fehler(new Error('kein Bild'))),
+        'image/png',
+      ),
+    );
+    const buehnePfad = '/e2e/buehne.ts';
+    const buehne = (await import(/* @vite-ignore */ buehnePfad)) as typeof import('./buehne.js');
+    buehne.fotoEditorZeigen(bild);
+  });
+  const editor = page.locator('.bild-editor');
+  await expect(editor.locator('.bild-leinwand')).toBeVisible({ timeout: 30_000 });
+  return editor;
+}
+
+/** „＋ Bereich" so oft drücken – `schon` Bereiche gibt es dann bereits. Bei vier verschwindet der Knopf. */
+async function neuerBereich(editor: Locator, wieviele: number, schon = 0) {
+  for (let i = schon + 1; i <= schon + wieviele; i += 1) {
+    await editor.getByRole('button', { name: '＋ Bereich' }).click();
+    await expect(bereichsKnoepfe(editor)).toHaveCount(i + (i < 4 ? 1 : 0), { timeout: 20_000 });
+  }
+}
+
+for (const [breite, hoehe] of [
+  [375, 667],
+  [412, 880],
+] as const) {
+  test(`die Einstellungen der Maske sind auf dem Telefon bedienbar, ohne zu wischen (${breite} Punkte)`, async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    await page.setViewportSize({ width: breite, height: hoehe });
+    if (!(await blattMitZweiGegenstaenden(page))) {
+      test.skip(true, OHNE_KODIERER);
+      return;
+    }
+    const editor = await editorOeffnen(page);
+    await reiterBereiche(editor);
+    await neuerBereich(editor, 1);
+    const leiste = einstellungen(editor);
+    await expect(leiste).toBeVisible();
+    const schieber = leiste.locator('.mb-schieber');
+
+    /** Liegt der Knopf ganz im Fenster UND ganz im sichtbaren Teil des Schiebers? */
+    const ganzSichtbar = async (knopf: Locator, imSchieber: boolean) => {
+      const k = await knopf.boundingBox();
+      const rahmen = await schieber.boundingBox();
+      if (!k || !rahmen) throw new Error('keine Box');
+      const wo = `${k.x}…${k.x + k.width} im Fenster ${breite}, Schieber ${rahmen.x}…${rahmen.x + rahmen.width}`;
+      expect(k.x, `links ${wo}`).toBeGreaterThanOrEqual(0);
+      expect(k.x + k.width, `rechts ${wo}`).toBeLessThanOrEqual(breite);
+      if (imSchieber) {
+        expect(k.x, `Schieber links ${wo}`).toBeGreaterThanOrEqual(rahmen.x - 0.5);
+        expect(k.x + k.width, `Schieber rechts ${wo}`).toBeLessThanOrEqual(
+          rahmen.x + rahmen.width + 0.5,
+        );
+      }
+    };
+
+    // Ohne Wischen: Abspielen, Name, „Ganzer Film", „Zeitraum", Ein/Aus und „Fertig".
+    await ganzSichtbar(leiste.getByRole('button', { name: 'Abspielen' }), false);
+    await ganzSichtbar(leiste.locator('.mb-name'), true);
+    await ganzSichtbar(leiste.getByRole('radio', { name: 'Ganzer Film' }), true);
+    await ganzSichtbar(leiste.getByRole('radio', { name: 'Zeitraum' }), true);
+    await ganzSichtbar(leiste.getByRole('button', { name: /wirkt/ }), true);
+    await ganzSichtbar(leiste.getByRole('button', { name: /Maske fertig/ }), false);
+    // Auf dem breiteren Telefon passt auch „Löschen" noch dazu.
+    if (breite >= 412) await ganzSichtbar(leiste.getByRole('button', { name: /löschen/ }), true);
+
+    // Der Rest liegt im Schieber – und ist erreichbar, mit „Fertig" fest daneben.
+    await schieber.evaluate((e) => {
+      e.scrollLeft = e.scrollWidth;
+    });
+    await ganzSichtbar(leiste.getByRole('button', { name: 'Hier trennen' }), true);
+    const fertig = leiste.getByRole('button', { name: /Maske fertig/ });
+    await ganzSichtbar(fertig, false);
+    // Nichts schiebt sich darüber: An seiner Mitte liegt „Fertig" selbst.
+    const mitte = await fertig.boundingBox();
+    if (!mitte) throw new Error('kein Fertig');
+    const oben = await page.evaluate(
+      ([x, y]) => document.elementFromPoint(x, y)?.closest('button')?.getAttribute('aria-label'),
+      [mitte.x + mitte.width / 2, mitte.y + mitte.height / 2],
+    );
+    expect(oben).toMatch(/Maske fertig/);
+
+    // Ein Satz in der Zeile: Die Bühne bleibt gross genug.
+    const buehne = await editor.locator('.bild-buehne').boundingBox();
+    expect(buehne?.height ?? 0, 'Höhe der Bühne').toBeGreaterThanOrEqual(
+      breite === 375 ? 150 : 200,
+    );
+  });
+}
+
+test('jeder Bereich trägt seine Farbe als Punkt – und lässt sich umbenennen', async ({ page }) => {
+  test.setTimeout(300_000);
+  page.setDefaultTimeout(60_000);
+  await page.setViewportSize({ width: 412, height: 880 });
+  if (!(await blattMitZweiGegenstaenden(page))) {
+    test.skip(true, OHNE_KODIERER);
+    return;
+  }
+  const editor = await editorOeffnen(page);
+  await reiterBereiche(editor);
+  await neuerBereich(editor, 2);
+
+  // Die Farbe im Chip ist die der Bahn und der Zeile der Einstellungen – für jeden Bereich.
+  const punktFarbe = (stelle: Locator) =>
+    stelle.locator('.mb-punkt').evaluate((e) => getComputedStyle(e).backgroundColor);
+  const farben: string[] = [];
+  for (const nummer of [0, 1]) {
+    await bereichsKnoepfe(editor).nth(nummer).click();
+    const imChip = await punktFarbe(bereichsKnoepfe(editor).nth(nummer));
+    const inDerLeiste = await punktFarbe(einstellungen(editor).locator('.mb-name'));
+    expect(imChip, `Chip ${nummer + 1} und Zeile`).toBe(inDerLeiste);
+    const inDerBahn = await editor
+      .locator('.mb-zeile')
+      .nth(nummer)
+      .evaluate(
+        (e) => getComputedStyle(e.querySelector('.mb-streifen') as Element).backgroundColor,
+      );
+    expect(imChip, `Chip ${nummer + 1} und Bahn`).toBe(inDerBahn);
+    farben.push(imChip);
+  }
+  expect(farben[0]).not.toBe(farben[1]);
+
+  // Umbenennen: Chip, Zeile und Bahn tragen den neuen Namen.
+  await bereichsKnoepfe(editor).nth(0).click();
+  const name = editor.getByRole('textbox', { name: 'Name' });
+  await name.fill('Läufer');
+  await expect(bereichsKnoepfe(editor).nth(0)).toContainText('Läufer');
+  expect(await leistenName(editor)).toBe('Läufer');
+  await expect(editor.locator('.mb-zeile').nth(0)).toHaveAttribute('aria-label', /^Maske Läufer,/);
+  // Der Zweite bleibt, wie er heisst.
+  await expect(bereichsKnoepfe(editor).nth(1)).toHaveText('Bereich 2');
+
+  // ↺ stellt den Namen wieder her – in einem Schritt, nicht Buchstabe für Buchstabe.
+  await editor.getByRole('button', { name: 'Rückgängig' }).click();
+  await expect(bereichsKnoepfe(editor).nth(0)).toHaveText('Bereich 1');
+  await expect(editor.locator('.mb-zeile').nth(0)).toHaveAttribute(
+    'aria-label',
+    /^Maske Bereich 1,/,
+  );
+
+  // Ein leerer Name bleibt nicht leer: Nach dem Verlassen des Feldes steht wieder der Standardname da.
+  await name.fill('');
+  await name.blur();
+  await expect(bereichsKnoepfe(editor).nth(0)).toHaveText('Bereich 1');
+});
+
+test('derselbe Name im Foto: Namensfeld, Farbe gibt es dort nicht', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 412, height: 880 });
+  const editor = await fotoEditorOeffnen(page);
+  await reiterBereiche(editor);
+  await neuerBereich(editor, 1);
+  const name = editor.getByRole('textbox', { name: 'Name' });
+  await name.fill('Himmel');
+  await expect(bereichsKnoepfe(editor).nth(0)).toHaveText('Himmel');
+  // Der Farbpunkt gehört zur Bahn in der Zeitleiste – ohne Zeitleiste kein Punkt.
+  await expect(editor.locator('.mb-punkt')).toHaveCount(0);
+});
+
+test('„＋ Bereich" gibt es auch an der Zeitleiste – von jedem Reiter aus', async ({ page }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 412, height: 880 });
+  if (!(await blattMitZweiGegenstaenden(page))) {
+    test.skip(true, OHNE_KODIERER);
+    return;
+  }
+  const editor = await editorOeffnen(page);
+  await reiterBereiche(editor);
+  await neuerBereich(editor, 1);
+  await einstellungen(editor)
+    .getByRole('button', { name: /Maske fertig/ })
+    .click();
+
+  // Auf einem anderen Reiter: ◐ → Namenswahl → „＋ Bereich".
+  await editor.locator('.bild-reiter').getByRole('button', { name: /Ton/ }).click();
+  await expect(editor.getByRole('group', { name: 'Bereiche' })).toHaveCount(0);
+  await editor.getByRole('button', { name: 'Maske wählen' }).click();
+  const wahl = editor.getByRole('toolbar', { name: 'Maske wählen' });
+  await wahl.getByRole('button', { name: '＋ Bereich' }).click();
+
+  // Der Reiter „Bereiche" ist aufgegangen, der neue Bereich da und überall gewählt.
+  await expect(editor.locator('.bild-reiter-knopf.is-active')).toContainText('Bereiche');
+  await expect(bereichsKnoepfe(editor)).toHaveCount(3, { timeout: 20_000 });
+  await expect(bereichsKnoepfe(editor).nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await expect(editor.locator('.mb-zeile')).toHaveCount(2);
+  expect(await leistenName(editor)).toBe('Bereich 2');
+
+  // Bei vier Bereichen fehlt der Knopf – er brächte nur eine Absage.
+  await neuerBereich(editor, 2, 2);
+  await einstellungen(editor)
+    .getByRole('button', { name: /Maske fertig/ })
+    .click();
+  await editor.getByRole('button', { name: 'Maske wählen' }).click();
+  await expect(
+    editor
+      .getByRole('toolbar', { name: 'Maske wählen' })
+      .getByRole('button', { name: '＋ Bereich' }),
+  ).toHaveCount(0);
+});
+
+test('bei vier Bereichen sagt der Editor, warum kein fünfter geht – im Video wie im Foto', async ({
+  page,
+}) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 412, height: 880 });
+  if (!(await blattMitZweiGegenstaenden(page))) {
+    test.skip(true, OHNE_KODIERER);
+    return;
+  }
+  const video = await editorOeffnen(page);
+  await reiterBereiche(video);
+  await expect(video.getByText(/Mehr als 4 Bereiche gehen nicht/)).toHaveCount(0);
+  await neuerBereich(video, 4);
+  await expect(video.getByRole('button', { name: '＋ Bereich' })).toHaveCount(0);
+  await expect(
+    video.getByText(/Mehr als 4 Bereiche gehen nicht – lösch einen, oder tipp weitere Gegenstände/),
+  ).toBeVisible();
+
+  const foto = await fotoEditorOeffnen(page);
+  await reiterBereiche(foto);
+  await neuerBereich(foto, 4);
+  await expect(foto.getByRole('button', { name: '＋ Bereich' })).toHaveCount(0);
+  await expect(foto.getByText(/Mehr als 4 Bereiche gehen nicht – lösch einen\./)).toBeVisible();
+});
+
+test('im Video bleibt eine Form an der Szene – das steht da; im Foto nicht', async ({ page }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 412, height: 880 });
+  if (!(await blattMitZweiGegenstaenden(page))) {
+    test.skip(true, OHNE_KODIERER);
+    return;
+  }
+  const hinweis = /Diese Form bleibt an der Szene/;
+  const video = await editorOeffnen(page);
+  await reiterBereiche(video);
+  await expect(video.getByText(hinweis)).toHaveCount(0);
+  await video
+    .getByRole('button', { name: /Verlauf/ })
+    .first()
+    .click();
+  await expect(video.getByRole('group', { name: 'Masken des Bereichs' })).toBeVisible();
+  await expect(video.getByText(hinweis)).toBeVisible();
+  // Mit eingeschaltetem Antippen geht es um einen Gegenstand, nicht um die Form – der Satz tritt zurück.
+  await antippenAn(video);
+  await expect(video.getByText(hinweis)).toHaveCount(0);
+
+  const foto = await fotoEditorOeffnen(page);
+  await reiterBereiche(foto);
+  await foto
+    .getByRole('button', { name: /Verlauf/ })
+    .first()
+    .click();
+  await expect(foto.getByRole('group', { name: 'Masken des Bereichs' })).toBeVisible();
+  await expect(foto.getByText(hinweis)).toHaveCount(0);
+});
