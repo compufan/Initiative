@@ -267,6 +267,12 @@ und bearbeiten an einem Ort, alles im Gerät.
     Kamera, nicht einem Gegenstand – für etwas, das sich bewegt, ist
     „Antippen" der Weg.
 - Höchstens acht Bereiche im Film und vier an einem Bild.
+- **Wo die Verfolgung an ihre Grenze kommt**: Läuft ein Gegenstand vor einem
+  anderen vorbei und verdeckt ihn, kann die Maske des hinteren am Verdecker
+  hängen bleiben – die Bahn zeigt das nicht. Bis das behoben ist, hilft:
+  den Bereich dort, wo sich die Wege treffen, mit „Hier trennen" teilen, den
+  Gegenstand im hinteren Teil noch einmal antippen und die alte Maske dort
+  mit „🗑 Maske" wegnehmen. Der Teil davor behält seine gute Verfolgung.
 - **Film bauen** wartet, bis alle eingeschalteten Bereiche überall verfolgt
   sind (meist ist das längst geschehen), und nimmt dann an jedem Bild die
   verfolgte Maske.

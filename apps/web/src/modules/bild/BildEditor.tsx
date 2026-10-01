@@ -2374,7 +2374,7 @@ export function BildEditor({
     bereichId: string | null,
     modus: 'dazu' | 'weg',
     mitNetz: boolean,
-    stelle?: { x: number; y: number },
+    stelle?: { x: number; y: number; breite: number; hoehe: number },
   ): (TippTeil & { id: string; modus: Maskenmodus; umkehren: boolean }) | null {
     const bereich = aktuell.bereiche.find((b) => b.id === bereichId);
     if (!bereich) return null;
@@ -2389,7 +2389,17 @@ export function BildEditor({
      * angefasste, sonst das jüngste: Wer den letzten Tipp zurücknimmt,
      * meint den, den er gerade gemacht hat.
      */
-    if (stelle) return passend.find((teil) => tippGehoertDazu(teil, stelle)) ?? null;
+    if (stelle) {
+      // Ein Teil in einer anderen Rechengrösse als die Vorlage kann nichts decken, was hier angetippt wird.
+      return (
+        passend.find(
+          (teil) =>
+            teil.breite === stelle.breite &&
+            teil.hoehe === stelle.hoehe &&
+            tippGehoertDazu(teil, stelle),
+        ) ?? null
+      );
+    }
     return (
       passend.find((teil) => teil.id === tippLetzteRef.current) ??
       passend[passend.length - 1] ??
@@ -2529,7 +2539,11 @@ export function BildEditor({
     // Im Film bekommt jeder neue Gegenstand sein eigenes Teil – siehe `imFilm`.
     const vorher =
       imFilm && modus === 'dazu'
-        ? tippTeilFinden(aktuell, bereichRef.current, modus, mitNetz, stelle)
+        ? tippTeilFinden(aktuell, bereichRef.current, modus, mitNetz, {
+            ...stelle,
+            breite: vorlage.image.width,
+            hoehe: vorlage.image.height,
+          })
         : tippTeilFinden(aktuell, bereichRef.current, modus, mitNetz);
     await tippTeilSetzen(vorher, [...(vorher?.punkte ?? []), stelle], {
       modus,

@@ -835,6 +835,121 @@ describe('Die Spur in Fenstern und beim Verschwinden', () => {
   });
 });
 
+describe('Verdeckung: ein Gegenstand läuft vor einem anderen vorbei', () => {
+  /*
+   * Zwei Quadrate (40 × 40) auf ruhigem Grund. A wandert nach rechts, B nach
+   * unten; ihre Wege kreuzen sich, und B (oder A) liegt dabei oben. Verfolgt
+   * wird A mit EINEM Tipp, wie im Editor.
+   *
+   * Die Wahrheit ist die sichtbare Fläche von A – dort, wo B liegt, ist A
+   * verdeckt und gehört nicht zur Maske. Die weiche Kante der Flutung lässt
+   * die Deckung auch im besten Fall bei rund 0,83 enden.
+   */
+  const KANTE = 40;
+  type Ecke = { x: number; y: number };
+  interface Zwei {
+    readonly a: (n: number) => Ecke;
+    readonly b: (n: number) => Ecke;
+    /** Wer oben liegt, wo sich beide überdecken. */
+    readonly oben: 'a' | 'b';
+  }
+
+  const drin = (e: Ecke, x: number, y: number) =>
+    x >= e.x && x < e.x + KANTE && y >= e.y && y < e.y + KANTE;
+
+  function bildZwei(n: number, film: Zwei): GelesenesBild {
+    const data = new Uint8ClampedArray(B * H * 4);
+    const a = film.a(n);
+    const b = film.b(n);
+    for (let y = 0; y < H; y += 1) {
+      for (let x = 0; x < B; x += 1) {
+        const at = (y * B + x) * 4;
+        let farbe = [36, 64, 92];
+        const inA = drin(a, x, y);
+        const inB = drin(b, x, y);
+        // Zuerst der untere, dann der obere.
+        if (film.oben === 'a') {
+          if (inB) farbe = [240, 176, 64];
+          if (inA) farbe = [16, 112, 48];
+        } else {
+          if (inA) farbe = [16, 112, 48];
+          if (inB) farbe = [240, 176, 64];
+        }
+        data[at] = farbe[0];
+        data[at + 1] = farbe[1];
+        data[at + 2] = farbe[2];
+        data[at + 3] = 255;
+      }
+    }
+    return {
+      zeitMs: n * 40,
+      daten: { data, width: B, height: H, colorSpace: 'srgb' } as ImageData,
+    };
+  }
+
+  function sichtbarVonA(n: number, film: Zwei): Uint8Array {
+    const maske = new Uint8Array(B * H);
+    const a = film.a(n);
+    const b = film.b(n);
+    for (let y = 0; y < H; y += 1) {
+      for (let x = 0; x < B; x += 1) {
+        if (drin(a, x, y) && !(film.oben === 'b' && drin(b, x, y))) maske[y * B + x] = 255;
+      }
+    }
+    return maske;
+  }
+
+  async function verfolgeA(film: Zwei, anzahl = 50) {
+    const bilder = Array.from({ length: anzahl }, (_, n) => bildZwei(n, film));
+    const start = film.a(0);
+    const roh = teil('tipp', { x: start.x + KANTE / 2, y: start.y + KANTE / 2 });
+    // Eine engere Toleranz als sonst: Grün und Grund liegen nicht weit auseinander.
+    const eintrag = { ...roh, teil: { ...roh.teil, toleranz: 25 } } as InhaltsTeil;
+    const { jeBild } = await folgeTeile(bilder, { teile: [eintrag], schluesselAbstand: 4 });
+    return bilder.map((_, n) =>
+      deckung(jeBild[n].get('t1')?.werte ?? new Uint8Array(B * H), sichtbarVonA(n, film)),
+    );
+  }
+
+  const kreuzend = {
+    a: (n: number) => ({ x: 20 + 4 * n, y: 50 }),
+    b: (n: number) => ({ x: 140, y: 10 + 2 * n }),
+  };
+
+  it('hält den Verdecker: Liegt A oben, bleibt seine Maske auf ihm', async () => {
+    const werte = await verfolgeA({ ...kreuzend, oben: 'a' });
+    const text = werte.map((w) => w.toFixed(2)).join(' ');
+    expect(Math.min(...werte), text).toBeGreaterThan(0.8);
+  }, 60_000);
+
+  /*
+   * Bekannte Grenze, mit Absicht als „muss scheitern" festgehalten: Liegt B
+   * über A, nimmt B die Maske mit. Die Suche nimmt die Bildpunkte unter der
+   * Maske und sucht sie im nächsten Bild; A ist einfarbig, und ob er nach
+   * rechts weiterläuft oder stehen bleibt und nur seinen linken Streifen
+   * verliert, unterscheidet allein der Rand zum Verdecker – der selbst wandert.
+   * Gemessen: Deckung 0,83 bis Bild 20, dann bricht sie ein, ab Bild 35 null.
+   *
+   * Ein Ansatz, der hier tragen könnte (ungeprüft): die Vorlage vom
+   * letzten unverdeckten Bild behalten und nur die besten Bildpunkte zählen –
+   * dann fiele der verdeckte Teil als Ausreisser heraus, und der sichtbare
+   * Rest entschiede. Wer das umsetzt, nimmt `.fails` weg.
+   *
+   * Dem Anwender bleibt der Weg, den `e2e/videoBereiche.spec.ts` prüft: den
+   * Bereich an der Kreuzung trennen und dahinter neu antippen.
+   */
+  it.fails(
+    'hält einen verdeckten Gegenstand (bekannte Grenze)',
+    async () => {
+      const werte = await verfolgeA({ ...kreuzend, oben: 'b' });
+      const text = werte.map((w) => w.toFixed(2)).join(' ');
+      // Vier Bilder nach dem Ende der Überdeckung (A ist ab Bild 30 frei) muss die Maske wieder auf A sitzen.
+      expect(Math.min(...werte.slice(34, 45)), text).toBeGreaterThan(0.7);
+    },
+    60_000,
+  );
+});
+
 describe('komponentenFiltern', () => {
   const B = 40;
   const H = 30;

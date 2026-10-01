@@ -500,6 +500,59 @@ test('derselbe Gegenstand in zwei Bereichen: beide Bearbeitungen wirken, nicht n
   }
 });
 
+test('zwei Gegenstände kreuzen sich: Hier trennen, nach der Kreuzung neu antippen, die falsche Maske wegnehmen', async ({
+  page,
+}) => {
+  /*
+   * Die Verfolgung hält zwei Gegenstände, die einander verdecken, nicht sicher
+   * auseinander: Läuft B vor A vorbei, kann die Maske von A an B hängen
+   * bleiben (gemessen: ab 1,6 s trägt A seine Bearbeitung nicht mehr, die graue
+   * Fläche läuft als Geist neben B her). Das ist eine bekannte Grenze – dieser
+   * Test hält den Weg heraus fest, der heute geht, und prüft ihn am fertigen Film:
+   * Den Bereich dort trennen, wo sich die Wege treffen, den Gegenstand dahinter
+   * noch einmal antippen und die alte Maske im hinteren Teil wegnehmen.
+   */
+  test.setTimeout(600_000);
+  page.setDefaultTimeout(60_000);
+  await page.setViewportSize({ width: 412, height: 880 });
+  const kreuzend: Szene = { a: GETRENNT.a, b: GETRENNT.b, bx: 150 };
+  if (!(await blattMitZweiGegenstaenden(page, kreuzend))) {
+    test.skip(true, OHNE_KODIERER);
+    return;
+  }
+  const editor = await editorOeffnen(page);
+  await zweiBereicheAnlegen(page, editor, kreuzend);
+  await editor.getByLabel('Belichtung').first().fill('1.5');
+  await bereichsKnoepfe(editor).nth(0).click();
+  await editor.getByLabel('Sättigung').first().fill('-1');
+
+  // Bei 1,6 s trennen: Davor bleibt die Verfolgung von A gut, danach beginnt der Geist.
+  await springe(editor, 4);
+  await einstellungen(editor).getByRole('button', { name: 'Hier trennen' }).click();
+  // Am Stellbild gilt nur noch die hintere Hälfte – sie heisst weitergezählt, „Bereich 3".
+  await expect(bereichsKnoepfe(editor).nth(0)).toHaveText('Bereich 3', { timeout: 30_000 });
+
+  // Nach der Kreuzung (2,8 s) steht A frei: dort neu antippen, die alte Maske wegnehmen.
+  await springe(editor, 3);
+  await tippen(page, editor, 254, 80);
+  await expect(teileChips(editor)).toHaveCount(2, { timeout: 30_000 });
+  await teileChips(editor).first().click();
+  await editor.getByRole('button', { name: '🗑 Maske' }).click();
+  await expect(teileChips(editor)).toHaveCount(1);
+  await expect(einstellungen(editor).locator('.mb-name')).toContainText('fertig verfolgt', {
+    timeout: 150_000,
+  });
+
+  await filmBauen(page, editor);
+  const proben = await filmAbtasten(page, [0.05, 0.85, 1.25, 2.05, 2.45, 3.05, 3.45], kreuzend.bx);
+  for (const p of proben) {
+    const wo = `bei ${p.t} s`;
+    // A trägt seine Bearbeitung vor UND hinter der Kreuzung, B durchgehend die seine.
+    expect(grau(p.a), `A grau ${wo}: ${p.a}`).toBe(true);
+    expect(aufgehellt(p.b), `B aufgehellt ${wo}: ${p.b}`).toBe(true);
+  }
+});
+
 /**
  * Der Fotoeditor auf derselben Bühne – dasselbe Reiter-Gerüst ohne Zeitleiste.
  * Für die Stellen, an denen Foto und Video gleich sein sollen (oder ausdrücklich nicht).
