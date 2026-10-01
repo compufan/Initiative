@@ -220,9 +220,24 @@ und bearbeiten an einem Ort, alles im Gerät.
 - **Abschnitte**: an der Wiedergabestelle teilen, Anfang und Ende ziehen,
   umstellen, entfernen, einen weiteren anhängen. Jeder Abschnitt trägt seine
   eigene Bearbeitung (Licht, Farbe, Zuschnitt).
-- **Wischen zeigt den Film live** – mit Bearbeitung und Masken, nicht erst
-  beim Loslassen. Wo das Gerät beim Abspielen nicht mitkommt, zeichnet es
-  kleiner, und erst ganz zuletzt ohne Bearbeitung.
+- **Wischen zeigt das Bild unter dem Finger** – mit Bearbeitung und Masken,
+  nicht erst beim Loslassen. Dafür legt die App beim Öffnen im Hintergrund
+  kleine Bilder des ganzen Films an, grob zuerst (erst jedes 16., dann jedes
+  8., 4., 2., zuletzt jedes Bild): Nach wenigen Sekunden liegt zu jeder Stelle
+  eines nahe, nach ein paar Sekunden mehr alle. Beim Wischen kommen die Bilder
+  aus diesem Speicher statt aus Sprüngen im Video, das Bild ist dann etwas
+  weich; hält der Finger an, wird es scharf. Solange der Speicher noch nicht
+  gefüllt ist („Die Wischvorschau wird noch vorbereitet“), wischt es wie
+  vorher, nur ruckliger. Alles bleibt im Gerät: Der Speicher liegt im
+  Arbeitsspeicher (höchstens 24 MB, nichts wird abgelegt) und verschwindet mit
+  dem Blatt; während der Film läuft, beim Wischen oder Bauen und wenn das
+  Fenster nicht zu sehen ist, pausiert das Füllen.
+- Eine Maske, die an einem Bild noch nicht verfolgt ist, fehlt dort – beim
+  Wischen steht dann über dem Bild, welche („„Motiv“ wird an diesem Bild noch
+  verfolgt …“), und sie erscheint kurz nach dem Loslassen. Wo das Gerät beim
+  Abspielen nicht mitkommt, zeichnet es kleiner, beim Wischen zuletzt ohne
+  Bearbeitung („zum Wischen mit Bearbeitung zu langsam – sie erscheint,
+  sobald du anhältst“).
 - **Masken gehören dem Film, nicht einem Bild.** Eine Maske (Antippen,
   Person, Motiv, Tiefe, Verlauf, Ellipse, Pinsel) gilt entweder im
   **ganzen Film** oder in einem **Zeitraum** („Ab hier", „Bis hier", „Nur
