@@ -1104,7 +1104,13 @@ async function blattMitSchwerenSpruengen(
   return true;
 }
 
-/** Zieht den Finger bei sechsfach gedrosselter Rechenleistung über 70 % der Leiste. */
+/**
+ * Zieht den Finger über 70 % der Leiste, bei sechsfach gedrosselter
+ * Rechenleistung. `page.mouse.move` wartet auf jede Antwort: Bei so langsamer
+ * Seite liegen zwischen zwei Ereignissen über 100 ms – für die App ruht der
+ * Finger dann, und das Video schärft nach. Das Video soll hier springen
+ * (der Weg ohne Speicher), das stört nicht.
+ */
 async function wischenGedrosselt(page: Page): Promise<void> {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 });
@@ -1116,6 +1122,37 @@ async function wischenGedrosselt(page: Page): Promise<void> {
     await page.mouse.move(bahn.x + 5 + (bahn.width * 0.7 * i) / 60, y);
     await page.waitForTimeout(16);
   }
+}
+
+/**
+ * Zieht den Finger über 70 % der Leiste wie ein Finger: Die Ereignisse gehen
+ * alle 16 ms los, ohne auf die Antwort der Seite zu warten – ein langsamer
+ * Treiber ließe die Seite sonst „ruhen". `beiHalten` läuft, solange der Finger
+ * noch liegt.
+ */
+async function wischenWieEinFinger<T>(page: Page, beiHalten: () => Promise<T>): Promise<T> {
+  const cdp = await page.context().newCDPSession(page);
+  const bahn = (await page.locator('.zl-bahn').first().boundingBox())!;
+  const y = bahn.y + bahn.height / 2;
+  const offen: Array<Promise<unknown>> = [];
+  const maus = (type: string, x: number) =>
+    cdp.send('Input.dispatchMouseEvent', {
+      type,
+      x,
+      y,
+      button: 'left',
+      buttons: type === 'mouseReleased' ? 0 : 1,
+      clickCount: 1,
+    } as never);
+  offen.push(maus('mousePressed', bahn.x + 5));
+  for (let i = 1; i <= 60; i += 1) {
+    await page.waitForTimeout(16);
+    offen.push(maus('mouseMoved', bahn.x + 5 + (bahn.width * 0.7 * i) / 60));
+  }
+  await Promise.all(offen);
+  const erg = await beiHalten();
+  await maus('mouseReleased', bahn.x + 5 + bahn.width * 0.7);
+  return erg;
 }
 
 test('beim Wischen läuft das Video mit, statt erst am Ende zu springen', async ({ page }) => {
@@ -1168,11 +1205,12 @@ test('beim Wischen springt das Video nicht, wenn der Wischspeicher das Bild hat'
   page,
 }) => {
   /*
-   * Der Zwilling des Tests darüber: dasselbe Video, dieselbe Drosselung –
-   * aber der Wischspeicher ist gefüllt. Dann kommen die Bilder beim Wischen
-   * aus ihm, nicht aus Sprüngen: Das Video springt im Zug nicht (oben ≥ 15
-   * Sprünge, die Dekodierung eines Bildes dauerte hier Sekunden), und die
-   * Leinwand der Blattvorschau zeigt trotzdem laufend neue Bilder.
+   * Der Zwilling des Tests darüber: dasselbe Video – aber der Wischspeicher
+   * ist gefüllt. Dann kommen die Bilder beim Wischen aus ihm, nicht aus
+   * Sprüngen: Das Video springt im Zug nicht (oben ≥ 15 Sprünge, jeder
+   * dekodierte hier Sekunden), und die Leinwand der Blattvorschau zeigt
+   * trotzdem laufend neue Bilder. Die Ereignisse gehen los wie bei einem
+   * Finger, ohne auf die Seite zu warten (siehe `wischenWieEinFinger`).
    */
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 412, height: 880 });
@@ -1195,19 +1233,19 @@ test('beim Wischen springt das Video nicht, wenn der Wischspeicher das Bild hat'
         ?.speicherGezeichnet ?? 0;
     video.addEventListener('seeked', () => w.gezeigt.push(video.currentTime * 1000));
   });
-  await wischenGedrosselt(page);
-  const erg = await page.evaluate(() => {
-    const w = window as unknown as {
-      gezeigt: number[];
-      vorher: number;
-      __vorschau?: { speicherGezeichnet: number };
-    };
-    return {
-      spruenge: w.gezeigt.length,
-      zeichnungen: (w.__vorschau?.speicherGezeichnet ?? 0) - w.vorher,
-    };
-  });
-  await page.mouse.up();
+  const erg = await wischenWieEinFinger(page, () =>
+    page.evaluate(() => {
+      const w = window as unknown as {
+        gezeigt: number[];
+        vorher: number;
+        __vorschau?: { speicherGezeichnet: number };
+      };
+      return {
+        spruenge: w.gezeigt.length,
+        zeichnungen: (w.__vorschau?.speicherGezeichnet ?? 0) - w.vorher,
+      };
+    }),
+  );
   expect(erg.spruenge, `Sprünge des Videos im Zug: ${JSON.stringify(erg)}`).toBeLessThanOrEqual(3);
   expect(
     erg.zeichnungen,
