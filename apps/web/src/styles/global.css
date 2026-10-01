@@ -1071,19 +1071,28 @@ body {
   color: var(--text);
 }
 
-/* Detailansicht: eine Zeile, mindestens eine Daumenbreite hoch. */
+/*
+ * Detailansicht: Der Link ist mindestens eine Daumenbreite (44 px) hoch.
+ *
+ * Die Höhe kommt aus Auffüllung gegen Gegenrand und nicht aus `min-height`:
+ * So wächst die TREFFFLÄCHE, aber nicht die Zeile – eine Zeile, die wegen
+ * eines Links 44 px hoch ist, riss in der Karte darüber und darunter Lücken.
+ */
 .ort-zeile {
-  align-items: center;
-  min-height: 44px;
+  /* Das Symbol sitzt an der ersten Zeile, auch wenn der Ort umbricht. */
+  align-items: baseline;
   font-size: 0.88rem;
   color: var(--text-muted);
 }
 
 .ort-zeile .ort-link,
 .ort-zeile .ort-suchen {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
+  padding: 12px 0;
+  margin: -12px 0;
+}
+
+.ort-zeile .ort-mehr {
+  margin: -12px 0;
 }
 
 /*
@@ -1108,6 +1117,17 @@ body {
 .ort-inline .ort-suchen {
   padding: 6px 0;
   margin: -6px 0;
+}
+
+/* Der Name vor der Adresse: eine Zeile, mit Auslassung – die Adresse bleibt sichtbar. */
+.ort-vorlauf {
+  display: inline-block;
+  max-width: 100%;
+  margin-right: 0.3em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
 }
 
 .ort-inline .ort-mehr {

@@ -91,6 +91,10 @@ export function OrtZeile({ ort, variante }: OrtZeileProps) {
     );
   }
 
+  const ersteAdresse = analyse.stuecke.findIndex(
+    (stueck) => stueck.art === 'adresse' || stueck.art === 'koordinate',
+  );
+
   const kartenFund = (fund: KartenFund) =>
     kartenZugang(zielVonFund(fund), false, fund.text, 'ort-link');
 
@@ -103,7 +107,14 @@ export function OrtZeile({ ort, variante }: OrtZeileProps) {
         {analyse.stuecke.map((stueck, index) => (
           <Fragment key={index}>
             {stueck.art === 'text' ? (
-              stueck.text
+              // Was vor der ersten Adresse steht (der Name des Ortes), darf in
+              // der Chatkarte einzeilig abgeschnitten werden – die Adresse
+              // selbst soll nie aus den zwei Zeilen fallen.
+              variante === 'inline' && index < ersteAdresse ? (
+                <span className="ort-vorlauf">{stueck.text}</span>
+              ) : (
+                stueck.text
+              )
             ) : stueck.art === 'web' ? (
               <a
                 className="ort-link"
