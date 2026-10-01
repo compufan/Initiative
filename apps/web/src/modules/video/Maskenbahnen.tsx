@@ -840,7 +840,15 @@ export function MaskenChips({
       for (let d = 0; d < werte.length && beste === null; d += 1) {
         for (const x of [kopf - d, kopf + d]) {
           if (x >= 0 && x < werte.length && zuSehen(werte[x])) {
-            beste = Math.min(ende - s / 2, (x + 0.5) * msJe);
+            /*
+             * Ein halbes Bild TIEFER in die Strecke hinein, von der Seite
+             * des Kopfes aus gesehen: Die Spalte der Bahn ist gröber als ein
+             * Bild, und ihre Mitte kann noch vor dem ersten Bild liegen, an
+             * dem die Maske gilt – dann landete der Kopf auf dem Bild davor
+             * und der Editor sagte „gilt hier nicht".
+             */
+            const hinein = x === kopf ? 0 : x > kopf ? s / 2 : -s / 2;
+            beste = Math.min(ende - s / 2, Math.max(s / 2, (x + 0.5) * msJe + hinein));
             break;
           }
         }

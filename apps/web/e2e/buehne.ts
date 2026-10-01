@@ -1,6 +1,7 @@
 import { createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { BildEditor } from '../src/modules/bild/BildEditor.js';
 import { VideoEditorSheet } from '../src/modules/video/VideoEditorSheet.js';
 
 /**
@@ -37,4 +38,30 @@ export function videoBlattZeigen(video: Blob): { fertig: Promise<Blob>; weg: () 
     }),
   );
   return { fertig, weg };
+}
+
+/**
+ * Dieselbe Bühne für den Fotoeditor: ein Bild hinein, ohne Anmeldung.
+ *
+ * Für Vergleiche zwischen Foto und Video – dasselbe Reiter-Gerüst, einmal mit
+ * Zeitleiste und einmal ohne. `onFertig` gibt es nicht; geprüft wird, was der
+ * Editor zeigt, nicht, wohin sein Ergebnis geht.
+ */
+export function fotoEditorZeigen(bild: Blob): { weg: () => void } {
+  const platz = document.createElement('div');
+  document.body.appendChild(platz);
+  const wurzel = createRoot(platz);
+  const weg = () => {
+    wurzel.unmount();
+    platz.remove();
+  };
+  wurzel.render(
+    createElement(BildEditor, {
+      quelle: bild,
+      name: 'pruefung.png',
+      ohneEntwurf: true,
+      onClose: weg,
+    }),
+  );
+  return { weg };
 }
