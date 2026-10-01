@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 
 import type { BildDoc } from '../bild/doc.js';
 import { bildDocAn } from './masken.js';
+import { rasterbildImVideobild } from './raster.js';
 import { filmZuQuelle, type Abschnitt } from './schnitt.js';
 import type { SchnittZustand } from './schnittZustand.js';
 import type { VorschauBild } from './vorschau.js';
@@ -138,15 +139,8 @@ export function useVorschauDoc(
   const docFuer = useCallback(
     (quelleMs: number): VorschauBild => {
       const nummer = abschnittAn(abschnitte, quelleMs, lage.current);
-      /*
-       * `quelleMs` ist der ANFANG des gezeigten Quellbildes (`mediaTime`),
-       * verfolgt wird aber an der Mitte eines Rasterbildes (`bildMitte`).
-       * Gemeint ist das erste Rasterbild, dessen Mitte in diesem Quellbild
-       * liegt – mit `bildIndex` (abgerundet) bekam jedes dritte Bild einer
-       * 30er-Quelle die Maske des vorigen.
-       */
-      const k = Math.max(0, Math.ceil(quelleMs / s - 0.5 - 1e-6));
-      return docFuerBild(nummer, k);
+      // `quelleMs` ist der ANFANG des gezeigten Quellbildes – siehe `rasterbildImVideobild`.
+      return docFuerBild(nummer, rasterbildImVideobild(quelleMs, s));
     },
     [abschnitte, docFuerBild, lage, s],
   );

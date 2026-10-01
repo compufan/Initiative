@@ -428,7 +428,9 @@ export function SchnittEditor({
   /*
    * Was über dem Bild steht, in dieser Reihenfolge: das Gerät ist zu
    * langsam, der Speicher ist noch nicht gefüllt, eine Maske fehlt gerade an
-   * DIESEM Bild.
+   * DIESEM Bild. Die letzte Zeile steht auch dann, wenn am Bild sonst nichts
+   * bearbeitet ist – gerade dann sieht der Anwender kein Zeichen dafür, dass
+   * hier eine Maske hingehört.
    */
   const fehlendNamen = bearbeiteteVorschau.fehlend
     .map((maskeId) => masken.find((maske) => maske.id === maskeId)?.name)
@@ -457,7 +459,7 @@ export function SchnittEditor({
           ruckliger.
         </span>
       </div>
-    ) : zieht && bearbeiteteVorschau.bearbeitet && fehlendNamen.length > 0 ? (
+    ) : zieht && fehlendNamen.length > 0 ? (
       <div className="bild-wiedergabe-zeile">
         <span>
           {aufzaehlen(fehlendNamen)} {fehlendNamen.length === 1 ? 'wird' : 'werden'} an diesem Bild

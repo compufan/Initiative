@@ -59,6 +59,24 @@ export function bildMitte(k: number, s: number): number {
   return (k + 0.5) * s;
 }
 
+/**
+ * Das Rasterbild, das zu einem Videobild gehört, das mit `mediaTime`
+ * gemeldet wird: das ERSTE, dessen Mitte in diesem Videobild liegt.
+ *
+ * `mediaTime` ist der ANFANG des Videobildes, verfolgt und gelesen wird aber
+ * an der Mitte eines Rasterbildes (`bildMitte`). Mit `bildIndex` (abgerundet)
+ * bekam jedes dritte Bild einer 30er-Quelle bei einem 25er-Film die Maske des
+ * vorigen. Bei einer Quelle, die höchstens so schnell ist wie das Raster,
+ * kommt für das Bild, das ein Sprung auf `bildMitte(k)` liefert, wieder k
+ * heraus; ist ein Videobild länger als ein Rasterbild, teilen sich zwei
+ * Rasterbilder dasselbe Videobild, und es gilt das erste.
+ *
+ * Nur für Bilder aus dem VIDEO: Was aus dem Wischspeicher kommt, kennt sein k.
+ */
+export function rasterbildImVideobild(mediaMs: number, s: number): number {
+  return Math.max(0, Math.ceil(mediaMs / s - 0.5 - 1e-6));
+}
+
 /** Die nächste Rasterkante – für Abschnittskanten. */
 export function rasterRunden(ms: number, s: number): number {
   return Math.round(ms / s) * s;
