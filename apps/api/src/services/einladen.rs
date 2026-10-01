@@ -57,6 +57,9 @@ use super::messages::{create_message, NewMessage};
 /// Wie viele fehlende Personen je ausgelassenem Gruppenchat genannt werden.
 const FEHLENDE_GENANNT: usize = 5;
 
+/// Wie lange eine wiederholte Anfrage auf eine laufende Zustellung wartet.
+const ZUSTELLUNG_WARTEN: std::time::Duration = std::time::Duration::from_secs(8);
+
 /* ---------- Der Plan -------------------------------------------------------- */
 
 /// Was der Ersteller will.
@@ -393,6 +396,15 @@ pub struct Zugestellt {
     pub fehlgeschlagen: usize,
 }
 
+/// Was aus einer offenen Karte in dieser Runde wurde.
+enum Ausgang {
+    Angelegt(Uuid),
+    Fehlgeschlagen,
+    /// Die Zeile ist inzwischen weg oder trägt schon eine Nachricht: Der Termin
+    /// wurde gelöscht, die Person ausgeladen oder eine andere Runde war schneller.
+    Uebersprungen,
+}
+
 /// Legt für jede noch offene Karte die Nachricht an (Phase 2).
 ///
 /// `still`: Die Nachricht löst keine eigene Mitteilung aus – die Einladung
@@ -403,6 +415,13 @@ pub struct Zugestellt {
 /// Höchstens [`EINLADUNG_PARALLEL`] gleichzeitig, und nie innerhalb einer
 /// Datenbank-Transaktion. Teilfehler werden gezählt und protokolliert, nicht
 /// geworfen: Der Termin steht, und eine fehlende Karte lässt sich nachliefern.
+///
+/// Zwischen dem Lesen der offenen Zeilen und dem Anlegen der Nachricht kann der
+/// Termin gelöscht oder die Person ausgeladen werden – dann sind die Zeilen
+/// weg, und eine Karte, die jetzt noch entstünde, hinge an nichts und bliebe für
+/// immer stehen. Deshalb wird vor jeder Karte nachgesehen, und eine Nachricht,
+/// deren Zeile bei der Eintragung nicht mehr (oder schon anderweitig belegt)
+/// ist, wird wieder zurückgenommen.
 pub async fn offene_karten_zustellen(
     state: &AppState,
     event_id: Uuid,
@@ -424,19 +443,32 @@ pub async fn offene_karten_zustellen(
     // `buffered` und nicht `buffer_unordered`: Die Reihenfolge der Ergebnisse
     // ist die der Anlage, und die erste Karte ist die „Ursprungskarte“ des
     // Termins.
-    let ergebnisse: Vec<(EventPlacementRow, Option<Uuid>)> = stream::iter(offen)
+    let ergebnisse: Vec<(EventPlacementRow, Ausgang)> = stream::iter(offen)
         .map(|zeile| async move {
+            let offen_noch: bool = sqlx::query_scalar(
+                "select exists (select 1 from event_placements
+                                 where id = $1 and message_id is null)",
+            )
+            .bind(zeile.id)
+            .fetch_one(&state.pool)
+            .await
+            // Im Zweifel anlegen: Eine überzählige Karte räumt die Eintragung
+            // unten weg, eine fehlende fiele niemandem auf.
+            .unwrap_or(true);
+            if !offen_noch {
+                return (zeile, Ausgang::Uebersprungen);
+            }
             let mut nachricht =
                 NewMessage::einladung(zeile.conversation_id, ersteller, event_id, zeile.id);
             nachricht.silent = still;
             match create_message(state, nachricht).await {
-                Ok(angelegt) => (zeile, Some(angelegt.id)),
+                Ok(angelegt) => (zeile, Ausgang::Angelegt(angelegt.id)),
                 Err(fehler) => {
                     tracing::warn!(
                         %fehler, termin = %event_id, chat = %zeile.conversation_id,
                         "Karte konnte nicht zugestellt werden"
                     );
-                    (zeile, None)
+                    (zeile, Ausgang::Fehlgeschlagen)
                 }
             }
         })
@@ -444,34 +476,94 @@ pub async fn offene_karten_zustellen(
         .collect()
         .await;
 
-    let fehlgeschlagen = ergebnisse.iter().filter(|(_, id)| id.is_none()).count();
+    let fehlgeschlagen = ergebnisse
+        .iter()
+        .filter(|(_, ausgang)| matches!(ausgang, Ausgang::Fehlgeschlagen))
+        .count();
     let (karten_ids, nachricht_ids): (Vec<Uuid>, Vec<Uuid>) = ergebnisse
         .iter()
-        .filter_map(|(zeile, nachricht)| nachricht.map(|id| (zeile.id, id)))
+        .filter_map(|(zeile, ausgang)| match ausgang {
+            Ausgang::Angelegt(id) => Some((zeile.id, *id)),
+            _ => None,
+        })
         .unzip();
-    if !karten_ids.is_empty() {
-        sqlx::query(
+    // Nur Zeilen, die noch leer sind: Wer schneller war, behält seine Karte.
+    let eingetragen: HashSet<Uuid> = if karten_ids.is_empty() {
+        HashSet::new()
+    } else {
+        sqlx::query_scalar::<_, Uuid>(
             "update event_placements p set message_id = t.nachricht
                from unnest($1::uuid[], $2::uuid[]) as t(karte, nachricht)
-              where p.id = t.karte",
+              where p.id = t.karte and p.message_id is null
+          returning p.id",
         )
         .bind(&karten_ids)
         .bind(&nachricht_ids)
-        .execute(&state.pool)
-        .await?;
+        .fetch_all(&state.pool)
+        .await?
+        .into_iter()
+        .collect()
+    };
+
+    // Nachrichten ohne Zeile zurücknehmen – sie sind verwaist.
+    let verwaist: Vec<Uuid> = ergebnisse
+        .iter()
+        .filter_map(|(zeile, ausgang)| match ausgang {
+            Ausgang::Angelegt(id) if !eingetragen.contains(&zeile.id) => Some(*id),
+            _ => None,
+        })
+        .collect();
+    if !verwaist.is_empty() {
+        let mut tx = state.pool.begin().await?;
+        let geloescht = nachrichten_loeschen(&mut tx, &verwaist).await?;
+        tx.commit().await?;
+        karten_melden(state, geloescht).await;
     }
 
     let karten = ergebnisse
         .into_iter()
-        .filter_map(|(mut zeile, nachricht)| {
-            zeile.message_id = nachricht;
-            nachricht.map(|_| zeile)
+        .filter_map(|(mut zeile, ausgang)| match ausgang {
+            Ausgang::Angelegt(id) if eingetragen.contains(&zeile.id) => {
+                zeile.message_id = Some(id);
+                Some(zeile)
+            }
+            _ => None,
         })
         .collect();
     Ok(Zugestellt {
         karten,
         fehlgeschlagen,
     })
+}
+
+/// Wartet, bis eine eben begonnene Zustellung fertig ist – höchstens ein paar
+/// Sekunden.
+///
+/// Für die Wiederholung einer Anfrage (gleicher Schlüssel): Die erste legt die
+/// Nachrichten womöglich noch an, und ihr Stand „ausstehend“ wäre eine
+/// Momentaufnahme, kein Fehler. Gewartet wird nur bei einem jungen Termin, und
+/// nie länger als [`ZUSTELLUNG_WARTEN`]: Ist die erste Anfrage mit dem Server
+/// gestorben, bleibt die Zeile offen, und die Wiederholung meldet es dann
+/// ehrlich.
+pub async fn auf_laufende_zustellung_warten(pool: &PgPool, event_id: Uuid) -> AppResult<()> {
+    let beginn = std::time::Instant::now();
+    loop {
+        let laeuft: bool = sqlx::query_scalar(
+            "select exists (
+               select 1 from event_placements p
+                 join calendar_events e on e.id = p.event_id
+                where p.event_id = $1 and p.message_id is null
+                  and e.created_at > now() - interval '2 minutes'
+             )",
+        )
+        .bind(event_id)
+        .fetch_one(pool)
+        .await?;
+        if !laeuft || beginn.elapsed() >= ZUSTELLUNG_WARTEN {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    }
 }
 
 /// Eine gelöschte Karte und wem das gemeldet wird.
@@ -493,6 +585,11 @@ pub struct Geloescht {
 /// Platzhalter: Der Ersteller sähe sonst in seinem Chat eine volle Karte,
 /// während der Eingeladene „nicht verfügbar“ sieht – zwei Wahrheiten in einem
 /// Chat.
+///
+/// Die Zeilen werden zuerst gelöscht und die Nachricht gilt, die sie **dabei**
+/// trugen, nicht die, die der Aufrufer gelesen hat: Trägt eine Zeile gerade
+/// erst durch eine laufende Zustellung ihre Nachricht, wartet das Löschen auf
+/// deren Eintragung, und die Karte bliebe sonst ohne Zeile zurück.
 pub async fn karten_entfernen(
     tx: &mut Transaction<'_, Postgres>,
     zeilen: &[EventPlacementRow],
@@ -500,23 +597,38 @@ pub async fn karten_entfernen(
     if zeilen.is_empty() {
         return Ok(Vec::new());
     }
-    let nachrichten: Vec<Uuid> = zeilen.iter().filter_map(|zeile| zeile.message_id).collect();
-    let empfaenger = super::verlauf::empfaenger_fuer_nachrichten(&mut **tx, &nachrichten).await?;
-
-    if !nachrichten.is_empty() {
-        sqlx::query(
-            "update messages set deleted_at = now(), body = null, metadata = '{}'::jsonb
-              where id = any($1) and deleted_at is null",
-        )
-        .bind(&nachrichten)
-        .execute(&mut **tx)
-        .await?;
-    }
     let ids: Vec<Uuid> = zeilen.iter().map(|zeile| zeile.id).collect();
-    sqlx::query("delete from event_placements where id = any($1)")
-        .bind(&ids)
-        .execute(&mut **tx)
-        .await?;
+    let getragen: Vec<Option<Uuid>> =
+        sqlx::query_scalar("delete from event_placements where id = any($1) returning message_id")
+            .bind(&ids)
+            .fetch_all(&mut **tx)
+            .await?;
+    let mut nachrichten: Vec<Uuid> = zeilen
+        .iter()
+        .filter_map(|zeile| zeile.message_id)
+        .chain(getragen.into_iter().flatten())
+        .collect();
+    nachrichten.sort();
+    nachrichten.dedup();
+    nachrichten_loeschen(tx, &nachrichten).await
+}
+
+/// Markiert Nachrichten als gelöscht und bestimmt, wem es zu melden ist.
+async fn nachrichten_loeschen(
+    tx: &mut Transaction<'_, Postgres>,
+    nachrichten: &[Uuid],
+) -> AppResult<Vec<Geloescht>> {
+    if nachrichten.is_empty() {
+        return Ok(Vec::new());
+    }
+    let empfaenger = super::verlauf::empfaenger_fuer_nachrichten(&mut **tx, nachrichten).await?;
+    sqlx::query(
+        "update messages set deleted_at = now(), body = null, metadata = '{}'::jsonb
+          where id = any($1) and deleted_at is null",
+    )
+    .bind(nachrichten)
+    .execute(&mut **tx)
+    .await?;
 
     Ok(empfaenger
         .into_iter()
@@ -745,7 +857,13 @@ pub async fn aendern_vorbereiten(
     .into_iter()
     .filter(|person| !auszuladen.contains(person))
     .collect();
-    anzahl_pruefen(soll.len())?;
+    // Die Grenze gilt nur, wenn die Liste wächst: Der alte Weg und die Migration
+    // haben Termine mit mehr Eingeladenen hinterlassen, und wer dort jemanden
+    // ausladen oder eine Gruppenkarte abwählen will, darf nicht an einer Zahl
+    // scheitern, die er mit dieser Änderung verkleinert.
+    if soll.len() > ist.len() {
+        anzahl_pruefen(soll.len())?;
+    }
 
     let ist_menge: HashSet<Uuid> = ist.iter().copied().collect();
     let soll_menge: HashSet<Uuid> = soll.iter().copied().collect();
@@ -759,6 +877,15 @@ pub async fn aendern_vorbereiten(
         .copied()
         .filter(|person| !soll_menge.contains(person))
         .collect();
+    // Eine Terminfindung stellt ihre Frage nur in den Chats, in denen sie
+    // steht: Wer später dazukäme, bekäme eine Karte mit Zusage-Knöpfen, könnte
+    // aber nicht abstimmen. Erst wenn der Zeitpunkt feststeht, lässt sich
+    // weiter einladen.
+    if !hinzu.is_empty() && termin.status == "planning" {
+        return Err(AppError::bad_request(
+            "Solange über den Zeitpunkt abgestimmt wird, lassen sich keine weiteren Personen einladen – lege zuerst den Zeitpunkt fest.",
+        ));
+    }
     personen_pruefen(tx, &hinzu).await?;
 
     // Gruppenkarten: was neu ist, was wegfällt.
@@ -897,12 +1024,20 @@ pub async fn termin_loeschen(
     state: &AppState,
     termin: &CalendarEventRow,
 ) -> AppResult<Vec<Geloescht>> {
-    let zeilen = platzierungen(&state.pool, termin.id).await?;
     let mut tx = state.pool.begin().await?;
     sqlx::query("update calendar_events set deleted_at = now() where id = $1")
         .bind(termin.id)
         .execute(&mut *tx)
         .await?;
+    // Erst jetzt gelesen, nicht davor: Eine Zustellung, die in der Zwischenzeit
+    // eine Karte angelegt hat, gehört sonst nicht mehr zu dem, was hier
+    // eingesammelt wird, und bliebe als Karte ohne Termin stehen.
+    let zeilen: Vec<EventPlacementRow> = sqlx::query_as(
+        "select * from event_placements where event_id = $1 order by created_at, id",
+    )
+    .bind(termin.id)
+    .fetch_all(&mut *tx)
+    .await?;
     let geloescht = karten_entfernen(&mut tx, &zeilen).await?;
     tx.commit().await?;
     Ok(geloescht)

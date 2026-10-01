@@ -17,6 +17,10 @@ pub struct IcsEvent {
     pub url: Option<String>,
     pub updated_at: DateTime<Utc>,
     pub reminder_minutes: Vec<i32>,
+    /// Abgesagt: Der Termin bleibt mit derselben Kennung im Kalender und wird
+    /// als abgesagt gekennzeichnet, damit Kalender-Apps ihn nachführen statt
+    /// ihn weiter als gültig zu zeigen.
+    pub abgesagt: bool,
 }
 
 pub struct IcsCalendar {
@@ -97,6 +101,9 @@ fn event_lines(event: &IcsEvent, domain: &str, out: &mut Vec<String>) {
     }
 
     out.push(format!("SUMMARY:{}", escape(&event.title)));
+    if event.abgesagt {
+        out.push("STATUS:CANCELLED".to_string());
+    }
     if let Some(description) = &event.description {
         out.push(format!("DESCRIPTION:{}", escape(description)));
     }
@@ -164,6 +171,7 @@ mod tests {
             url: Some("https://example.com/kalender".to_string()),
             updated_at: Utc.with_ymd_and_hms(2026, 8, 20, 8, 0, 0).unwrap(),
             reminder_minutes: vec![60],
+            abgesagt: false,
         }
     }
 
@@ -238,5 +246,25 @@ mod tests {
         );
         assert!(ics.contains("DTSTART;VALUE=DATE:20260824"));
         assert!(ics.contains("DTEND;VALUE=DATE:20260825"));
+    }
+
+    #[test]
+    fn abgesagte_termine_tragen_den_status_und_behalten_ihre_kennung() {
+        let kalender = IcsCalendar {
+            name: "Test".to_string(),
+            description: None,
+            refresh_interval: None,
+            domain: "example.com".to_string(),
+        };
+        let gueltig = build_calendar(&[sample()], &kalender);
+        assert!(!gueltig.contains("STATUS:"));
+
+        let mut abgesagt = sample();
+        abgesagt.abgesagt = true;
+        let ics = build_calendar(&[abgesagt], &kalender);
+        assert!(ics.contains("STATUS:CANCELLED"));
+        // Dieselbe Kennung: So führen Kalender-Apps den Termin nach, statt einen
+        // zweiten anzulegen.
+        assert!(ics.contains("UID:01234567-89ab-7def-8000-000000000000@example.com"));
     }
 }

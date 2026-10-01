@@ -372,6 +372,14 @@ async fn remove(
         .bind(id)
         .execute(&state.pool)
         .await?;
+    // War es die Karte eines Termins, steht sie dort nicht mehr: Die Zeile in
+    // `event_placements` mitzunehmen hält Editor, „Erneut zustellen“ und die
+    // Erinnerungen ehrlich – sonst gälte die Karte weiter als vorhanden und
+    // ließe sich nicht wieder zustellen.
+    sqlx::query("delete from event_placements where message_id = $1")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
 
     state
         .hub

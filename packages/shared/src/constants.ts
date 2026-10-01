@@ -62,6 +62,8 @@ export const LIMITS = {
   pollOptionsMax: 30,
   eventTitleMax: 160,
   eventDescriptionMax: 4000,
+  /** Wie lang der Ort eines Termins sein darf – `EVENT_LOCATION_MAX` im Server. */
+  eventLocationMax: 300,
   /** Länge des Wiederholungsschutz-Schlüssels beim Anlegen eines Termins. */
   eventClientIdMax: 64,
   /**

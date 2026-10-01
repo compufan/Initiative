@@ -406,7 +406,7 @@ export function EventEditor(props: EventEditorProps) {
           id="cal-location"
           className="input"
           value={form.location}
-          maxLength={300}
+          maxLength={LIMITS.eventLocationMax}
           placeholder="z. B. Stadtpark, Eingang Nord"
           autoComplete="off"
           onChange={(changed) => patch({ location: changed.target.value })}

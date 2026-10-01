@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::constants::{
-    EVENT_CLIENT_ID_MAX, EVENT_DESCRIPTION_MAX, EVENT_TITLE_MAX, POLL_OPTIONS_MAX, RSVP_STATUSES,
+    EVENT_CLIENT_ID_MAX, EVENT_DESCRIPTION_MAX, EVENT_LOCATION_MAX, EVENT_TITLE_MAX,
+    POLL_OPTIONS_MAX, RSVP_STATUSES,
 };
 use crate::db::{AttachmentRow, CalendarEventRow, EventAttachmentRow, EventNoteRow, UserRow};
 use crate::drossel::regeln;
@@ -176,6 +177,7 @@ struct CreateEventInput {
 fn validate_event(
     title: &str,
     description: Option<&str>,
+    location: Option<&str>,
     starts: DateTime<Utc>,
     ends: DateTime<Utc>,
 ) -> AppResult<()> {
@@ -183,6 +185,11 @@ fn validate_event(
     validator.length("title", title, 1, EVENT_TITLE_MAX);
     if let Some(description) = description {
         validator.length("description", description, 0, EVENT_DESCRIPTION_MAX);
+    }
+    // Der Ort steckt in jeder Karte und jeder Chatliste der Eingeladenen: Ohne
+    // Grenze trüge ein Fremder mit einer Einladung Megabytes in fremde Chats.
+    if let Some(location) = location {
+        validator.length("location", location, 0, EVENT_LOCATION_MAX);
     }
     validator.require("endsAt", ends >= starts, "Ende liegt vor dem Beginn");
     validator.finish()
@@ -195,12 +202,15 @@ const NUR_ERSTELLER_LADET_EIN: &str = "Nur wer den Termin angelegt hat, kann Ein
 /// Der Ersteller ist Absender aller Karten und Gegenüber aller Einzelchats; ein
 /// anderer Absender zerlegte die Synchronität und das Erinnern. Inhalte ändern
 /// und löschen dürfen auch Gruppen-Admins (`assert_editable`).
-fn nur_ersteller(event: &CalendarEventRow, user_id: Uuid) -> AppResult<()> {
+///
+/// Wer gar nicht eingeladen ist, bekommt 404 und nicht 403: Sonst ließe sich an
+/// der Antwort ablesen, ob es einen Termin mit dieser Kennung gibt.
+async fn nur_ersteller(state: &AppState, event: &CalendarEventRow, user_id: Uuid) -> AppResult<()> {
     if event.created_by == Some(user_id) {
-        Ok(())
-    } else {
-        Err(AppError::forbidden(NUR_ERSTELLER_LADET_EIN))
+        return Ok(());
     }
+    assert_attendee(&state.pool, event, user_id).await?;
+    Err(AppError::forbidden(NUR_ERSTELLER_LADET_EIN))
 }
 
 /// Bremst Anfragen, die Einladungen verschicken oder ändern.
@@ -226,6 +236,7 @@ async fn create(
     validate_event(
         &title,
         input.description.as_deref(),
+        input.location.as_deref(),
         input.starts_at,
         input.ends_at,
     )?;
@@ -331,6 +342,9 @@ async fn assert_editable(
     if event.created_by == Some(user_id) {
         return Ok(());
     }
+    // Zuerst die Sichtbarkeit: Wer nicht eingeladen ist, erfährt mit 404 nicht,
+    // dass es den Termin gibt – eine Rolle als Gruppen-Admin ändert daran nichts.
+    assert_attendee(&state.pool, event, user_id).await?;
     let darf: bool = sqlx::query_scalar(
         "select exists (
            select 1 from event_attendees ea
@@ -419,7 +433,7 @@ async fn update(
 
     let aendert_einladungen = input.attendee_ids.is_some() || input.zustellung.is_some();
     if aendert_einladungen {
-        nur_ersteller(&row, user.id())?;
+        nur_ersteller(&state, &row, user.id()).await?;
     }
 
     let starts_at = input.starts_at.unwrap_or(row.starts_at);
@@ -429,7 +443,15 @@ async fn update(
         .clone()
         .map(|value| value.trim().to_string())
         .unwrap_or_else(|| row.title.clone());
-    validate_event(&title, None, starts_at, ends_at)?;
+    // Auch Beschreibung und Ort: Das Ändern ist derselbe Weg wie das Anlegen und
+    // darf die Grenzen nicht umgehen. `null` löscht und braucht keine Prüfung.
+    validate_event(
+        &title,
+        input.description.as_ref().and_then(|text| text.as_deref()),
+        input.location.as_ref().and_then(|text| text.as_deref()),
+        starts_at,
+        ends_at,
+    )?;
 
     // Absagen und Wiederaufnehmen. Ein Termin in Abstimmung hat noch keinen
     // Zeitpunkt, den man absagen könnte.
@@ -576,7 +598,11 @@ async fn abschliessen(
         einladen::karten_melden(state, geaendert.geloescht).await;
         neue_chats_melden(state, &geaendert.neue_chats).await;
         neue_einzelchats = geaendert.neue_chats.len();
-        zugestellt = einladen::offene_karten_zustellen(state, alt.id, ausloeser, true)
+        // Absender der Karten ist immer der Ersteller, auch wenn eine
+        // eingeladene Person sich selbst austrägt und dabei offene Karten
+        // nachgeholt werden.
+        let absender = alt.created_by.unwrap_or(ausloeser);
+        zugestellt = einladen::offene_karten_zustellen(state, alt.id, absender, true)
             .await
             .unwrap_or_else(|fehler| {
                 tracing::warn!(%fehler, termin = %alt.id, "Karten konnten nicht zugestellt werden");
@@ -619,12 +645,21 @@ async fn abschliessen(
     };
     if let Some(anlass) = anlass {
         // Wer an Uhrzeit und Ort feilt, klingelt nicht bei jedem Tippfehler:
-        // Weitere Änderungen landen still in den Karten.
-        let gebremst = matches!(anlass, TerminAnlass::Geaendert(_))
-            && !state.drossel.erlaubt(
+        // Weitere Änderungen landen still in den Karten. Ebenso, wer im Wechsel
+        // absagt und wieder aufnimmt – jede Absage wäre sonst eine neue
+        // Mitteilung an bis zu 200 Personen. Beides zählt für sich: Eine Absage
+        // kurz nach einer Zeitänderung soll ankommen.
+        let gebremst = match anlass {
+            TerminAnlass::Geaendert(_) => !state.drossel.erlaubt(
                 &format!("termin-push:{}", alt.id),
                 regeln::TERMIN_AENDERUNG_PUSH,
-            );
+            ),
+            TerminAnlass::Abgesagt => !state.drossel.erlaubt(
+                &format!("termin-absage:{}", alt.id),
+                regeln::TERMIN_AENDERUNG_PUSH,
+            ),
+            TerminAnlass::Geloescht => false,
+        };
         if !gebremst {
             let empfaenger: Vec<Uuid> = dto
                 .attendees
@@ -723,7 +758,16 @@ async fn ausladen(
     Path((id, user_id)): Path<(Uuid, Uuid)>,
 ) -> AppResult<Json<TerminAntwort>> {
     let event = require_event(&state, id).await?;
-    nur_ersteller(&event, user.id())?;
+    // Sich selbst austragen darf jede eingeladene Person: Wer eingeladen wurde,
+    // ohne gefragt zu werden, hat sonst keine Möglichkeit, den Termin wieder
+    // loszuwerden – er bliebe im Kalender, bis der Ersteller ihn entfernt.
+    // Andere ausladen darf nur der Ersteller.
+    let selbst = user_id == user.id();
+    if selbst {
+        assert_visible(&state, &event, user.id()).await?;
+    } else {
+        nur_ersteller(&state, &event, user.id()).await?;
+    }
 
     if event.created_by == Some(user_id) {
         return Err(AppError::bad_request(
@@ -750,7 +794,8 @@ async fn ausladen(
         abschliessen(&state, user.id(), &alt, Some(geaendert), None, false).await?;
     Ok(Json(TerminAntwort {
         termin: dto,
-        zustellung,
+        // Wo der Termin überall als Karte steht, geht nur den Ersteller etwas an.
+        zustellung: if selbst { None } else { zustellung },
     }))
 }
 
@@ -769,17 +814,41 @@ async fn rsvp(
         return Err(AppError::conflict("Der Termin ist abgesagt."));
     }
 
-    sqlx::query(
-        "insert into event_attendees (event_id, user_id, status, responded_at)
-         values ($1, $2, $3, now())
-         on conflict (event_id, user_id) do update
-         set status = excluded.status, responded_at = excluded.responded_at",
-    )
-    .bind(id)
-    .bind(user.id())
-    .bind(&input.status)
-    .execute(&state.pool)
-    .await?;
+    // Prüfen und Schreiben sind ein Schritt: Eine eigene Prüfung davor und ein
+    // Einfügen danach ließen eine Zusage, die mit dem Ausladen zusammenfällt,
+    // die Teilnehmerzeile neu anlegen – die Person wäre wieder drin, mit Zugang
+    // zu Notizen und Unterlagen. Das Ändern wartet auf eine laufende
+    // Löschung der Zeile und trifft danach nichts mehr.
+    let geschrieben = if row.created_by == Some(user.id()) {
+        // Den Ersteller kann niemand ausladen; fehlt seine Zeile (ältere
+        // Termine), legt die erste Zusage sie an.
+        sqlx::query(
+            "insert into event_attendees (event_id, user_id, status, responded_at)
+             values ($1, $2, $3, now())
+             on conflict (event_id, user_id) do update
+             set status = excluded.status, responded_at = excluded.responded_at",
+        )
+        .bind(id)
+        .bind(user.id())
+        .bind(&input.status)
+        .execute(&state.pool)
+        .await?
+        .rows_affected()
+    } else {
+        sqlx::query(
+            "update event_attendees set status = $3, responded_at = now()
+              where event_id = $1 and user_id = $2",
+        )
+        .bind(id)
+        .bind(user.id())
+        .bind(&input.status)
+        .execute(&state.pool)
+        .await?
+        .rows_affected()
+    };
+    if geschrieben == 0 {
+        return Err(AppError::not_found("Termin nicht gefunden"));
+    }
 
     Ok(Json(melde_termin(&state, id).await?))
 }
@@ -791,7 +860,7 @@ async fn zustellung_lesen(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<ZustellungStandDto>> {
     let row = require_event(&state, id).await?;
-    nur_ersteller(&row, user.id())?;
+    nur_ersteller(&state, &row, user.id()).await?;
     Ok(Json(einladen::zustellung_stand(&state.pool, id).await?))
 }
 
@@ -802,7 +871,7 @@ async fn zustellung_nachliefern(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<TerminAntwort>> {
     let row = require_event(&state, id).await?;
-    nur_ersteller(&row, user.id())?;
+    nur_ersteller(&state, &row, user.id()).await?;
     Ok(Json(einladen::nachliefern(&state, &row, user.id()).await?))
 }
 
@@ -851,6 +920,7 @@ fn to_ics_event(event: &CalendarEventDto, app_url: &str) -> IcsEvent {
         url: Some(format!("{app_url}/kalender/termin/{}", event.id)),
         updated_at: event.updated_at,
         reminder_minutes: event.reminder_minutes.clone(),
+        abgesagt: event.status == "cancelled",
     }
 }
 
@@ -984,6 +1054,11 @@ async fn create_planning(
     if let Some(description) = input.description.as_deref() {
         Validator::new()
             .length("description", description, 0, EVENT_DESCRIPTION_MAX)
+            .finish()?;
+    }
+    if let Some(location) = input.location.as_deref() {
+        Validator::new()
+            .length("location", location, 0, EVENT_LOCATION_MAX)
             .finish()?;
     }
 
@@ -1919,12 +1994,44 @@ async fn confirm_event(
 
     // Die Antworten zum gewählten Zeitpunkt werden zu Zu- und Absagen.
     //
-    // `insert ... on conflict` und nicht nur `update`: Wer über einen
-    // Einzelchat abgestimmt hat, ist nicht Mitglied der Gruppe und steht
-    // deshalb noch gar nicht auf der Teilnehmerliste. Ein blosses `update`
-    // hätte seine Zusage stillschweigend verworfen – er hätte zugesagt und
-    // stünde trotzdem nirgends.
+    // Wer schon eingeladen ist, bekommt seine Antwort eingetragen. Wer es nicht
+    // ist, wird nur dann aufgenommen, wenn er nicht zur Gruppe des Termins
+    // gehört: Wer über einen Einzelchat abgestimmt hat, ist nicht Mitglied der
+    // Gruppe und steht deshalb noch gar nicht auf der Teilnehmerliste – ein
+    // blosses `update` hätte seine Zusage stillschweigend verworfen. Ein
+    // Gruppenmitglied ohne Teilnehmerzeile dagegen ist ausgeladen (oder erst
+    // nach dem Einladen beigetreten) und bleibt es, auch wenn es vorher
+    // abgestimmt hat.
     for vote in votes.iter().filter(|vote| vote.option_id == option.id) {
+        let eingetragen = sqlx::query(
+            "update event_attendees set status = $3, responded_at = now()
+              where event_id = $1 and user_id = $2",
+        )
+        .bind(id)
+        .bind(vote.user_id)
+        .bind(&vote.value)
+        .execute(&state.pool)
+        .await?
+        .rows_affected();
+        if eingetragen > 0 {
+            continue;
+        }
+        let in_der_gruppe: bool = match event.conversation_id {
+            Some(chat) => {
+                sqlx::query_scalar(
+                    "select exists (select 1 from conversation_members
+                                     where conversation_id = $1 and user_id = $2)",
+                )
+                .bind(chat)
+                .bind(vote.user_id)
+                .fetch_one(&state.pool)
+                .await?
+            }
+            None => false,
+        };
+        if in_der_gruppe {
+            continue;
+        }
         sqlx::query(
             "insert into event_attendees (event_id, user_id, status, responded_at)
              values ($1, $2, $3, now())

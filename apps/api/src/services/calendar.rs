@@ -465,6 +465,12 @@ async fn vorhandener_termin(
 }
 
 async fn wiederholung(state: &AppState, event_id: Uuid, explizit: bool) -> AppResult<Angelegt> {
+    // Die erste Anfrage stellt womöglich noch zu: Wer jetzt „ausstehend“ liest,
+    // hält die Karten für verloren und stößt ein zweites Zustellen an, das
+    // neben dem ersten läuft. Also kurz auf deren Ende warten.
+    if explizit {
+        einladen::auf_laufende_zustellung_warten(&state.pool, event_id).await?;
+    }
     let termin = load_event_dto(state, event_id).await?;
     let zustellung = if explizit {
         Some(einladen::zustellung_dto(&state.pool, event_id, &[], 0, 0, None).await?)

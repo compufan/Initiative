@@ -34,6 +34,10 @@ pub const POLL_OPTION_MAX: usize = 120;
 pub const POLL_OPTIONS_MAX: usize = 30;
 pub const EVENT_TITLE_MAX: usize = 160;
 pub const EVENT_DESCRIPTION_MAX: usize = 4000;
+/// Wie lang der Ort eines Termins sein darf. Eine Adresse ist kurz; jede Karte
+/// und jede Chatliste der Eingeladenen trägt den Ort mit, ohne Grenze trüge ein
+/// Fremder Megabytes in fremde Chats.
+pub const EVENT_LOCATION_MAX: usize = 300;
 /// Wie lang der Wiederholungsschutz-Schlüssel beim Anlegen eines Termins sein darf.
 pub const EVENT_CLIENT_ID_MAX: usize = 64;
 /// Wie viele Personen ein Termin höchstens einlädt. Muss mit `EINLADUNGEN_MAX`

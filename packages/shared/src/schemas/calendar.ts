@@ -137,7 +137,7 @@ export const createEventSchema = z
     conversationId: z.string().uuid().nullable().optional(),
     title: z.string().trim().min(1).max(LIMITS.eventTitleMax),
     description: z.string().max(LIMITS.eventDescriptionMax).nullable().optional(),
-    location: z.string().max(300).nullable().optional(),
+    location: z.string().max(LIMITS.eventLocationMax).nullable().optional(),
     startsAt: isoDateSchema,
     endsAt: isoDateSchema,
     allDay: z.boolean().default(false),
@@ -195,7 +195,7 @@ export const rsvpSchema = z.object({ status: z.enum(RSVP_STATUSES) });
 export const eventFromPollSchema = z.object({
   optionId: z.string().uuid(),
   title: z.string().trim().min(1).max(LIMITS.eventTitleMax).optional(),
-  location: z.string().max(300).nullable().optional(),
+  location: z.string().max(LIMITS.eventLocationMax).nullable().optional(),
   description: z.string().max(LIMITS.eventDescriptionMax).nullable().optional(),
   /** Close the poll once the event has been created. */
   closePoll: z.boolean().default(true),
@@ -213,7 +213,12 @@ export type CheckScope = 'nobody' | NoteScope;
 
 // `as const` wie bei NOTE_SCOPES: Ein blosses `CheckScope[]` ist für zod kein
 // Tupel, und `z.enum()` verlangt eines.
-export const CHECK_SCOPES = ['nobody', 'author', 'members', 'listed'] as const satisfies readonly CheckScope[];
+export const CHECK_SCOPES = [
+  'nobody',
+  'author',
+  'members',
+  'listed',
+] as const satisfies readonly CheckScope[];
 
 export interface EventNoteItemDto {
   id: string;

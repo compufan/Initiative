@@ -39,6 +39,18 @@ struct Probe {
     push: Mitschnitt,
 }
 
+/// Schliesst den Verbindungsvorrat, wenn der Test zu Ende ist.
+///
+/// Ohne das behält jeder Test seine Verbindungen bis zum Ende des ganzen Laufs;
+/// bei gut dreissig Tests ist dann der Datenbankserver voll, und die letzten
+/// scheitern mit „Interner Serverfehler“ schon bei der Registrierung.
+impl Drop for Probe {
+    fn drop(&mut self) {
+        let vorrat = self.state.pool.clone();
+        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(vorrat.close()));
+    }
+}
+
 struct Konto {
     token: String,
     id: String,
@@ -77,6 +89,42 @@ impl Probe {
             status,
             serde_json::from_slice(&bytes).unwrap_or(Value::Null),
         )
+    }
+
+    /// Wie `call`, aber mit dem Körper als Text – für das Kalender-Abo, das
+    /// kein JSON ist.
+    async fn text(&self, uri: &str, token: Option<&str>) -> (StatusCode, String) {
+        let mut builder = Request::builder().method("GET").uri(uri);
+        if let Some(token) = token {
+            builder = builder.header("authorization", format!("Bearer {token}"));
+        }
+        let response = self
+            .router
+            .clone()
+            .oneshot(builder.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, String::from_utf8_lossy(&bytes).to_string())
+    }
+
+    /// Das Kalender-Abo eines Kontos als Text.
+    async fn abo(&self, wer: &Konto) -> String {
+        let (_, ich) = self
+            .call("GET", "/api/v1/auth/me", Some(&wer.token), None)
+            .await;
+        let (status, text) = self
+            .text(
+                &format!(
+                    "/api/v1/calendar/{}/feed.ics",
+                    ich["calendarToken"].as_str().unwrap()
+                ),
+                None,
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{text}");
+        text
     }
 
     async fn konto(&self, name: &str) -> Konto {
@@ -706,21 +754,18 @@ async fn wer_nicht_eingeladen_ist_sieht_nichts() {
             .all(|e| e["id"] != id),
         "die Liste zeigt ihn nicht: {liste}"
     );
-    let (_, ich) = probe
-        .call("GET", "/api/v1/auth/me", Some(&d.token), None)
-        .await;
-    let (status, _) = probe
-        .call(
-            "GET",
-            &format!(
-                "/api/v1/calendar/{}/feed.ics",
-                ich["calendarToken"].as_str().unwrap()
-            ),
-            None,
-            None,
-        )
-        .await;
-    assert_eq!(status, StatusCode::OK);
+    // Der Inhalt des Abos, nicht nur sein Statuscode: Ein Abo, das den Termin
+    // einem Nicht-Eingeladenen zeigte, würde genau die Kennung preisgeben, mit
+    // der `event.ics` ohne Anmeldung abrufbar ist.
+    let abo_dora = probe.abo(&d).await;
+    assert!(
+        !abo_dora.contains(id),
+        "das Abo von Dora nennt den Termin nicht: {abo_dora}"
+    );
+    assert!(!abo_dora.contains("SUMMARY:Grillen"));
+    let abo_anna = probe.abo(&a).await;
+    assert!(abo_anna.contains(id), "das Abo des Erstellers nennt ihn");
+    assert!(probe.abo(&b).await.contains(id), "und das der Eingeladenen");
     let (_, eigenes) = probe
         .call("GET", "/api/v1/calendar/events", Some(&a.token), None)
         .await;
@@ -2361,6 +2406,8 @@ async fn nur_der_ersteller_aendert_einladungen() {
             }),
         )
         .await;
+    // Er bekommt 404 wie beim Lesen: Eine Rolle in der Gruppe verrät ihm nicht,
+    // dass es den Termin gibt.
     let (status, _) = probe
         .aendern(
             &b,
@@ -2368,7 +2415,7 @@ async fn nur_der_ersteller_aendert_einladungen() {
             json!({ "title": "Doch" }),
         )
         .await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
     // Löschen darf der Admin, wenn er eingeladen ist und die Karte in seiner
     // Gruppe steht.
@@ -2381,4 +2428,722 @@ async fn nur_der_ersteller_aendert_einladungen() {
         )
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+// ---------------------------------------------------------------------------
+// Nachgestellte Befunde
+// ---------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread")]
+async fn eine_zusage_waehrend_des_ausladens_holt_niemanden_zurueck() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let n = kurz();
+    let a = probe.konto(&format!("anna{n}")).await;
+    let b = probe.konto(&format!("bodo{n}")).await;
+    let termin = probe
+        .termin_mit(
+            &a,
+            json!({ "attendeeIds": ids(&[&b]), "zustellung": { "senden": false } }),
+        )
+        .await;
+    let id = termin["id"].as_str().unwrap();
+    let termin_id: Uuid = id.parse().unwrap();
+
+    // Das Ausladen hält die Zeile in der Schwebe: Bodos Zusage besteht die
+    // Prüfung (die Zeile ist noch zu sehen) und wartet dann auf das Schreiben.
+    let mut ausladen = probe.state.pool.begin().await.unwrap();
+    sqlx::query("delete from event_attendees where event_id = $1 and user_id = $2")
+        .bind(termin_id)
+        .bind(b.uuid())
+        .execute(&mut *ausladen)
+        .await
+        .unwrap();
+    let zusage = probe.rsvp(&b, id, "yes");
+    let abschluss = async {
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        ausladen.commit().await.unwrap();
+    };
+    let ((status, antwort), _) = tokio::join!(zusage, abschluss);
+
+    // Die Zusage trifft keine Zeile mehr – und legt auch keine neu an.
+    assert_eq!(status, StatusCode::NOT_FOUND, "{antwort}");
+    let dabei: bool = sqlx::query_scalar(
+        "select exists (select 1 from event_attendees where event_id = $1 and user_id = $2)",
+    )
+    .bind(termin_id)
+    .bind(b.uuid())
+    .fetch_one(&probe.state.pool)
+    .await
+    .unwrap();
+    assert!(!dabei, "Bodo bleibt ausgeladen");
+    let (status, _) = probe.holen(&b, id).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ort_und_beschreibung_haben_eine_grenze_auch_beim_aendern() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let n = kurz();
+    let a = probe.konto(&format!("anna{n}")).await;
+
+    let (status, antwort) = probe
+        .termin(&a, koerper(json!({ "location": "o".repeat(301) })))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{antwort}");
+    // Genau an der Grenze geht es.
+    let termin = probe
+        .termin_mit(&a, json!({ "location": "o".repeat(300) }))
+        .await;
+    let id = termin["id"].as_str().unwrap();
+
+    // Beim Ändern gilt dasselbe – für Ort und Beschreibung.
+    let (status, _) = probe
+        .aendern(&a, id, json!({ "location": "o".repeat(301) }))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, _) = probe
+        .aendern(&a, id, json!({ "description": "d".repeat(4001) }))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, geaendert) = probe
+        .aendern(&a, id, json!({ "description": "d".repeat(4000) }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{geaendert}");
+    // Löschen (`null`) braucht keine Länge.
+    let (status, geaendert) = probe
+        .aendern(&a, id, json!({ "location": null, "description": null }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{geaendert}");
+    assert!(geaendert["location"].is_null());
+
+    // Auch die Terminfindung.
+    let b = probe.konto(&format!("bodo{n}")).await;
+    let g = probe.gruppe(&a, "Zwei", &[&b]).await;
+    let (status, _) = probe
+        .call(
+            "POST",
+            "/api/v1/calendar/planning",
+            Some(&a.token),
+            Some(json!({
+                "conversationId": g,
+                "title": "Wann?",
+                "location": "o".repeat(301),
+                "slots": [
+                    { "startsAt": chrono::Utc::now() + chrono::Duration::days(2) },
+                    { "startsAt": chrono::Utc::now() + chrono::Duration::days(3) }
+                ]
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn eingeladene_tragen_sich_selbst_aus() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let n = kurz();
+    let a = probe.konto(&format!("anna{n}")).await;
+    let b = probe.konto(&format!("bodo{n}")).await;
+    let c = probe.konto(&format!("cleo{n}")).await;
+    let d = probe.konto(&format!("dora{n}")).await;
+    let termin = probe
+        .termin_mit(
+            &a,
+            json!({ "attendeeIds": ids(&[&b, &c]), "zustellung": {} }),
+        )
+        .await;
+    let id = termin["id"].as_str().unwrap();
+    let ab = probe.einzelkarten_chat(id, &b).await.unwrap();
+    assert_eq!(probe.karten(&a, &ab, id).await.len(), 1);
+    let pfad = |wer: &Konto| format!("/api/v1/calendar/events/{id}/attendees/{}", wer.id);
+
+    // Bodo hat abgesagt, der Termin bleibt trotzdem in seiner Liste – bis er
+    // sich austrägt.
+    probe.rsvp(&b, id, "no").await;
+    let mut hoerer_b = probe.hoeren(&b);
+    let (status, antwort) = probe.call("DELETE", &pfad(&b), Some(&b.token), None).await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+    assert!(!ist_teilnehmer(&antwort, &b));
+    assert!(
+        antwort.get("zustellung").is_none() || antwort["zustellung"].is_null(),
+        "wo der Termin steht, geht den Ersteller etwas an"
+    );
+    // Der Zugang endet, die Einzelkarte verschwindet, er hört es über den Rundruf.
+    let (status, _) = probe.holen(&b, id).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(probe.karten(&a, &ab, id).await.is_empty());
+    assert!(!hoerer_b.vom_typ("event.deleted").is_empty());
+    // Der Ersteller und Cleo sehen ihn weiter.
+    let (_, fuer_anna) = probe.holen(&a, id).await;
+    assert!(!ist_teilnehmer(&fuer_anna, &b));
+    assert!(ist_teilnehmer(&fuer_anna, &c));
+    let (status, _) = probe.holen(&c, id).await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Wer nicht eingeladen ist, kann niemanden austragen – und erfährt nicht
+    // einmal, dass es den Termin gibt. Cleo trägt nur sich selbst aus.
+    let (status, _) = probe.call("DELETE", &pfad(&c), Some(&d.token), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = probe.call("DELETE", &pfad(&d), Some(&d.token), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = probe.call("DELETE", &pfad(&a), Some(&c.token), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "andere ausladen darf nur er");
+    // Der Ersteller kann sich nicht selbst austragen.
+    let (status, _) = probe.call("DELETE", &pfad(&a), Some(&a.token), None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ein_grosser_altbestand_laesst_sich_verkleinern() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let n = kurz();
+    let a = probe.konto(&format!("anna{n}")).await;
+    let b = probe.konto(&format!("bodo{n}")).await;
+    let termin = probe
+        .termin_mit(
+            &a,
+            json!({ "attendeeIds": ids(&[&b]), "zustellung": { "senden": false } }),
+        )
+        .await;
+    let id = termin["id"].as_str().unwrap();
+    let termin_id: Uuid = id.parse().unwrap();
+
+    // Der alte Weg und die Migration kennen keine Grenze: 230 Teilnehmer.
+    let leute: Vec<Uuid> = (0..229).map(|_| Uuid::now_v7()).collect();
+    let namen: Vec<String> = (0..229).map(|nummer| format!("alt{n}x{nummer}")).collect();
+    sqlx::query(
+        "insert into users (id, username, display_name, password_hash, calendar_token)
+         select t.id, t.name, t.name, 'x', t.id::text
+           from unnest($1::uuid[], $2::text[]) as t(id, name)",
+    )
+    .bind(&leute)
+    .bind(&namen)
+    .execute(&probe.state.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into event_attendees (event_id, user_id, status)
+         select $1, p, 'pending' from unnest($2::uuid[]) as p",
+    )
+    .bind(termin_id)
+    .bind(&leute)
+    .execute(&probe.state.pool)
+    .await
+    .unwrap();
+
+    // Ausladen und Abwählen gehen: Die Liste schrumpft.
+    let (status, antwort) = probe
+        .call(
+            "DELETE",
+            &format!("/api/v1/calendar/events/{id}/attendees/{}", b.id),
+            Some(&a.token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+    assert_eq!(antwort["attendees"].as_array().unwrap().len(), 230);
+    let (status, antwort) = probe
+        .aendern(&a, id, json!({ "zustellung": { "gruppenChatIds": [] } }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+
+    // Wachsen dürfte sie nicht.
+    let (status, antwort) = probe
+        .aendern(&a, id, json!({ "attendeeIds": ids(&[&b]) }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+    assert_eq!(antwort["attendees"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn abgesagte_termine_stehen_im_abo_als_abgesagt() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let n = kurz();
+    let a = probe.konto(&format!("anna{n}")).await;
+    let b = probe.konto(&format!("bodo{n}")).await;
+    let termin = probe
+        .termin_mit(&a, json!({ "attendeeIds": ids(&[&b]), "zustellung": {} }))
+        .await;
+    let id = termin["id"].as_str().unwrap();
+    let einzeln = format!("/api/v1/calendar/events/{id}/event.ics");
+
+    let abo = probe.abo(&b).await;
+    assert!(abo.contains(id) && !abo.contains("STATUS:CANCELLED"));
+    let (_, ics) = probe.text(&einzeln, None).await;
+    assert!(!ics.contains("STATUS:CANCELLED"));
+
+    let (status, _) = probe
+        .aendern(&a, id, json!({ "status": "cancelled" }))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    // Dieselbe Kennung, jetzt als abgesagt gekennzeichnet.
+    let abo = probe.abo(&b).await;
+    assert!(
+        abo.contains(id) && abo.contains("STATUS:CANCELLED"),
+        "{abo}"
+    );
+    let (_, ics) = probe.text(&einzeln, None).await;
+    assert!(ics.contains("STATUS:CANCELLED"), "{ics}");
+
+    // Wiederaufgenommen gilt er wieder.
+    probe
+        .aendern(&a, id, json!({ "status": "confirmed" }))
+        .await;
+    assert!(!probe.abo(&b).await.contains("STATUS:CANCELLED"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn absagen_im_wechsel_klingelt_nicht_beliebig_oft() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let n = kurz();
+    let a = probe.konto(&format!("anna{n}")).await;
+    let b = probe.konto(&format!("bodo{n}")).await;
+    let termin = probe
+        .termin_mit(&a, json!({ "attendeeIds": ids(&[&b]), "zustellung": {} }))
+        .await;
+    let id = termin["id"].as_str().unwrap();
+    probe.push_leeren();
+
+    for _ in 0..8 {
+        let (status, _) = probe
+            .aendern(&a, id, json!({ "status": "cancelled" }))
+            .await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, _) = probe
+            .aendern(&a, id, json!({ "status": "confirmed" }))
+            .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    // Die Regel erlaubt drei Mitteilungen je zehn Minuten (und Termin): Die
+    // übrigen Absagen stehen still in den Karten.
+    let absagen = probe
+        .push_an(&b)
+        .iter()
+        .filter(|push| {
+            push["body"]
+                .as_str()
+                .is_some_and(|text| text.contains("Abgesagt"))
+        })
+        .count();
+    assert_eq!(absagen, 3, "acht Absagen, drei Mitteilungen");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn schreibende_wege_verraten_die_kennung_nicht() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let n = kurz();
+    let a = probe.konto(&format!("anna{n}")).await;
+    let b = probe.konto(&format!("bodo{n}")).await;
+    let c = probe.konto(&format!("cleo{n}")).await;
+    let termin = probe
+        .termin_mit(&a, json!({ "attendeeIds": ids(&[&b]), "zustellung": {} }))
+        .await;
+    let id = termin["id"].as_str().unwrap();
+    let unbekannt = Uuid::now_v7().to_string();
+    let sammlung = Uuid::now_v7().to_string();
+
+    // Wer nicht eingeladen ist, bekommt auf eine bekannte und eine unbekannte
+    // Kennung dieselbe Antwort.
+    for kennung in [id, unbekannt.as_str()] {
+        let wege: Vec<(&str, String, Option<Value>)> = vec![
+            (
+                "PATCH",
+                format!("/api/v1/calendar/events/{kennung}"),
+                Some(json!({ "title": "Neu" })),
+            ),
+            ("DELETE", format!("/api/v1/calendar/events/{kennung}"), None),
+            (
+                "DELETE",
+                format!("/api/v1/calendar/events/{kennung}/attendees/{}", b.id),
+                None,
+            ),
+            (
+                "GET",
+                format!("/api/v1/calendar/events/{kennung}/zustellung"),
+                None,
+            ),
+            (
+                "POST",
+                format!("/api/v1/calendar/events/{kennung}/zustellung/nachliefern"),
+                None,
+            ),
+            (
+                "PATCH",
+                format!("/api/v1/calendar/events/{kennung}/collection"),
+                Some(json!({ "collectionId": sammlung })),
+            ),
+            (
+                "POST",
+                format!("/api/v1/calendar/events/{kennung}/confirm"),
+                Some(json!({})),
+            ),
+        ];
+        for (methode, pfad, koerper) in wege {
+            let (status, antwort) = probe.call(methode, &pfad, Some(&c.token), koerper).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{methode} {pfad}: {antwort}");
+        }
+    }
+
+    // Wer eingeladen ist, aber nichts ändern darf, bekommt 403.
+    let (status, _) = probe.aendern(&b, id, json!({ "title": "Neu" })).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/calendar/events/{id}/zustellung"),
+            Some(&b.token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn eine_zustellung_ohne_zeile_raeumt_ihre_karte_wieder_weg() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let n = kurz();
+    let a = probe.konto(&format!("anna{n}")).await;
+    let b = probe.konto(&format!("bodo{n}")).await;
+    let ab = probe.einzel(&a, &b).await;
+    let termin = probe
+        .termin_mit(
+            &a,
+            json!({ "attendeeIds": ids(&[&b]), "zustellung": { "senden": false } }),
+        )
+        .await;
+    let id = termin["id"].as_str().unwrap();
+    let termin_id: Uuid = id.parse().unwrap();
+
+    // Eine reservierte Karte, noch ohne Nachricht – wie nach Phase 1.
+    let zeile = Uuid::now_v7();
+    sqlx::query(
+        "insert into event_placements (id, event_id, conversation_id, art, user_id, created_by)
+         values ($1, $2, $3, 'einzel', $4, $5)",
+    )
+    .bind(zeile)
+    .bind(termin_id)
+    .bind(ab.parse::<Uuid>().unwrap())
+    .bind(b.uuid())
+    .bind(a.uuid())
+    .execute(&probe.state.pool)
+    .await
+    .unwrap();
+
+    // Während die Karte angelegt wird, löscht jemand den Termin (oder lädt die
+    // Person aus): Die Zeile verschwindet, bevor die Zustellung sie einträgt.
+    let mut loeschen = probe.state.pool.begin().await.unwrap();
+    sqlx::query("delete from event_placements where id = $1")
+        .bind(zeile)
+        .execute(&mut *loeschen)
+        .await
+        .unwrap();
+    let state = probe.state.clone();
+    let ersteller = a.uuid();
+    let zustellen = tokio::spawn(async move {
+        initiative_api::services::einladen::offene_karten_zustellen(
+            &state, termin_id, ersteller, true,
+        )
+        .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    loeschen.commit().await.unwrap();
+    let zugestellt = zustellen.await.unwrap().unwrap();
+
+    // Keine Karte bleibt zurück: weder zugestellt noch sichtbar im Chat.
+    assert!(zugestellt.karten.is_empty());
+    assert!(probe.karten(&a, &ab, id).await.is_empty());
+    assert!(probe.karten(&b, &ab, id).await.is_empty());
+    assert!(probe.platzierungen(id).await.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn eine_gelaufene_zustellung_laesst_dem_schnelleren_seine_karte() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let n = kurz();
+    let a = probe.konto(&format!("anna{n}")).await;
+    let b = probe.konto(&format!("bodo{n}")).await;
+    let ab = probe.einzel(&a, &b).await;
+    let termin = probe
+        .termin_mit(
+            &a,
+            json!({ "attendeeIds": ids(&[&b]), "zustellung": { "senden": false } }),
+        )
+        .await;
+    let id = termin["id"].as_str().unwrap();
+    let termin_id: Uuid = id.parse().unwrap();
+    let zeile = Uuid::now_v7();
+    sqlx::query(
+        "insert into event_placements (id, event_id, conversation_id, art, user_id, created_by)
+         values ($1, $2, $3, 'einzel', $4, $5)",
+    )
+    .bind(zeile)
+    .bind(termin_id)
+    .bind(ab.parse::<Uuid>().unwrap())
+    .bind(b.uuid())
+    .bind(a.uuid())
+    .execute(&probe.state.pool)
+    .await
+    .unwrap();
+
+    // Zwei Runden gleichzeitig (etwa „Erneut zustellen“ neben der ersten):
+    // Es bleibt genau eine Karte.
+    let (erste, zweite) = tokio::join!(
+        initiative_api::services::einladen::offene_karten_zustellen(
+            &probe.state,
+            termin_id,
+            a.uuid(),
+            true
+        ),
+        initiative_api::services::einladen::offene_karten_zustellen(
+            &probe.state,
+            termin_id,
+            a.uuid(),
+            true
+        ),
+    );
+    let (erste, zweite) = (erste.unwrap(), zweite.unwrap());
+    assert_eq!(erste.karten.len() + zweite.karten.len(), 1);
+    assert_eq!(probe.karten(&a, &ab, id).await.len(), 1);
+    let platzierungen = probe.platzierungen(id).await;
+    assert_eq!(platzierungen.len(), 1);
+    assert!(platzierungen[0].2, "die Zeile trägt die Nachricht");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn eine_geloeschte_karte_ist_keine_platzierung_mehr() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let n = kurz();
+    let a = probe.konto(&format!("anna{n}")).await;
+    let b = probe.konto(&format!("bodo{n}")).await;
+    let g = probe.gruppe(&a, "Zwei", &[&b]).await;
+    let termin = probe
+        .termin_mit(
+            &a,
+            json!({
+                "attendeeIds": ids(&[&b]),
+                "zustellung": { "gruppenChatIds": [g] }
+            }),
+        )
+        .await;
+    let id = termin["id"].as_str().unwrap();
+    let karten = probe.karten(&a, &g, id).await;
+    assert_eq!(karten.len(), 1);
+    assert_eq!(probe.platzierungen(id).await.len(), 2, "Gruppe und Einzel");
+
+    let (status, _) = probe
+        .call(
+            "DELETE",
+            &format!("/api/v1/messages/{}", karten[0]["id"].as_str().unwrap()),
+            Some(&a.token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    // Der Editor sieht, dass die Karte nicht mehr steht …
+    let (_, stand) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/calendar/events/{id}/zustellung"),
+            Some(&a.token),
+            None,
+        )
+        .await;
+    assert!(stand["gruppen"].as_array().unwrap().is_empty(), "{stand}");
+    // … und kann sie wieder zustellen.
+    let (status, antwort) = probe
+        .aendern(&a, id, json!({ "zustellung": { "gruppenChatIds": [g] } }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+    assert_eq!(probe.karten(&b, &g, id).await.len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn eine_wiederholung_wartet_auf_die_laufende_zustellung() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let n = kurz();
+    let a = probe.konto(&format!("anna{n}")).await;
+    let b = probe.konto(&format!("bodo{n}")).await;
+    let ab = probe.einzel(&a, &b).await;
+    let schluessel = format!("wdh{n}");
+    let anfrage = || {
+        koerper(json!({
+            "clientId": schluessel,
+            "attendeeIds": ids(&[&b]),
+            "zustellung": { "senden": false }
+        }))
+    };
+    let (status, termin) = probe.termin(&a, anfrage()).await;
+    assert_eq!(status, StatusCode::CREATED, "{termin}");
+    let termin_id: Uuid = termin["id"].as_str().unwrap().parse().unwrap();
+
+    // Phase 2 der ersten Anfrage läuft noch: Die Zeile ist reserviert, die
+    // Nachricht noch nicht da.
+    let (status, nachricht) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/conversations/{ab}/messages"),
+            Some(&a.token),
+            Some(json!({ "type": "text", "body": "Platzhalter" })),
+        )
+        .await;
+    assert!(status.is_success(), "{nachricht}");
+    let nachricht_id: Uuid = nachricht["id"].as_str().unwrap().parse().unwrap();
+    sqlx::query(
+        "insert into event_placements (id, event_id, conversation_id, art, user_id, created_by)
+         values ($1, $2, $3, 'einzel', $4, $5)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(termin_id)
+    .bind(ab.parse::<Uuid>().unwrap())
+    .bind(b.uuid())
+    .bind(a.uuid())
+    .execute(&probe.state.pool)
+    .await
+    .unwrap();
+
+    let beginn = std::time::Instant::now();
+    let wiederholung = probe.termin(&a, anfrage());
+    let fertig = async {
+        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+        sqlx::query("update event_placements set message_id = $2 where event_id = $1")
+            .bind(termin_id)
+            .bind(nachricht_id)
+            .execute(&probe.state.pool)
+            .await
+            .unwrap();
+    };
+    let ((status, antwort), _) = tokio::join!(wiederholung, fertig);
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+    assert!(beginn.elapsed() >= std::time::Duration::from_millis(600));
+    assert_eq!(antwort["id"], termin["id"]);
+    // Nicht „ausstehend: 1“: Die Karte war gleich da.
+    assert_eq!(antwort["zustellung"]["ausstehend"], 0, "{antwort}");
+    assert_eq!(antwort["zustellung"]["einzelchats"], 1, "{antwort}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn eine_terminfindung_nimmt_ausgeladene_nicht_wieder_auf() {
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let n = kurz();
+    let a = probe.konto(&format!("anna{n}")).await;
+    let b = probe.konto(&format!("bodo{n}")).await;
+    let c = probe.konto(&format!("cleo{n}")).await;
+    let d = probe.konto(&format!("dora{n}")).await;
+    let g = probe.gruppe(&a, "Drei", &[&b, &c]).await;
+    let start = chrono::Utc::now() + chrono::Duration::days(2);
+    let (status, geplant) = probe
+        .call(
+            "POST",
+            "/api/v1/calendar/planning",
+            Some(&a.token),
+            Some(json!({
+                "conversationId": g,
+                "title": "Wann grillen wir?",
+                "slots": [
+                    { "startsAt": start },
+                    { "startsAt": start + chrono::Duration::days(1) }
+                ]
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{geplant}");
+    let id = geplant["id"].as_str().unwrap();
+    let poll_id = geplant["pollId"].as_str().unwrap();
+    assert!(ist_teilnehmer(&geplant, &b) && ist_teilnehmer(&geplant, &c));
+
+    // Beide stimmen für den ersten Vorschlag.
+    let (_, poll) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/polls/{poll_id}"),
+            Some(&b.token),
+            None,
+        )
+        .await;
+    let zeit = poll["options"][0]["id"].as_str().unwrap();
+    for wer in [&b, &c] {
+        let (status, _) = probe
+            .call(
+                "POST",
+                &format!("/api/v1/polls/{poll_id}/vote"),
+                Some(&wer.token),
+                Some(json!({ "votes": [{ "optionId": zeit, "value": "yes" }] })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    // Weitere Personen lassen sich erst einladen, wenn der Zeitpunkt steht:
+    // Sie bekämen eine Karte, könnten aber nicht abstimmen.
+    let (status, antwort) = probe
+        .aendern(&a, id, json!({ "attendeeIds": ids(&[&b, &c, &d]) }))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{antwort}");
+    assert!(antwort["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("abgestimmt"));
+    let (status, _) = probe.holen(&d, id).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Bodo wird ausgeladen und stimmt dennoch mit (er sitzt in der Gruppe).
+    let (status, _) = probe
+        .call(
+            "DELETE",
+            &format!("/api/v1/calendar/events/{id}/attendees/{}", b.id),
+            Some(&a.token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = probe.holen(&b, id).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, bestaetigt) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/calendar/events/{id}/confirm"),
+            Some(&a.token),
+            Some(json!({ "optionId": zeit })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{bestaetigt}");
+    // Cleo bekommt ihre Zusage, Bodo bleibt ausgeladen.
+    assert_eq!(status_von(&bestaetigt, &c), "yes");
+    assert!(!ist_teilnehmer(&bestaetigt, &b));
+    let (status, _) = probe.holen(&b, id).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = probe.rsvp(&b, id, "yes").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Nach der Festlegung lässt sich weiter einladen.
+    let (status, antwort) = probe
+        .aendern(&a, id, json!({ "attendeeIds": ids(&[&c, &d]) }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
 }
