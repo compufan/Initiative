@@ -211,6 +211,10 @@ describe('stufeBis', () => {
     for (const k of film) da.add(k);
     expect(stufeBis(film, (k) => da.has(k), 16)).toBe(4);
   });
+
+  it('sagt bei einem Film ohne Bilder -1 und nicht die höchste Stufe', () => {
+    expect(stufeBis([], () => false, 16)).toBe(-1);
+  });
 });
 
 /* ---------- Die Klasse ---------- */

@@ -271,12 +271,18 @@ export function zuVerdraengen(
   return opfer;
 }
 
-/** Bis zu welcher Stufe alles da ist – -1, wenn nicht einmal Stufe 0. */
+/**
+ * Bis zu welcher Stufe alles da ist – -1, wenn nicht einmal Stufe 0, und bei
+ * einem Film ohne Bilder: Wo nichts gebraucht wird, ist auch nichts „da“ –
+ * sonst meldete der leere Speicher vor dem ersten `setzen` die höchste Stufe,
+ * und wer auf eine Stufe wartet, liefe gleich los.
+ */
 export function stufeBis(
   film: readonly number[],
   da: (k: number) => boolean,
   schritt: number,
 ): number {
+  if (film.length === 0) return -1;
   const fehlt = [false, false, false, false, false];
   for (const k of film) if (!da(k)) fehlt[stufeVon(k, schritt)] = true;
   let stufe = -1;
