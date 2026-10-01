@@ -44,6 +44,46 @@
   cursor: pointer;
 }
 
+/* ---- Ordnerwahl ---- */
+
+.fil-baum {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Bei vielen Ordnern darf die Liste nicht das ganze Blatt füllen – sonst
+   liegt der Knopf zum Bestätigen ausser Reichweite. */
+.fil-baum-liste {
+  display: flex;
+  flex-direction: column;
+  max-height: 34vh;
+  overflow-y: auto;
+}
+
+/* Die Einrückung kommt aus `--tiefe` (0 = oberste Ebene), damit sie nicht in
+   jeder Zeile als Zahl im Quelltext steht und sich an einer Stelle ändern lässt. */
+.fil-baum-zeile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 4px 2px;
+  padding-inline-start: calc(2px + var(--tiefe, 0) * 16px);
+  min-width: 0;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.fil-baum-zeile.is-grau {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.fil-baum-zeile.is-gedaempft > .truncate {
+  color: var(--text-muted);
+}
+
 /* ---- Pfad ---- */
 
 .fil-breadcrumb {
