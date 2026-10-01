@@ -127,6 +127,26 @@ describe('schaerfenFeld', () => {
     expect(Array.from(daten)).toEqual(Array.from(quelle));
   });
 
+  it('behält das Verwischte und schärft nur obendrauf', () => {
+    /*
+     * Weichzeichnen und Schärfe zugleich: `daten` ist schon unscharf, `quelle`
+     * das scharfe Bild davor. Vorher ersetzte die Schärfe `daten` durch das
+     * geschärfte Original – bei halber Dämpfung stand dort fast wieder das
+     * scharfe Bild, und das Bokeh war weg.
+     */
+    const quelle = kante(40, 8, 0);
+    // Stand nach der Unschärfe: Die harte Kante ist verlaufen.
+    const verwischt = kante(40, 8, 6);
+    const halb = new Uint8Array(40 * 8).fill(128);
+    const daten = new Uint8ClampedArray(verwischt);
+    schaerfenFeld(daten, 40, 8, 1, 3, 0, halb, quelle);
+    const at = (x: number) => (4 * 40 + x) * 4;
+    // Mitten in der Kante: weit näher am Verwischten als am Scharfen.
+    const naeheVerwischt = Math.abs(daten[at(18)] - verwischt[at(18)]);
+    const naeheScharf = Math.abs(daten[at(18)] - quelle[at(18)]);
+    expect(naeheVerwischt).toBeLessThan(naeheScharf);
+  });
+
   it('erzeugt keinen Saum über die Nachbarschaft hinaus', () => {
     /*
      * Der Vergleich zur alten Fassung: Die klemmte hart auf 0 … 1 und liess

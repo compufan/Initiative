@@ -120,11 +120,16 @@ export function schaerfeAn(
 /**
  * Die Unschärfemaske über ein ganzes RGBA-Feld – der Weg ohne Grafikeinheit.
  *
- * `daempfung` ist das Bokeh-Gewicht je Punkt (0 … 255) oder `null`. Wo
- * unscharf gezeichnet wurde, darf nicht nachgeschärft werden: Sonst holte die
- * Schärfe genau die Hochfrequenz aus dem scharfen Quellbild zurück, die die
- * Tiefenschärfe gerade entfernt hat – der Hintergrund wäre unscharf UND
- * kantig.
+ * `daempfung` ist der Einfluss der Unschärfen je Punkt (0 … 255) oder `null`.
+ * Wo unscharf gezeichnet wurde, darf nicht nachgeschärft werden: Sonst holte
+ * die Schärfe genau die Hochfrequenz aus dem scharfen Quellbild zurück, die
+ * Weichzeichnen und Bokeh gerade entfernt haben – der Hintergrund wäre
+ * unscharf UND kantig.
+ *
+ * `daten` darf schon unscharf gezeichnet sein, `quelle` ist das scharfe Bild
+ * davor. Die Schärfe liest aus `quelle`, schreibt aber nur ihren ZUWACHS auf
+ * `daten`. Vorher ersetzte sie `daten` durch das geschärfte Original – wer
+ * Schärfe und Bokeh zugleich einstellte, verlor das Bokeh.
  */
 export function schaerfenFeld(
   daten: Uint8ClampedArray,
@@ -174,7 +179,10 @@ export function schaerfenFeld(
         weich /= summe;
         const mitte = zuLinear(quelle[at + k] / 255);
         const neu = schaerfeAn(mitte, weich, kleinst, groesst, staerke * 1.5 * daempf, schwelle);
-        daten[at + k] = Math.round(zuSrgb(neu) * 255);
+        // Der Zuwachs auf das, was schon dasteht. Wo nichts verwischt wurde,
+        // ist das `mitte` und das Ergebnis dasselbe wie die Schärfe allein.
+        const jetzt = zuLinear(daten[at + k] / 255);
+        daten[at + k] = Math.round(Math.min(1, Math.max(0, zuSrgb(jetzt + (neu - mitte)))) * 255);
       }
     }
   }

@@ -22,10 +22,10 @@
 import { BEREICHE_MAX } from './doc.js';
 import type { Szene } from './maskenSpeicher.js';
 import { maskeUmrastern } from './maske.js';
-import { bokehRgba } from './bokeh.js';
 import { ABTAST_N, schaerfenFeld } from './schaerfe.js';
 import { flaeche2d, glRaum } from './farbraum.js';
 import { bokehRadius } from './weich.js';
+import { unscharfAufBytes, unscharfEbenen, type StufenGuete } from './unscharf.js';
 import {
   LUT_KANTE,
   formHin,
@@ -1088,6 +1088,7 @@ function aufLeinwand(
   hoehe: number,
   a: Anpassung,
   szene: Szene,
+  guete: StufenGuete,
 ): HTMLCanvasElement | null {
   const flaeche = document.createElement('canvas');
   flaeche.width = breite;
@@ -1099,96 +1100,33 @@ function aufLeinwand(
   const daten = bilddaten.data;
 
   /*
-   * Die Tiefenschärfe auf dem Prozessor: DREI Stufen statt einer.
+   * Weichzeichnen und Bokeh ganz am Anfang: Eine Linse zeichnet unscharf, die
+   * Entwicklung kommt danach. Wäre es umgekehrt, verteilte die Scheibe
+   * bereits getönte Farben, und der Kontrast würde zweimal angefasst.
    *
-   * Näher an der Grafikeinheit, als es hier lange stand – aber immer noch
-   * nicht gleich. Dort ist es eine Scheibe aus 48 Tupfen, hier ein Sechseck
-   * aus drei gerichteten Kästen. Was inzwischen auf BEIDEN Wegen gilt: Beide
-   * mitteln im linearen Licht und spreizen helle Stellen mit derselben
-   * vierten Potenz, ein Lichtpunkt bleibt also auf beiden Wegen ein
-   * Lichtpunkt. Solange hier ein Kastenmittel über Anzeigewerten stand, war
-   * das der eine Unterschied, den man sofort sah – aus demselben Bild wurde
-   * auf dem einen Gerät ein Licht und auf dem anderen ein grauer Schleier.
-   *
-   * Der Vergleichstest nimmt Bereiche mit Unschärfe trotzdem weiter AUS:
-   * Sechseck und Scheibe verteilen dasselbe Licht anders, und eine
-   * Gleichheit zu behaupten, die nicht gilt, wäre schlimmer als der
-   * Unterschied.
-   *
-   * Was hier aber gleich sein MUSS, ist die Regel: Das Maskengewicht steuert
-   * die GRÖSSE der Unschärfe, nicht die Durchsichtigkeit eines Bildes mit
-   * fester Grösse. Mit einer einzigen Stufe – so stand es hier – bekam ein
-   * Bildpunkt bei halbem Gewicht ein halb durchsichtiges Doppelbild statt
-   * einer halb so grossen Zerstreuung. Solange die Maske ein freigestelltes
-   * Motiv war, fiel das nicht auf; sobald sie ein Verlauf über die Tiefe der
-   * Szene ist, ist es der ganze Unterschied.
-   *
-   * Drei Stufen und nicht acht, weil jede eine volle Kopie des Bildes kostet:
-   * bei 2000 × 1500 sind das 12 MB je Stufe. Zwischen den Stufen wird linear
-   * überblendet – innerhalb einer Stufe bleibt also die Überblendung, aber
-   * über einen Sprung von einem Drittel Radius statt über den ganzen.
+   * Dieselbe Rechnung wie die Grafikeinheit (`unscharf.ts`, `unscharfGpu.ts`):
+   * gleiche Strecken, gleicher Kern, gleiche Stufen. Dass es hier einmal ein
+   * Kastenmittel und ein anderes Bild als auf dem Telefon mit Grafikeinheit
+   * war, ist der Fehler, den es nicht wieder geben soll – der Vergleichstest
+   * hält beide Wege jetzt auch mit Unschärfe gegeneinander.
    */
-  const staerkste = szene.bereiche.reduce((max, b) => Math.max(max, b.anpassung.unschaerfe), 0);
-  // Das Bild, wie es vor der Tiefenschärfe war – die Schärfe liest daraus.
+  // Das Bild, wie es vor der Unschärfe war – die Schärfe liest daraus.
   const unverwischt = a.schaerfe > 0 ? new Uint8ClampedArray(daten) : daten;
-  let bokehGewicht: Uint8Array | null = null;
-  if (staerkste > 0) {
-    bokehGewicht = new Uint8Array(breite * hoehe);
-    for (const b of szene.bereiche) {
-      if (b.anpassung.unschaerfe <= 0) continue;
-      const w = maskeUmrastern(
-        b.maske.feld,
-        b.maske.raster.breite,
-        b.maske.raster.hoehe,
-        breite,
-        hoehe,
-      );
-      for (let i = 0; i < bokehGewicht.length; i += 1) {
-        const wert = Math.round(w[i] * b.anpassung.unschaerfe);
-        if (wert > bokehGewicht[i]) bokehGewicht[i] = wert;
-      }
-    }
-    const vollerRadius = bokehRadius(staerkste, Math.max(breite, hoehe));
-    const STUFEN = 3;
-    /** Stufe 0 ist das scharfe Bild; danach ein Drittel, zwei Drittel, ganz. */
-    const stufen: Uint8ClampedArray[] = [];
-    for (let k = 1; k <= STUFEN; k += 1) {
-      const kopie = new Uint8ClampedArray(daten);
-      /*
-       * Hier stand ein Kastenweichzeichner – und damit rechnete der
-       * Rückfallweg etwas anderes als der Schattierer.
-       *
-       * Auf der Grafikeinheit zerstreut `zerstreuen` über eine SCHEIBE im
-       * linearen Licht; ohne Grafikeinheit kam ein quadratisches Mittel über
-       * Anzeigewerte heraus. Aus einem Lichtpunkt wurde dort ein heller Fleck
-       * und hier ein grauer Schleier – gemessen 142 gegen 11 von 255.
-       * Dasselbe Bild, zwei Geräte, zwei Ergebnisse.
-       *
-       * `bokehRgba` schliesst den Abstand: Sechseck statt Quadrat, lineares
-       * Licht statt Anzeigewerte, und helle Stellen wiegen schwerer. Es
-       * kostet rund das Dreieinhalbfache (gemessen 150 ms gegen 42 ms bei
-       * 1200 × 900) – und dieser Weg läuft ohnehin nur dort, wo keine
-       * Grafikeinheit da ist.
-       */
-      bokehRgba(kopie, breite, hoehe, (vollerRadius * k) / STUFEN);
-      stufen.push(kopie);
-    }
-    for (let i = 0; i < bokehGewicht.length; i += 1) {
-      const g = bokehGewicht[i];
-      if (g === 0) continue;
-      const at = i * 4;
-      // Wo zwischen den Stufen liegt dieser Bildpunkt?
-      const lage = (g / 255) * STUFEN;
-      const unten = Math.min(Math.floor(lage), STUFEN - 1);
-      const t = lage - unten;
-      // `unten === 0` heisst: zwischen dem scharfen Bild und der ersten Stufe.
-      const a0 = unten === 0 ? daten : stufen[unten - 1];
-      const a1 = stufen[unten];
-      for (let k = 0; k < 3; k += 1) {
-        const von = a0[at + k];
-        daten[at + k] = von + (a1[at + k] - von) * t;
-      }
-    }
+  let daempfung: Uint8Array | null = null;
+  const ebenen = unscharfEbenen(szene.bereiche, breite, hoehe);
+  if (ebenen.length > 0) {
+    const quellen = ebenen.map((ebene) => {
+      const b = szene.bereiche[ebene.platz];
+      const { raster } = b.maske;
+      const hoch = (feld: Uint8Array) =>
+        maskeUmrastern(feld, raster.breite, raster.hoehe, breite, hoehe);
+      return {
+        ebene,
+        maske: hoch(b.maske.feld),
+        kern: ebene.reinheit === 2 && b.maske.kern ? hoch(b.maske.kern) : null,
+      };
+    });
+    daempfung = unscharfAufBytes(daten, breite, hoehe, quellen, guete);
   }
 
   if (a.schaerfe > 0) {
@@ -1199,7 +1137,7 @@ function aufLeinwand(
       a.schaerfe,
       a.schaerfeRadius,
       a.schaerfeSchwelle,
-      bokehGewicht,
+      daempfung,
       unverwischt,
     );
   }
@@ -1296,6 +1234,8 @@ interface Merkzettel {
   hoehe: number;
   quelle: CanvasImageSource;
   stand: number;
+  /** Zur Güte gehört das Ergebnis: ein Standbild in „mittel“ ist keins in „hoch“. */
+  guete: StufenGuete;
 }
 
 let gemerkt: Merkzettel | null = null;
@@ -1360,6 +1300,12 @@ export function bildRechnen(
      * selbst; sie gilt nur bis zum nächsten Aufruf.
      */
     readonly fluechtig?: boolean;
+    /**
+     * Wie genau Weichzeichnen und Bokeh rechnen – ohne Angabe `hoch`.
+     * Beide Wege, Grafikeinheit und Prozessor, halten sich daran; der
+     * Vergleichstest rechnet sie auf derselben Güte.
+     */
+    readonly guete?: StufenGuete;
   },
 ): CanvasImageSource {
   /*
@@ -1376,6 +1322,7 @@ export function bildRechnen(
   if ((istNeutral(a) && szene.bereiche.length === 0) || breite <= 0 || hoehe <= 0) return bild;
   const schluessel = szene.bereiche.length > 0 ? szene.schluessel : tonSchluessel(a);
   const stand = quellstand(bild);
+  const guete = optionen?.guete ?? 'hoch';
   if (
     !optionen?.fluechtig &&
     gemerkt &&
@@ -1383,13 +1330,14 @@ export function bildRechnen(
     gemerkt.breite === breite &&
     gemerkt.hoehe === hoehe &&
     gemerkt.quelle === bild &&
-    gemerkt.stand === stand
+    gemerkt.stand === stand &&
+    gemerkt.guete === guete
   ) {
     return gemerkt.flaeche;
   }
   const aufDerGpu = aufGpu(bild, breite, hoehe, a, szene);
   letzterWeg = aufDerGpu ? 'gpu' : 'leinwand';
-  const fertig = aufDerGpu ?? aufLeinwand(bild, breite, hoehe, a, szene);
+  const fertig = aufDerGpu ?? aufLeinwand(bild, breite, hoehe, a, szene, guete);
   if (!fertig) {
     letzterWeg = 'keiner';
     return bild;
@@ -1412,7 +1360,7 @@ export function bildRechnen(
   const ectx = flaeche2d(eigen);
   if (!ectx) return fertig;
   ectx.drawImage(fertig, 0, 0);
-  gemerkt = { flaeche: eigen, schluessel, breite, hoehe, quelle: bild, stand };
+  gemerkt = { flaeche: eigen, schluessel, breite, hoehe, quelle: bild, stand, guete };
   return eigen;
 }
 
