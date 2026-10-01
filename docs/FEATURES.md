@@ -695,8 +695,9 @@ muss.
 - **Monatsansicht** mit Punkten an Tagen mit Terminen und **Agenda** als
   chronologische Liste.
 - Termine mit **Titel, Beschreibung, Ort, Farbe** und Ganztags-Option.
-- Ein Termin kann **an einen Chat gebunden** sein (alle Mitglieder sehen ihn) –
-  oder privat bleiben.
+- Ein Termin gehört **seinen Eingeladenen**, nicht einem Chat: Er kann als Karte
+  in Chats stehen, aber wer ihn sieht, bestimmt allein die Einladung (siehe
+  „Einladen“). Ohne Eingeladene bleibt er privat.
 - **Zu- und Absagen**: ja, nein, vielleicht. Wer wie geantwortet hat, steht beim
   Termin. Änderungen sind jederzeit möglich.
 - **Serientermine**: täglich, wöchentlich, monatlich oder jährlich, auf Wunsch
@@ -704,9 +705,71 @@ muss.
   Ende wahlweise nie, nach einer Anzahl oder an einem Datum. Die einzelnen
   Termine der Reihe sind in der Detailansicht aufgelistet.
 - **Erinnerungen** pro Termin, zum Beispiel 1 Stunde und 1 Tag vorher.
-- Ein neuer Termin wird auf Wunsch **als Karte in den Chat** gepostet – dort
-  kann direkt zu- oder abgesagt werden.
+- Ein neuer Termin wird auf Wunsch **als Karte in die Chats** gepostet
+  (Einzelchats und ausgewählte Gruppenchats) – dort kann direkt zu- oder
+  abgesagt werden.
 - **Einzelnen Termin exportieren** (`.ics`) und in jede Kalender-App übernehmen.
+
+### Einladen
+
+- **Wer den Termin sieht, bestimmt allein die Einladung.** Wer im Gruppenchat
+  sitzt, aber nicht eingeladen ist, sieht ihn nirgends: nicht in der Liste, nicht
+  im Kalender-Abo, nicht auf der Terminseite, nicht in Notizen und Unterlagen. In
+  seinem Chat steht höchstens eine Karte „Termin nicht verfügbar“.
+- Unter **Eingeladen** steht die **Liste aller Personen, mit denen du einen Chat
+  teilst** – auch wenn noch niemand gewählt ist, ganz ohne Suchen. Das Suchfeld
+  filtert sie sofort; ab zwei Zeichen findet es zusätzlich andere Personen auf
+  diesem Server.
+- **Schnellwahl**: „Alle“ (alle Kontakte, höchstens 200), „Niemand“ und
+  „Gruppenchat …“, das dessen Mitglieder wählt – einzelne lassen sich danach
+  abwählen. Mehrere Gruppenchats gehen, höchstens zehn.
+- **Wohin die Einladung geht**: Jede eingeladene Person bekommt eine **Karte im
+  Einzelchat** mit dir; fehlt der Chat, legt die App ihn an. Dazu kommt die Karte
+  in einen **Gruppenchat – aber nur, wenn du ihn ausdrücklich gewählt hast und
+  alle seine Mitglieder eingeladen sind**. „Alle“ postet in keinen Gruppenchat.
+  Die Vorschau unter dem Feld sagt vorher, wohin was geht; „Dort posten“ nimmt
+  einen Gruppenchat wieder heraus, „Einladung im Chat senden“ schaltet alle
+  Nachrichten ab (dann sehen die Eingeladenen den Termin nur im Kalender).
+  Aus dem Gruppenchat heraus angelegt, sind seine Mitglieder und er selbst schon
+  vorgewählt – alles bleibt abwählbar.
+- **Eine Benachrichtigung je Person**, gleich in wie vielen Chats ihre Karte
+  steht. Ein stummgeschalteter Chat wird übersprungen; ist alles stumm, kommt
+  keine.
+- **Alles ist synchron**: Eine Zu- oder Absage in einem Chat, am Termin oder im
+  Kalender gilt überall. Alle Karten, die Terminseite und der Kalender zeigen
+  denselben Stand – auch in Chats, die gerade nicht offen sind.
+- **Nachträglich einladen und ausladen** kann nur, wer den Termin angelegt hat.
+  Wer neu dazukommt, bekommt Karte und Benachrichtigung, wer schon dabei war,
+  nichts davon. Wer ausgeladen wird, verliert sofort den Zugang; seine Karte im
+  Einzelchat wird gelöscht. Eine Karte im Gruppenchat bleibt stehen, zeigt dem
+  Ausgeladenen aber nichts.
+- **Zeit oder Ort ändern** benachrichtigt alle Eingeladenen (der Titel nicht;
+  höchstens dreimal in zehn Minuten je Termin, weitere Änderungen stehen still
+  in den Karten). Bisherige Zu- und Absagen bleiben.
+- **Absagen** lässt den Termin und seine Karten stehen („Abgesagt“), sperrt
+  Zusagen und benachrichtigt alle; man kann ihn wieder aufnehmen. **Löschen**
+  räumt auf: Der Termin und alle seine Karten verschwinden.
+- Konnten Karten nicht zugestellt werden (Verbindung weg mitten im Senden), bleibt
+  der Termin gültig; auf der Terminseite steht dann „Einladungen nicht
+  zugestellt“ mit „Erneut zustellen“.
+
+Was nicht geht, ehrlich:
+
+- Wer eine Person einlädt, mit der er nur in Gruppen schreibt – oder jemanden
+  über die Suche –, **legt dadurch einen neuen Einzelchat an**, der beim Gegenüber
+  erscheint. Die Vorschau sagt es; eine Sperrfunktion gibt es nicht.
+- **Alle Eingeladenen sehen die Teilnehmerliste mit allen Antworten.** Sie lässt
+  sich nicht verbergen; wer Fremde dazuholt, zeigt ihnen damit auch die Namen der
+  anderen.
+- Wer einer Gruppe **nach** der Einladung beitritt, sieht den Termin nicht, wenn
+  er nicht selbst eingeladen ist. Gruppen-Admins, die selbst eingeladen sind,
+  ändern Inhalt, Absage und Löschen, aber keine Einladungen.
+- Eine Karte im Gruppenchat, die jemandem bisher nichts zeigte, füllt sich nach
+  seiner Einladung beim nächsten Öffnen des Chats, nicht schon live.
+- Ein Termin aus einer **Umfrage** oder **Terminfindung** lädt weiter alle
+  Mitglieder des Chats ein und postet nur dort eine Karte.
+- Höchstens 200 Eingeladene je Termin. Benachrichtigungen kommen nur an, wenn die
+  Person sie erlaubt hat.
 
 ### Notizen und Listen am Termin
 
