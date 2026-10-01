@@ -6,6 +6,7 @@ import {
   aufVerhaeltnis,
   ausgabeGroesse,
   docKopie,
+  docOhneBearbeitung,
   docUnberuehrt,
   nachAnsicht,
   nachOriginal,
@@ -254,6 +255,28 @@ describe('Bereiche im Dokument', () => {
     expect(kopie.bereiche[0].anpassung).not.toBe(doc.bereiche[0].anpassung);
     expect(kopie.bereiche[0]).not.toBe(doc.bereiche[0]);
     expect(kopie.bereiche).not.toBe(doc.bereiche);
+  });
+
+  it('nimmt beide Unschärfen in die Kopie mit', () => {
+    // `docKopie` kopiert `anpassung` per Spread – ein neues Feld kommt von
+    // selbst mit. Der Test hält das fest, damit niemand die Aufzählung der
+    // Regler später von Hand schreibt und `bokeh` dabei vergisst.
+    const doc = mitBereich();
+    doc.bereiche[0].anpassung.bokeh = 0.7;
+    doc.bereiche[0].anpassung.unschaerfe = 0.2;
+    const kopie = docKopie(doc);
+    expect(kopie.bereiche[0].anpassung.bokeh).toBe(0.7);
+    expect(kopie.bereiche[0].anpassung.unschaerfe).toBe(0.2);
+    kopie.bereiche[0].anpassung.bokeh = 0;
+    expect(doc.bereiche[0].anpassung.bokeh).toBe(0.7);
+  });
+
+  it('schaltet beim „Vorher“-Zug auch die Unschärfen aus', () => {
+    // `docOhneBearbeitung` lässt die Bereiche weg – und damit beide Regler.
+    const doc = mitBereich();
+    doc.bereiche[0].anpassung.bokeh = 0.7;
+    doc.bereiche[0].anpassung.unschaerfe = 0.2;
+    expect(docOhneBearbeitung(doc).bereiche).toEqual([]);
   });
 
   it('lässt eine Änderung an der Kopie das Original in Ruhe', () => {

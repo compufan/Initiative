@@ -195,7 +195,7 @@ describe('Mitnahme der Masken vermerken', () => {
             marke: 1,
           },
         ],
-        anpassung: { ...neuesDoc(1, 1).anpassung, unschaerfe: 0 },
+        anpassung: { ...neuesDoc(1, 1).anpassung, unschaerfe: 0, bokeh: 0 },
       },
     ],
   };
@@ -248,7 +248,7 @@ describe('Formen hängen am Bild wie Masken', () => {
             bis: { x: 0, y: 0 },
           },
         ],
-        anpassung: { ...neuesDoc(1, 1).anpassung, unschaerfe: 0 },
+        anpassung: { ...neuesDoc(1, 1).anpassung, unschaerfe: 0, bokeh: 0 },
       },
     ],
   };

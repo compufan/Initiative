@@ -133,7 +133,7 @@ test('GLSL und TypeScript rechnen auch mit Bereichen dieselben Farben', async ({
         bereiche: fall.bereiche.map((b, i) => ({
           id: `b${i}`,
           maske: { raster, feld: b.feld, stand: nummer * 10 + i },
-          anpassung: { ...b.a, unschaerfe: 0 },
+          anpassung: { ...b.a, unschaerfe: 0, bokeh: 0 },
         })),
         schluessel: `fall${nummer}`,
       };
@@ -246,7 +246,7 @@ test('die Maske sitzt richtig herum – oben ist oben', async ({ page }) => {
         {
           id: 'oben',
           maske: { raster: { breite: rb, hoehe: rh, faktor: rb / kante }, feld, stand: 1 },
-          anpassung: { ...ton.FARB_NEUTRAL, belichtung: 2, unschaerfe: 0 },
+          anpassung: { ...ton.FARB_NEUTRAL, belichtung: 2, unschaerfe: 0, bokeh: 0 },
         },
       ],
       schluessel: 'oben',
@@ -345,12 +345,12 @@ test('Grafikeinheit und Prozessor kommen zum selben Bild', async ({ page }) => {
         {
           id: 'a',
           maske: { raster, feld, stand: 1 },
-          anpassung: { ...ton.FARB_NEUTRAL, belichtung: 1, kontrast: 0.4, unschaerfe: 0 },
+          anpassung: { ...ton.FARB_NEUTRAL, belichtung: 1, kontrast: 0.4, unschaerfe: 0, bokeh: 0 },
         },
         {
           id: 'b',
           maske: { raster, feld, stand: 2 },
-          anpassung: { ...ton.FARB_NEUTRAL, waerme: 0.6, saettigung: 0.3, unschaerfe: 0 },
+          anpassung: { ...ton.FARB_NEUTRAL, waerme: 0.6, saettigung: 0.3, unschaerfe: 0, bokeh: 0 },
         },
       ],
       schluessel: 'vergleich',
@@ -503,7 +503,7 @@ test('das Bokeh verwischt nur hinter der Maske und blutet nicht heraus', async (
         {
           id: 'weich',
           maske: { raster: { breite: rb, hoehe: rb, faktor: rb / kante }, feld, stand: 1 },
-          anpassung: { ...ton.FARB_NEUTRAL, unschaerfe: 1 },
+          anpassung: { ...ton.FARB_NEUTRAL, unschaerfe: 1, bokeh: 0 },
         },
       ],
       schluessel: 'bokeh',
@@ -661,7 +661,7 @@ test('die Zerstreuung ist eine Scheibe und keine Glocke', async ({ page }) => {
         {
           id: 'alles',
           maske: { raster: { breite: rb, hoehe: rb, faktor: rb / kante }, feld, stand: 1 },
-          anpassung: { ...ton.FARB_NEUTRAL, unschaerfe: 1 },
+          anpassung: { ...ton.FARB_NEUTRAL, unschaerfe: 1, bokeh: 0 },
         },
       ],
       schluessel: 'scheibe',
@@ -769,7 +769,7 @@ test('die Maske bestimmt die Grösse der Zerstreuung, nicht ihre Durchsichtigkei
         {
           id: 'verlauf',
           maske: { raster: { breite: rb, hoehe: rb, faktor: rb / kante }, feld, stand: 1 },
-          anpassung: { ...ton.FARB_NEUTRAL, unschaerfe: 1 },
+          anpassung: { ...ton.FARB_NEUTRAL, unschaerfe: 1, bokeh: 0 },
         },
       ],
       schluessel: 'wachsend',
@@ -880,7 +880,7 @@ test('ein scharfer Punkt streut nicht in unscharfe Nachbarn hinein', async ({ pa
           {
             id: 'stufe',
             maske: { raster: { breite: kante, hoehe: kante, faktor: 1 }, feld, stand: marke },
-            anpassung: { ...ton.FARB_NEUTRAL, unschaerfe: 1 },
+            anpassung: { ...ton.FARB_NEUTRAL, unschaerfe: 1, bokeh: 0 },
           },
         ],
         schluessel: `stufe${marke}`,

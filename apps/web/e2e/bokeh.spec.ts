@@ -52,7 +52,7 @@ test('ein Lichtpunkt bleibt im Unscharfen ein Licht – auf beiden Wegen', async
     const bereich = {
       id: 'ganz',
       maske: { raster: { breite: 64, hoehe: 64 }, feld, stand: 1 },
-      anpassung: { ...ton.NEUTRAL, unschaerfe: 1, kanal: 0 },
+      anpassung: { ...ton.NEUTRAL, unschaerfe: 1, bokeh: 0, kanal: 0 },
     };
 
     const hellstes = (weg: 'gpu' | 'cpu') => {

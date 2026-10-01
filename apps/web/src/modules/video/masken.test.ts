@@ -1298,6 +1298,81 @@ describe('editorAenderung', () => {
     expect(erg.clipDoc.anpassung.kontrast).toBe(0.3);
   });
 
+  it('übernimmt Bokeh und Weichzeichnen ohne neuen Anker', () => {
+    /*
+     * Beide Unschärfen gehören zur Maske, nicht zu einem Anker: Ein Regler
+     * ändert, WIE stark die Bahn wirkt, nicht, WO sie liegt. `FELDER` kennt
+     * sie deshalb nicht, und es darf weder ein Anker noch eine neue Kennung
+     * noch ein Neuberechnen daraus entstehen.
+     */
+    const { masken, gezeigt, z, motiv, himmel } = aufbau();
+    expect(z.doc.bereiche[0].anpassung.bokeh).toBe(0);
+    const doc = docKopie(z.doc);
+    doc.bereiche[0].anpassung.bokeh = 0.6;
+    const erg = editorAenderung(doc, gezeigt, masken, new Map(), bezug);
+    expect(erg.neu).toEqual([]);
+    expect(erg.masken[0].anpassung.bokeh).toBe(0.6);
+    expect(erg.masken[0].anpassung.unschaerfe).toBe(0);
+    // Die Teile sind dasselbe Feld, jeder Anker dasselbe Objekt.
+    expect(erg.masken[0].teile).toBe(motiv.teile);
+    expect(erg.masken[0].teile[0].anker[0]).toBe(motiv.teile[0].anker[0]);
+    expect(erg.masken[1]).toBe(himmel);
+
+    const zweiter = docKopie(z.doc);
+    zweiter.bereiche[0].anpassung.unschaerfe = 0.25;
+    const erg2 = editorAenderung(zweiter, gezeigt, masken, new Map(), bezug);
+    expect(erg2.masken[0].anpassung.unschaerfe).toBe(0.25);
+    expect(erg2.masken[0].anpassung.bokeh).toBe(0);
+    expect(erg2.masken[0].teile).toBe(motiv.teile);
+    expect(erg2.neu).toEqual([]);
+  });
+
+  it('hält vier Bereiche mit vier Werten getrennt', () => {
+    const masken = ['a', 'b', 'c', 'd'].map((id, i) =>
+      maske(id, [spur(`r${id}`, [5, radial(`r${id}`, 5 + i * 8, 5)])], { farbe: i }),
+    );
+    // Reine Formen brauchen eine Kamera, sonst sind sie „fehlend“: eine ruhige.
+    const karten = new Karten();
+    karten.lageSonst = {
+      stand: 'fein',
+      lage: { s: 1, w: 0, tx: 0, ty: 0, sicher: 9 },
+      faktor: 2,
+    };
+    const z = bildDocAn(neuesDoc(B, H), masken, karten, 20, 'editor', RAHMEN);
+    const gezeigt: Gezeigt = { k: 20, z, vorSitzung: masken };
+    expect(z.doc.bereiche.map((b) => b.id)).toEqual(['a', 'b', 'c', 'd']);
+
+    const doc = docKopie(z.doc);
+    [0.1, 0.4, 0.7, 1].forEach((wert, i) => {
+      doc.bereiche[i].anpassung.bokeh = wert;
+      doc.bereiche[i].anpassung.unschaerfe = 1 - wert;
+    });
+    const erg = editorAenderung(doc, gezeigt, masken, new Map(), bezug);
+    expect(erg.neu).toEqual([]);
+    expect(erg.masken.map((m) => m.anpassung.bokeh)).toEqual([0.1, 0.4, 0.7, 1]);
+    erg.masken.forEach((m, i) =>
+      expect(m.anpassung.unschaerfe).toBeCloseTo([0.9, 0.6, 0.3, 0][i], 12),
+    );
+    erg.masken.forEach((m, i) => expect(m.teile).toBe(masken[i].teile));
+
+    // Und beim nächsten Zusammensetzen stehen sie wieder im Bilddokument,
+    // je Bereich der eigene Wert.
+    const wieder = bildDocAn(neuesDoc(B, H), erg.masken, karten, 20, 'editor', RAHMEN);
+    expect(wieder.doc.bereiche.map((b) => b.anpassung.bokeh)).toEqual([0.1, 0.4, 0.7, 1]);
+  });
+
+  it('holt beim Rückgängig im Editor den alten Wert zurück', () => {
+    const { masken, gezeigt, z } = aufbau();
+    const vor = docKopie(z.doc);
+    const nach = docKopie(z.doc);
+    nach.bereiche[0].anpassung.bokeh = 0.8;
+    const hin = editorAenderung(nach, gezeigt, masken, new Map(), bezug);
+    expect(hin.masken[0].anpassung.bokeh).toBe(0.8);
+    const zurueck = editorAenderung(vor, gezeigt, hin.masken, new Map(), bezug);
+    expect(zurueck.masken[0].anpassung.bokeh).toBe(0);
+    expect(zurueck.masken[0].teile).toBe(masken[0].teile);
+  });
+
   it('setzt bei einem neuen Tipp einen Anker HIER – die alten bleiben', () => {
     const { masken, gezeigt, z, motiv } = aufbau();
     const doc = docKopie(z.doc);

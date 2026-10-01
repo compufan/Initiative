@@ -116,6 +116,35 @@ describe('entwurfSichern / entwurfHolen', () => {
     expect(await entwurfHolen('k1', 100, 80)).toBeNull();
   });
 
+  it('deutet den Weichzeichner eines alten Entwurfs als Bokeh um', async () => {
+    /*
+     * Ein Entwurf überlebt das Schliessen – also auch ein Update der App. Der
+     * alte Regler `unschaerfe` war die Linse; stünde er danach als Gauss im
+     * Bild, hätte sich die Aufnahme beim Fortsetzen verändert.
+     */
+    const roh = docNachRoh(getont());
+    roh.bereiche = [
+      {
+        id: 'b',
+        name: 'Grund',
+        aktiv: true,
+        teile: [],
+        anpassung: { belichtung: 0.2, unschaerfe: 0.7 },
+      },
+    ];
+    speicher.set('k1', {
+      id: 'k1',
+      doc: roh,
+      breite: 100,
+      hoehe: 80,
+      stand: Date.now(),
+      name: null,
+    });
+    const fund = await entwurfHolen('k1', 100, 80);
+    expect(fund?.doc.bereiche[0].anpassung.bokeh).toBeCloseTo(0.7);
+    expect(fund?.doc.bereiche[0].anpassung.unschaerfe).toBe(0);
+  });
+
   it('teilt kein Feld mit dem lebenden Dokument', async () => {
     /*
      * Der Editor ändert sein Dokument nie an Ort und Stelle – aber der

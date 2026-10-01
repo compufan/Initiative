@@ -27,7 +27,7 @@ function mitTipp(): BildDoc {
             marke: 1,
           },
         ],
-        anpassung: { ...neuesDoc(1, 1).anpassung, unschaerfe: 0 },
+        anpassung: { ...neuesDoc(1, 1).anpassung, unschaerfe: 0, bokeh: 0 },
       },
     ],
   };
