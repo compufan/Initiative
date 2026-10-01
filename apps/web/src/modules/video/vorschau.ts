@@ -776,7 +776,10 @@ export function useBearbeiteteVorschau(auftrag: VorschauAuftrag): VorschauStand 
     const w = wisch.current;
     if (!aktiv || !element) return;
     if (w.zuletzt === 'speicher' && w.gezeichnet) {
-      w.wunsch = { ...w.gezeichnet, roh: false };
+      // Ein Wunsch, der noch wartet, ist neuer als das Gezeichnete und nimmt die neue Bearbeitung
+      // ohnehin mit – ihn zu ersetzen verlöre das Ziel des Fingers (gemessen beim Loslassen: Die
+      // Leinwand blieb auf einem Bild, 280 Bilder daneben, bis der Editor sein Standbild zeigte).
+      w.wunsch ??= { ...w.gezeichnet, roh: false };
       planen();
       return;
     }
