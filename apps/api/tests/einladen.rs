@@ -3147,3 +3147,56 @@ async fn eine_terminfindung_nimmt_ausgeladene_nicht_wieder_auf() {
         .await;
     assert_eq!(status, StatusCode::OK, "{antwort}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ohne_karte_im_einzelchat_gibt_es_nur_ueber_eine_gruppenkarte_eine_mitteilung() {
+    // Die Vorschau der Oberfläche verspricht genau das: Wer keine Karte bekommt,
+    // wird nicht benachrichtigt – es gäbe keinen Chat, über den es liefe.
+    let Some(probe) = aufbauen().await else {
+        return;
+    };
+    let n = kurz();
+    let a = probe.konto(&format!("anna{n}")).await;
+    let b = probe.konto(&format!("bodo{n}")).await;
+    let c = probe.konto(&format!("cleo{n}")).await;
+    let g = probe.gruppe(&a, "Zwei", &[&b]).await;
+    let termin = probe
+        .termin_mit(&a, json!({ "zustellung": { "senden": false } }))
+        .await;
+    let id = termin["id"].as_str().unwrap();
+    probe.push_leeren();
+
+    // Cleo: weder Einzelkarte noch Gruppenkarte – keine Mitteilung.
+    let (status, antwort) = probe
+        .aendern(
+            &a,
+            id,
+            json!({
+                "attendeeIds": ids(&[&c]),
+                "zustellung": { "senden": true, "einzelchats": false }
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+    assert_eq!(antwort["zustellung"]["benachrichtigt"], 0, "{antwort}");
+    assert_eq!(antwort["zustellung"]["einzelchats"], 0);
+    assert_eq!(probe.push_anzahl(), 0);
+
+    // Bodo sitzt in der Gruppe, deren Karte jetzt entsteht: Über sie wird er
+    // erreicht – genau einmal.
+    let (status, antwort) = probe
+        .aendern(
+            &a,
+            id,
+            json!({
+                "attendeeIds": ids(&[&c, &b]),
+                "zustellung": { "senden": true, "einzelchats": false, "gruppenChatIds": [g] }
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+    assert_eq!(antwort["zustellung"]["benachrichtigt"], 1, "{antwort}");
+    assert_eq!(probe.karten(&b, &g, id).await.len(), 1);
+    assert_eq!(probe.push_an(&b).len(), 1);
+    assert!(probe.push_an(&c).is_empty());
+}
