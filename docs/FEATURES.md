@@ -262,7 +262,8 @@ und bearbeiten an einem Ort, alles im Gerät.
     antippst, wird für sich verfolgt – er bekommt sein eigenes Teil im selben
     Bereich, und die Regler gelten allen. Soll jeder anders aussehen, gib ihm
     einen eigenen Bereich. Zwei Bereiche auf demselben Gegenstand stapeln ihre
-    Wirkung.
+    Wirkung. Jeder Gegenstand wird im Hintergrund für sich verfolgt – das
+    kostet Rechenzeit, mit Netz deutlich mehr als nach Farbe.
   - **Formen** (Verlauf, Ellipse, Pinsel) bleiben an der Szene und folgen der
     Kamera, nicht einem Gegenstand – für etwas, das sich bewegt, ist
     „Antippen" der Weg.

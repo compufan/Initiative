@@ -801,7 +801,7 @@ export function BildEditor({
    * Reagiert wird auf eine ÄNDERUNG der Angabe, nicht auf ihren Wert: Legt
    * ein Tipp hier einen Bereich an, kennt die Umgebung ihn erst eine Runde
    * später, und ein Vergleich mit dem Wert risse die Wahl in der Zwischenzeit
-   * auf den alten zurück. `wunschOffen` hält, was von aussen kam und noch
+   * auf den alten zurück. `wunsch.offen` hält, was von aussen kam und noch
    * nicht angekommen ist: Nach „Hier trennen" und nach einem Wechsel des
    * Abschnitts steht der Bereich erst im Dokument, wenn es neu geladen ist.
    */
