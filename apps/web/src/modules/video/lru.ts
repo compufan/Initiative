@@ -78,7 +78,17 @@ export class BytesLru<S, W> {
     this.summe -= eintrag.bytes;
   }
 
-  leeren(): void {
+  /**
+   * Alles vergessen.
+   *
+   * Mit `melden` wird für jeden Eintrag `verdraengt` gerufen – für Werte, die
+   * freigegeben werden müssen (entpackte Bilder: `close`). Ohne bleibt es
+   * wie bei `loeschen`: Der Aufrufer räumt selbst.
+   */
+  leeren(melden = false): void {
+    if (melden) {
+      for (const [alt, eintrag] of this.eintraege) this.verdraengt?.(alt, eintrag.wert);
+    }
     this.eintraege.clear();
     this.summe = 0;
   }
