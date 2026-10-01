@@ -206,6 +206,17 @@ export interface VideoBilder {
 }
 
 /**
+ * Was ein kleines, kodiertes Bild sein soll – für den Wischspeicher
+ * (`wischspeicher.ts`): die längere Kante, das Format und die Güte.
+ */
+export interface KleinWunsch {
+  readonly kante: number;
+  /** `'image/webp'` oder `'image/jpeg'` – was `toBlob` kann, prüft der Wischspeicher einmal. */
+  readonly typ: string;
+  readonly guete: number;
+}
+
+/**
  * Ein offener Leser: einmal aufmachen, beliebig oft springen, wieder zumachen.
  *
  * # Warum es das neben `videoBilderLesen` gibt
@@ -250,6 +261,25 @@ export interface VideoLeser {
     abbruch?: AbortSignal,
     groesse?: { readonly b: number; readonly h: number },
   ): Promise<ImageData>;
+  /**
+   * Das Bild an dieser Stelle verkleinert UND kodiert – für den
+   * Wischspeicher, der keine Bildpunkte braucht, sondern kleine Bilder zum
+   * Aufheben.
+   *
+   * Springt nicht noch einmal, wenn das Video schon dort steht (wie ein
+   * zweiter `bildAn`): Die Verfolgung liest ihre Bilder ohnehin, und das
+   * kleine Bild kommt dann aus demselben Stand des Videos dazu. Gezeichnet
+   * wird in eine EIGENE Leinwand ohne `getImageData` – `toBlob` kopiert die
+   * Bildpunkte beim Aufruf, die Leinwand ist sofort wieder frei und der
+   * Dekodierer wartet nicht auf die Kodierung (gemessen 50 statt 60 ms je
+   * Bild). Das Ergebnis liegt deshalb erst in `kodiert`; es ist `null`, wo
+   * der Browser das Format nicht kodiert.
+   */
+  kleinAn(
+    zeitMs: number,
+    wunsch: KleinWunsch,
+    abbruch?: AbortSignal,
+  ): Promise<{ readonly kodiert: Promise<Blob | null> }>;
   schliessen(): void;
 }
 
@@ -324,6 +354,8 @@ export async function videoLeserOeffnen(
     if (!stift) throw new VideoLeseError('Diese Ansicht kann keine Bilder zeichnen');
     /** Die Leinwand für verkleinerte Bilder – erst angelegt, wenn eines verlangt wird. */
     let klein: CanvasRenderingContext2D | null = null;
+    /** Die Leinwand für kodierte kleine Bilder – ohne `willReadFrequently`, es wird nie gelesen. */
+    let kodierFlaeche: HTMLCanvasElement | null = null;
 
     return {
       breite: b,
@@ -355,6 +387,28 @@ export async function videoLeserOeffnen(
         stift.clearRect(0, 0, b, h);
         stift.drawImage(video, 0, 0, b, h);
         return stift.getImageData(0, 0, b, h);
+      },
+      async kleinAn(zeitMs, wunsch, abbruch) {
+        const ziel = Math.min(zeitMs / 1000, Math.max(0, dauerS - rand));
+        await springen(video, ziel, abbruch);
+        const mass = masse(video.videoWidth, video.videoHeight, wunsch.kante);
+        kodierFlaeche ??= document.createElement('canvas');
+        if (kodierFlaeche.width !== mass.b) kodierFlaeche.width = mass.b;
+        if (kodierFlaeche.height !== mass.h) kodierFlaeche.height = mass.h;
+        const kodierStift = kodierFlaeche.getContext('2d');
+        if (!kodierStift) throw new VideoLeseError('Diese Ansicht kann keine Bilder zeichnen');
+        kodierStift.imageSmoothingQuality = 'high';
+        kodierStift.drawImage(video, 0, 0, mass.b, mass.h);
+        const flaeche = kodierFlaeche;
+        const kodiert = new Promise<Blob | null>((fertig) => {
+          try {
+            flaeche.toBlob((blob) => fertig(blob), wunsch.typ, wunsch.guete);
+          } catch {
+            // Ein Browser ohne `toBlob` für dieses Format: dann gibt es kein kleines Bild.
+            fertig(null);
+          }
+        });
+        return { kodiert };
       },
       schliessen,
     };
