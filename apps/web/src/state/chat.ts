@@ -13,7 +13,9 @@ import { ApiError, api } from '../lib/api.js';
 import { realtime } from '../lib/realtime.js';
 import {
   auf as aufTerminEreignisse,
+  auffrischen as terminAuffrischen,
   connectTerminEreignisse,
+  einmalPruefen as terminEinmalPruefen,
   neuer as neuerTermin,
   type EntferntGrund,
 } from '../lib/terminEreignisse.js';
@@ -185,7 +187,7 @@ export const useChat = create<ChatState>((set, get) => ({
       set((state) => ({
         messages: {
           ...state.messages,
-          [conversationId]: sortMessages([...cached, ...(state.messages[conversationId] ?? [])]),
+          [conversationId]: vereinen(cached, state.messages[conversationId]),
         },
       }));
     }
@@ -201,6 +203,11 @@ export const useChat = create<ChatState>((set, get) => ({
       }));
       void cacheMessages(items);
       void trimMessageCache(conversationId);
+      // Nur die erste Seite kam frisch vom Server. Karten dahinter stammen aus
+      // dem Zwischenspeicher und zeigen den Stand vom letzten Öffnen – ihre
+      // Termine werden einmal je Sitzung nachgeprüft.
+      const frisch = new Set(items.map((message) => message.id));
+      terminEinmalPruefen(kartenKennungen(cached.filter((message) => !frisch.has(message.id))));
     } catch (error) {
       if (!(error instanceof ApiError && error.isOffline)) throw error;
     } finally {
@@ -424,6 +431,33 @@ function mergeList(existing: ChatMessage[] | undefined, incoming: MessageDto[]):
   return sortMessages([...map.values()]);
 }
 
+/**
+ * Führt Zwischenspeicher und Speicher zusammen – je Kennung eine Nachricht, der
+ * Speicher gewinnt (er ist neuer). Bloßes Aneinanderhängen ließ dieselbe
+ * Nachricht zweimal im Speicher stehen; React behielt die Geisterzeilen wegen
+ * doppelter Schlüssel, und der ganze Verlauf erschien doppelt.
+ */
+function vereinen(
+  zwischenspeicher: ChatMessage[],
+  aktuell: ChatMessage[] | undefined,
+): ChatMessage[] {
+  const nachId = new Map<string, ChatMessage>();
+  for (const message of zwischenspeicher) nachId.set(message.id, message);
+  for (const message of aktuell ?? []) nachId.set(message.id, message);
+  return sortMessages([...nachId.values()]);
+}
+
+/** Die Termine, deren Karten in diesen Nachrichten stehen (nur sichtbare, nicht gelöschte). */
+function kartenKennungen(messages: Iterable<ChatMessage>): string[] {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.type !== 'event' || message.deletedAt || message.terminGrund) continue;
+    const id = message.event?.id ?? message.metadata.eventId;
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
 function outboxToMessage(entry: OutboxEntry): ChatMessage {
   return {
     id: `local:${entry.clientId}`,
@@ -545,17 +579,19 @@ function istKarteVon(message: ChatMessage, eventId: string): boolean {
  */
 export function terminAbgleichen(event: CalendarEventDto): void {
   const geaendert: ChatMessage[] = [];
+  const neuLaden: string[] = [];
   useChat.setState((state) => {
     let messages = state.messages;
-    let loaded = state.loaded;
-    // Steht die Karte dieses Termins schon im Chat, zu dem er gehört? Dann
-    // stammen leere Karten dort von anderen Terminen.
+    // Steht die Karte dieses Termins schon im Chat, zu dem er gehört – und
+    // irgendwo? Dann stammen leere Karten dort von anderen Terminen.
     let imChat = false;
+    let irgendwo = false;
     const chat = event.conversationId;
     for (const [conversationId, list] of Object.entries(state.messages)) {
       let neu: ChatMessage[] | null = null;
       list.forEach((message, index) => {
         if (!istKarteVon(message, event.id)) return;
+        irgendwo = true;
         if (conversationId === chat) imChat = true;
         const fassung = message.event ? neuerTermin(message.event, event) : event;
         if (fassung === message.event && !message.terminGrund) return;
@@ -573,24 +609,43 @@ export function terminAbgleichen(event: CalendarEventDto): void {
 
     // Eine Karte, die dem Betrachter bisher nichts zeigte (er war nicht
     // eingeladen), trägt weder `event` noch die Kennung – sie lässt sich nicht
-    // zuordnen. Wird er eingeladen, soll der Gruppenchat beim nächsten Öffnen
-    // vollständig neu geladen werden, nicht nur um das Neuere ergänzt: Nur dann
-    // füllt sich die leere Karte.
-    if (chat && !imChat && loaded[chat]) {
-      const leer = (state.messages[chat] ?? []).some(
-        (message) =>
-          message.type === 'event' &&
-          !message.event &&
-          !message.metadata.eventId &&
-          !message.deletedAt,
-      );
-      if (leer) loaded = { ...loaded, [chat]: false };
+    // zuordnen. Wird er eingeladen, muss sie neu geholt werden, damit sie sich
+    // füllt: im Chat des Termins, wenn dort noch keine Karte dieses Termins
+    // steht, und – kennt der Speicher den Termin sonst nirgends – in jedem
+    // geladenen Chat mit einer leeren Karte (ein Termin kann in mehreren
+    // Gruppenchats stehen).
+    //
+    // Der Chat wird gezielt neu geladen und nicht nur zum Neuladen vorgemerkt:
+    // Ein vorgemerkter Chat, der geöffnet bleibt, füllte sich nie.
+    for (const [conversationId, list] of Object.entries(state.messages)) {
+      if (!state.loaded[conversationId]) continue;
+      const betroffen =
+        (conversationId === chat && !imChat) || !irgendwo
+          ? list.some(
+              (message) =>
+                message.type === 'event' &&
+                !message.event &&
+                !message.metadata.eventId &&
+                !message.deletedAt,
+            )
+          : false;
+      if (betroffen) neuLaden.push(conversationId);
     }
 
-    const nichts = messages === state.messages && loaded === state.loaded;
-    return nichts ? {} : { messages, loaded };
+    return messages === state.messages ? {} : { messages };
   });
   if (geaendert.length > 0) void cacheMessages(geaendert.map(zumCache));
+  for (const conversationId of neuLaden) leereKarteNeuLaden(conversationId);
+}
+
+/** Wann zuletzt ein Chat wegen einer leeren Karte neu geladen wurde – höchstens alle 30 s. */
+const leereKarteGeladen = new Map<string, number>();
+
+function leereKarteNeuLaden(conversationId: string): void {
+  const jetzt = Date.now();
+  if (jetzt - (leereKarteGeladen.get(conversationId) ?? 0) < 30_000) return;
+  leereKarteGeladen.set(conversationId, jetzt);
+  void useChat.getState().loadMessages(conversationId, { force: true });
 }
 
 /**
@@ -623,6 +678,29 @@ export function terminEntfernt(eventId: string, grund?: EntferntGrund): void {
   if (geaendert.length > 0) void cacheMessages(geaendert.map(zumCache));
 }
 
+/**
+ * Nach einer Lücke der Verbindung: Was die Karten zeigen, kann veraltet sein –
+ * Zusagen, Absage, neue Zeit, Löschen in der Lücke kamen nie an. Jeder Termin,
+ * dessen Karte im Speicher steht, wird neu geholt und läuft durch den Trichter,
+ * der alle Karten und den Kalender nachführt. Chats, in denen eine Karte „nicht
+ * verfügbar“ zeigt, werden neu geladen: Wer in der Lücke (wieder) eingeladen
+ * wurde, bekäme sonst nie seine Karte.
+ */
+export function kartenNachholen(): void {
+  const { messages, loaded } = useChat.getState();
+  terminAuffrischen(kartenKennungen(Object.values(messages).flat()));
+  for (const [conversationId, list] of Object.entries(messages)) {
+    if (!loaded[conversationId]) continue;
+    const verwehrt = list.some(
+      (message) =>
+        message.type === 'event' &&
+        !message.deletedAt &&
+        (message.terminGrund || (!message.event && !message.metadata.eventId)),
+    );
+    if (verwehrt) leereKarteNeuLaden(conversationId);
+  }
+}
+
 /** Wire realtime events into the store exactly once. */
 let wired = false;
 export function connectChatRealtime(): void {
@@ -632,7 +710,11 @@ export function connectChatRealtime(): void {
   // Termin-Karten stehen in vielen Chats, auch in nie geöffneten: Jede Änderung
   // des Termins führt sie alle nach – nicht nur die Karte, die gerade offen ist.
   connectTerminEreignisse();
-  aufTerminEreignisse({ aktualisiert: terminAbgleichen, entfernt: terminEntfernt });
+  aufTerminEreignisse({
+    aktualisiert: terminAbgleichen,
+    entfernt: terminEntfernt,
+    nachholen: kartenNachholen,
+  });
 
   realtime.on('message.new', ({ message }) => useChat.getState().applyMessage(message));
   realtime.on('message.updated', ({ message }) => useChat.getState().applyMessage(message));

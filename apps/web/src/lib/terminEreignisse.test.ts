@@ -12,6 +12,7 @@ import type { CalendarEventDto } from '@initiative/shared';
 
 const byIdMock = vi.fn();
 const handlers = new Map<string, (payload: never) => void>();
+const zustandHoerer = new Set<(zustand: string) => void>();
 
 vi.mock('./api.js', () => ({
   ApiError: class ApiError extends Error {
@@ -30,6 +31,10 @@ vi.mock('./realtime.js', () => ({
       handlers.set(type, handler);
       return () => handlers.delete(type);
     },
+    onStateChange: (handler: (zustand: string) => void) => {
+      zustandHoerer.add(handler);
+      return () => zustandHoerer.delete(handler);
+    },
   },
 }));
 
@@ -43,6 +48,7 @@ beforeEach(async () => {
   vi.resetModules();
   byIdMock.mockReset();
   handlers.clear();
+  zustandHoerer.clear();
   t = await import('./terminEreignisse.js');
 });
 
@@ -134,10 +140,44 @@ describe('entfernt', () => {
     t.aktualisiert(termin('a', 9));
     t.entfernt('a', 'ausgeladen');
     expect(gemeldet).toEqual([['a', 'ausgeladen']]);
-    // Wer wieder eingeladen wird, bekommt einen höheren Stand – aber ein Zähler,
-    // der das Löschen überlebt, könnte eine spätere Fassung fälschlich verwerfen.
     expect(t.standVon('a')).toBeUndefined();
-    expect(t.aktualisiert(termin('a', 2))).toBe(true);
+    // Wer wieder eingeladen wird, bekommt einen höheren Stand und wird
+    // angenommen.
+    expect(t.aktualisiert(termin('a', 10))).toBe(true);
+  });
+
+  it('lässt einen entfernten Termin nicht von einer späten Fassung beleben', () => {
+    const angekommen: number[] = [];
+    t.auf({ aktualisiert: (event) => angekommen.push(event.stand ?? -1) });
+    t.aktualisiert(termin('a', 9));
+    t.entfernt('a', 'geloescht');
+
+    // Ein Rundruf mit einem Stand, den wir schon kannten: Er gehört zu davor.
+    expect(t.aktualisiert(termin('a', 9))).toBe(false);
+    expect(t.aktualisiert(termin('a', 7))).toBe(false);
+    // Eine Antwort auf eine Anfrage, die VOR dem Entfernen losging – egal, was
+    // sie für einen Stand trägt.
+    expect(t.aktualisiert(termin('a', 12), { angefordertAm: Date.now() - 5 })).toBe(false);
+    expect(angekommen).toEqual([9]);
+
+    // Eine Anfrage danach (oder ein höherer Rundruf) belebt ihn wieder.
+    vi.advanceTimersByTime(10);
+    expect(t.aktualisiert(termin('a', 12), { angefordertAm: Date.now() })).toBe(true);
+    expect(t.aktualisiert(termin('a', 13))).toBe(true);
+  });
+
+  it('kennt der Trichter den Stand nicht, entscheidet allein der Zeitpunkt der Anfrage', () => {
+    t.entfernt('b', 'geloescht');
+    expect(t.aktualisiert(termin('b', 3), { angefordertAm: Date.now() - 1 })).toBe(false);
+    // Ein Rundruf ohne Anfrage wird angenommen: Er kam nach dem Entfernen.
+    expect(t.aktualisiert(termin('b', 4))).toBe(true);
+  });
+
+  it('der Grabstein steht nicht ewig', () => {
+    t.aktualisiert(termin('a', 9));
+    t.entfernt('a', 'geloescht');
+    vi.advanceTimersByTime(t.GRABSTEIN_MS + 1);
+    expect(t.aktualisiert(termin('a', 9))).toBe(true);
   });
 });
 
@@ -178,6 +218,25 @@ describe('Hinweis mit Termin-Kennung', () => {
     expect(byIdMock).not.toHaveBeenCalled();
   });
 
+  it('fragt nicht, wenn die volle Fassung VOR dem Hinweis kam und den Stand trägt', async () => {
+    // So ist die Reihenfolge am selben Server: erst die volle Fassung, ein bis
+    // drei Millisekunden später der Hinweis aus dem Bus.
+    t.aktualisiert(termin('a', 8));
+    await vi.advanceTimersByTimeAsync(3);
+    t.nachladen('a', 8);
+    await vi.advanceTimersByTimeAsync(t.HINWEIS_STREUUNG_MS + 1);
+    expect(byIdMock).not.toHaveBeenCalled();
+  });
+
+  it('fragt, wenn der Hinweis einen höheren Stand meldet, als wir kennen', async () => {
+    byIdMock.mockResolvedValue(termin('a', 9));
+    t.aktualisiert(termin('a', 8));
+    await vi.advanceTimersByTimeAsync(3);
+    t.nachladen('a', 9);
+    await vi.advanceTimersByTimeAsync(t.HINWEIS_STREUUNG_MS + 1);
+    expect(byIdMock).toHaveBeenCalledTimes(1);
+  });
+
   it('ein zweiter Hinweis nach dem Abruf holt wieder', async () => {
     byIdMock.mockResolvedValue(termin('a', 2));
     t.nachladen('a');
@@ -210,6 +269,119 @@ describe('Hinweis mit Termin-Kennung', () => {
     await vi.advanceTimersByTimeAsync(t.HINWEIS_STREUUNG_MS + 1);
 
     expect(gemeldet).toEqual([]);
+  });
+});
+
+describe('auffrischen und einmalPruefen', () => {
+  it('holt jeden Termin einmal, höchstens vier zugleich', async () => {
+    let offen = 0;
+    let spitze = 0;
+    byIdMock.mockImplementation(async (id: string) => {
+      offen += 1;
+      spitze = Math.max(spitze, offen);
+      await new Promise((fertig) => setTimeout(fertig, 50));
+      offen -= 1;
+      return termin(id, 1);
+    });
+    const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'a', 'b'];
+    t.auffrischen(ids);
+    await vi.advanceTimersByTimeAsync(t.HINWEIS_STREUUNG_MS + 1);
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(byIdMock).toHaveBeenCalledTimes(7);
+    expect(spitze).toBeLessThanOrEqual(4);
+  });
+
+  it('die Antwort läuft durch den Trichter, ein 404 heißt entfernt', async () => {
+    const { ApiError } = await import('./api.js');
+    byIdMock.mockImplementation(async (id: string) => {
+      if (id === 'weg') throw new (ApiError as unknown as new (s: number) => Error)(404);
+      return termin(id, 4);
+    });
+    const log: string[] = [];
+    t.auf({
+      aktualisiert: (event) => log.push(`neu ${event.id}`),
+      entfernt: (id) => log.push(`weg ${id}`),
+    });
+    t.auffrischen(['da', 'weg']);
+    await vi.advanceTimersByTimeAsync(t.HINWEIS_STREUUNG_MS + 1);
+    expect(log.sort()).toEqual(['neu da', 'weg weg']);
+  });
+
+  it('einmalPruefen prüft einen Termin nur einmal je Sitzung', async () => {
+    byIdMock.mockResolvedValue(termin('a', 1));
+    t.einmalPruefen(['a']);
+    await vi.advanceTimersByTimeAsync(t.HINWEIS_STREUUNG_MS + 1);
+    t.einmalPruefen(['a']);
+    await vi.advanceTimersByTimeAsync(t.HINWEIS_STREUUNG_MS + 1);
+    expect(byIdMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('nachholen nach einer Lücke', () => {
+  const zustand = (wert: string) => zustandHoerer.forEach((hoerer) => hoerer(wert));
+
+  it('ruft die Hörer nach offline → online, nicht beim ersten Verbinden', () => {
+    const geholt = vi.fn();
+    t.auf({ nachholen: geholt });
+    t.connectTerminEreignisse();
+
+    zustand('connecting');
+    zustand('online');
+    expect(geholt).not.toHaveBeenCalled();
+
+    zustand('offline');
+    zustand('connecting');
+    zustand('online');
+    expect(geholt).toHaveBeenCalledTimes(1);
+
+    // Ein weiteres „online“ ohne Abbruch dazwischen holt nichts.
+    zustand('online');
+    expect(geholt).toHaveBeenCalledTimes(1);
+  });
+
+  it('mehrere Anlässe kurz hintereinander zählen einmal', () => {
+    const geholt = vi.fn();
+    t.auf({ nachholen: geholt });
+    t.nachholen();
+    t.nachholen();
+    expect(geholt).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(5000);
+    t.nachholen();
+    expect(geholt).toHaveBeenCalledTimes(2);
+  });
+
+  it('holt auch nach, wenn die App lange im Hintergrund war', async () => {
+    // Die Testumgebung hat kein `document`: ein kleiner Ersatz, der die
+    // Sichtbarkeit und den Hörer festhält.
+    const hoerer = new Map<string, () => void>();
+    const dokument = {
+      visibilityState: 'visible',
+      addEventListener: (art: string, eintrag: () => void) => hoerer.set(art, eintrag),
+    };
+    vi.stubGlobal('document', dokument);
+    vi.resetModules();
+    const frisch = await import('./terminEreignisse.js');
+    const geholt = vi.fn();
+    frisch.auf({ nachholen: geholt });
+    frisch.connectTerminEreignisse();
+    const wechsel = (sicht: string) => {
+      dokument.visibilityState = sicht;
+      hoerer.get('visibilitychange')?.();
+    };
+
+    wechsel('hidden');
+    vi.advanceTimersByTime(frisch.HINTERGRUND_MS + 1000);
+    wechsel('visible');
+    expect(geholt).toHaveBeenCalledTimes(1);
+
+    // Ein kurzer Wechsel genügt nicht.
+    vi.advanceTimersByTime(5000);
+    wechsel('hidden');
+    vi.advanceTimersByTime(2000);
+    wechsel('visible');
+    expect(geholt).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
   });
 });
 

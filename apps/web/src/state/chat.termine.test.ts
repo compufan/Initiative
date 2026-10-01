@@ -14,6 +14,8 @@ import type { CalendarEventDto } from '@initiative/shared';
 
 const cacheMessagesMock = vi.fn();
 const listMock = vi.fn();
+const byIdMock = vi.fn();
+const cachedMock = vi.fn();
 const conversationsListMock = vi.fn();
 const handlers = new Map<string, (payload: never) => void>();
 
@@ -25,7 +27,7 @@ vi.mock('../lib/api.js', () => ({
   api: {
     messages: { list: (...args: unknown[]) => listMock(...args) },
     conversations: { list: (...args: unknown[]) => conversationsListMock(...args) },
-    calendar: { byId: vi.fn() },
+    calendar: { byId: (...args: unknown[]) => byIdMock(...args) },
   },
 }));
 
@@ -47,7 +49,7 @@ vi.mock('../lib/db.js', () => ({
   dropCachedMessage: vi.fn(),
   enqueueOutbox: vi.fn(),
   readCachedConversations: vi.fn().mockResolvedValue([]),
-  readCachedMessages: vi.fn().mockResolvedValue([]),
+  readCachedMessages: (...args: unknown[]) => cachedMock(...args),
   readOutbox: vi.fn().mockResolvedValue([]),
   removeCachedConversation: vi.fn(),
   removeOutbox: vi.fn(),
@@ -103,7 +105,9 @@ beforeEach(async () => {
   vi.resetModules();
   handlers.clear();
   cacheMessagesMock.mockReset();
-  listMock.mockReset();
+  listMock.mockReset().mockResolvedValue({ items: [], nextCursor: null });
+  byIdMock.mockReset();
+  cachedMock.mockReset().mockResolvedValue([]);
   conversationsListMock.mockReset().mockResolvedValue({ items: [] });
   zaehler = 0;
   chat = await import('./chat.js');
@@ -215,20 +219,30 @@ describe('Termin-Karten im Speicher', () => {
     expect(chat.useChat.getState().messages.c1).toBe(vorher);
   });
 
-  it('lädt einen Chat mit leerer Karte beim nächsten Öffnen vollständig neu, wenn der Termin auftaucht', () => {
-    chat.useChat.setState({
-      messages: { g: [karte('g', null)] },
-      loaded: { g: true },
+  /** Lässt die angestoßenen, nicht abgewarteten Ladevorgänge zu Ende laufen. */
+  const abwarten = () => new Promise((fertig) => setTimeout(fertig, 0));
+
+  it('lädt einen Chat mit leerer Karte gezielt neu, wenn der Termin auftaucht – er füllt sich auch bei offenem Chat', async () => {
+    const leer = karte('g', null);
+    chat.useChat.setState({ messages: { g: [leer] }, loaded: { g: true } });
+    // Der Server liefert dieselbe Karte jetzt gefüllt.
+    listMock.mockResolvedValue({
+      items: [{ ...(leer as object), metadata: { eventId: 't1' }, event: termin('t1', 1, 2) }],
+      nextCursor: null,
     });
 
-    // Der Termin gehört zu diesem Gruppenchat; wer eingeladen wird, sieht die
-    // bisher leere Karte erst nach einem Neuladen des Chats.
+    // Der Termin gehört zu diesem Gruppenchat; wer eingeladen wird, bekommt die
+    // bisher leere Karte gefüllt – ohne dass er den Chat erst verlassen muss.
     trichter.aktualisiert({ ...termin('t1', 1), conversationId: 'g' });
+    await abwarten();
 
-    expect(chat.useChat.getState().loaded.g).toBe(false);
+    expect(listMock).toHaveBeenCalledWith('g');
+    const liste = chat.useChat.getState().messages.g!;
+    expect(liste).toHaveLength(1);
+    expect(liste[0]!.event?.attendees).toHaveLength(2);
   });
 
-  it('auch wenn der Termin schon in einem Einzelchat steht, wird der Gruppenchat neu geladen', () => {
+  it('auch wenn der Termin schon in einem Einzelchat steht, wird der Gruppenchat neu geladen', async () => {
     // Beim Einladen kommt zuerst die Karte im Einzelchat, dann der Rundruf.
     chat.useChat.setState({
       messages: { g: [karte('g', null)], e: [karte('e', 't1', termin('t1', 1))] },
@@ -236,22 +250,53 @@ describe('Termin-Karten im Speicher', () => {
     });
 
     trichter.aktualisiert({ ...termin('t1', 2), conversationId: 'g' });
+    await abwarten();
 
-    expect(chat.useChat.getState().loaded.g).toBe(false);
+    expect(listMock).toHaveBeenCalledWith('g');
   });
 
-  it('steht die Karte des Termins im Gruppenchat selbst, stammt die leere von einem anderen', () => {
+  it('kennt der Speicher den Termin nirgends, werden alle geladenen Chats mit leerer Karte neu geladen', async () => {
+    chat.useChat.setState({
+      messages: { g1: [karte('g1', null)], g2: [karte('g2', null)], g3: [text('g3')] },
+      loaded: { g1: true, g2: true, g3: true },
+    });
+
+    // Der Termin steht in zwei Gruppenchats; welcher der erste ist, weiß der
+    // Speicher nicht – beide leeren Karten müssen sich füllen können.
+    trichter.aktualisiert({ ...termin('t1', 1), conversationId: 'g1' });
+    await abwarten();
+
+    expect(listMock).toHaveBeenCalledWith('g1');
+    expect(listMock).toHaveBeenCalledWith('g2');
+    expect(listMock).not.toHaveBeenCalledWith('g3');
+  });
+
+  it('lädt einen Chat wegen leerer Karten höchstens alle 30 Sekunden neu', async () => {
+    chat.useChat.setState({ messages: { g: [karte('g', null)] }, loaded: { g: true } });
+
+    trichter.aktualisiert({ ...termin('t1', 1), conversationId: 'g' });
+    await abwarten();
+    // Der Chat bleibt leer (der Server zeigt die Karte weiter ohne Termin).
+    chat.useChat.setState({ loaded: { g: true } });
+    trichter.aktualisiert({ ...termin('t1', 2), conversationId: 'g' });
+    await abwarten();
+
+    expect(listMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('steht die Karte des Termins im Gruppenchat selbst, stammt die leere von einem anderen', async () => {
     chat.useChat.setState({
       messages: { g: [karte('g', null), karte('g', 't1', termin('t1', 1))] },
       loaded: { g: true },
     });
 
     trichter.aktualisiert({ ...termin('t1', 2), conversationId: 'g' });
+    await abwarten();
 
-    expect(chat.useChat.getState().loaded.g).toBe(true);
+    expect(listMock).not.toHaveBeenCalled();
   });
 
-  it('eine gelöschte Karte zählt nicht als leere Karte', () => {
+  it('eine gelöschte Karte zählt nicht als leere Karte', async () => {
     const gelöscht = {
       ...(karte('g', null) as object),
       deletedAt: '2026-01-02T00:00:00Z',
@@ -259,8 +304,107 @@ describe('Termin-Karten im Speicher', () => {
     chat.useChat.setState({ messages: { g: [gelöscht] }, loaded: { g: true } });
 
     trichter.aktualisiert({ ...termin('t1', 1), conversationId: 'g' });
+    await abwarten();
 
-    expect(chat.useChat.getState().loaded.g).toBe(true);
+    expect(listMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('Zwischenspeicher und Lücken', () => {
+  it('führt Zwischenspeicher und Speicher ohne Doppelte zusammen', async () => {
+    const a = text('c');
+    const b = text('c');
+    // Der Speicher kennt `b` schon (Rundruf), der Zwischenspeicher beide.
+    chat.useChat.setState({ messages: { c: [b] }, loaded: {} });
+    cachedMock.mockResolvedValue([a, b]);
+    // Der Zustand, während die erste Seite noch unterwegs ist: React behält die
+    // Zeilen, die in diesem Augenblick doppelt stehen, auch danach.
+    let waehrendDesAbrufs: string[] = [];
+    listMock.mockImplementation(async () => {
+      waehrendDesAbrufs = chat.useChat.getState().messages.c!.map((message) => message.id);
+      return { items: [b], nextCursor: null };
+    });
+
+    await chat.useChat.getState().loadMessages('c');
+
+    const erwartet = [(a as { id: string }).id, (b as { id: string }).id];
+    expect(waehrendDesAbrufs).toEqual(erwartet);
+    expect(chat.useChat.getState().messages.c!.map((message) => message.id)).toEqual(erwartet);
+  });
+
+  it('prüft Karten hinter der ersten Seite einmal je Sitzung nach', async () => {
+    vi.useFakeTimers();
+    try {
+      const alt = termin('t1', 1, 1);
+      const hinten = karte('c', 't1', alt);
+      const vorn = karte('c', 't2', termin('t2', 1));
+      cachedMock.mockResolvedValue([hinten, vorn]);
+      // Nur `vorn` kommt frisch; `hinten` liegt hinter der ersten Seite.
+      listMock.mockResolvedValue({ items: [vorn], nextCursor: 'weiter' });
+      byIdMock.mockResolvedValue(termin('t1', 2, 2));
+
+      await chat.useChat.getState().loadMessages('c');
+      await vi.advanceTimersByTimeAsync(trichter.HINWEIS_STREUUNG_MS + 1);
+
+      // Die Karte hinter der ersten Seite zeigt jetzt den Stand vom Server.
+      expect(byIdMock).toHaveBeenCalledTimes(1);
+      expect(byIdMock).toHaveBeenCalledWith('t1');
+      const karteHinten = chat.useChat
+        .getState()
+        .messages.c!.find((message) => message.id === (hinten as { id: string }).id);
+      expect(karteHinten?.event?.stand).toBe(2);
+
+      // Beim nächsten Laden derselben Sitzung nicht noch einmal.
+      await chat.useChat.getState().loadMessages('c', { force: true });
+      await vi.advanceTimersByTimeAsync(trichter.HINWEIS_STREUUNG_MS + 1);
+      expect(byIdMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('holt nach einer Lücke der Verbindung jeden Termin im Speicher neu', async () => {
+    vi.useFakeTimers();
+    try {
+      chat.useChat.setState({
+        messages: {
+          g: [karte('g', 't1', termin('t1', 1, 1)), text('g')],
+          e: [karte('e', 't1', termin('t1', 1, 1)), karte('e', 't2', termin('t2', 4))],
+        },
+        loaded: { g: true, e: true },
+      });
+      byIdMock.mockImplementation(async (id: string) =>
+        id === 't1' ? termin('t1', 2, 2) : termin('t2', 4),
+      );
+
+      trichter.nachholen();
+      await vi.advanceTimersByTimeAsync(trichter.HINWEIS_STREUUNG_MS + 1);
+
+      // Jeder Termin einmal, nicht einmal je Karte.
+      expect(byIdMock).toHaveBeenCalledTimes(2);
+      const { messages } = chat.useChat.getState();
+      expect(messages.g![0]!.event?.stand).toBe(2);
+      expect(messages.e![0]!.event?.stand).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lädt nach der Lücke einen Chat neu, in dem eine Karte nichts zeigt', async () => {
+    vi.useFakeTimers();
+    try {
+      chat.useChat.setState({
+        messages: { g: [karte('g', null)] },
+        loaded: { g: true },
+      });
+
+      trichter.nachholen();
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(listMock).toHaveBeenCalledWith('g');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

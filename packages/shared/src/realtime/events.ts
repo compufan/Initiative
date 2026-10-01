@@ -89,6 +89,11 @@ export type ServerEvent =
         conversationId?: string;
         /** Bei einem zu grossen Termin-Rundruf: Welchen Termin es nachzuladen gilt. */
         eventId?: string;
+        /**
+         * Der `stand` der gekürzten Fassung. Wer diesen Stand (oder einen
+         * höheren) schon kennt, muss nichts nachladen.
+         */
+        stand?: number;
         scope: string;
       };
     }

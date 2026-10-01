@@ -168,7 +168,7 @@ impl Event {
     }
 
     pub fn sync_hint(scope: &str, conversation_id: Option<uuid::Uuid>) -> Self {
-        Self::sync_hint_fuer(scope, conversation_id, None)
+        Self::sync_hint_fuer(scope, conversation_id, None, None)
     }
 
     /// Wie `sync_hint`, mit der Kennung des Termins, um den es geht.
@@ -176,14 +176,22 @@ impl Event {
     /// Ein Termin-Rundruf trägt die Kennung nicht auf oberster Ebene; ohne sie
     /// wüsste der Client nach einem gekürzten Rundruf nicht, was er nachladen
     /// soll.
+    ///
+    /// Mit dem `stand` der Fassung, die gekürzt wurde: Geräte am selben Server
+    /// bekommen die volle Fassung zuerst und den Hinweis kurz danach; am Stand
+    /// erkennen sie, dass sie nichts mehr nachladen müssen.
     pub fn sync_hint_fuer(
         scope: &str,
         conversation_id: Option<uuid::Uuid>,
         event_id: Option<uuid::Uuid>,
+        stand: Option<i64>,
     ) -> Self {
         let mut payload = json!({ "scope": scope, "conversationId": conversation_id });
         if let (Some(event_id), Some(karte)) = (event_id, payload.as_object_mut()) {
             karte.insert("eventId".to_string(), json!(event_id));
+            if let Some(stand) = stand {
+                karte.insert("stand".to_string(), json!(stand));
+            }
         }
         Self::new("sync.hint", payload)
     }

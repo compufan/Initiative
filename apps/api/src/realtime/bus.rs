@@ -200,6 +200,11 @@ pub(super) fn stuecke(user_ids: &[Uuid], event: &Event) -> Vec<Stueck> {
         .or_else(|| kennung_in(&event.payload, &["message", "conversationId"]));
     let event_id = kennung_in(&event.payload, &["eventId"])
         .or_else(|| kennung_in(&event.payload, &["event", "id"]));
+    let stand = event
+        .payload
+        .get("event")
+        .and_then(|termin| termin.get("stand"))
+        .and_then(Value::as_i64);
 
     user_ids
         .chunks(EMPFAENGER_JE_STUECK)
@@ -219,7 +224,7 @@ pub(super) fn stuecke(user_ids: &[Uuid], event: &Event) -> Vec<Stueck> {
             }
             // Too large for NOTIFY – ask clients to refetch instead of
             // silently dropping the update.
-            let hint = Event::sync_hint_fuer(event.r#type, conversation_id, event_id);
+            let hint = Event::sync_hint_fuer(event.r#type, conversation_id, event_id, stand);
             Stueck {
                 user_ids: teil.to_vec(),
                 encoded: serde_json::to_string(&WireMessage {
@@ -311,7 +316,7 @@ mod tests {
         let termin = Uuid::now_v7();
         let event = Event::new(
             "event.updated",
-            json!({ "event": { "id": termin, "text": "x".repeat(9000) } }),
+            json!({ "event": { "id": termin, "stand": 7, "text": "x".repeat(9000) } }),
         );
         let stuecke = stuecke(&empfaenger(3), &event);
         assert_eq!(stuecke.len(), 1);
@@ -321,6 +326,9 @@ mod tests {
         assert_eq!(wire["type"], "sync.hint");
         assert_eq!(wire["payload"]["scope"], "event.updated");
         assert_eq!(wire["payload"]["eventId"], termin.to_string());
+        // Der Stand der gekürzten Fassung geht mit: Wer sie schon hat, lädt
+        // nichts nach.
+        assert_eq!(wire["payload"]["stand"], 7);
     }
 
     #[test]

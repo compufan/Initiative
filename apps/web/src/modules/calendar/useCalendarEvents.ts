@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CalendarEventDto } from '@initiative/shared';
 import { ApiError, api } from '../../lib/api.js';
-import { aktualisiert, auf, neuer, type EntferntGrund } from '../../lib/terminEreignisse.js';
+import {
+  aktualisiert,
+  auf,
+  auffrischen,
+  entferntVerwirft,
+  neuer,
+  type EntferntGrund,
+} from '../../lib/terminEreignisse.js';
 
 /** Legt die Fassung ein – eine ältere als die vorhandene verdrängt nichts. */
 function upsert(events: CalendarEventDto[], event: CalendarEventDto): CalendarEventDto[] {
@@ -72,8 +79,11 @@ export function useCalendarEvents(from: Date, to: Date): CalendarEventsResult {
         aktualisiert: (event) => setEvents((current) => upsert(current, event)),
         entfernt: (eventId) =>
           setEvents((current) => current.filter((item) => item.id !== eventId)),
+        // Rundrufe in einer Lücke der Verbindung kommen nie wieder: Die Liste
+        // wird neu geholt.
+        nachholen: () => void reload(),
       }),
-    [],
+    [reload],
   );
 
   // Die eigene Antwort läuft durch denselben Trichter wie der Rundruf – so
@@ -144,14 +154,18 @@ export function useLiveEvent(
     let cancelled = false;
     setLoading(true);
     setFailed(false);
+    const angefordertAm = Date.now();
     api.calendar
       .byId(eventId)
       .then((loaded) => {
         if (cancelled) return;
+        // Wurde der Termin entfernt, während die Antwort unterwegs war, zeigt sie
+        // ihn, wie er davor war – sie belebt ihn nicht wieder.
+        if (entferntVerwirft(loaded, angefordertAm)) return;
         // Durch den Trichter, damit auch die Karten und der Kalender sie
         // bekommen – und trotzdem hier anzeigen, falls er sie als ältere
         // verwirft: Diese Ansicht hat sonst gar keine.
-        aktualisiert(loaded);
+        aktualisiert(loaded, { angefordertAm });
         setEventRaw((current) =>
           current && current.id === loaded.id ? neuer(current, loaded) : loaded,
         );
@@ -181,6 +195,9 @@ export function useLiveEvent(
         setDeleted(true);
         setGrund(warum);
       },
+      // Nach einer Lücke der Verbindung: den Termin neu holen. Die Antwort
+      // läuft durch den Trichter und kommt über den Hörer oben hier an.
+      nachholen: () => auffrischen([eventId]),
     });
   }, [eventId]);
 
