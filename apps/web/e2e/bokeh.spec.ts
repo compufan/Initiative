@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 /**
- * Weichzeichnen ist nicht Bokeh.
+ * Weichzeichnen ist nicht Bokeh – hier der Regler „Bokeh“ (`bokeh`).
  *
  * Der Unterschied, den man auf einem Foto sofort sieht, ist EINER: Ein
  * Lichtpunkt im Unscharfen bleibt ein Licht. Ein Mittel über Anzeigewerte
@@ -12,7 +12,7 @@ import { expect, test } from '@playwright/test';
  *
  * Warum als Browser-Test und nicht in vitest: Der eine Weg ist ein
  * Schattierer. Ohne echte Grafikeinheit gibt es ihn nicht zu prüfen, und
- * `bokeh.test.ts` prüft nur die Prozessorseite.
+ * `unscharf.test.ts` prüft nur die Prozessorseite.
  */
 test('ein Lichtpunkt bleibt im Unscharfen ein Licht – auf beiden Wegen', async ({ page }) => {
   await page.goto('/');
@@ -46,13 +46,13 @@ test('ein Lichtpunkt bleibt im Unscharfen ein Licht – auf beiden Wegen', async
     for (const k of [0, 1, 2]) bild.data[mitte * 4 + k] = 255;
     qctx.putImageData(bild, 0, 0);
 
-    // Ein Bereich über das ganze Bild, volle Unschärfe: Jeder Bildpunkt
+    // Ein Bereich über das ganze Bild, volles Bokeh: Jeder Bildpunkt
     // zerstreut gleich weit, die Maske spielt hier keine Rolle.
     const feld = new Uint8Array(64 * 64).fill(255);
     const bereich = {
       id: 'ganz',
       maske: { raster: { breite: 64, hoehe: 64 }, feld, stand: 1 },
-      anpassung: { ...ton.NEUTRAL, unschaerfe: 1, bokeh: 0, kanal: 0 },
+      anpassung: { ...ton.NEUTRAL, unschaerfe: 0, bokeh: 1, kanal: 0 },
     };
 
     const hellstes = (weg: 'gpu' | 'cpu') => {
@@ -85,16 +85,19 @@ test('ein Lichtpunkt bleibt im Unscharfen ein Licht – auf beiden Wegen', async
   expect(ergebnis.c?.weg, 'der Rückfallweg wurde nicht genommen').toBe('leinwand');
 
   /*
-   * Die Schwelle steht bei 80, und sie trennt zwei Welten:
+   * Die Schwelle steht bei 140, und sie trennt drei Welten:
    *
-   *   Mittel über Anzeigewerte, Kasten          11
-   *   Mittel über Anzeigewerte, Scheibe + Glanz 24
-   *   lineares Licht, Scheibe (Grafikeinheit)  152
-   *   lineares Licht, Sechseck (Prozessor)     105
+   *   Mittel über Anzeigewerte, Kasten                      11
+   *   Scheibe aus 48 Zufallstupfen, lineares Licht (vorher)  152 / 105
+   *   Sechseck mit Verstärkung heller Stellen (jetzt)        174 / 174
    *
-   * Die beiden oberen Zeilen sind die Fassungen, die es vorher gab. Jede
-   * Rückkehr dorthin reisst diese Grenze um mehr als das Dreifache.
+   * Die ersten beiden Zeilen sind die Fassungen, die es vorher gab, und sie
+   * waren auf den beiden Wegen verschieden (Grafikeinheit 152, Prozessor 105).
+   * Jetzt rechnen beide dieselbe Scheibe: ein Licht bleibt ein Licht, mit
+   * einer Spitze, die der Anwender als Licht erkennt, und nicht als Schleier.
    */
-  expect(ergebnis.g?.max, 'Grafikeinheit: aus dem Licht wurde ein Schleier').toBeGreaterThan(80);
-  expect(ergebnis.c?.max, 'Prozessor: aus dem Licht wurde ein Schleier').toBeGreaterThan(80);
+  expect(ergebnis.g?.max, 'Grafikeinheit: aus dem Licht wurde ein Schleier').toBeGreaterThan(140);
+  expect(ergebnis.c?.max, 'Prozessor: aus dem Licht wurde ein Schleier').toBeGreaterThan(140);
+  // Und beide Wege zeigen dasselbe Licht, nicht zwei verschieden helle.
+  expect(Math.abs((ergebnis.g?.max ?? 0) - (ergebnis.c?.max ?? 0))).toBeLessThanOrEqual(2);
 });

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 /**
  * Örtliche Anpassungen – der Renderer.
@@ -7,6 +7,11 @@ import { expect, test } from '@playwright/test';
  * (TypeScript, geprüft), im Schattierer (GLSL) und im Rückfallweg über
  * Farbtabellen. Die erste ist die Wahrheit; diese Datei hält die beiden
  * anderen dagegen.
+ *
+ * Dazu kommen die zwei Unschärfen („Weichzeichnen“ und „Bokeh“, siehe weiter
+ * unten): Sie rechnen in einer eigenen Vorstufe (`unscharf.ts` für den
+ * Prozessor, `unscharfGpu.ts` für die Grafikeinheit, dieselben Durchgänge), und
+ * diese Datei hält ihre Abnahmezahlen fest.
  *
  * Kein Anmeldevorgang, keine Datenbank – nur eine Seite, auf der die Bündel
  * der App geladen sind.
@@ -432,10 +437,114 @@ test('ohne Bereiche verhält sich alles wie vorher', async ({ page }) => {
   expect(ergebnis.mitTon).toBe(false);
 });
 
-test('das Bokeh verwischt nur hinter der Maske und blutet nicht heraus', async ({ page }) => {
+/*
+ * ---------- Weichzeichnen und Bokeh ----------
+ *
+ * Zwei Regler je Bereich, eine Rechnung (`unscharf.ts` auf dem Prozessor,
+ * `unscharfGpu.ts` auf der Grafikeinheit). Vorher zeigte eine Netzmaske beim
+ * Weichzeichnen 92 % der Bildpunkte ausserhalb leicht verändert, holte 40 %
+ * Fremdfarbe in den Saum und machte aus einem Lichtpunkt eine körnige Scheibe.
+ * Die Tests hier halten die Abnahmezahlen des Entwurfs fest – an Szenen und
+ * Massen aus `hilfen/unscharfMessen.ts`, gerechnet vom echten Renderer.
+ *
+ * Abstände in Bildpunkten bei 1200 Punkten Kantenlänge; das Messgerät rechnet
+ * auf die Grösse der Szene um.
+ */
+
+/** Das Messgerät der Unschärfe: im Browser über den Entwicklungsserver geladen, wie `buehne.ts`. */
+const MESSGERAET = '/e2e/hilfen/unscharfMessen.ts';
+type Messgeraet = typeof import('./hilfen/unscharfMessen.js');
+
+/** Ein Fall der Netzmasken-Reihe, wie ihn der Test aus dem Browser zurückbekommt. */
+interface NetzFall {
+  name: string;
+  maskenBreite: number;
+  ab: import('./hilfen/unscharfMessen.js').MassAB;
+  kante: import('./hilfen/unscharfMessen.js').Kante;
+  original: import('./hilfen/unscharfMessen.js').Kante;
+  weg: string;
+}
+
+interface Messungen {
+  netz: NetzFall[];
+  lichter: Record<string, import('./hilfen/unscharfMessen.js').Lichter | null>;
+}
+
+/**
+ * Die Messreihe der Netzmasken, einmal je Prozess.
+ *
+ * Fünf Tests lesen verschiedene Zahlen daraus – jeder für sich zu rechnen
+ * kostete das Fünffache für nichts. Der erste, der sie braucht, rechnet sie auf
+ * SEINER Seite; die anderen bekommen dasselbe Ergebnis. Gerechnet wird bei 1200
+ * × 900 auf der Grafikeinheit (das ist, was die Schwellen des Entwurfs
+ * beschreiben); der Prozessorweg rechnet dasselbe Bild – das hält der
+ * Paritätstest weiter unten fest.
+ */
+let messungenZettel: Promise<Messungen> | null = null;
+function netzMessungen(page: Page): Promise<Messungen> {
+  messungenZettel ??= (async () => {
+    await page.goto('/');
+    return page.evaluate(async (pfad) => {
+      const m = (await import(/* @vite-ignore */ pfad)) as Messgeraet;
+      const faelle: [
+        string,
+        Partial<import('../src/modules/bild/doc.js').Bereichston>,
+        string,
+        string,
+      ][] = [
+        ['Bokeh, Grund, Netz', { bokeh: 1 }, 'netz', 'grund'],
+        ['Bokeh, Motiv, Netz', { bokeh: 1 }, 'netz', 'motiv'],
+        ['Bokeh, Grund, Video', { bokeh: 1 }, 'video', 'grund'],
+        ['Bokeh, Grund, breiter Saum', { bokeh: 1 }, 'netzbreit', 'grund'],
+        ['Weichzeichnen, Grund, Netz', { unschaerfe: 1 }, 'netz', 'grund'],
+        ['Weichzeichnen, Motiv, Netz', { unschaerfe: 1 }, 'netz', 'motiv'],
+        ['Weichzeichnen, Grund, Video', { unschaerfe: 1 }, 'video', 'grund'],
+        ['Weichzeichnen, Grund, breiter Saum', { unschaerfe: 1 }, 'netzbreit', 'grund'],
+        ['beide, Grund, Netz', { unschaerfe: 1, bokeh: 1 }, 'netz', 'grund'],
+        ['beide, Motiv, Netz', { unschaerfe: 0.6, bokeh: 0.6 }, 'netz', 'motiv'],
+      ];
+      const netz: NetzFall[] = [];
+      for (const [name, par, maske, ziel] of faelle) {
+        const f = m.fall({
+          art: 'A',
+          W: 1200,
+          maske: maske as import('./hilfen/unscharfMessen.js').MaskenArt,
+          ziel: ziel as 'motiv' | 'grund',
+          par,
+          wege: ['gpu'],
+        });
+        netz.push({
+          name,
+          maskenBreite: f.maskeKante.breite,
+          ab: f.weg.gpu.ab,
+          kante: f.weg.gpu.kante,
+          original: f.original,
+          weg: f.weg.gpu.gerechnet,
+        });
+      }
+      const lichter: Messungen['lichter'] = {};
+      for (const guete of ['hoch', 'mittel', 'niedrig'] as const) {
+        const f = m.fall({
+          art: 'B',
+          W: 1200,
+          maske: 'netz',
+          ziel: 'grund',
+          par: { bokeh: 1 },
+          wege: ['gpu'],
+          guete,
+        });
+        lichter[guete] = f.weg.gpu.lichter;
+      }
+      return { netz, lichter };
+    }, MESSGERAET);
+  })();
+  return messungenZettel;
+}
+
+test('Weichzeichnen und Bokeh bleiben in der Maske und holen nichts von draussen herein', async ({
+  page,
+}) => {
   /*
-   * Stufe K: Tiefenschärfe auf derselben Maske.
-   *
    * Das Testbild trägt SENKRECHTE STREIFEN über die ganze Fläche – ein
    * einfarbiger Hintergrund könnte Unschärfe gar nicht zeigen. Gemessen wird
    * die Schwankung innerhalb einer Zeile: Streifen haben eine hohe,
@@ -444,85 +553,38 @@ test('das Bokeh verwischt nur hinter der Maske und blutet nicht heraus', async (
    * Zwei Eigenschaften, und die zweite ist die schwerere:
    *
    * 1. Wo die Maske greift, verschwinden die Streifen.
-   * 2. Wo sie NICHT greift, bleibt alles Bildpunkt für Bildpunkt, wie es war.
-   *    Das ist der Heiligenschein, den ein Porträtmodus bekommt, wenn er die
-   *    Tupfen nicht mit der Maske gewichtet: Die Farbe des scharfen Motivs
-   *    blutet in den weichen Hintergrund und legt einen Saum um die Person.
+   * 2. Wo sie NICHT greift, bleibt jedes Byte, wie es war – und was im
+   *    Bereich liegt, mischt sich nicht mit dem, was daneben liegt. Das ist
+   *    der Heiligenschein, den ein Porträtmodus bekommt, wenn er die Farbe des
+   *    scharfen Motivs in den weichen Hintergrund blutet.
+   *
+   * Die beiden Hälften liegen bei GANZ verschiedenen Helligkeiten: links dunkel
+   * (0/90), rechts hell (165/255) – gleicher Hub, ganz verschiedene
+   * Mittelwerte. Das ist Bedingung, nicht Zierde: Sähen beide Hälften gleich
+   * aus, könnte man nicht messen, ob Farbe von links nach rechts blutet.
+   *
+   * Die Maske ist eine Silhouette (`reinheit` 0), wie die eines Netzes: Nur
+   * dort zählt ein Bildpunkt als Quelle, wo die Maske sicher greift.
    */
   await page.goto('/');
-  const ergebnis = await page.evaluate(async () => {
-    const ladeTon = '/src/modules/bild/ton.ts';
-    const ladeGpu = '/src/modules/bild/tonGpu.ts';
-    const ton = (await import(
-      /* @vite-ignore */ ladeTon
-    )) as typeof import('../src/modules/bild/ton.js');
-    const gpu = (await import(
-      /* @vite-ignore */ ladeGpu
-    )) as typeof import('../src/modules/bild/tonGpu.js');
-
+  const ergebnis = await page.evaluate(async (pfad) => {
+    const m = (await import(/* @vite-ignore */ pfad)) as Messgeraet;
     const kante = 256;
-    const quelle = document.createElement('canvas');
-    quelle.width = kante;
-    quelle.height = kante;
-    const qctx = quelle.getContext('2d');
-    if (!qctx) return { fehler: 'keine Leinwand' };
-    const bild = qctx.createImageData(kante, kante);
+    const daten = new Uint8ClampedArray(kante * kante * 4);
     for (let y = 0; y < kante; y += 1)
       for (let x = 0; x < kante; x += 1) {
-        /*
-         * Streifen mit Periode 6 – gut sichtbar für einen Radius von 5. Und
-         * die beiden Hälften liegen bei GANZ verschiedenen Helligkeiten:
-         * links dunkel (0/90), rechts hell (165/255) – gleicher Hub, ganz
-         * verschiedene Mittelwerte.
-         *
-         * Das ist Bedingung, nicht Zierde. Sähen beide Hälften gleich aus,
-         * könnte man nicht messen, ob Farbe von links nach rechts blutet –
-         * und genau das ist der Heiligenschein, den die Gewichtung der Tupfen
-         * verhindert. Meine erste Fassung dieses Tests hatte überall dieselben
-         * Streifen und liess die Mutation durch.
-         */
         const hell = Math.floor(x / 3) % 2 === 0;
-        const links = x < kante / 2;
-        const wert = links ? (hell ? 0 : 90) : hell ? 165 : 255;
-        const at = (y * kante + x) * 4;
-        bild.data[at] = wert;
-        bild.data[at + 1] = wert;
-        bild.data[at + 2] = wert;
-        bild.data[at + 3] = 255;
+        const wert = x < kante / 2 ? (hell ? 0 : 90) : hell ? 165 : 255;
+        daten.set([wert, wert, wert, 255], (y * kante + x) * 4);
       }
-    qctx.putImageData(bild, 0, 0);
 
-    // Die Maske deckt GENAU die rechte Hälfte.
+    // Die Maske deckt GENAU die rechte Hälfte, auf einem gröberen Raster.
     const rb = 128;
     const feld = new Uint8Array(rb * rb);
     for (let y = 0; y < rb; y += 1)
       for (let x = 0; x < rb; x += 1) feld[y * rb + x] = x >= rb / 2 ? 255 : 0;
 
-    const szene = {
-      bereiche: [
-        {
-          id: 'weich',
-          maske: { raster: { breite: rb, hoehe: rb, faktor: rb / kante }, feld, stand: 1 },
-          anpassung: { ...ton.FARB_NEUTRAL, unschaerfe: 1, bokeh: 0 },
-        },
-      ],
-      schluessel: 'bokeh',
-    };
-
-    const lesen = (flaeche: CanvasImageSource) => {
-      const z = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
-      if (!z) return null;
-      z.canvas.width = kante;
-      z.canvas.height = kante;
-      z.drawImage(flaeche, 0, 0);
-      return z.getImageData(0, 0, kante, kante).data;
-    };
-
-    const ohne = lesen(quelle);
-    const mit = lesen(gpu.bildRechnen(quelle, kante, kante, ton.NEUTRAL, szene));
-    if (!ohne || !mit) return { fehler: 'keine Leinwand' };
-
-    /** Die mittlere Schwankung zwischen Nachbarn in einem Streifen. */
+    /** Die mittlere Schwankung zwischen Nachbarn in einer Zeile. */
     const schwankung = (d: Uint8ClampedArray, x0: number, x1: number) => {
       let summe = 0;
       let n = 0;
@@ -531,17 +593,8 @@ test('das Bokeh verwischt nur hinter der Maske und blutet nicht heraus', async (
         summe += Math.abs(d[(y * kante + x) * 4] - d[(y * kante + x + 1) * 4]);
         n += 1;
       }
-      return n > 0 ? summe / n : -1;
+      return summe / n;
     };
-
-    // Wieviele Bildpunkte links der Maske haben sich ueberhaupt geaendert?
-    let linksVeraendert = 0;
-    for (let y = 0; y < kante; y += 1)
-      for (let x = 0; x < kante / 2 - 8; x += 1) {
-        const at = (y * kante + x) * 4;
-        if (Math.abs(mit[at] - ohne[at]) > 2) linksVeraendert += 1;
-      }
-
     /** Der Mittelwert eines senkrechten Bandes. */
     const mittel = (d: Uint8ClampedArray, x0: number, x1: number) => {
       let summe = 0;
@@ -551,286 +604,400 @@ test('das Bokeh verwischt nur hinter der Maske und blutet nicht heraus', async (
           summe += d[(y * kante + x) * 4];
           n += 1;
         }
-      return n > 0 ? summe / n : -1;
+      return summe / n;
     };
 
-    return {
-      weg: gpu.letzterWeg,
-      // Das Band rechts DIREKT an der Grenze – dorthin blutet es, wenn es
-      // blutet. Der Radius ist 5, also reicht die Scheibe 5 Punkte weit.
-      randVorher: mittel(ohne, kante / 2, kante / 2 + 6),
-      randNachher: mittel(mit, kante / 2, kante / 2 + 6),
-      linksVorher: schwankung(ohne, 8, kante / 2 - 8),
-      linksNachher: schwankung(mit, 8, kante / 2 - 8),
-      rechtsVorher: schwankung(ohne, kante / 2 + 8, kante - 8),
-      rechtsNachher: schwankung(mit, kante / 2 + 8, kante - 8),
-      linksVeraendert,
+    const varianten = {
+      Bokeh: { bokeh: 1 },
+      Weichzeichnen: { unschaerfe: 1 },
+      beide: { bokeh: 1, unschaerfe: 1 },
     };
-  });
+    const aus: Record<
+      string,
+      {
+        weg: string;
+        links: number;
+        rechtsVorher: number;
+        rechtsNachher: number;
+        randVorher: number;
+        randNachher: number;
+        linksVeraendert: number;
+      }
+    > = {};
+    for (const [name, par] of Object.entries(varianten)) {
+      for (const weg of ['gpu', 'cpu'] as const) {
+        const szene = m.handSzene(feld, kante, kante, par, { reinheit: 0, rb, rh: rb });
+        const r = m.rendern(daten, kante, kante, szene, weg);
+        // Links, bis zum letzten Bildpunkt vor der Grenze: kein Byte darf sich ändern.
+        let linksVeraendert = 0;
+        for (let y = 0; y < kante; y += 1)
+          for (let x = 0; x < kante / 2; x += 1)
+            for (let k = 0; k < 3; k += 1) {
+              const at = (y * kante + x) * 4 + k;
+              if (r.daten[at] !== daten[at]) linksVeraendert += 1;
+            }
+        aus[`${name} (${weg})`] = {
+          weg: r.weg,
+          links: schwankung(r.daten, 8, kante / 2 - 8),
+          rechtsVorher: schwankung(daten, kante / 2 + 8, kante - 8),
+          rechtsNachher: schwankung(r.daten, kante / 2 + 8, kante - 8),
+          // Das Band DIREKT rechts der Grenze – dorthin blutet es, wenn es blutet.
+          randVorher: mittel(daten, kante / 2, kante / 2 + 6),
+          randNachher: mittel(r.daten, kante / 2, kante / 2 + 6),
+          linksVeraendert,
+        };
+      }
+    }
+    return { aus, linksVorher: schwankung(daten, 8, kante / 2 - 8) };
+  }, MESSGERAET);
 
-  expect(ergebnis.fehler).toBeUndefined();
-  expect(ergebnis.weg).toBe('gpu');
-
-  /*
-   * Beide Hälften tragen vorher gleich harte Streifen. Bei Streifen der
-   * Breite 3 und einem Hub von 90 ist der Abstand zweier Nachbarn zweimal
-   * null und einmal 90, im Mittel also 30.
-   */
+  // Beide Hälften tragen vorher gleich harte Streifen: Bei Streifen der Breite
+  // 3 und einem Hub von 90 ist der Abstand zweier Nachbarn zweimal null und
+  // einmal 90, im Mittel also 30.
   expect(ergebnis.linksVorher).toBeGreaterThan(25);
-  expect(ergebnis.rechtsVorher).toBeGreaterThan(25);
-
-  // 1. Rechts sind sie fort.
-  expect(ergebnis.rechtsNachher).toBeLessThan(ergebnis.rechtsVorher! / 4);
-
-  /*
-   * Das Band direkt rechts der Grenze verwischt nur mit den Bildpunkten
-   * SEINER EIGENEN Seite.
-   *
-   * Nachgemessen: Es wird dabei heller, von 210 auf 225. Das ist kein
-   * Zufall, sondern das Aufblühen der Lichter (`GLANZ`) unter lauter hellen
-   * Nachbarn – so sieht eine Zerstreuungsscheibe aus.
-   *
-   * Ohne die Gewichtung der Tupfen mischt sich die dunkle linke Hälfte ein
-   * und verwässert genau das: gemessen 211,9, also praktisch unverändert.
-   * Das ist der Heiligenschein – hier als Ausbleiben des Blühens sichtbar,
-   * im echten Bild als Saum um das Motiv.
-   *
-   * Meine erste Erwartung war „bleibt gleich“, und sie war verkehrt herum.
-   */
-  expect(ergebnis.randNachher! - ergebnis.randVorher!).toBeGreaterThan(10);
-
-  // 2. Links stehen sie unangetastet – und zwar Bildpunkt für Bildpunkt.
-  expect(ergebnis.linksNachher).toBeCloseTo(ergebnis.linksVorher!, 0);
-  expect(ergebnis.linksVeraendert, 'die Unschärfe blutet in die scharfe Hälfte').toBe(0);
+  expect(Object.keys(ergebnis.aus)).toHaveLength(6);
+  for (const [name, e] of Object.entries(ergebnis.aus)) {
+    expect(e.weg, `${name}: falscher Weg`).toBe(name.endsWith('(gpu)') ? 'gpu' : 'leinwand');
+    expect(e.rechtsVorher).toBeGreaterThan(25);
+    // 1. Rechts sind die Streifen fort.
+    expect(e.rechtsNachher, `${name}: die Streifen im Bereich sind noch da`).toBeLessThan(
+      e.rechtsVorher / 4,
+    );
+    /*
+     * Das Band direkt rechts der Grenze verwischt nur mit den Bildpunkten
+     * SEINER EIGENEN Seite. Mischte sich die dunkle linke Hälfte ein
+     * (Mittel 45), fiele es von 210 auf etwa 150; hier wird es nicht dunkler –
+     * bei Bokeh sogar heller, denn die hellen Streifen wiegen schwerer.
+     */
+    expect(e.randNachher, `${name}: Farbe von links ist hereingeblutet`).toBeGreaterThan(
+      e.randVorher - 2,
+    );
+    // 2. Links stehen sie unangetastet – Byte für Byte, bis an die Grenze.
+    expect(e.links).toBeCloseTo(ergebnis.linksVorher, 5);
+    expect(e.linksVeraendert, `${name}: die Unschärfe blutet in die scharfe Hälfte`).toBe(0);
+  }
 });
 
-test('die Zerstreuung ist eine Scheibe und keine Glocke', async ({ page }) => {
+test('die Unschärfe sitzt richtig herum – oben ist oben', async ({ page }) => {
   /*
-   * Woran man Bokeh erkennt: Ein Lichtpunkt wird zu einem KREIS mit
-   * gleichmaessiger Helligkeit, nicht zu einem verwaschenen Fleck, der zur
-   * Mitte hin heller wird. Das ist der Unterschied zwischen einer Linse und
-   * einem Weichzeichner.
+   * Dieselbe Falle wie beim Atlas der Farbbereiche, nur dass hier zwei Räume
+   * im Spiel sind: Das Original liegt im Texturraum (beim Hochladen
+   * gespiegelt), die Arbeitstexturen und das Zwischenbild im Bildraum. Wer
+   * eine der Drehungen zwischen ihnen vergisst, bekommt Unschärfe an der
+   * falschen Hälfte – ausgerechnet bei einer Maske, die nur OBEN trägt.
    *
-   * Dafuer sorgt eine einzige Zeile: `r = sqrt(t)` bei der Verteilung der
-   * Tupfen. Die Wurzel legt die Tupfen flaechengleich auf die Scheibe; ohne
-   * sie haeufen sie sich in der Mitte, und aus der Scheibe wird eine Glocke.
-   *
-   * Gemessen wird deshalb das Verhaeltnis KERN zu SCHEIBE. Beide Fassungen
-   * erzeugen naemlich einen aehnlich grossen und aehnlich hellen Fleck – der
-   * Unterschied steckt ausschliesslich in seinem Querschnitt:
-   *
-   *            Mitte   r=4   r=8   r=10  r=12
-   *   richtig    23     20    19     10    0     flach, dann Kante
-   *   ohne sqrt 100     24    14      6    0     Spitze, dann Ausklang
-   *
-   * Ein frueherer Anlauf mass nur Scheibe gegen Rand und blieb deshalb gruen,
-   * obwohl die Wurzel fehlte: an dieser Stelle unterscheiden sich die beiden
-   * Fassungen kaum. Gemessen wird jetzt dort, wo der Unterschied sitzt.
-   *
-   * Gemittelt wird ueber ganze Ringe und nicht ueber einzelne Punkte, weil
-   * jeder Bildpunkt seine eigene Zufallsdrehung bekommt.
+   * Waagerechte Streifen, damit eine verdrehte Zeilenfolge sichtbar wird, und
+   * ein Raster, das nicht durch vier teilbar ist.
    */
   await page.goto('/');
-  const ergebnis = await page.evaluate(async () => {
-    const ladeTon = '/src/modules/bild/ton.ts';
-    const ladeGpu = '/src/modules/bild/tonGpu.ts';
-    const ton = (await import(
-      /* @vite-ignore */ ladeTon
-    )) as typeof import('../src/modules/bild/ton.js');
-    const gpu = (await import(
-      /* @vite-ignore */ ladeGpu
-    )) as typeof import('../src/modules/bild/tonGpu.js');
+  const ergebnis = await page.evaluate(async (pfad) => {
+    const m = (await import(/* @vite-ignore */ pfad)) as Messgeraet;
+    const kante = 192;
+    const daten = new Uint8ClampedArray(kante * kante * 4);
+    for (let y = 0; y < kante; y += 1)
+      for (let x = 0; x < kante; x += 1) {
+        const wert = Math.floor(y / 3) % 2 === 0 ? 30 : 220;
+        daten.set([wert, wert, wert, 255], (y * kante + x) * 4);
+      }
+    const rb = 33;
+    const feld = new Uint8Array(rb * rb);
+    for (let y = 0; y < rb; y += 1)
+      for (let x = 0; x < rb; x += 1) feld[y * rb + x] = y < rb / 2 ? 255 : 0;
 
-    // Ein einzelner heller Punkt auf schwarzem Grund.
-    const kante = 512;
-    const quelle = document.createElement('canvas');
-    quelle.width = kante;
-    quelle.height = kante;
-    const qctx = quelle.getContext('2d');
-    if (!qctx) return { fehler: 'keine Leinwand' };
-    qctx.fillStyle = '#000000';
-    qctx.fillRect(0, 0, kante, kante);
-    qctx.fillStyle = '#ffffff';
-    qctx.fillRect(kante / 2 - 1, kante / 2 - 1, 3, 3);
-
-    // Die Maske deckt alles – der ganze Punkt soll zerstreut werden.
-    const rb = 64;
-    const feld = new Uint8Array(rb * rb).fill(255);
-    const szene = {
-      bereiche: [
-        {
-          id: 'alles',
-          maske: { raster: { breite: rb, hoehe: rb, faktor: rb / kante }, feld, stand: 1 },
-          anpassung: { ...ton.FARB_NEUTRAL, unschaerfe: 1, bokeh: 0 },
-        },
-      ],
-      schluessel: 'scheibe',
-    };
-
-    const flaeche = gpu.bildRechnen(quelle, kante, kante, ton.NEUTRAL, szene);
-    const z = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
-    if (!z) return { fehler: 'keine Leinwand' };
-    z.canvas.width = kante;
-    z.canvas.height = kante;
-    z.drawImage(flaeche as CanvasImageSource, 0, 0);
-    const d = z.getImageData(0, 0, kante, kante).data;
-
-    /** Mittlere Helligkeit aller Bildpunkte im Abstandsband [von, bis]. */
-    const band = (von: number, bis: number) => {
-      const m = kante / 2;
+    const schwankung = (d: Uint8ClampedArray, y0: number, y1: number) => {
       let summe = 0;
       let n = 0;
-      for (let y = Math.floor(m - bis) - 1; y <= Math.ceil(m + bis) + 1; y += 1) {
-        for (let x = Math.floor(m - bis) - 1; x <= Math.ceil(m + bis) + 1; x += 1) {
-          if (x < 0 || y < 0 || x >= kante || y >= kante) continue;
-          const abstand = Math.hypot(x - m, y - m);
-          if (abstand < von || abstand > bis) continue;
-          summe += d[(y * kante + x) * 4];
-          n += 1;
-        }
+      const x = kante / 2;
+      for (let y = y0; y < y1 - 1; y += 1) {
+        summe += Math.abs(d[(y * kante + x) * 4] - d[((y + 1) * kante + x) * 4]);
+        n += 1;
       }
-      return n > 0 ? summe / n : -1;
+      return summe / n;
     };
 
-    // Der Radius ist `unschaerfe · 0,02 · kante` = 10 Punkte.
-    return {
-      weg: gpu.letzterWeg,
-      kern: band(0, 2.5),
-      scheibe: band(6, 9),
-      draussen: band(12, 15),
-    };
-  });
+    const aus: Record<string, { oben: number; vorher: number; untenVeraendert: number }> = {};
+    for (const [name, par] of Object.entries({
+      Bokeh: { bokeh: 1 },
+      Weichzeichnen: { unschaerfe: 1 },
+    })) {
+      for (const weg of ['gpu', 'cpu'] as const) {
+        const szene = m.handSzene(feld, kante, kante, par, { reinheit: 0, rb, rh: rb });
+        const r = m.rendern(daten, kante, kante, szene, weg);
+        let untenVeraendert = 0;
+        for (let y = 120; y < kante; y += 1)
+          for (let x = 0; x < kante; x += 1)
+            for (let k = 0; k < 3; k += 1) {
+              const at = (y * kante + x) * 4 + k;
+              if (r.daten[at] !== daten[at]) untenVeraendert += 1;
+            }
+        aus[`${name} (${weg})`] = {
+          oben: schwankung(r.daten, 10, 80),
+          vorher: schwankung(daten, 10, 80),
+          untenVeraendert,
+        };
+      }
+    }
+    return aus;
+  }, MESSGERAET);
 
-  expect(ergebnis.fehler).toBeUndefined();
-  expect(ergebnis.weg).toBe('gpu');
-  // Es gibt ueberhaupt einen Fleck.
-  expect(ergebnis.scheibe).toBeGreaterThan(5);
-  // Die Mitte ragt nicht heraus: Scheibe, keine Glocke.
-  // Gemessen: richtig 1,2 – ohne Wurzel 5,3.
-  expect(ergebnis.kern).toBeLessThan(ergebnis.scheibe! * 2);
-  // Und die Scheibe hat eine Kante.
-  expect(ergebnis.draussen).toBeLessThan(ergebnis.scheibe! * 0.15);
+  expect(Object.keys(ergebnis)).toHaveLength(4);
+  for (const [name, e] of Object.entries(ergebnis)) {
+    expect(e.vorher).toBeGreaterThan(25);
+    expect(e.oben, `${name}: oben sind die Streifen noch da`).toBeLessThan(e.vorher / 3);
+    expect(e.untenVeraendert, `${name}: unten hat sich etwas verändert`).toBe(0);
+  }
 });
 
-test('die Maske bestimmt die Grösse der Zerstreuung, nicht ihre Durchsichtigkeit', async ({
+test('ausserhalb einer Netzmaske bleibt jedes Byte, und die Wirkung endet an der Kante', async ({
+  page,
+}) => {
+  /*
+   * Die erste Beschwerde: „Weichzeichnen geht noch über die Kanten der Maske
+   * hinaus.“ Gemessen am Freistellnetz (Staub 0 … 12 ausserhalb, Saum von 11
+   * bis 29 Punkten, auch als verfolgte Videomaske): Vorher änderten sich 67 bis
+   * 96 % aller Bildpunkte mit Maske ≤ 15, und die Wirkung reichte über 64
+   * Punkte hinaus.
+   *
+   * Zwei Dinge werden gehalten, beide an jedem Fall der Reihe:
+   *
+   * - Kein einziger Bildpunkt mit Maske ≤ 15/255 ändert sich (K1). Nicht
+   *   „kaum“ – kein Byte.
+   * - Die Wirkung reicht nur wenig über die Kante hinaus (K2): bei einem Saum
+   *   bis 12 Punkte höchstens 6; bei einem breiten Saum (wie ihn „U²-Net“
+   *   liefert) beim Bokeh höchstens 8, beim Weichzeichnen 16. Das ist die
+   *   Breite des Saums selbst plus ein Gauss, kein Hof.
+   */
+  const { netz } = await netzMessungen(page);
+  expect(netz).toHaveLength(10);
+  for (const f of netz) {
+    expect(f.weg, `${f.name}: es hat nicht die Grafikeinheit gerechnet`).toBe('gpu');
+    expect(f.ab.anzahl15, `${f.name}: die Messung hat Bildpunkte`).toBeGreaterThan(40_000);
+    expect(f.ab.geaendert15, `${f.name}: Bildpunkte mit Maske ≤ 15 verändert`).toBe(0);
+    expect(f.ab.geaendert0, `${f.name}: Bildpunkte mit Maske 0 verändert`).toBe(0);
+    const schmal = f.maskenBreite <= 12.5;
+    const grenze = schmal ? 6 : f.name.startsWith('Bokeh') ? 8 : 16;
+    expect(f.ab.reichweite, `${f.name}: Reichweite ausserhalb`).toBeLessThanOrEqual(grenze);
+    expect(f.ab.fern, `${f.name}: mittlere Abweichung ab 8 Punkten Abstand`).toBeLessThan(0.1);
+  }
+});
+
+test('im Saum kommt keine Farbe von draussen herein', async ({ page }) => {
+  /*
+   * Der Saum einer Netzmaske ist eine Mischfarbe aus Motiv und Grund. Wer ihn
+   * mitmittelt, holt den Hof herein: Vorher kam 26 bis 53 % Farbe des
+   * Gegenstücks direkt an der Kante an, auf der Grafikeinheit wie auf dem
+   * Prozessor.
+   *
+   * Gemessen wird der Anteil der Farbe des GEGENSTÜCKS (aus der Chromazität
+   * entmischt, abzüglich dessen, was tief im Bereich ohnehin dasteht) bei 0–2,
+   * 2–4 und 4–8 Punkten Abstand zur Kante – im Grundfall (Porträtmodus: der
+   * Grund wird unscharf, das Motiv bleibt) wie im Motivfall (das Motiv wird
+   * unscharf, rotes Karo und grüner Grund).
+   */
+  const { netz } = await netzMessungen(page);
+  for (const f of netz) {
+    const [kante, nah, fern] = f.ab.fremd;
+    expect(kante, `${f.name}: Fremdfarbe bei 0–2 Punkten`).toBeLessThanOrEqual(0.2);
+    expect(nah, `${f.name}: Fremdfarbe bei 2–4 Punkten`).toBeLessThanOrEqual(0.05);
+    expect(fern, `${f.name}: Fremdfarbe bei 4–8 Punkten`).toBeLessThanOrEqual(0.03);
+  }
+});
+
+test('die Kante bleibt schmal und scharf', async ({ page }) => {
+  /*
+   * Eine Kante, die durch die Unschärfe breiter wird, ist ein Halo. Gemessen
+   * an einem Profil quer zur Kopfkante, über 51 Randpunkte gemittelt:
+   *
+   * - Breite von 10 auf 90 % (K4): höchstens 4,5 Punkte bei einer Maske bis 12
+   *   Punkten Saum; höchstens 0,3 × die Maskenbreite bei einem breiten Saum.
+   *   Vorher 14 gegen 11, beim breiten Saum 18 gegen 29.
+   * - Kontrast bei ±4 Punkten (K5): 0,90 bei schmalem, 0,70 bei breitem Saum;
+   *   die Steilheit nicht unter der Hälfte des Originals; die 50-%-Kreuzung
+   *   nicht um mehr als 1,5 Punkte verschoben (das Motiv wird nicht grösser).
+   */
+  const { netz } = await netzMessungen(page);
+  for (const f of netz) {
+    const schmal = f.maskenBreite <= 12.5;
+    expect(f.kante.breite, `${f.name}: Kantenbreite`).toBeLessThanOrEqual(
+      schmal ? 4.5 : 0.3 * f.maskenBreite,
+    );
+    expect(f.kante.kontrast, `${f.name}: Kontrast bei ±4 Punkten`).toBeGreaterThanOrEqual(
+      schmal ? 0.9 : 0.7,
+    );
+    expect(f.kante.steilheit, `${f.name}: Steilheit`).toBeGreaterThanOrEqual(
+      0.5 * f.original.steilheit,
+    );
+    expect(Math.abs(f.kante.versatz), `${f.name}: Kante verschoben`).toBeLessThanOrEqual(1.5);
+  }
+});
+
+test('Lichter werden zu Scheiben – flach, mit Kante, ohne Körnung', async ({ page }) => {
+  /*
+   * Woran man Bokeh erkennt: Ein Lichtpunkt wird zu einem Kreis mit
+   * gleichmässiger Helligkeit, nicht zu einem verwaschenen Fleck. Vorher
+   * rechnete der Schattierer 48 Zufallstupfen je Bildpunkt: Bei einem 2,6
+   * Punkte kleinen Licht traf im Mittel nur ein Tupfen, die Scheibe war ein
+   * körniger Fleck (Streuung 0,61), und ohne Grafikeinheit kam etwas ganz
+   * anderes heraus.
+   *
+   * Gemessen an acht Lichtpunkten auf dunklem Grund (Radius 24, Netzmaske):
+   *
+   * - das Innere der Scheibe bleibt hell (≥ 140 von 255; vorher 90) – ein
+   *   Licht bleibt ein Licht, kein grauer Schleier;
+   * - Rand zu Innen ≥ 0,9: eine Scheibe hat eine Kante;
+   * - Mitte zu Rand < 2: keine Glocke;
+   * - Aussen zu Innen höchstens 0,25 – in den kleineren Güten (grösserer
+   *   Arbeitsmassstab, weicherer Rand) 0,35 und 0,55;
+   * - Streuung im Inneren ≤ 0,15: kein Korn.
+   */
+  const { lichter } = await netzMessungen(page);
+  const aussen = { hoch: 0.25, mittel: 0.35, niedrig: 0.55 } as const;
+  for (const guete of ['hoch', 'mittel', 'niedrig'] as const) {
+    const l = lichter[guete];
+    expect(l, `${guete}: keine Lichter gemessen`).not.toBeNull();
+    if (!l) continue;
+    expect(l.spitze, `${guete}: Spitze`).toBeGreaterThanOrEqual(140);
+    expect(l.innen, `${guete}: Inneres`).toBeGreaterThanOrEqual(140);
+    expect(l.randZuInnen, `${guete}: Rand zu Innen`).toBeGreaterThanOrEqual(0.9);
+    expect(l.mitteZuRand, `${guete}: Mitte zu Rand`).toBeLessThan(2);
+    expect(l.aussenZuInnen, `${guete}: Aussen zu Innen`).toBeLessThanOrEqual(aussen[guete]);
+    expect(l.streuung, `${guete}: Streuung im Inneren`).toBeLessThanOrEqual(0.15);
+  }
+});
+
+test('der Radius der Scheibe folgt der Maske – Grösse, nicht Durchsichtigkeit', async ({
   page,
 }) => {
   /*
    * Der Unterschied zwischen einer Linse und einer Überblendung.
    *
    * Bei halbem Maskengewicht kann man zweierlei tun: eine halb so grosse
-   * Zerstreuung zeichnen (was eine Linse tut), oder eine volle Zerstreuung
-   * halb durchsichtig darüberlegen. Beim harten Rand einer Freistellmaske
-   * sieht beides fast gleich aus – deshalb ist es lange niemandem
-   * aufgefallen. Sobald die Maske aber ein Verlauf über die Tiefe einer Szene
+   * Zerstreuung zeichnen (was eine Linse tut), oder eine volle halb
+   * durchsichtig darüberlegen. Bei einer Freistellmaske sieht beides fast
+   * gleich aus; sobald die Maske aber ein Verlauf über die Tiefe einer Szene
    * ist, ist es der ganze Effekt: Nur die erste Fassung lässt die Unschärfe
    * mit der Entfernung WACHSEN.
    *
-   * Gemessen wird an drei Lichtpunkten unter einem waagerechten
-   * Maskenverlauf. Bei voller Unschärfe ist der Radius 0,02 · 512 = 10,2
-   * Punkte; die drei Punkte liegen bei Gewicht 0,20 / 0,50 / 0,81, also bei
-   * Radius 2,0 / 5,1 / 8,3. Ein Ring im Abstand 7 liegt damit ausserhalb der
-   * ersten Scheibe und innerhalb der dritten.
+   * Drei Reihen Lichter unter einem waagerechten Verlauf (links 0, rechts
+   * 255), Radius 24. Gehalten wird (K7):
    *
-   * Mit einer Überblendung hätten alle drei denselben Radius 10,2 und der
-   * Ring wäre überall hell, nur verschieden stark – das Verhältnis von erstem
-   * zu drittem Punkt wäre dann ihr Gewichtsverhältnis, 0,20 : 0,81.
+   * - der Radius der Scheibe wächst mit der Maske, nie zurück;
+   * - er weicht höchstens um ein Viertel von R vom Bandradius `R · k / K` ab,
+   *   den die Rechnung der Quelle zuteilt;
+   * - die Scheibe ist im Inneren glatt (Streuung ≤ 0,05 ab 8 Punkten Radius) –
+   *   keine Halbscheiben an den Stufengrenzen, keine Doppelscheiben.
+   *
+   * In „mittel“ (weniger Stufen, gröberes Abtasten) ist die Toleranz weiter.
    */
   await page.goto('/');
-  const ergebnis = await page.evaluate(async () => {
-    const ladeTon = '/src/modules/bild/ton.ts';
-    const ladeGpu = '/src/modules/bild/tonGpu.ts';
-    const ton = (await import(
-      /* @vite-ignore */ ladeTon
-    )) as typeof import('../src/modules/bild/ton.js');
-    const gpu = (await import(
-      /* @vite-ignore */ ladeGpu
-    )) as typeof import('../src/modules/bild/tonGpu.js');
+  const ergebnis = await page.evaluate(async (pfad) => {
+    const m = (await import(/* @vite-ignore */ pfad)) as Messgeraet;
+    const W = 1200;
+    const sz = m.szeneHolen('C', W);
+    const feld = m.maskeAlpha(sz, 'hverlauf');
+    const aus: Record<string, import('./hilfen/unscharfMessen.js').ReiheLicht[]> = {};
+    for (const [guete, stufen] of [
+      ['hoch', 8],
+      ['mittel', 6],
+    ] as const) {
+      const szene = m.handSzene(feld, W, sz.H, { bokeh: 1 });
+      const r = m.rendern(sz.orig, W, sz.H, szene, 'gpu', guete);
+      aus[guete] = m.reiheMessen(sz, r.daten, feld, 24, stufen);
+    }
+    return aus;
+  }, MESSGERAET);
 
-    const kante = 512;
-    const orte = [100, 256, 412];
-    const quelle = document.createElement('canvas');
-    quelle.width = kante;
-    quelle.height = kante;
-    const qctx = quelle.getContext('2d');
-    if (!qctx) return { fehler: 'keine Leinwand' };
-    qctx.fillStyle = '#000000';
-    qctx.fillRect(0, 0, kante, kante);
-    qctx.fillStyle = '#ffffff';
-    for (const x of orte) qctx.fillRect(x - 1, kante / 2 - 1, 3, 3);
-
-    // Waagerechter Verlauf: links 0, rechts 255.
-    const rb = 64;
-    const feld = new Uint8Array(rb * rb);
-    for (let y = 0; y < rb; y += 1)
-      for (let x = 0; x < rb; x += 1) feld[y * rb + x] = Math.round((x / (rb - 1)) * 255);
-    const szene = {
-      bereiche: [
-        {
-          id: 'verlauf',
-          maske: { raster: { breite: rb, hoehe: rb, faktor: rb / kante }, feld, stand: 1 },
-          anpassung: { ...ton.FARB_NEUTRAL, unschaerfe: 1, bokeh: 0 },
-        },
-      ],
-      schluessel: 'wachsend',
-    };
-
-    const flaeche = gpu.bildRechnen(quelle, kante, kante, ton.NEUTRAL, szene);
-    const z = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
-    if (!z) return { fehler: 'keine Leinwand' };
-    z.canvas.width = kante;
-    z.canvas.height = kante;
-    z.drawImage(flaeche as CanvasImageSource, 0, 0);
-    const d = z.getImageData(0, 0, kante, kante).data;
-
-    /** Mittlere Helligkeit auf einem Ring um einen der Lichtpunkte. */
-    const ring = (mx: number, radius: number) => {
-      let summe = 0;
-      let n = 0;
-      for (let i = 0; i < 120; i += 1) {
-        const w = (i / 120) * Math.PI * 2;
-        const x = Math.round(mx + Math.cos(w) * radius);
-        const y = Math.round(kante / 2 + Math.sin(w) * radius);
-        if (x < 0 || y < 0 || x >= kante || y >= kante) continue;
-        summe += d[(y * kante + x) * 4];
-        n += 1;
+  for (const [guete, reihe] of Object.entries(ergebnis)) {
+    expect(reihe, `${guete}: Lichter`).toHaveLength(27);
+    const toleranz = guete === 'hoch' ? 1 : 1.5;
+    const streuMax = guete === 'hoch' ? 0.05 : 0.12;
+    for (const l of reihe) {
+      expect(
+        Math.abs(l.r25 - l.erwartet),
+        `${guete}: Radius bei Maske ${l.m.toFixed(2)}`,
+      ).toBeLessThanOrEqual(0.25 * 24 * toleranz);
+      if (l.erwartet >= 8) {
+        expect(l.streuung, `${guete}: Streuung bei Maske ${l.m.toFixed(2)}`).toBeLessThanOrEqual(
+          streuMax,
+        );
       }
-      return n > 0 ? summe / n : -1;
-    };
+    }
+    // Je Reihe von links nach rechts: der Radius wächst, auch mit etwas Spielraum nie zurück.
+    for (let r = 0; r < 3; r += 1) {
+      const zeile = reihe.slice(r * 9, r * 9 + 9);
+      for (let i = 1; i < zeile.length; i += 1) {
+        expect(zeile[i].r25, `${guete}: Reihe ${r}, Licht ${i}`).toBeGreaterThanOrEqual(
+          zeile[i - 1].r25 - 0.5,
+        );
+      }
+    }
+    // Und ganz links ist keine Scheibe, ganz rechts die grösste.
+    expect(reihe[8].r25).toBeGreaterThan(reihe[0].r25 + 15);
+  }
+});
 
+test('Motiv und Tiefe lassen keinen scharfen Ring um das Motiv', async ({ page }) => {
+  /*
+   * „Motiv + Tiefe“: Der Grund ist über die Tiefe unscharf, das Motiv (Netz,
+   * `weg`) scharf. Die Maske fällt zum Motiv hin über den Saum von 255 auf 0,
+   * und die Linse folgt der Maske – vorher blieb deshalb neben dem Motiv ein
+   * scharfer Ring: Die Schärfe des Grundes 4 bis 8 Punkte daneben war das
+   * Zehnfache der Schärfe weiter weg (19,6 gegen 1,9).
+   *
+   * Jetzt zählt jede Quelle in ihrer eigenen Stufe, und der Kern der Maske
+   * (Silhouette, ohne die glatte Tiefe) bestimmt, was Quelle sein darf: Nahe
+   * beim Motiv ist der Grund so unscharf wie weit davon. Gehalten wird, dass
+   * der Ring höchstens 2,5-fach so scharf ist (K5).
+   */
+  await page.goto('/');
+  const ergebnis = await page.evaluate(async (pfad) => {
+    const m = (await import(/* @vite-ignore */ pfad)) as Messgeraet;
+    const W = 1200;
+    const sz = m.szeneHolen('A', W);
+    const alpha = m.maskeAlpha(sz, 'netz');
+    const szene = m.bereichSzene(
+      W,
+      sz.H,
+      [m.tiefenTeil(W, sz.H, { motiv: sz.drin }), m.netzTeil(alpha, W, sz.H, false, 'weg')],
+      { bokeh: 1 },
+    );
+    const r = m.rendern(sz.orig, W, sz.H, szene, 'gpu', 'hoch');
     return {
-      weg: gpu.letzterWeg,
-      ring7: orte.map((x) => ring(x, 7)),
-      kern: orte.map((x) => ring(x, 0)),
+      reinheit: szene.bereiche[0].reinheit,
+      kern: !!szene.bereiche[0].maske.kern,
+      weg: r.weg,
+      vorher: m.schaerfeBand(sz, sz.orig, 4, 8),
+      nah: m.schaerfeBand(sz, r.daten, 4, 8),
+      fern: m.schaerfeBand(sz, r.daten, 32, 64),
     };
-  });
+  }, MESSGERAET);
 
-  expect(ergebnis.fehler).toBeUndefined();
+  // Die Maske ist wirklich gemischt – sonst prüfte der Test den falschen Fall.
+  expect(ergebnis.reinheit).toBe(2);
+  expect(ergebnis.kern).toBe(true);
   expect(ergebnis.weg).toBe('gpu');
-  const [schmal, mittel, breit] = ergebnis.ring7!;
-  // Die dritte Scheibe reicht über den Ring hinaus, die erste nicht.
-  expect(breit).toBeGreaterThan(2);
-  expect(mittel).toBeGreaterThan(schmal);
-  expect(breit).toBeGreaterThan(mittel);
-  // Und zwar deutlich: Bei einer Überblendung wären es 0,20 : 0,81 = 0,24.
-  expect(schmal).toBeLessThan(breit * 0.1);
+  // Der Grund ist tatsächlich unscharf geworden, nah wie fern.
+  expect(ergebnis.nah).toBeLessThan(ergebnis.vorher * 0.3);
+  expect(ergebnis.fern).toBeLessThan(ergebnis.vorher * 0.3);
+  // Und der Ring ist keiner.
+  expect(ergebnis.nah).toBeLessThanOrEqual(2.5 * ergebnis.fern);
 });
 
 test('ein scharfer Punkt streut nicht in unscharfe Nachbarn hinein', async ({ page }) => {
   /*
    * Wir SAMMELN ein, was eine Linse VERSTREUT. Das geht nur dann richtig,
    * wenn ein eingesammelter Bildpunkt auch wirklich bis hierher streut: Ein
-   * Punkt im Abstand 8 mit einer eigenen Scheibe vom Radius 3 erreicht uns
+   * Punkt im Abstand 8 mit einer eigenen Scheibe vom Radius 2,6 erreicht uns
    * nicht und darf nicht mitzählen.
    *
-   * Vorher stand in der Gewichtung ein fester Mindestwert von 0,02 statt
-   * dieser Prüfung. Bei einer Freistellmaske fiel das nie auf – das Motiv ist
-   * innen überall gleich scharf, es gibt kein Gefälle. Mit einer Tiefenkarte
-   * gibt es das sehr wohl, und dann leiht sich ein unscharfer Teil des Motivs
-   * Farbe von einem scharfen Teil desselben Motivs.
+   * Jede Quelle gehört genau einer Stufe (Radius `R · k / K`), und die Summe
+   * über alle Stufen ist das Ergebnis – darum gilt das von selbst. Bei einer
+   * Freistellmaske fällt es nie auf: Das Motiv ist innen überall gleich scharf.
+   * Mit einer Tiefenkarte gibt es ein Gefälle, und dann leiht sich ein
+   * unscharfer Teil des Motivs Farbe von einem scharfen Teil desselben Motivs.
    *
    * Aufbau: ein heller Punkt auf Schwarz, links im Bild, wo die Maske 0,3
-   * sagt (Radius 3,1). Gemessen wird 8 Punkte weiter rechts, wo die Maske 1
+   * sagt (Radius 2,6). Gemessen wird 8 Punkte weiter rechts, wo die Maske 1
    * sagt (Radius 10,2). Die dortige Scheibe REICHT bis zum Punkt – aber die
    * Scheibe des Punktes reicht nicht zurück.
    *
@@ -839,81 +1006,506 @@ test('ein scharfer Punkt streut nicht in unscharfe Nachbarn hinein', async ({ pa
    * würde der Test auch dann grün, wenn die Prüfung einfach alles verwirft.
    */
   await page.goto('/');
-  const ergebnis = await page.evaluate(async () => {
-    const ladeTon = '/src/modules/bild/ton.ts';
-    const ladeGpu = '/src/modules/bild/tonGpu.ts';
-    const ton = (await import(
-      /* @vite-ignore */ ladeTon
-    )) as typeof import('../src/modules/bild/ton.js');
-    const gpu = (await import(
-      /* @vite-ignore */ ladeGpu
-    )) as typeof import('../src/modules/bild/tonGpu.js');
-
+  const ergebnis = await page.evaluate(async (pfad) => {
+    const m = (await import(/* @vite-ignore */ pfad)) as Messgeraet;
     const kante = 512;
     const punktX = 248;
     const messX = 256;
+    const daten = new Uint8ClampedArray(kante * kante * 4);
+    for (let i = 0; i < kante * kante; i += 1) daten.set([0, 0, 0, 255], i * 4);
+    for (let y = kante / 2 - 1; y <= kante / 2 + 1; y += 1)
+      for (let x = punktX - 1; x <= punktX + 1; x += 1)
+        daten.set([255, 255, 255, 255], (y * kante + x) * 4);
 
     /** Rechnet das Bild mit einer Maske, die links `links` und rechts 1 ist. */
-    const lauf = (links: number, marke: number) => {
-      const quelle = document.createElement('canvas');
-      quelle.width = kante;
-      quelle.height = kante;
-      const q = quelle.getContext('2d');
-      if (!q) return -1;
-      q.fillStyle = '#000000';
-      q.fillRect(0, 0, kante, kante);
-      q.fillStyle = '#ffffff';
-      q.fillRect(punktX - 1, kante / 2 - 1, 3, 3);
-
-      /*
-       * Ein Raster mit einem Feld je Bildpunkt. Beim üblichen groben Raster
-       * (64) wäre die Stufe acht Punkte breit verschmiert – und genau diese
-       * acht Punkte sind hier die Messstrecke.
-       */
+    const lauf = (links: number, weg: 'gpu' | 'cpu') => {
+      // Ein Feld je Bildpunkt: Beim üblichen groben Raster wäre die Stufe acht
+      // Punkte breit verschmiert – und genau diese acht sind hier die Messstrecke.
       const feld = new Uint8Array(kante * kante);
       for (let y = 0; y < kante; y += 1)
         for (let x = 0; x < kante; x += 1)
           feld[y * kante + x] = x < messX ? Math.round(links * 255) : 255;
-
-      const szene = {
-        bereiche: [
-          {
-            id: 'stufe',
-            maske: { raster: { breite: kante, hoehe: kante, faktor: 1 }, feld, stand: marke },
-            anpassung: { ...ton.FARB_NEUTRAL, unschaerfe: 1, bokeh: 0 },
-          },
-        ],
-        schluessel: `stufe${marke}`,
-      };
-      const flaeche = gpu.bildRechnen(quelle, kante, kante, ton.NEUTRAL, szene);
-      const z = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
-      if (!z) return -1;
-      z.canvas.width = kante;
-      z.canvas.height = kante;
-      z.drawImage(flaeche as CanvasImageSource, 0, 0);
-      const d = z.getImageData(0, 0, kante, kante).data;
-      // Mittel über eine kurze senkrechte Strecke an der Messstelle.
+      const szene = m.handSzene(feld, kante, kante, { bokeh: 1 });
+      const r = m.rendern(daten, kante, kante, szene, weg);
       let summe = 0;
       for (let y = kante / 2 - 3; y <= kante / 2 + 3; y += 1)
-        summe += d[(y * kante + messX + 1) * 4];
+        summe += r.daten[(y * kante + messX + 1) * 4];
       return summe / 7;
     };
+    return {
+      gpu: { schwach: lauf(0.3, 'gpu'), voll: lauf(1, 'gpu') },
+      cpu: { schwach: lauf(0.3, 'cpu'), voll: lauf(1, 'cpu') },
+    };
+  }, MESSGERAET);
 
-    // Reihenfolge beachten: In einem Objektliteral werden die Eigenschaften
-    // der Reihe nach ausgewertet. Stünde `weg` vorn, läse es den Weg VOR den
-    // beiden Läufen – also den Anfangswert.
-    const schwach = lauf(0.3, 1);
-    const voll = lauf(1, 2);
-    return { schwach, voll, weg: gpu.letzterWeg };
-  });
+  for (const [weg, e] of Object.entries(ergebnis)) {
+    expect(e.voll, `${weg}: ein streuender Punkt muss ankommen`).toBeGreaterThan(6);
+    expect(e.schwach, `${weg}: ein kaum streuender Punkt darf nicht ankommen`).toBeLessThan(
+      e.voll * 0.25,
+    );
+  }
+});
 
-  expect(ergebnis.weg).toBe('gpu');
+test('Grafikeinheit und Prozessor zeichnen dieselbe Unschärfe', async ({ page }) => {
   /*
-   * Gemessen: mit der Prüfung 0,0 gegen 12,9 – ohne sie 4,0 gegen 12,9.
-   * Der scharfe Punkt kommt also nur noch an, wenn er wirklich streut.
+   * Der Fehler, der es nicht wieder geben soll: Vorher rechnete der Weg ohne
+   * Grafikeinheit etwas anderes als der Schattierer – doppelter Radius,
+   * unbedeckte Bildpunkte (Streifen), bei gebrochenem Radius ein schwarzes
+   * Bild, ein gelber Hof statt eines Hauchs. Aus demselben Bild wurde auf dem
+   * einen Gerät eine Scheibe und auf dem anderen ein Fleck mit Streifen.
+   *
+   * Jetzt rechnen beide dieselben Durchgänge mit denselben Konstanten. Der
+   * Unterschied ist nur noch Rundung: je Kanal höchstens 2 Stufen, im Mittel
+   * höchstens 0,05 (gemessen: 1 und 0,005). Beide Wege rechnen auf DERSELBEN
+   * Güte – der Prozessor darf im Betrieb eine tiefer wählen, dann wären die
+   * Kanten weicher, und das wäre kein Vergleich mehr.
+   *
+   * Dazu kommt für beide Wege, was nicht Rundung ist: ausserhalb der Maske
+   * ändert sich kein Byte (K1).
    */
-  expect(ergebnis.voll, 'ein streuender Punkt muss ankommen').toBeGreaterThan(6);
-  expect(ergebnis.schwach, 'ein kaum streuender Punkt darf nicht ankommen').toBeLessThan(
-    ergebnis.voll! * 0.25,
-  );
+  await page.goto('/');
+  const ergebnis = await page.evaluate(async (pfad) => {
+    const m = (await import(/* @vite-ignore */ pfad)) as Messgeraet;
+    type Mass = { max: number; mittel: number };
+    const berichte: {
+      name: string;
+      gpu: string;
+      cpu: string;
+      gleich: Mass;
+      geaendert15: number[];
+    }[] = [];
+    const W = 600;
+
+    // 1. Netzmasken, Szene A und B: Silhouetten mit Saum und Staub.
+    const netzFaelle: [
+      string,
+      'A' | 'B',
+      import('./hilfen/unscharfMessen.js').MaskenArt,
+      'motiv' | 'grund',
+      Partial<import('../src/modules/bild/doc.js').Bereichston>,
+      ('hoch' | 'mittel' | 'niedrig')?,
+    ][] = [
+      ['Bokeh, harte Kante', 'A', 'hart', 'grund', { bokeh: 1 }],
+      ['Bokeh, Netz, Motiv', 'A', 'netz', 'motiv', { bokeh: 1 }],
+      ['Bokeh, Video, Grund', 'A', 'video', 'grund', { bokeh: 1 }],
+      ['Weichzeichnen, Netz, Grund', 'A', 'netz', 'grund', { unschaerfe: 1 }],
+      ['beide, Netz, Grund', 'A', 'netz', 'grund', { unschaerfe: 0.7, bokeh: 1 }],
+      ['Lichter, Bokeh, Netz', 'B', 'netz', 'grund', { bokeh: 1 }],
+      ['Bokeh, Netz, mittel', 'A', 'netz', 'grund', { bokeh: 1 }, 'mittel'],
+      ['Bokeh, Netz, niedrig', 'A', 'netz', 'grund', { bokeh: 1 }, 'niedrig'],
+    ];
+    for (const [name, art, maske, ziel, par, guete] of netzFaelle) {
+      const f = m.fall({ art, W, maske, ziel, par, guete });
+      berichte.push({
+        name,
+        gpu: f.weg.gpu.gerechnet,
+        cpu: f.weg.cpu.gerechnet,
+        gleich: f.gleich as Mass,
+        geaendert15: [f.weg.gpu.ab.geaendert15, f.weg.cpu.ab.geaendert15],
+      });
+    }
+
+    // 2. Verlauf (glatt, Reinheit 1): Lichterreihen unter steigender Maske.
+    {
+      const sz = m.szeneHolen('C', W);
+      const feld = m.maskeAlpha(sz, 'hverlauf');
+      for (const [name, par] of [
+        ['Bokeh, Verlauf', { bokeh: 1 }],
+        ['Weichzeichnen, Verlauf', { unschaerfe: 1 }],
+      ] as const) {
+        const szene = m.handSzene(feld, W, sz.H, par);
+        const g = m.rendern(sz.orig, W, sz.H, szene, 'gpu');
+        const c = m.rendern(sz.orig, W, sz.H, szene, 'cpu');
+        berichte.push({
+          name,
+          gpu: g.weg,
+          cpu: c.weg,
+          gleich: m.unterschied(g.daten, c.daten),
+          geaendert15: [],
+        });
+      }
+    }
+
+    // 3. Gemischt (Reinheit 2): Motiv + Tiefe – Kernfeld, Stufen, Rückfall.
+    {
+      const sz = m.szeneHolen('A', W);
+      const alpha = m.maskeAlpha(sz, 'netz');
+      for (const [name, par] of [
+        ['Motiv + Tiefe, Bokeh', { bokeh: 0.8 }],
+        ['Motiv + Tiefe, beide', { bokeh: 0.8, unschaerfe: 0.5 }],
+      ] as const) {
+        const szene = m.bereichSzene(
+          W,
+          sz.H,
+          [m.tiefenTeil(W, sz.H, { motiv: sz.drin }), m.netzTeil(alpha, W, sz.H, false, 'weg')],
+          par,
+        );
+        const g = m.rendern(sz.orig, W, sz.H, szene, 'gpu');
+        const c = m.rendern(sz.orig, W, sz.H, szene, 'cpu');
+        berichte.push({
+          name,
+          gpu: g.weg,
+          cpu: c.weg,
+          gleich: m.unterschied(g.daten, c.daten),
+          geaendert15: [],
+        });
+      }
+    }
+    return berichte;
+  }, MESSGERAET);
+
+  expect(ergebnis).toHaveLength(12);
+  for (const b of ergebnis) {
+    expect(b.gpu, `${b.name}: es hat nicht die Grafikeinheit gerechnet`).toBe('gpu');
+    expect(b.cpu, `${b.name}: der Rückfallweg wurde nicht erzwungen`).toBe('leinwand');
+    expect(b.gleich.max, `${b.name}: grösster Unterschied`).toBeLessThanOrEqual(2);
+    expect(b.gleich.mittel, `${b.name}: mittlerer Unterschied`).toBeLessThan(0.05);
+    for (const n of b.geaendert15) expect(n, `${b.name}: Bildpunkte ausserhalb`).toBe(0);
+  }
+});
+
+test('Vorstufe auf beiden Wegen: winzige Bilder, Radius über das Bild hinaus, kein NaN', async ({
+  page,
+}) => {
+  /*
+   * Durch den Renderer ist der Radius immer ein Bruchteil der Bildkante, ein
+   * Radius grösser als das Bild kommt dort nie vor. Die Ränder des
+   * Arbeitsmassstabs (Blöcke, die über das Bild hinausragen, Strecken, die
+   * ausserhalb lesen) sind aber genau die Stellen, an denen Grafikeinheit und
+   * Prozessor auseinanderlaufen könnten – und ein NaN im Gleitkomma wird zu
+   * einem schwarzen Bildpunkt. Darum rechnet dieser Test die Vorstufe selbst,
+   * mit einem eigenen Radius, auf Bildern von 1 × 1 bis 64 × 48 Punkten.
+   *
+   * Gehalten wird (K14):
+   *
+   * - ein gleichmässiges Feld bleibt gleichmässig, an allen Rändern, auch bei
+   *   einem Radius von 40 Punkten auf 7 × 5 (±1; gemessen 0);
+   * - die beiden Wege weichen bei Bildern unter 64 Punkten um höchstens 10
+   *   Stufen ab (gemessen 1).
+   */
+  await page.goto('/');
+  const ergebnis = await page.evaluate(async (pfad) => {
+    const m = (await import(/* @vite-ignore */ pfad)) as Messgeraet;
+    const faelle: { name: string; gleichmaessig: number; gleich: number; ohneGpu: boolean }[] = [];
+    for (const [W, H] of [
+      [1, 1],
+      [3, 2],
+      [7, 5],
+      [33, 17],
+      [64, 48],
+    ]) {
+      const n = W * H;
+      const einfarbig = new Uint8ClampedArray(n * 4);
+      const gemischt = new Uint8ClampedArray(n * 4);
+      for (let i = 0; i < n; i += 1) {
+        einfarbig.set([120, 60, 200, 255], i * 4);
+        gemischt.set([(i * 37) % 256, (i * 91) % 256, (i * 53) % 256, 255], i * 4);
+      }
+      const maske = new Uint8Array(n).fill(255);
+      for (const [bokehPx, weichPx] of [
+        [0.8, 0],
+        [13, 0],
+        [40, 0],
+        [0, 13],
+        [13, 4],
+      ]) {
+        for (const reinheit of [0, 1] as const) {
+          for (const guete of ['hoch', 'niedrig'] as const) {
+            const ebene = { bokehPx, weichPx, reinheit };
+            const a = m.stufeDirekt(einfarbig, W, H, maske, ebene, guete);
+            const b = m.stufeDirekt(gemischt, W, H, maske, ebene, guete);
+            let abweichung = 0;
+            for (const bild of [a.cpu, a.gpu]) {
+              if (!bild) continue;
+              for (let i = 0; i < n * 4; i += 1)
+                abweichung = Math.max(abweichung, Math.abs(bild[i] - einfarbig[i]));
+            }
+            faelle.push({
+              name: `${W}×${H}, Bokeh ${bokehPx}, Weich ${weichPx}, Reinheit ${reinheit}, ${guete}`,
+              gleichmaessig: abweichung,
+              gleich: b.gpu ? m.unterschied(b.gpu, b.cpu).max : 0,
+              ohneGpu: b.gpu === null,
+            });
+          }
+        }
+      }
+    }
+    return faelle;
+  }, MESSGERAET);
+
+  expect(ergebnis).toHaveLength(100);
+  expect(
+    ergebnis.every((f) => f.ohneGpu),
+    'ohne Float-Ziele gibt es die Vorstufe nicht – der Test prüfte nur den Prozessor',
+  ).toBe(false);
+  for (const f of ergebnis) {
+    expect(
+      f.gleichmaessig,
+      `${f.name}: ein gleichmässiges Feld blieb nicht gleichmässig`,
+    ).toBeLessThanOrEqual(1);
+    expect(f.gleich, `${f.name}: Grafikeinheit gegen Prozessor`).toBeLessThanOrEqual(10);
+  }
+});
+
+test('ein Zug an einem anderen Regler rechnet die Unschärfe nicht neu', async ({ page }) => {
+  /*
+   * Die Unschärfe ist teuer und braucht Nachbarschaften, also rechnet sie in
+   * einer eigenen Vorstufe und liefert ein Zwischenbild. Der Hauptschattierer
+   * liest es nur. Das Zwischenbild trägt einen Zettel: Quelle, Masken, beide
+   * Radien, Güte, Grösse. Ein Zug an „Belichtung“ ändert keinen davon – die
+   * Unschärfe kostet dann nichts. Vorher lief der Bokeh-Teil bei jedem
+   * Reglerzug im Hauptschattierer.
+   *
+   * Gezählt wird mit `stufenGerechnet` (ein Zähler, nie eine Zeitmessung – die
+   * wäre auf einem ausgelasteten Rechner launisch):
+   *
+   * - Belichtung, Kontrast, Wärme: der Zähler bleibt stehen, das Bild
+   *   ändert sich trotzdem;
+   * - Bokeh, Weichzeichnen, Güte: der Zähler steigt um genau eins.
+   */
+  await page.goto('/');
+  const ergebnis = await page.evaluate(async (pfad) => {
+    const m = (await import(/* @vite-ignore */ pfad)) as Messgeraet;
+    const ladeGpu = '/src/modules/bild/tonGpu.ts';
+    const ladeTon = '/src/modules/bild/ton.ts';
+    const gpu = (await import(
+      /* @vite-ignore */ ladeGpu
+    )) as typeof import('../src/modules/bild/tonGpu.js');
+    const ton = (await import(
+      /* @vite-ignore */ ladeTon
+    )) as typeof import('../src/modules/bild/ton.js');
+
+    const W = 600;
+    const sz = m.szeneHolen('A', W);
+    const quelle = m.leinwandAus(sz.orig, W, sz.H);
+    const teil = m.netzTeil(m.maskeAlpha(sz, 'netz'), W, sz.H, true);
+    const szene = m.bereichSzene(W, sz.H, [teil], { bokeh: 1, unschaerfe: 0.3 });
+    /** Dieselbe Szene, nur mit anderen Reglern – gleiche Maske, gleiche Kennung. */
+    const mit = (par: Partial<import('../src/modules/bild/doc.js').Bereichston>) => ({
+      ...szene,
+      bereiche: szene.bereiche.map((b) => ({ ...b, anpassung: { ...b.anpassung, ...par } })),
+    });
+
+    const lesen = (
+      global: import('../src/modules/bild/ton.js').Anpassung,
+      s = szene,
+      guete: 'hoch' | 'mittel' = 'mittel',
+    ) => {
+      gpu.gpuAbschalten(false);
+      const vor = gpu.zaehler.stufenGerechnet;
+      const flaeche = gpu.bildRechnen(quelle, W, sz.H, global, s, { fluechtig: true, guete });
+      const d = m.lesen(flaeche, W, sz.H);
+      let summe = 0;
+      for (let i = 0; i < W * sz.H; i += 1) summe += d[i * 4] + d[i * 4 + 1] + d[i * 4 + 2];
+      return {
+        gerechnet: gpu.zaehler.stufenGerechnet - vor,
+        helligkeit: summe / (W * sz.H * 3),
+        weg: gpu.letzterWeg,
+      };
+    };
+
+    const erste = lesen(ton.NEUTRAL);
+    return {
+      erste,
+      belichtung: lesen({ ...ton.NEUTRAL, belichtung: 0.8 }),
+      kontrast: lesen({ ...ton.NEUTRAL, belichtung: 0.8, kontrast: 0.4 }),
+      waerme: lesen({ ...ton.NEUTRAL, waerme: 0.5 }),
+      wieder: lesen(ton.NEUTRAL),
+      bokeh: lesen(ton.NEUTRAL, mit({ bokeh: 0.5 })),
+      weich: lesen(ton.NEUTRAL, mit({ bokeh: 0.5, unschaerfe: 0.9 })),
+      guete: lesen(ton.NEUTRAL, mit({ bokeh: 0.5, unschaerfe: 0.9 }), 'hoch'),
+      gleich: lesen(ton.NEUTRAL, mit({ bokeh: 0.5, unschaerfe: 0.9 }), 'hoch'),
+    };
+  }, MESSGERAET);
+
+  expect(ergebnis.erste.weg).toBe('gpu');
+  expect(ergebnis.erste.gerechnet, 'beim ersten Mal wird gerechnet').toBe(1);
+  // Ein Zug an der Farbe rechnet die Unschärfe nicht neu – das Bild ändert sich trotzdem.
+  expect(ergebnis.belichtung.gerechnet).toBe(0);
+  expect(ergebnis.kontrast.gerechnet).toBe(0);
+  expect(ergebnis.waerme.gerechnet).toBe(0);
+  expect(ergebnis.belichtung.helligkeit).toBeGreaterThan(ergebnis.erste.helligkeit + 10);
+  expect(ergebnis.wieder.gerechnet).toBe(0);
+  expect(ergebnis.wieder.helligkeit).toBeCloseTo(ergebnis.erste.helligkeit, 5);
+  // Ein Zug an einem der beiden Regler oder an der Güte rechnet genau einmal.
+  expect(ergebnis.bokeh.gerechnet).toBe(1);
+  expect(ergebnis.weich.gerechnet).toBe(1);
+  expect(ergebnis.guete.gerechnet).toBe(1);
+  expect(ergebnis.gleich.gerechnet, 'dieselbe Einstellung noch einmal: aus dem Zettel').toBe(0);
+});
+
+test('Sonderfälle: Radius 0, NaN, unendlich und negativ lassen das Bild, wie es war', async ({
+  page,
+}) => {
+  /*
+   * Eine Datei kann NaN, unendlich, −1 oder 7 liefern – und weder die
+   * Grafikeinheit noch der Prozessor sollen je etwas anderes als eine Zahl von
+   * 0 bis 1 sehen. Das wird an EINER Stelle geklemmt (`unscharfEbenen`); hier
+   * wird gehalten, dass es dabei bleibt: Das Bild kommt Byte für Byte so
+   * heraus, wie es hereinkam, und die Vorstufe läuft gar nicht erst (kein
+   * Schattierer-Lauf, `stufenGerechnet` steht still).
+   *
+   * Ein Radius unter 0,75 Punkten gehört dazu: Die Scheibe wäre schmaler als
+   * ein Bildpunkt.
+   */
+  await page.goto('/');
+  const ergebnis = await page.evaluate(async (pfad) => {
+    const m = (await import(/* @vite-ignore */ pfad)) as Messgeraet;
+    const ladeGpu = '/src/modules/bild/tonGpu.ts';
+    const gpu = (await import(
+      /* @vite-ignore */ ladeGpu
+    )) as typeof import('../src/modules/bild/tonGpu.js');
+    const W = 300;
+    const sz = m.szeneHolen('A', W);
+    const feld = m.maskeAlpha(sz, 'netz');
+    const faelle: [string, { bokeh: number; unschaerfe: number }][] = [
+      ['null', { bokeh: 0, unschaerfe: 0 }],
+      ['NaN', { bokeh: Number.NaN, unschaerfe: Number.NaN }],
+      ['unendlich', { bokeh: Number.POSITIVE_INFINITY, unschaerfe: Number.NEGATIVE_INFINITY }],
+      ['negativ', { bokeh: -1, unschaerfe: -0.5 }],
+      ['unter einem Bildpunkt', { bokeh: 0.001, unschaerfe: 0.001 }],
+    ];
+    const aus: { name: string; weg: string; veraendert: number; gerechnet: number }[] = [];
+    for (const [name, par] of faelle) {
+      for (const weg of ['gpu', 'cpu'] as const) {
+        const szene = m.handSzene(feld, W, sz.H, par, { reinheit: 0 });
+        const vor = gpu.zaehler.stufenGerechnet;
+        const r = m.rendern(sz.orig, W, sz.H, szene, weg);
+        let veraendert = 0;
+        for (let i = 0; i < W * sz.H * 4; i += 1) if (r.daten[i] !== sz.orig[i]) veraendert += 1;
+        aus.push({
+          name: `${name} (${weg})`,
+          weg: r.weg,
+          veraendert,
+          gerechnet: gpu.zaehler.stufenGerechnet - vor,
+        });
+      }
+    }
+    return aus;
+  }, MESSGERAET);
+
+  expect(ergebnis).toHaveLength(10);
+  for (const f of ergebnis) {
+    expect(f.veraendert, `${f.name}: Bytes verändert`).toBe(0);
+    expect(f.gerechnet, `${f.name}: die Vorstufe lief`).toBe(0);
+  }
+});
+
+test('Ressourcen: Texturen wachsen im Film nicht, ohne Float-Ziele rechnet der Prozessor die Vorstufe', async ({
+  page,
+}) => {
+  /*
+   * Ein Film rechnet jedes Bild neu und legt dafür jedes Mal eine neue Quelle
+   * an. Ohne einen Vorrat legte jedes Bild fünf neue Texturen an – auf einem
+   * Telefon geht dabei der Grafikspeicher aus. Gehalten wird (K15):
+   *
+   * - nach 50 Bildern leben genau so viele Texturen wie nach 5, und die
+   *   Vorstufe wurde 50 Mal gerechnet (es ist kein Zettel, der hier hilft);
+   * - fehlen float-renderbare Ziele (`EXT_color_buffer_float`), rechnet der
+   *   Prozessor die Vorstufe und lädt sie als 8 Bit hoch – das Ergebnis ist
+   *   das der Grafikeinheit, höchstens 2 Stufen daneben;
+   * - ein verlorener Kontext bringt keinen Absturz: Das Bild kommt vom
+   *   Prozessor, Vorrat und Zettel sind zurückgesetzt, und beim nächsten Bild
+   *   läuft wieder alles auf der Grafikeinheit.
+   */
+  await page.goto('/');
+  const ergebnis = await page.evaluate(async (pfad) => {
+    // Den Kontext des Renderers festhalten, bevor er angelegt wird – nur so
+    // lässt er sich später verlieren lassen.
+    const kontexte: WebGL2RenderingContext[] = [];
+    const echt = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (
+      this: HTMLCanvasElement,
+      art: string,
+      ...rest: unknown[]
+    ) {
+      const c = (echt as (...a: unknown[]) => unknown).call(this, art, ...rest);
+      if (art === 'webgl2' && c) kontexte.push(c as WebGL2RenderingContext);
+      return c;
+    } as typeof echt;
+
+    const m = (await import(/* @vite-ignore */ pfad)) as Messgeraet;
+    const ladeGpu = '/src/modules/bild/tonGpu.ts';
+    const ladeUnscharf = '/src/modules/bild/unscharfGpu.ts';
+    const ladeTon = '/src/modules/bild/ton.ts';
+    const gpu = (await import(
+      /* @vite-ignore */ ladeGpu
+    )) as typeof import('../src/modules/bild/tonGpu.js');
+    const unscharfGpu = (await import(
+      /* @vite-ignore */ ladeUnscharf
+    )) as typeof import('../src/modules/bild/unscharfGpu.js');
+    const ton = (await import(
+      /* @vite-ignore */ ladeTon
+    )) as typeof import('../src/modules/bild/ton.js');
+
+    const W = 240;
+    const sz = m.szeneHolen('A', W);
+    const szene = m.bereichSzene(W, sz.H, [m.netzTeil(m.maskeAlpha(sz, 'netz'), W, sz.H, true)], {
+      bokeh: 1,
+      unschaerfe: 0.5,
+    });
+
+    // 1. Ein Film: jedes Bild eine neue Quelle, flüchtig, in der kleinsten Güte.
+    const bild = () => {
+      const quelle = m.leinwandAus(sz.orig, W, sz.H);
+      gpu.bildRechnen(quelle, W, sz.H, ton.NEUTRAL, szene, { fluechtig: true, guete: 'niedrig' });
+    };
+    const vor = gpu.zaehler.stufenGerechnet;
+    for (let i = 0; i < 5; i += 1) bild();
+    const nach5 = gpu.zaehler.texturenLebend;
+    for (let i = 0; i < 45; i += 1) bild();
+    const nach50 = gpu.zaehler.texturenLebend;
+    const gerechnet = gpu.zaehler.stufenGerechnet - vor;
+
+    // 2. Ohne Float-Ziele: der Prozessor rechnet die Vorstufe.
+    const bildEinzeln = (weg: 'gpu' | 'cpu') => m.rendern(sz.orig, W, sz.H, szene, weg, 'mittel');
+    const normal = bildEinzeln('gpu');
+    unscharfGpu.floatZieleSperren(true);
+    const vorHybrid = gpu.zaehler.stufenGerechnet;
+    const hybrid = bildEinzeln('gpu');
+    const hybridGerechnet = gpu.zaehler.stufenGerechnet - vorHybrid;
+    unscharfGpu.floatZieleSperren(false);
+
+    // 3. Ein verlorener Kontext. Es gibt zwei (der andere gehört der Prüfung des
+    // Farbraums); beide gehen, der Renderer ist einer davon.
+    const lebendVorVerlust = gpu.zaehler.texturenLebend;
+    for (const kontext of kontexte) kontext.getExtension('WEBGL_lose_context')?.loseContext();
+    const nachVerlust = bildEinzeln('gpu');
+    const lebendNachVerlust = gpu.zaehler.texturenLebend;
+    const wieder = bildEinzeln('gpu');
+    HTMLCanvasElement.prototype.getContext = echt;
+
+    return {
+      kontexte: kontexte.length,
+      nach5,
+      nach50,
+      gerechnet,
+      hybridWeg: hybrid.weg,
+      hybridGerechnet,
+      hybridGegenNormal: m.unterschied(hybrid.daten, normal.daten),
+      nachVerlustWeg: nachVerlust.weg,
+      nachVerlustGegenNormal: m.unterschied(nachVerlust.daten, normal.daten),
+      lebendVorVerlust,
+      lebendNachVerlust,
+      wiederWeg: wieder.weg,
+      wiederGegenNormal: m.unterschied(wieder.daten, normal.daten),
+    };
+  }, MESSGERAET);
+
+  expect(ergebnis.kontexte).toBeGreaterThan(0);
+  expect(ergebnis.nach5, 'die Vorstufe hält Texturen').toBeGreaterThan(0);
+  expect(ergebnis.nach50, 'nach 50 Bildern leben mehr Texturen als nach 5').toBe(ergebnis.nach5);
+  expect(ergebnis.gerechnet, 'jedes Filmbild rechnet die Vorstufe').toBe(50);
+
+  expect(ergebnis.hybridWeg, 'den Hauptdurchlauf macht weiter die Grafikeinheit').toBe('gpu');
+  expect(ergebnis.hybridGerechnet).toBe(1);
+  expect(ergebnis.hybridGegenNormal.max).toBeLessThanOrEqual(2);
+  expect(ergebnis.hybridGegenNormal.mittel).toBeLessThan(0.05);
+
+  expect(ergebnis.nachVerlustWeg, 'nach dem Verlust rechnet der Prozessor').toBe('leinwand');
+  expect(ergebnis.nachVerlustGegenNormal.max).toBeLessThanOrEqual(2);
+  expect(ergebnis.lebendVorVerlust).toBeGreaterThan(0);
+  expect(ergebnis.lebendNachVerlust, 'Vorrat und Zettel sind zurückgesetzt').toBe(0);
+  expect(ergebnis.wiederWeg, 'beim nächsten Bild läuft die Grafikeinheit wieder').toBe('gpu');
+  expect(ergebnis.wiederGegenNormal.max).toBeLessThanOrEqual(2);
 });

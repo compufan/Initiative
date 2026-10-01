@@ -9,7 +9,13 @@ import { maskeUmrastern } from '../../src/modules/bild/maske.js';
 import { szeneBauen, type Szene as RenderSzene } from '../../src/modules/bild/maskenSpeicher.js';
 import { NEUTRAL } from '../../src/modules/bild/ton.js';
 import { bildRechnen, gpuAbschalten, letzterWeg } from '../../src/modules/bild/tonGpu.js';
-import type { StufenGuete } from '../../src/modules/bild/unscharf.js';
+import {
+  staerke,
+  unscharfAufBytes,
+  type StufenGuete,
+  type UnscharfEbene,
+} from '../../src/modules/bild/unscharf.js';
+import { unscharfRechnen, unscharfWerk } from '../../src/modules/bild/unscharfGpu.js';
 import { rleDekodieren, rleKodieren } from '../../src/modules/video/rle.js';
 
 /**
@@ -452,17 +458,60 @@ export function maskeAlpha(sz: Szene, art: MaskenArt): Uint8Array {
 let marke = 100000;
 
 /** Ein Netzteil aus Alpha in Vorlagengrösse (= Bildgrösse), so wie es die App hält. */
-export function netzTeil(alpha: Uint8Array, W: number, H: number, umkehren: boolean): Maskenteil {
+export function netzTeil(
+  alpha: Uint8Array,
+  W: number,
+  H: number,
+  umkehren: boolean,
+  modus: Maskenteil['modus'] = 'dazu',
+): Maskenteil {
   marke += 1;
   return {
     id: `n${marke}`,
-    modus: 'dazu',
+    modus,
     umkehren,
     art: 'netz',
     netz: 'object',
     breite: W,
     hoehe: H,
     alpha,
+    marke,
+  };
+}
+
+/**
+ * Ein Tiefenteil. Als Verlauf steigt die Entfernung von links (0, fern) nach
+ * rechts (255, nah): Mit Fokus 0 und Spanne 1 wächst die Unschärfe von links
+ * nach rechts über das ganze Bild, wie bei einer Tiefenkarte.
+ *
+ * Mit `motiv` ist das Motiv nah (255) und alles andere fern (0), der Fokus
+ * liegt vorn: Der Grund ist überall gleich unscharf, das Motiv scharf – der
+ * Tiefenteil von „Motiv + Tiefe“.
+ */
+export function tiefenTeil(
+  W: number,
+  H: number,
+  opt: { modus?: Maskenteil['modus']; motiv?: Uint8Array } = {},
+): Maskenteil {
+  marke += 1;
+  const karte = new Uint8Array(W * H);
+  for (let y = 0; y < H; y += 1)
+    for (let x = 0; x < W; x += 1)
+      karte[y * W + x] = opt.motiv
+        ? opt.motiv[y * W + x]
+          ? 255
+          : 0
+        : Math.round((x / (W - 1)) * 255);
+  return {
+    id: `t${marke}`,
+    modus: opt.modus ?? 'dazu',
+    umkehren: false,
+    art: 'tiefe',
+    breite: W,
+    hoehe: H,
+    karte,
+    fokus: opt.motiv ? 1 : 0,
+    spanne: 1,
     marke,
   };
 }
@@ -541,6 +590,164 @@ export function bereichSzene(
   return szeneBauen(doc, W, H);
 }
 
+/**
+ * Eine Szene von Hand, ohne `szeneBauen`: ein Feld, das der Test selbst baut.
+ *
+ * Für Fälle, in denen die Maske genau so sein soll, wie der Test sie sagt –
+ * ein glatter Verlauf (`reinheit` 1, Vorgabe), eine harte Kante einer
+ * Silhouette (0), ein Kernfeld (2). `rb` × `rh` ist die Grösse des Feldes; ohne
+ * Angabe hat es einen Punkt je Bildpunkt.
+ */
+export function handSzene(
+  feld: Uint8Array,
+  W: number,
+  H: number,
+  anpassung: Partial<Bereichston>,
+  opt: { reinheit?: 0 | 1 | 2; kern?: Uint8Array; rb?: number; rh?: number } = {},
+): RenderSzene {
+  marke += 1;
+  const rb = opt.rb ?? W;
+  const rh = opt.rh ?? H;
+  return {
+    bereiche: [
+      {
+        id: `h${marke}`,
+        maske: {
+          raster: { breite: rb, hoehe: rh, faktor: rb / W },
+          feld,
+          kern: opt.kern,
+          stand: marke,
+        },
+        anpassung: { ...BEREICH_NEUTRAL, ...anpassung },
+        reinheit: opt.reinheit ?? 1,
+      },
+    ],
+    schluessel: `hand${marke}`,
+  };
+}
+
+/** Grösster und mittlerer Unterschied je Kanal zweier Ergebnisse. */
+export function unterschied(
+  a: Uint8ClampedArray,
+  b: Uint8ClampedArray,
+): { max: number; mittel: number } {
+  let max = 0;
+  let summe = 0;
+  const n = a.length / 4;
+  for (let i = 0; i < n; i += 1) {
+    for (let k = 0; k < 3; k += 1) {
+      const d = Math.abs(a[i * 4 + k] - b[i * 4 + k]);
+      if (d > max) max = d;
+      summe += d;
+    }
+  }
+  return { max, mittel: summe / (n * 3) };
+}
+
+/**
+ * Die Vorstufe allein, auf beiden Wegen, mit einem Radius nach Wahl.
+ *
+ * Durch den Renderer ist der Radius immer ein Bruchteil der Bildkante – ein
+ * Radius grösser als das Bild kommt dort nicht vor. Die Randfälle (ein Bild
+ * von 1 × 1 oder 7 × 5 Punkten, Radien über den Bildrand hinaus) lassen sich
+ * deshalb nur an der Vorstufe selbst prüfen: Sie bekommt hier ein eigenes
+ * Bild, eine eigene Maske und die Ebene, wie `unscharfEbenen` sie bauen würde.
+ *
+ * Zurück kommt, was der Hauptschattierer daraus machte: das Zwischenbild, wo
+ * der Einfluss über null liegt, sonst das Original. `gpu` ist `null`, wenn
+ * dieses Gerät keine Float-Ziele hat.
+ */
+export function stufeDirekt(
+  orig: Uint8ClampedArray,
+  W: number,
+  H: number,
+  maske: Uint8Array,
+  ebene: Omit<UnscharfEbene, 'platz'>,
+  guete: StufenGuete,
+  kern: Uint8Array | null = null,
+): { gpu: Uint8ClampedArray | null; cpu: Uint8ClampedArray; einflussGpu: Uint8Array | null } {
+  const voll: UnscharfEbene = { ...ebene, platz: 0 };
+
+  const cpu = new Uint8ClampedArray(orig);
+  unscharfAufBytes(cpu, W, H, [{ ebene: voll, maske, kern }], guete);
+
+  const leinwand = document.createElement('canvas');
+  leinwand.width = W;
+  leinwand.height = H;
+  const gl = leinwand.getContext('webgl2');
+  const zaehler = { stufenGerechnet: 0, texturenLebend: 0 };
+  const werk = gl ? unscharfWerk(gl, zaehler) : null;
+  if (!gl || !werk) return { gpu: null, cpu, einflussGpu: null };
+
+  const textur = (
+    daten: ArrayBufferView,
+    b: number,
+    h: number,
+    spiegeln: boolean,
+    linear: boolean,
+  ) => {
+    const t = gl.createTexture() as WebGLTexture;
+    gl.activeTexture(gl.TEXTURE0 + 7);
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    const filter = linear ? gl.LINEAR : gl.NEAREST;
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, spiegeln);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, b, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, daten);
+    return t;
+  };
+  // Das Original im Texturraum (gespiegelt hochgeladen), Maske und Kern im
+  // Bildraum, je ein Kanal – wie `aufGpu` sie ablegt.
+  const quelle = textur(orig, W, H, true, false);
+  const atlas = new Uint8Array(W * H * 4);
+  const kernAtlas = new Uint8Array(W * H * 4);
+  for (let i = 0; i < W * H; i += 1) {
+    atlas[i * 4] = maske[i];
+    if (kern) kernAtlas[i * 4] = kern[i];
+  }
+  const atlasT = textur(atlas, W, H, false, true);
+  const kernT = textur(kernAtlas, W, H, false, true);
+
+  const ergebnis = unscharfRechnen(
+    werk,
+    { quelle, atlas: atlasT, kernAtlas: kernT, breite: W, hoehe: H, guete },
+    [voll],
+    'direkt',
+  );
+  if (!ergebnis || !werk.ergebnis) {
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    return { gpu: null, cpu, einflussGpu: null };
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, werk.ergebnis.puffer);
+  const roh = new Uint8Array(W * H * 4);
+  gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, roh);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  // Ein Browser hält nur eine Handvoll Kontexte am Leben; wer in einer
+  // Schleife viele braucht, gibt jeden gleich wieder her.
+  gl.getExtension('WEBGL_lose_context')?.loseContext();
+
+  // Zeile 0 der Rückgabe liegt unten – umdrehen und mit dem Original verbinden,
+  // wo der Einfluss null ist (dort gilt das Byte, nicht der Gleitkommaweg).
+  const gpu = new Uint8ClampedArray(orig);
+  const einfluss = new Uint8Array(W * H);
+  for (let y = 0; y < H; y += 1) {
+    for (let x = 0; x < W; x += 1) {
+      const von = ((H - 1 - y) * W + x) * 4;
+      const nach = (y * W + x) * 4;
+      einfluss[y * W + x] = roh[von + 3];
+      if (roh[von + 3] === 0) continue;
+      gpu[nach] = roh[von];
+      gpu[nach + 1] = roh[von + 1];
+      gpu[nach + 2] = roh[von + 2];
+    }
+  }
+  return { gpu, cpu, einflussGpu: einfluss };
+}
+
 /* ---------- Masse ---------- */
 
 const GRUPPEN = [0, 2, 4, 8, 16, 32, 64, 1e9];
@@ -560,7 +767,10 @@ export interface MassAB {
   reichweite: number;
   /** Mittlere Abweichung (Stufen) ab 8 Punkten Abstand ausserhalb. */
   fern: number;
-  /** Anteil Fremdfarbe innen bei 0–2 / 2–4 / ≥ 4 Punkten Abstand zur Kante. */
+  /**
+   * Anteil Fremdfarbe innen bei 0–2 / 2–4 / 4–8 Punkten Abstand zur Kante,
+   * abzüglich dessen, was ab 16 Punkten Tiefe ohnehin dasteht.
+   */
   fremd: [number, number, number];
 }
 
@@ -590,7 +800,8 @@ export function messenAB(
     ueber2: new Array<number>(G).fill(0),
     dsum: new Array<number>(G).fill(0),
   };
-  const innen = { n: new Array<number>(3).fill(0), fremd: new Array<number>(3).fill(0) };
+  // Je Abstand zur Kante: 0–2, 2–4, 4–8 und – als Grundwert – ab 16 Punkten.
+  const innen = { n: new Array<number>(4).fill(0), fremd: new Array<number>(4).fill(0) };
   let a15 = 0;
   let g15 = 0;
   let g0 = 0;
@@ -611,13 +822,17 @@ export function messenAB(
       if (dmax > 2) aussen.ueber2[g] += 1;
     } else {
       const t = -s;
-      const g = t < 2 ? 0 : t < 4 ? 1 : 2;
+      const g = t < 2 ? 0 : t < 4 ? 1 : t < 8 ? 2 : t >= 16 ? 3 : -1;
+      if (g < 0) continue;
       // Anteil der Gegenfarbe aus der Chromazität: 0 = Grund, 1 = Motiv.
       const a = klemm((chroma(res, i) - sz.rBg) / (sz.rMo - sz.rBg), -0.5, 1.5);
       innen.n[g] += 1;
       innen.fremd[g] += fremd === 'motiv' ? a : 1 - a;
     }
   }
+  // Auch tief im Bereich ist die Entmischung nicht null (Rauschen, zwei
+  // Karofarben): Der Grundwert dort wird abgezogen.
+  const grundwert = innen.n[3] ? innen.fremd[3] / innen.n[3] : 0;
   let reichweite = 0;
   for (let g = 0; g < G; g += 1) {
     if (aussen.n[g] > 0 && aussen.ueber2[g] / aussen.n[g] > 0.01) {
@@ -636,7 +851,7 @@ export function messenAB(
     geaendert0: g0,
     reichweite,
     fern: fernAnzahl ? fernSumme / fernAnzahl : 0,
-    fremd: [0, 1, 2].map((g) => (innen.n[g] ? innen.fremd[g] / innen.n[g] : 0)) as [
+    fremd: [0, 1, 2].map((g) => (innen.n[g] ? innen.fremd[g] / innen.n[g] : 0) - grundwert) as [
       number,
       number,
       number,
@@ -763,6 +978,8 @@ export interface Lichter {
   innen: number;
   /** Rand zu Innen: Eine Scheibe hat eine Kante, eine Glocke nicht. */
   randZuInnen: number;
+  /** Mitte zu Rand: Bei einer Glocke ragt die Mitte heraus, bei einer Scheibe nicht. */
+  mitteZuRand: number;
   /** Aussen zu Innen: je kleiner, desto schärfer die Kante. */
   aussenZuInnen: number;
   /** Streuung im Inneren, auf das Innere bezogen. */
@@ -824,9 +1041,108 @@ export function lichterMessen(sz: Szene, res: Uint8ClampedArray, R: number): Lic
     spitze,
     innen,
     randZuInnen: innen > 0 ? mittel(radial, 0.85, 0.97) / innen : 0,
+    mitteZuRand:
+      mittel(radial, 0.85, 0.97) > 0 ? mittel(radial, 0, 0.15) / mittel(radial, 0.85, 0.97) : 0,
     aussenZuInnen: innen > 0 ? mittel(radial, 1.15, 1.45) / innen : 0,
     streuung: innen > 0 ? mittel(ringStreu, 0.15, 0.75) / innen : 0,
   };
+}
+
+export interface ReiheLicht {
+  /** Die Maske am Licht, 0 … 1. */
+  m: number;
+  /** Der Radius, den die Stufen der Maske vorsehen (Punkte der Messgrösse). */
+  erwartet: number;
+  /** Der Radius, bei dem das radiale Mittel zuletzt 25 % der Scheibenhöhe erreicht. */
+  r25: number;
+  /** Streuung im Inneren der Scheibe, auf ihr Mittel bezogen. */
+  streuung: number;
+}
+
+/**
+ * Die Lichterreihen (Szene C) unter einer Maske, die von links nach rechts
+ * steigt: Wie gross ist jede Scheibe, und wie gleichmässig?
+ *
+ * `erwartet` ist der Bandradius `R · k / K` mit `k = ⌊s · K + ½⌋` – derselbe
+ * Radius, den die Rechnung jeder Quelle zuteilt. Gemessen wird der Radius am
+ * radialen Mittel (Schritte von ¼ Punkt) und die Streuung zwischen 0,2 und
+ * 0,7 des erwarteten Radius.
+ */
+export function reiheMessen(
+  sz: Szene,
+  res: Uint8ClampedArray,
+  maskImg: Uint8Array,
+  R: number,
+  stufen: number,
+): ReiheLicht[] {
+  const { W, H } = sz;
+  const aus: ReiheLicht[] = [];
+  const lichtWert = (i: number) => (res[i * 4] + res[i * 4 + 1] + res[i * 4 + 2]) / 3;
+  for (const p of sz.punkte) {
+    const m = maskImg[Math.round(p.y) * W + Math.round(p.x)] / 255;
+    const k = Math.floor(staerke(m, m, 1) * stufen + 0.5);
+    const erwartet = (R * k) / stufen;
+    const n = Math.ceil(R * 1.7 * 4);
+    const summe = new Array<number>(n).fill(0);
+    const zahl = new Array<number>(n).fill(0);
+    for (let y = Math.floor(p.y - R * 1.7); y <= Math.ceil(p.y + R * 1.7); y += 1) {
+      for (let x = Math.floor(p.x - R * 1.7); x <= Math.ceil(p.x + R * 1.7); x += 1) {
+        if (x < 0 || y < 0 || x >= W || y >= H) continue;
+        const b = Math.floor(Math.hypot(x + 0.5 - p.x, y + 0.5 - p.y) * 4);
+        if (b >= n) continue;
+        summe[b] += lichtWert(y * W + x);
+        zahl[b] += 1;
+      }
+    }
+    const profil = summe.map((v, i) => (zahl[i] ? v / zahl[i] : 0));
+    const hoehe = Math.max(...profil.slice(2));
+    let r25 = 0;
+    for (let i = 0; i < n; i += 1) if (profil[i] >= 0.25 * hoehe) r25 = (i + 0.5) / 4;
+    // Streuung im Inneren: alle Bildpunkte zwischen 0,2 und 0,7 des Radius.
+    const rb = Math.max(2, erwartet);
+    let q1 = 0;
+    let q2 = 0;
+    let qn = 0;
+    for (let y = Math.floor(p.y - rb); y <= Math.ceil(p.y + rb); y += 1) {
+      for (let x = Math.floor(p.x - rb); x <= Math.ceil(p.x + rb); x += 1) {
+        if (x < 0 || y < 0 || x >= W || y >= H) continue;
+        const d = Math.hypot(x + 0.5 - p.x, y + 0.5 - p.y);
+        if (d < 0.2 * rb || d > 0.7 * rb) continue;
+        const v = lichtWert(y * W + x);
+        q1 += v;
+        q2 += v * v;
+        qn += 1;
+      }
+    }
+    const mittel = qn ? q1 / qn : 0;
+    const streuung =
+      qn && mittel > 0 ? Math.sqrt(Math.max(0, q2 / qn - mittel * mittel)) / mittel : 0;
+    aus.push({ m, erwartet, r25, streuung });
+  }
+  return aus;
+}
+
+/**
+ * Wie scharf der Grund in einem Abstandsband um das Motiv ist: das Mittel
+ * der Helligkeitsunterschiede zu den Nachbarn rechts und unten, nur ausserhalb
+ * des Motivs. Abstände in Punkten bei 1200.
+ */
+export function schaerfeBand(sz: Szene, res: Uint8ClampedArray, von: number, bis: number): number {
+  const { W, H, sd } = sz;
+  const u = W / 1200;
+  const hell = (i: number) => (res[i * 4] + res[i * 4 + 1] + res[i * 4 + 2]) / 3;
+  let summe = 0;
+  let n = 0;
+  for (let y = 0; y < H - 1; y += 1) {
+    for (let x = 0; x < W - 1; x += 1) {
+      const i = y * W + x;
+      const d = sd[i] / u;
+      if (d < von || d >= bis) continue;
+      summe += Math.abs(hell(i) - hell(i + 1)) + Math.abs(hell(i) - hell(i + W));
+      n += 2;
+    }
+  }
+  return n ? summe / n : 0;
 }
 
 /* ---------- ein ganzer Fall ---------- */
@@ -902,19 +1218,6 @@ export function fall(e: FallEingabe): FallAusgabe {
     };
   }
   if (e.bilder) aus.bilder = bilder;
-  const g = bilder.gpu;
-  const c = bilder.cpu;
-  if (g && c) {
-    let max = 0;
-    let summe = 0;
-    for (let i = 0; i < W * H; i += 1) {
-      for (let k = 0; k < 3; k += 1) {
-        const d = Math.abs(g[i * 4 + k] - c[i * 4 + k]);
-        if (d > max) max = d;
-        summe += d;
-      }
-    }
-    aus.gleich = { max, mittel: summe / (W * H * 3) };
-  }
+  if (bilder.gpu && bilder.cpu) aus.gleich = unterschied(bilder.gpu, bilder.cpu);
   return aus;
 }

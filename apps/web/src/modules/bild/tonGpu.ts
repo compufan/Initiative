@@ -954,6 +954,12 @@ function aufGpu(
   const w = werkzeug();
   if (!w) return null;
   const { gl, orte } = w;
+  // Schon vor dem Hochladen: Ein Kontext, der zwischen zwei Bildern verloren
+  // ging, kostet sonst einen Durchlauf ins Leere.
+  if (gl.isContextLost()) {
+    werkVerwerfen();
+    return null;
+  }
   try {
     if (w.leinwand.width !== breite) w.leinwand.width = breite;
     if (w.leinwand.height !== hoehe) w.leinwand.height = hoehe;
@@ -1084,21 +1090,39 @@ function aufGpu(
     }
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    if (gl.isContextLost()) return null;
+    if (gl.isContextLost()) {
+      // Ein toter Kontext wirft nichts, er tut nur nichts: ohne das Verwerfen
+      // blieb er für die ganze Sitzung der „Werkzeugkasten“, und jedes Bild
+      // lief über Aufrufe ins Leere zum Prozessor.
+      werkVerwerfen();
+      return null;
+    }
     return w.leinwand;
   } catch {
     // Ein verlorener Kontext ist auf einem Telefon Alltag, kein Fehler.
-    // Der Quellzettel MUSS dabei mitfallen: Er behauptete sonst, in einer
-    // Textur aus einem toten Kontext liege noch das richtige Bild.
-    werk = undefined;
-    quellzettel = null;
-    atlasZettel = null;
-    kernZettel = null;
-    hybridZettel = null;
-    unscharfVerwerfen();
-    zaehler.texturenLebend = 0;
+    werkVerwerfen();
     return null;
   }
+}
+
+/**
+ * Vergisst alles, was an einem Kontext hing – nach einem Verlust zeigen
+ * Texturen und Zettel ins Leere.
+ *
+ * Der Quellzettel MUSS dabei mitfallen: Er behauptete sonst, in einer Textur
+ * aus einem toten Kontext liege noch das richtige Bild. Dasselbe gilt für den
+ * Atlas, die Kernfelder, das Zwischenbild der Unschärfe samt Vorrat – und der
+ * Zähler der lebenden Texturen beginnt von vorn. Das nächste Bild legt einen
+ * neuen Kontext an; solange der Prozessor rechnet, sieht niemand etwas.
+ */
+function werkVerwerfen(): void {
+  werk = undefined;
+  quellzettel = null;
+  atlasZettel = null;
+  kernZettel = null;
+  hybridZettel = null;
+  unscharfVerwerfen();
+  zaehler.texturenLebend = 0;
 }
 
 /**
