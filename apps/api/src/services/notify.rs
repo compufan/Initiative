@@ -460,6 +460,117 @@ pub async fn benachrichtige_termin(
     angesprochen
 }
 
+/// Eine Erinnerung, die zugestellt wurde – und an wen eine Mitteilung gehen soll.
+#[derive(Debug, Clone)]
+pub struct Erinnert {
+    pub termin_id: Uuid,
+    pub titel: String,
+    pub person: Uuid,
+    /// Der Einzelchat, in dem die Erinnerung steht.
+    pub chat: Uuid,
+    /// Die Karte der Erinnerung.
+    pub nachricht: Uuid,
+}
+
+/// Was an eine erinnerte Person geht – oder nichts.
+///
+/// Rein, damit sich Auswahl und Wortlaut ohne Push-Dienst prüfen lassen. Es
+/// gelten die Einstellungen der Person wie überall: Push aus oder der Einzelchat
+/// stummgeschaltet heisst keine Mitteilung (die Karte steht trotzdem im Chat),
+/// ohne Vorschau steht weder Termin noch Ersteller darin.
+///
+/// Titel „Initiative“ und nicht der Name des Erstellers: Die Mitteilung kommt von
+/// der App, nicht von einer Person – eine automatische Mitteilung soll kein
+/// Gesicht tragen. Das `tag` ist das der Einladung: Auf dem Gerät steht höchstens
+/// **eine** Mitteilung je Termin, die aber erneut klingelt.
+pub fn erinnerung_mitteilung(
+    erinnert: &Erinnert,
+    push_an: bool,
+    vorschau: bool,
+    stumm: bool,
+) -> Option<PushPayload> {
+    if !push_an || stumm {
+        return None;
+    }
+    let text = if vorschau {
+        truncate(&super::erinnern::erinnerungstext(&erinnert.titel), 140)
+    } else {
+        "Erinnerung an einen Termin".to_string()
+    };
+    Some(PushPayload {
+        title: "Initiative".to_string(),
+        body: text,
+        tag: Some(format!("termin:{}", erinnert.termin_id)),
+        url: format!("/chats/{}", erinnert.chat),
+        conversation_id: Some(erinnert.chat),
+        message_id: Some(erinnert.nachricht),
+        kind: "event".to_string(),
+    })
+}
+
+/// Schickt die Mitteilungen zu den Erinnerungen eines Durchgangs: **eine** je
+/// Erinnerung, mit **einer** Abfrage für alle Personen.
+///
+/// Die Karte ist stumm angelegt (`NewMessage::erinnerung`), sonst käme
+/// `notify_new_message` mit „📅 Termin“ und dem Kennzeichen des Chats dazu.
+///
+/// Liefert, wie vielen Erinnerungen eine Mitteilung folgt. Ist der Push nicht
+/// eingerichtet, ist das null; gesendet wird im Hintergrund.
+pub async fn benachrichtige_erinnerungen(state: &AppState, erinnert: &[Erinnert]) -> usize {
+    if !state.push.enabled() || erinnert.is_empty() {
+        return 0;
+    }
+    let personen: Vec<Uuid> = erinnert.iter().map(|eintrag| eintrag.person).collect();
+    let chats: Vec<Uuid> = erinnert.iter().map(|eintrag| eintrag.chat).collect();
+    let zeilen = match sqlx::query_as::<_, PersonEinstellung>(
+        "select u.id, u.settings, cm.conversation_id, cm.muted_until
+           from users u
+           left join conversation_members cm
+             on cm.user_id = u.id and cm.conversation_id = any($2)
+          where u.id = any($1)",
+    )
+    .bind(&personen)
+    .bind(&chats)
+    .fetch_all(&state.pool)
+    .await
+    {
+        Ok(zeilen) => zeilen,
+        Err(fehler) => {
+            tracing::warn!(%fehler, "Empfänger der Erinnerungen nicht geladen");
+            return 0;
+        }
+    };
+
+    let jetzt = chrono::Utc::now();
+    let mut einstellung: HashMap<Uuid, (bool, bool)> = HashMap::new();
+    let mut stumm: HashSet<(Uuid, Uuid)> = HashSet::new();
+    for zeile in &zeilen {
+        einstellung
+            .entry(zeile.id)
+            .or_insert_with(|| benachrichtigungen(&zeile.settings));
+        if let (Some(chat), Some(bis)) = (zeile.conversation_id, zeile.muted_until) {
+            if bis > jetzt {
+                stumm.insert((zeile.id, chat));
+            }
+        }
+    }
+
+    let ziele: Vec<(Vec<Uuid>, PushPayload)> = erinnert
+        .iter()
+        .filter_map(|eintrag| {
+            let (push_an, vorschau) = einstellung.get(&eintrag.person).copied()?;
+            let ist_stumm = stumm.contains(&(eintrag.person, eintrag.chat));
+            erinnerung_mitteilung(eintrag, push_an, vorschau, ist_stumm)
+                .map(|payload| (vec![eintrag.person], payload))
+        })
+        .collect();
+    let angesprochen = ziele.len();
+    if !ziele.is_empty() {
+        state.push.im_hintergrund(state.pool.clone(), ziele);
+    }
+    angesprochen
+}
+
 async fn anzeigename(state: &AppState, person: Uuid) -> String {
     sqlx::query_as::<_, (String,)>("select display_name from users where id = $1")
         .bind(person)
@@ -521,6 +632,54 @@ mod tests {
             })),
             (false, false)
         );
+    }
+
+    fn erinnert() -> Erinnert {
+        Erinnert {
+            termin_id: chat(7),
+            titel: "Grillen".to_string(),
+            person: chat(2),
+            chat: chat(3),
+            nachricht: chat(4),
+        }
+    }
+
+    #[test]
+    fn die_erinnerung_zeigt_mit_vorschau_den_termin_und_nennt_nie_einen_namen() {
+        let payload = erinnerung_mitteilung(&erinnert(), true, true, false).expect("Mitteilung");
+        assert_eq!(payload.title, "Initiative");
+        assert_eq!(
+            payload.body,
+            "Erinnerung: Du hast noch nicht auf „Grillen“ geantwortet."
+        );
+        assert_eq!(payload.kind, "event");
+        assert_eq!(payload.tag, Some(format!("termin:{}", chat(7))));
+        assert_eq!(payload.url, format!("/chats/{}", chat(3)));
+        assert_eq!(payload.conversation_id, Some(chat(3)));
+        assert_eq!(payload.message_id, Some(chat(4)));
+    }
+
+    #[test]
+    fn ohne_vorschau_steht_weder_termin_noch_titel_darin() {
+        let payload = erinnerung_mitteilung(&erinnert(), true, false, false).expect("Mitteilung");
+        assert_eq!(payload.body, "Erinnerung an einen Termin");
+        assert!(!payload.body.contains("Grillen"));
+        assert_eq!(payload.title, "Initiative");
+    }
+
+    #[test]
+    fn push_aus_oder_ein_stummer_chat_heisst_keine_mitteilung() {
+        assert!(erinnerung_mitteilung(&erinnert(), false, true, false).is_none());
+        assert!(erinnerung_mitteilung(&erinnert(), true, true, true).is_none());
+    }
+
+    #[test]
+    fn ein_langer_titel_wird_gekuerzt() {
+        let mut lang = erinnert();
+        lang.titel = "x".repeat(300);
+        let payload = erinnerung_mitteilung(&lang, true, true, false).expect("Mitteilung");
+        assert_eq!(payload.body.chars().count(), 140);
+        assert!(payload.body.ends_with('…'));
     }
 
     #[test]

@@ -206,6 +206,14 @@ pub struct CalendarEventRow {
     pub stand: i64,
     /// Wiederholungsschutz beim Anlegen: derselbe Schlüssel, derselbe Termin.
     pub client_id: Option<String>,
+    /// Stunden bis zur ersten Erinnerung an Ausstehende und zwischen den
+    /// folgenden. Leer: aus (`migrations/0024_erinnern.sql`).
+    pub erinnern_nach_std: Option<i32>,
+    /// Wie oft höchstens je Person; leer bei eingeschaltetem Erinnern heisst
+    /// „bis zum Termin“ (der Server deckelt auch das).
+    pub erinnern_anzahl: Option<i16>,
+    /// Seit wann die Einstellung gilt – der Anker der Uhr.
+    pub erinnern_seit: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,

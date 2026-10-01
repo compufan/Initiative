@@ -18,8 +18,8 @@ use crate::constants::{
 use crate::db::{AttachmentRow, CalendarEventRow, EventAttachmentRow, EventNoteRow, UserRow};
 use crate::drossel::regeln;
 use crate::dto::{
-    CalendarEventDto, EventAttachmentDto, EventNoteDto, ListResult, TerminAntwort, ZustellungDto,
-    ZustellungStandDto,
+    CalendarEventDto, ErinnernStandDto, EventAttachmentDto, EventNoteDto, ListResult,
+    TerminAntwort, ZustellungDto, ZustellungStandDto,
 };
 use crate::error::{AppError, AppResult};
 use crate::ical::{build_calendar, IcsCalendar, IcsEvent};
@@ -33,6 +33,7 @@ use crate::services::calendar::{
 };
 use crate::services::conversations::{assert_membership, neue_chats_melden};
 use crate::services::einladen::{self, Einladungswunsch, Geaendert, Wunsch};
+use crate::services::erinnern::{self, Erinnern};
 use crate::services::events::{
     assert_attendee, may_edit_note, require_note, to_note_dto, CHECK_SCOPES, NOTE_SCOPES,
 };
@@ -64,6 +65,11 @@ pub fn router() -> Router<AppState> {
         .route(
             "/calendar/events/{id}/zustellung/nachliefern",
             post(zustellung_nachliefern),
+        )
+        // Wie weit das Erinnern an ausstehende Antworten ist – nur der Ersteller.
+        .route(
+            "/calendar/events/{id}/erinnerungen",
+            get(erinnerungen_lesen),
         )
         .route("/calendar/events/{id}/occurrences", get(occurrences))
         .route("/calendar/events/{id}/event.ics", get(event_ics))
@@ -150,6 +156,28 @@ fn wahr() -> bool {
     true
 }
 
+/// Wie an ausstehende Antworten erinnert wird – siehe `services::erinnern`.
+///
+/// `anzahl` fehlt oder `null`: bis zum Termin, höchstens zehn.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ErinnernInput {
+    /// Stunden bis zur ersten Erinnerung und zwischen allen weiteren.
+    nach_stunden: i32,
+    anzahl: Option<i32>,
+}
+
+impl ErinnernInput {
+    /// Prüft die Grenzen und macht die Einstellung daraus.
+    fn pruefen(self) -> AppResult<Erinnern> {
+        erinnern::pruefen(self.nach_stunden, self.anzahl)?;
+        Ok(Erinnern {
+            nach_std: self.nach_stunden,
+            anzahl: self.anzahl,
+        })
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateEventInput {
@@ -172,6 +200,9 @@ struct CreateEventInput {
     /// Wiederholungsschutz: Wer denselben Schlüssel noch einmal schickt
     /// (Funkloch, Doppeltipp), bekommt den schon angelegten Termin zurück.
     client_id: Option<String>,
+    /// Erinnern an ausstehende Antworten; fehlt es oder ist es `null`, wird
+    /// nicht erinnert.
+    erinnern: Option<ErinnernInput>,
 }
 
 fn validate_event(
@@ -196,6 +227,10 @@ fn validate_event(
 }
 
 const NUR_ERSTELLER_LADET_EIN: &str = "Nur wer den Termin angelegt hat, kann Einladungen ändern";
+const NUR_ERSTELLER_ERINNERT: &str =
+    "Nur wer den Termin angelegt hat, kann Erinnerungen einstellen";
+const NUR_ERSTELLER_SIEHT_ERINNERUNGEN: &str =
+    "Nur wer den Termin angelegt hat, sieht, wie weit die Erinnerungen sind";
 
 /// Einladungen ändern darf nur, wer den Termin angelegt hat.
 ///
@@ -206,11 +241,21 @@ const NUR_ERSTELLER_LADET_EIN: &str = "Nur wer den Termin angelegt hat, kann Ein
 /// Wer gar nicht eingeladen ist, bekommt 404 und nicht 403: Sonst ließe sich an
 /// der Antwort ablesen, ob es einen Termin mit dieser Kennung gibt.
 async fn nur_ersteller(state: &AppState, event: &CalendarEventRow, user_id: Uuid) -> AppResult<()> {
+    nur_ersteller_sagt(state, event, user_id, NUR_ERSTELLER_LADET_EIN).await
+}
+
+/// Wie [`nur_ersteller`], mit dem Text, der zur Sache passt.
+async fn nur_ersteller_sagt(
+    state: &AppState,
+    event: &CalendarEventRow,
+    user_id: Uuid,
+    text: &str,
+) -> AppResult<()> {
     if event.created_by == Some(user_id) {
         return Ok(());
     }
     assert_attendee(&state.pool, event, user_id).await?;
-    Err(AppError::forbidden(NUR_ERSTELLER_LADET_EIN))
+    Err(AppError::forbidden(text))
 }
 
 /// Bremst Anfragen, die Einladungen verschicken oder ändern.
@@ -274,6 +319,7 @@ async fn create(
     if zustellung.is_some() || !input.attendee_ids.is_empty() {
         einladen_bremsen(&state, user.id())?;
     }
+    let erinnern = input.erinnern.map(ErinnernInput::pruefen).transpose()?;
 
     let angelegt = anlegen(
         &state,
@@ -297,6 +343,7 @@ async fn create(
             announce: input.announce,
             zustellung,
             client_id: input.client_id,
+            erinnern,
         },
     )
     .await?;
@@ -406,6 +453,10 @@ struct UpdateEventInput {
     zustellung: Option<ZustellungAendern>,
     /// `confirmed` oder `cancelled`: Absagen und Wiederaufnehmen.
     status: Option<String>,
+    /// Erinnern an ausstehende Antworten: fehlt es, bleibt die Einstellung;
+    /// `null` schaltet sie aus. Nur der Ersteller darf es senden.
+    #[serde(default, deserialize_with = "super::double_option")]
+    erinnern: Option<Option<ErinnernInput>>,
 }
 
 /// Was beim Ändern an der Zustellung gilt.
@@ -429,12 +480,41 @@ async fn update(
     Json(input): Json<UpdateEventInput>,
 ) -> AppResult<Json<TerminAntwort>> {
     let row = require_event(&state, id).await?;
+    // Zuerst, vor der allgemeinen Prüfung: Wer das Erinnern ändern will, ohne den
+    // Termin angelegt zu haben, soll den passenden Grund hören – und ein
+    // Nicht-Eingeladener weiterhin 404.
+    if input.erinnern.is_some() {
+        nur_ersteller_sagt(&state, &row, user.id(), NUR_ERSTELLER_ERINNERT).await?;
+    }
     assert_editable(&state, &row, user.id()).await?;
 
     let aendert_einladungen = input.attendee_ids.is_some() || input.zustellung.is_some();
     if aendert_einladungen {
         nur_ersteller(&state, &row, user.id()).await?;
     }
+
+    // Wen der Ersteller wie oft anschreiben lässt, ändert er allein – ein
+    // Gruppen-Admin ändert Zeit und Ort, aber nicht das.
+    let neues_erinnern: Option<Option<Erinnern>> = match input.erinnern {
+        None => None,
+        Some(eingabe) => {
+            match eingabe {
+                None => Some(None),
+                Some(eingabe) => {
+                    let einstellung = eingabe.pruefen()?;
+                    // Es gibt noch keinen Zeitpunkt; die Frage dort lautet
+                    // „Wann?“, nicht „Kommst du?“ – beantwortet wird sie in der
+                    // Abstimmung.
+                    if row.status == "planning" {
+                        return Err(AppError::bad_request(
+                            "Solange über den Zeitpunkt abgestimmt wird, lässt sich keine Erinnerung einstellen – lege zuerst den Zeitpunkt fest.",
+                        ));
+                    }
+                    Some(Some(einstellung))
+                }
+            }
+        }
+    };
 
     let starts_at = input.starts_at.unwrap_or(row.starts_at);
     let ends_at = input.ends_at.unwrap_or(row.ends_at);
@@ -522,6 +602,36 @@ async fn update(
     .bind(&neuer_status)
     .execute(&mut *tx)
     .await?;
+
+    // Die Erinnerungs-Einstellung – gegen den gesperrten Stand verglichen, nicht
+    // gegen das, was beim Lesen oben galt: Die Uhr startet nur bei einem
+    // tatsächlichen Unterschied (siehe `erinnern::uhr_neu_starten`).
+    let wieder_aufgenommen =
+        alt.status == "cancelled" && neuer_status.as_deref() == Some("confirmed");
+    let erinnern_alt = Erinnern::aus_zeile(&alt);
+    let erinnern_neu = neues_erinnern.unwrap_or(erinnern_alt);
+    let uhr_neu = erinnern::uhr_neu_starten(erinnern_alt, erinnern_neu, wieder_aufgenommen);
+    if erinnern_neu != erinnern_alt || uhr_neu {
+        sqlx::query(
+            "update calendar_events set
+               erinnern_nach_std = $2::int,
+               erinnern_anzahl = $3::smallint,
+               erinnern_seit = case when $2::int is null then null
+                                    when $4 then now()
+                                    else erinnern_seit end
+             where id = $1",
+        )
+        .bind(id)
+        .bind(erinnern_neu.map(|einstellung| einstellung.nach_std))
+        .bind(
+            erinnern_neu
+                .and_then(|einstellung| einstellung.anzahl)
+                .map(|anzahl| anzahl as i16),
+        )
+        .bind(uhr_neu)
+        .execute(&mut *tx)
+        .await?;
+    }
 
     let aenderung = wesentlich_geaendert(
         &alt,
@@ -864,6 +974,20 @@ async fn zustellung_lesen(
     Ok(Json(einladen::zustellung_stand(&state.pool, id).await?))
 }
 
+/// Wie weit das Erinnern an ausstehende Antworten ist – nur für den Ersteller.
+///
+/// Wie viele Erinnerungen jede Person schon bekam, geht die anderen nichts an:
+/// Der Termin selbst und der Rundruf tragen nur die Einstellung, keine Zähler.
+async fn erinnerungen_lesen(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<ErinnernStandDto>> {
+    let row = require_event(&state, id).await?;
+    nur_ersteller_sagt(&state, &row, user.id(), NUR_ERSTELLER_SIEHT_ERINNERUNGEN).await?;
+    Ok(Json(erinnern::stand(&state.pool, &row).await?))
+}
+
 /// Legt fehlende Nachrichten zu reservierten Karten an – wiederholbar.
 async fn zustellung_nachliefern(
     State(state): State<AppState>,
@@ -1114,6 +1238,7 @@ async fn create_planning(
             announce: Some(false),
             zustellung: None,
             client_id: None,
+            erinnern: None,
         },
     )
     .await?;

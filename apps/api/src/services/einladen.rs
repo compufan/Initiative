@@ -614,7 +614,7 @@ pub async fn karten_entfernen(
 }
 
 /// Markiert Nachrichten als gelöscht und bestimmt, wem es zu melden ist.
-async fn nachrichten_loeschen(
+pub(super) async fn nachrichten_loeschen(
     tx: &mut Transaction<'_, Postgres>,
     nachrichten: &[Uuid],
 ) -> AppResult<Vec<Geloescht>> {
@@ -960,7 +960,12 @@ pub async fn aendern_vorbereiten(
         .await?;
     }
     let mut zu_loeschen = weg_karten.clone();
+    let mut erinnerungskarten = Vec::new();
     if !entfernt.is_empty() {
+        // Die Erinnerungen vorher: Mit der Teilnehmerzeile gehen sie per Kaskade
+        // weg und mit ihnen die Kennung ihrer Nachricht.
+        erinnerungskarten =
+            super::erinnern::erinnerungen_entfernen(tx, termin.id, Some(&entfernt)).await?;
         sqlx::query("delete from event_attendees where event_id = $1 and user_id = any($2)")
             .bind(termin.id)
             .bind(&entfernt)
@@ -976,7 +981,8 @@ pub async fn aendern_vorbereiten(
         .await?;
         zu_loeschen.extend(einzelkarten);
     }
-    let geloescht = karten_entfernen(tx, &zu_loeschen).await?;
+    let mut geloescht = karten_entfernen(tx, &zu_loeschen).await?;
+    geloescht.extend(erinnerungskarten);
 
     let mut karten: Vec<Reservierung> = gruppen_plan
         .gruppen
@@ -1038,7 +1044,10 @@ pub async fn termin_loeschen(
     .bind(termin.id)
     .fetch_all(&mut *tx)
     .await?;
-    let geloescht = karten_entfernen(&mut tx, &zeilen).await?;
+    let mut geloescht = karten_entfernen(&mut tx, &zeilen).await?;
+    // Auch die Erinnerungen an den Termin: Sie sind Karten im Einzelchat und
+    // verschwinden mit ihm wie die Einladungskarte.
+    geloescht.extend(super::erinnern::erinnerungen_entfernen(&mut tx, termin.id, None).await?);
     tx.commit().await?;
     Ok(geloescht)
 }

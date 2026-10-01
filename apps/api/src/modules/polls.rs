@@ -407,6 +407,7 @@ async fn create_event_from_poll(
             announce: Some(true),
             zustellung: None,
             client_id: None,
+            erinnern: None,
         },
     )
     .await?;
