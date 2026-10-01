@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import {
   TYPING_TTL_MS,
   uuidv7,
+  type CalendarEventDto,
   type ConversationDto,
   type MessageDto,
   type MessageMetadata,
@@ -10,6 +11,12 @@ import {
 } from '@initiative/shared';
 import { ApiError, api } from '../lib/api.js';
 import { realtime } from '../lib/realtime.js';
+import {
+  auf as aufTerminEreignisse,
+  connectTerminEreignisse,
+  neuer as neuerTermin,
+  type EntferntGrund,
+} from '../lib/terminEreignisse.js';
 import {
   cacheConversations,
   cacheMessages,
@@ -27,8 +34,19 @@ import {
 } from '../lib/db.js';
 import { uploadBlob } from '../lib/upload.js';
 
-/** A message plus client-only delivery state. */
-export type ChatMessage = MessageDto & { pending?: boolean; failed?: boolean };
+/**
+ * A message plus client-only delivery state.
+ *
+ * `terminGrund` gilt nur für Termin-Karten: Warum der Termin nicht mehr zu sehen
+ * ist, solange die Sitzung läuft („Du bist nicht mehr eingeladen“). Nach dem
+ * Neuladen kennt der Server den Grund der Karte nicht mehr – dann steht dort das
+ * neutrale „Termin nicht verfügbar“, darum wird er nicht zwischengespeichert.
+ */
+export type ChatMessage = MessageDto & {
+  pending?: boolean;
+  failed?: boolean;
+  terminGrund?: EntferntGrund;
+};
 
 export interface Draft {
   type?: MessageType;
@@ -496,11 +514,125 @@ async function refreshMessages(
   }
 }
 
+/**
+ * Was aus einer Nachricht in den Zwischenspeicher darf: ohne den Zustand, der
+ * nur in dieser Sitzung gilt.
+ */
+function zumCache(message: ChatMessage): MessageDto {
+  const { terminGrund: _grund, pending: _wartet, failed: _gescheitert, ...rest } = message;
+  return rest;
+}
+
+function istKarteVon(message: ChatMessage, eventId: string): boolean {
+  return (
+    message.type === 'event' &&
+    (message.metadata.eventId === eventId || message.event?.id === eventId)
+  );
+}
+
+/**
+ * Führt jede Karte eines Termins auf den neuen Stand nach – in ALLEN Chats.
+ *
+ * Die Karte hält keinen eigenen Stand: Sie zeigt den Termin, wie der Server ihn
+ * dem Betrachter ausgeliefert hat, und der liegt in `message.event`. Bisher
+ * wurde er nie berührt – `EventBubble` hörte selbst auf `event.updated`, aber
+ * nur, solange sie eingehängt war. Eine Zusage in einem anderen Chat erreichte
+ * eine nicht geöffnete Karte nie, und beim Zurückkehren stand dort der alte
+ * Zähler.
+ *
+ * Nur betroffene Listen werden kopiert; alles andere behält seine Identität,
+ * damit nicht jeder Chat neu zeichnet, weil ein Termin sich geändert hat.
+ */
+export function terminAbgleichen(event: CalendarEventDto): void {
+  const geaendert: ChatMessage[] = [];
+  useChat.setState((state) => {
+    let messages = state.messages;
+    let loaded = state.loaded;
+    // Steht die Karte dieses Termins schon im Chat, zu dem er gehört? Dann
+    // stammen leere Karten dort von anderen Terminen.
+    let imChat = false;
+    const chat = event.conversationId;
+    for (const [conversationId, list] of Object.entries(state.messages)) {
+      let neu: ChatMessage[] | null = null;
+      list.forEach((message, index) => {
+        if (!istKarteVon(message, event.id)) return;
+        if (conversationId === chat) imChat = true;
+        const fassung = message.event ? neuerTermin(message.event, event) : event;
+        if (fassung === message.event && !message.terminGrund) return;
+        neu ??= list.slice();
+        const ersatz: ChatMessage = { ...message, event: fassung };
+        delete ersatz.terminGrund;
+        neu[index] = ersatz;
+        geaendert.push(ersatz);
+      });
+      if (neu) {
+        if (messages === state.messages) messages = { ...state.messages };
+        messages[conversationId] = neu;
+      }
+    }
+
+    // Eine Karte, die dem Betrachter bisher nichts zeigte (er war nicht
+    // eingeladen), trägt weder `event` noch die Kennung – sie lässt sich nicht
+    // zuordnen. Wird er eingeladen, soll der Gruppenchat beim nächsten Öffnen
+    // vollständig neu geladen werden, nicht nur um das Neuere ergänzt: Nur dann
+    // füllt sich die leere Karte.
+    if (chat && !imChat && loaded[chat]) {
+      const leer = (state.messages[chat] ?? []).some(
+        (message) =>
+          message.type === 'event' &&
+          !message.event &&
+          !message.metadata.eventId &&
+          !message.deletedAt,
+      );
+      if (leer) loaded = { ...loaded, [chat]: false };
+    }
+
+    const nichts = messages === state.messages && loaded === state.loaded;
+    return nichts ? {} : { messages, loaded };
+  });
+  if (geaendert.length > 0) void cacheMessages(geaendert.map(zumCache));
+}
+
+/**
+ * Der Termin ist weg oder nicht mehr sichtbar: Die Karten zeigen es, statt
+ * einen Stand von vorgestern zu behalten.
+ */
+export function terminEntfernt(eventId: string, grund?: EntferntGrund): void {
+  const geaendert: ChatMessage[] = [];
+  useChat.setState((state) => {
+    let messages = state.messages;
+    for (const [conversationId, list] of Object.entries(state.messages)) {
+      let neu: ChatMessage[] | null = null;
+      list.forEach((message, index) => {
+        if (!istKarteVon(message, eventId)) return;
+        if (!message.event && message.terminGrund === grund) return;
+        neu ??= list.slice();
+        const ersatz: ChatMessage = { ...message, event: undefined };
+        if (grund) ersatz.terminGrund = grund;
+        else delete ersatz.terminGrund;
+        neu[index] = ersatz;
+        geaendert.push(ersatz);
+      });
+      if (neu) {
+        if (messages === state.messages) messages = { ...state.messages };
+        messages[conversationId] = neu;
+      }
+    }
+    return messages === state.messages ? {} : { messages };
+  });
+  if (geaendert.length > 0) void cacheMessages(geaendert.map(zumCache));
+}
+
 /** Wire realtime events into the store exactly once. */
 let wired = false;
 export function connectChatRealtime(): void {
   if (wired) return;
   wired = true;
+
+  // Termin-Karten stehen in vielen Chats, auch in nie geöffneten: Jede Änderung
+  // des Termins führt sie alle nach – nicht nur die Karte, die gerade offen ist.
+  connectTerminEreignisse();
+  aufTerminEreignisse({ aktualisiert: terminAbgleichen, entfernt: terminEntfernt });
 
   realtime.on('message.new', ({ message }) => useChat.getState().applyMessage(message));
   realtime.on('message.updated', ({ message }) => useChat.getState().applyMessage(message));
@@ -553,9 +685,11 @@ export function connectChatRealtime(): void {
       ),
     }));
   });
-  realtime.on('sync.hint', ({ conversationId }) => {
+  realtime.on('sync.hint', ({ conversationId, eventId }) => {
     if (conversationId) void useChat.getState().loadMessages(conversationId, { force: true });
-    else void useChat.getState().loadConversations();
+    // Ein Hinweis auf einen Termin gehört dem Trichter (`terminEreignisse`); die
+    // Chats müssen dafür nicht neu geladen werden.
+    else if (!eventId) void useChat.getState().loadConversations();
   });
   realtime.onStateChange((state) => {
     if (state === 'online') void useChat.getState().flushOutbox();

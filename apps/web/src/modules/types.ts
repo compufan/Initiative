@@ -3,7 +3,12 @@ import type { RouteObject } from 'react-router-dom';
 import type { ConversationDto, MessageDto } from '@initiative/shared';
 
 export interface MessageRendererProps {
-  message: MessageDto & { pending?: boolean; failed?: boolean };
+  message: MessageDto & {
+    pending?: boolean;
+    failed?: boolean;
+    /** Nur Termin-Karten: warum der Termin in dieser Sitzung nicht mehr zu sehen ist. */
+    terminGrund?: 'geloescht' | 'ausgeladen';
+  };
   conversation: ConversationDto | null;
   isMine: boolean;
 }

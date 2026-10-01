@@ -28,10 +28,12 @@ import type {
   SelfUserDto,
   Prioritaet,
   StickerPackDto,
+  TerminAntwort,
   UpdateCollectionInput,
   UpdateCollectionItemInput,
   UserDto,
   VerlaufsantragDto,
+  ZustellungStandDto,
 } from '@initiative/shared';
 import { API_PREFIX } from '@initiative/shared';
 
@@ -614,9 +616,15 @@ export const api = {
   calendar: {
     events: (query: { from?: string; to?: string; conversationId?: string } = {}) =>
       get<ListResult<CalendarEventDto>>('/calendar/events', { query }),
-    create: (body: Record<string, unknown>) => post<CalendarEventDto>('/calendar/events', body),
+    /**
+     * Anlegen und Ändern liefern den Termin auf oberster Ebene, dazu – wenn
+     * `zustellung` oder `attendeeIds` gesendet wurde – was daraus geworden ist
+     * (Karten, neue Einzelchats, Ausgelassenes). Ältere Server kennen das Feld
+     * nicht; dann fehlt es einfach.
+     */
+    create: (body: Record<string, unknown>) => post<TerminAntwort>('/calendar/events', body),
     update: (id: string, body: Record<string, unknown>) =>
-      patch<CalendarEventDto>(`/calendar/events/${id}`, body),
+      patch<TerminAntwort>(`/calendar/events/${id}`, body),
     remove: (id: string) => del<void>(`/calendar/events/${id}`),
     rsvp: (id: string, status: 'yes' | 'no' | 'maybe' | 'pending') =>
       post<CalendarEventDto>(`/calendar/events/${id}/rsvp`, { status }),
@@ -631,14 +639,34 @@ export const api = {
      * zu sehen – ausgeladen war niemand.
      *
      * Ein Feld, zwei Bedeutungen, je nach Aufrufer. Jetzt hat es eine.
+     *
+     * Die Neuen bekommen eine Karte im Einzelchat und eine Benachrichtigung;
+     * wer schon dabei war, nichts davon. Der Ersteller gehört nicht in die
+     * Liste – er ist immer dabei.
      */
-    invite: (id: string, bisher: string[], neue: string[]) =>
-      patch<CalendarEventDto>(`/calendar/events/${id}`, {
-        attendeeIds: [...new Set([...bisher, ...neue])],
+    invite: (id: string, bisher: string[], neue: string[], ersteller?: string) =>
+      patch<TerminAntwort>(`/calendar/events/${id}`, {
+        attendeeIds: [...new Set([...bisher, ...neue])].filter((person) => person !== ersteller),
+        zustellung: { senden: true, einzelchats: true },
       }),
-    /** Und wieder ausladen. Nur wer den Termin verwaltet. */
+    /** Und wieder ausladen. Nur der Ersteller; ihre Einzelkarte wird gelöscht. */
     uninvite: (id: string, userId: string) =>
-      del<CalendarEventDto>(`/calendar/events/${id}/attendees/${userId}`),
+      del<TerminAntwort>(`/calendar/events/${id}/attendees/${userId}`),
+    /** Absagen lässt den Termin und seine Karten stehen („Abgesagt“), Zusagen sind dann gesperrt. */
+    absagen: (id: string) =>
+      patch<TerminAntwort>(`/calendar/events/${id}`, { status: 'cancelled' }),
+    /** Nimmt einen abgesagten Termin wieder auf. */
+    wiederaufnehmen: (id: string) =>
+      patch<TerminAntwort>(`/calendar/events/${id}`, { status: 'confirmed' }),
+    /**
+     * Wo der Termin als Karte steht – nur der Ersteller. Der Editor braucht
+     * das, bevor er `gruppenChatIds` schicken darf: Ohne diese Antwort wählte
+     * er bestehende Gruppenkarten versehentlich ab.
+     */
+    zustellung: (id: string) => get<ZustellungStandDto>(`/calendar/events/${id}/zustellung`),
+    /** Legt Karten nach, die beim Anlegen nicht zugestellt werden konnten. */
+    nachliefern: (id: string) =>
+      post<TerminAntwort>(`/calendar/events/${id}/zustellung/nachliefern`),
     byId: (id: string) => get<CalendarEventDto>(`/calendar/events/${id}`),
     icsUrl: (calendarToken: string) =>
       `${API_BASE}${API_PREFIX}/calendar/${calendarToken}/feed.ics`,

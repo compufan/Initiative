@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { CalendarEventDto } from '@initiative/shared';
 import { ApiError, api } from '../../lib/api.js';
-import { realtime } from '../../lib/realtime.js';
+import { aktualisiert, auf, neuer, type EntferntGrund } from '../../lib/terminEreignisse.js';
 
+/** Legt die Fassung ein – eine ältere als die vorhandene verdrängt nichts. */
 function upsert(events: CalendarEventDto[], event: CalendarEventDto): CalendarEventDto[] {
   const index = events.findIndex((item) => item.id === event.id);
   if (index < 0) return [...events, event];
   const next = events.slice();
-  next[index] = event;
+  next[index] = neuer(events[index], event);
   return next;
 }
 
@@ -27,6 +28,10 @@ export interface CalendarEventsResult {
  * screens unfold them into occurrences afterwards. `event.updated` and
  * `event.deleted` keep the list in sync while the screen is open – both
  * subscriptions are released when the component unmounts.
+ *
+ * Gehört wird am Trichter (`terminEreignisse`), nicht am Rundruf: Dort laufen
+ * auch die eigenen Antworten und das Nachladen nach einem Hinweis zusammen, und
+ * ein Rundruf, der einen anderen überholt, verdrängt die neuere Fassung nicht.
  */
 export function useCalendarEvents(from: Date, to: Date): CalendarEventsResult {
   const fromIso = from.toISOString();
@@ -40,7 +45,13 @@ export function useCalendarEvents(from: Date, to: Date): CalendarEventsResult {
     setLoading(true);
     try {
       const { items } = await api.calendar.events({ from: fromIso, to: toIso });
-      setEvents(items);
+      // Ein Rundruf, der während der Anfrage ankam, kann neuer sein als die Liste.
+      setEvents((current) =>
+        items.map((item) => {
+          const vorhanden = current.find((termin) => termin.id === item.id);
+          return vorhanden ? neuer(vorhanden, item) : item;
+        }),
+      );
       setFailed(false);
       setOffline(false);
     } catch (error) {
@@ -55,21 +66,22 @@ export function useCalendarEvents(from: Date, to: Date): CalendarEventsResult {
     void reload();
   }, [reload]);
 
-  useEffect(() => {
-    const offUpdated = realtime.on('event.updated', ({ event }) => {
-      setEvents((current) => upsert(current, event));
-    });
-    const offDeleted = realtime.on('event.deleted', ({ eventId }) => {
-      setEvents((current) => current.filter((item) => item.id !== eventId));
-    });
-    return () => {
-      offUpdated();
-      offDeleted();
-    };
-  }, []);
+  useEffect(
+    () =>
+      auf({
+        aktualisiert: (event) => setEvents((current) => upsert(current, event)),
+        entfernt: (eventId) =>
+          setEvents((current) => current.filter((item) => item.id !== eventId)),
+      }),
+    [],
+  );
 
+  // Die eigene Antwort läuft durch denselben Trichter wie der Rundruf – so
+  // stimmt die Liste auch dann, wenn der Rundruf nie ankommt, und die Karten in
+  // den Chats bekommen sie ebenfalls. Der Trichter verwirft eine Fassung, die
+  // älter ist als die bekannte; der Hörer oben legt sie sonst in die Liste.
   const apply = useCallback((event: CalendarEventDto) => {
-    setEvents((current) => upsert(current, event));
+    aktualisiert(event);
   }, []);
 
   return { events, loading, offline, failed, reload, apply };
@@ -81,6 +93,8 @@ export interface LiveEventResult {
   loading: boolean;
   failed: boolean;
   deleted: boolean;
+  /** Warum der Termin weg ist – nur, wenn `deleted` gilt und der Server es sagte. */
+  grund: EntferntGrund | undefined;
 }
 
 /**
@@ -93,17 +107,34 @@ export function useLiveEvent(
   eventId: string | null,
   initial?: CalendarEventDto | null,
 ): LiveEventResult {
-  const [event, setEvent] = useState<CalendarEventDto | null>(initial ?? null);
+  const [event, setEventRaw] = useState<CalendarEventDto | null>(initial ?? null);
   const [loading, setLoading] = useState(Boolean(eventId) && initial == null);
   const [failed, setFailed] = useState(false);
   const [deleted, setDeleted] = useState(false);
+  const [grund, setGrund] = useState<EntferntGrund | undefined>(undefined);
 
-  // Re-renders with the same expanded copy are a no-op for React.
+  // Re-renders with the same expanded copy are a no-op for React. Die Karte im
+  // Chat-Speicher wird vom Trichter nachgeführt; eine ältere Fassung als die,
+  // die schon angezeigt wird, verdrängt nichts.
   useEffect(() => {
     if (!initial) return;
-    setEvent(initial);
+    setEventRaw((current) =>
+      current && current.id === initial.id ? neuer(current, initial) : initial,
+    );
     setDeleted(false);
+    setGrund(undefined);
   }, [initial]);
+
+  /**
+   * Eine Fassung aus der eigenen Antwort (Zusage, Speichern, Einladen).
+   *
+   * Sie läuft durch den Trichter, damit auch die Karten in allen Chats und der
+   * Kalender sie bekommen – nicht nur diese Ansicht.
+   */
+  const setEvent = useCallback((next: CalendarEventDto) => {
+    if (!aktualisiert(next)) return;
+    setEventRaw((current) => (current && current.id === next.id ? neuer(current, next) : next));
+  }, []);
 
   useEffect(() => {
     if (!eventId || (initial && initial.id === eventId)) {
@@ -116,7 +147,14 @@ export function useLiveEvent(
     api.calendar
       .byId(eventId)
       .then((loaded) => {
-        if (!cancelled) setEvent(loaded);
+        if (cancelled) return;
+        // Durch den Trichter, damit auch die Karten und der Kalender sie
+        // bekommen – und trotzdem hier anzeigen, falls er sie als ältere
+        // verwirft: Diese Ansicht hat sonst gar keine.
+        aktualisiert(loaded);
+        setEventRaw((current) =>
+          current && current.id === loaded.id ? neuer(current, loaded) : loaded,
+        );
       })
       .catch(() => {
         if (!cancelled) setFailed(true);
@@ -131,17 +169,20 @@ export function useLiveEvent(
 
   useEffect(() => {
     if (!eventId) return undefined;
-    const offUpdated = realtime.on('event.updated', (payload) => {
-      if (payload.event.id === eventId) setEvent(payload.event);
+    return auf({
+      aktualisiert: (neu) => {
+        if (neu.id !== eventId) return;
+        setEventRaw((current) => (current && current.id === neu.id ? neuer(current, neu) : neu));
+        setDeleted(false);
+        setGrund(undefined);
+      },
+      entfernt: (id, warum) => {
+        if (id !== eventId) return;
+        setDeleted(true);
+        setGrund(warum);
+      },
     });
-    const offDeleted = realtime.on('event.deleted', (payload) => {
-      if (payload.eventId === eventId) setDeleted(true);
-    });
-    return () => {
-      offUpdated();
-      offDeleted();
-    };
   }, [eventId]);
 
-  return { event, setEvent, loading, failed, deleted };
+  return { event, setEvent, loading, failed, deleted, grund };
 }
