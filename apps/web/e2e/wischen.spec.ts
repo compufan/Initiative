@@ -422,7 +422,7 @@ test.describe('Wischen aus dem Speicher – ohne Bearbeitung', () => {
           .length,
       };
     });
-    expect(rest.videos, 'Videoelemente mit Quelle').toBe(0);
+    expect(rest.videos, 'Dekodierer (Videoelemente ausserhalb des Dokuments) mit Quelle').toBe(0);
     expect(rest.adressen, 'nicht freigegebene Adressen').toBe(0);
     expect(rest.spaetereSprunge, 'Sprünge nach dem Schliessen').toBe(0);
   });

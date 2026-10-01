@@ -55,7 +55,19 @@ export const SPRUNG_SCHALTER = `
     if (String(args[0]).toLowerCase() === 'video') videos.add(el);
     return el;
   };
-  W.__lebende = () => [...videos].filter((v) => v.getAttribute('src')).length;
+  // Videoelemente, die je im Dokument hingen, gehören React und gehen mit dem Blatt; die DEKODIERER
+  // (Leser, Verfolgung) hängen nie im Dokument – von ihnen darf nach dem Schliessen keiner übrig sein.
+  const eingehaengt = new WeakSet();
+  new MutationObserver((meldungen) => {
+    for (const m of meldungen) {
+      for (const knoten of m.addedNodes) {
+        if (knoten.nodeType !== 1) continue;
+        if (knoten.tagName === 'VIDEO') eingehaengt.add(knoten);
+        knoten.querySelectorAll('video').forEach((v) => eingehaengt.add(v));
+      }
+    }
+  }).observe(document, { childList: true, subtree: true });
+  W.__lebende = () => [...videos].filter((v) => v.getAttribute('src') && !eingehaengt.has(v)).length;
   // Adressen, die noch nicht freigegeben sind.
   const urls = new Set();
   const anlegen = URL.createObjectURL.bind(URL);
@@ -1000,7 +1012,7 @@ export interface Auswertung {
   falschAnteil: number | null;
   /** Anteil der Proben im Zug mit Maske, deren Quadrat entsättigt war (nur mit `maske`). */
   maskeAnteil: number | null;
-  /** Vom Stillstand des Fingers bis das scharfe Videobild gezeichnet ist (bei liegendem Finger). */
+  /** Vom Stillstand des Fingers bis das Video das scharfe Bild der Fingerstelle meldet (bei liegendem Finger). */
   schaerfeMs: number | null;
   verfolgerLesen: number | null;
 }
@@ -1162,7 +1174,12 @@ export function auswerten(
   const editorDa = nachUp.find((p) => p.wh === 0);
   const bisEditorMs = editorDa ? editorDa.t - up.t : null;
   const nahNachUp = nachUp.find((p) => p.bild !== null && Math.abs(p.bild - up.F) <= toleranz);
-  const bisNachUpMs = nahNachUp ? nahNachUp.t - up.t : null;
+  // Steht das Standbild des Editors schon (Überlagerung weg, Strichcode stimmt), ist das Bild da – und genau.
+  const bisNachUpMs = nahNachUp
+    ? nahNachUp.t - up.t
+    : bisEditorMs !== null && d.stillbild === up.F
+      ? bisEditorMs
+      : null;
 
   // Sprünge des sichtbaren Videos im Zug
   const prot = d.protokoll ?? [];
@@ -1192,10 +1209,8 @@ export function auswerten(
       p.px >= 0 &&
       (!maskeBereich || (p.k >= maskeBereich.vonK && p.k < maskeBereich.bisK)),
   );
-  // Das scharfe Videobild beim Nachschärfen: eine neue Zeichnung aus dem Video nach der letzten Bewegung.
-  const nachBewegung = proben.filter((p) => p.t >= letzteBewegung.t);
-  const g0 = nachBewegung[0]?.g ?? 0;
-  const scharf = nachBewegung.find((p) => p.g > g0 && p.aus === 'video' && p.lw === 1);
+  // Das scharfe Videobild beim Nachschärfen: Das Video meldet das Bild der Fingerstelle, nachdem der Finger stand.
+  const scharf = rv.find((r) => r.t >= letzteBewegung.t && frame(r.mt) === letzteBewegung.F);
   const roh = rv.filter((r) => r.t >= down.t && r.t <= up.t);
 
   return {
