@@ -6,7 +6,7 @@ import {
   type ConversationDto,
   type GrantableLevel,
 } from '@initiative/shared';
-import { PersonenWahl } from '../../components/PersonenWahl.js';
+import { PersonenWahl, type Person } from '../../components/PersonenWahl.js';
 import { conversationTitle } from '../messenger/helpers.js';
 import { Sheet } from '../../components/Sheet.js';
 import { Spinner } from '../../components/Feedback.js';
@@ -19,6 +19,14 @@ interface ShareSheetProps {
   open: boolean;
   onClose: () => void;
   collection: CollectionDto;
+  /**
+   * Wer zur Wahl steht, ohne dass man suchen muss – statt der Mitglieder des
+   * Herkunftschats. Am Termin sind das die Eingeladenen: Der Chat gibt dort
+   * keinen Zugang, die Teilnehmerzeile schon.
+   */
+  personen?: Person[];
+  /** Wer beim Öffnen schon angehakt ist – am Termin die, die noch nicht hineinkommen. */
+  vorgewaehlt?: string[];
 }
 
 const STUFEN_TEXT: Record<GrantableLevel, string> = {
@@ -34,7 +42,7 @@ const STUFEN_TEXT: Record<GrantableLevel, string> = {
  * der wichtigere – „alle aus der Familiengruppe“ ist eine Angabe, die auch
  * dann noch stimmt, wenn später jemand dazukommt.
  */
-export function ShareSheet({ open, onClose, collection }: ShareSheetProps) {
+export function ShareSheet({ open, onClose, collection, personen, vorgewaehlt }: ShareSheetProps) {
   const myId = useMyId();
   const [grants, setGrants] = useState<CollectionGrantDto[]>([]);
   const [chats, setChats] = useState<ConversationDto[]>([]);
@@ -44,6 +52,14 @@ export function ShareSheet({ open, onClose, collection }: ShareSheetProps) {
   const [busy, setBusy] = useState(false);
 
   const darfVergeben = collection.myLevel === 'own';
+
+  // Frisch bei jedem Öffnen: Das Blatt bleibt eingehängt, die Auswahl vom
+  // letzten Mal wäre sonst noch da. Als Text verglichen, weil die Liste bei
+  // jedem Rendern neu entsteht und den Effekt sonst ständig auslöste.
+  const vorwahl = (vorgewaehlt ?? []).join(',');
+  useEffect(() => {
+    if (open) setAuswahl(vorwahl ? vorwahl.split(',') : []);
+  }, [open, vorwahl]);
 
   useEffect(() => {
     if (!open) return;
@@ -87,6 +103,7 @@ export function ShareSheet({ open, onClose, collection }: ShareSheetProps) {
       displayName: mitglied.user.displayName,
     }));
   }, [chats, collection.conversationId]);
+  const vorschlaege = personen ?? ausChat;
 
   // Ein Recht stand bisher als nackte Kennung in der Liste – eine UUID, mit
   // der niemand etwas anfangen kann.
@@ -179,7 +196,9 @@ export function ShareSheet({ open, onClose, collection }: ShareSheetProps) {
           {grants.length === 0 ? (
             <p className="fil-hint">
               Bisher hat niemand ein ausdrückliches Recht.
-              {collection.conversationId && ' Alle im zugehörigen Chat haben trotzdem Zugriff.'}
+              {collection.conversationId &&
+                collection.memberLevel !== 'none' &&
+                ' Alle im zugehörigen Chat haben trotzdem Zugriff.'}
             </p>
           ) : (
             <ul className="list">
@@ -226,7 +245,7 @@ export function ShareSheet({ open, onClose, collection }: ShareSheetProps) {
 
               <PersonenWahl
                 label="Wem die Sammlung freigegeben wird"
-                vorschlaege={ausChat}
+                vorschlaege={vorschlaege}
                 gewaehlt={auswahl}
                 onChange={setAuswahl}
                 zusatz={(id) => {
