@@ -6,6 +6,7 @@ import {
   abtastungenJeBildpunkt,
   arbeitsFaktor,
   bokehRadiusPx,
+  filmGuete,
   kernGewicht,
   linienAnzahl,
   lichtGewicht,
@@ -180,6 +181,17 @@ describe('Arbeitsmassstab und Güte', () => {
       expect(GUETEN[g].stufenGlatt).toBeGreaterThan(GUETEN[g].stufenSilhouette);
     }
     expect(stufenAnzahl(1, 'hoch')).toBeGreaterThan(stufenAnzahl(1, 'niedrig'));
+  });
+
+  it('lässt die Filmvorschau eine Güte tiefer rechnen, wenn viele Bereiche unscharf sind', () => {
+    // Volle Grösse bekommt „mittel“, die kleinere Stufe „niedrig“ …
+    expect(filmGuete(0, 1)).toBe('mittel');
+    expect(filmGuete(1, 1)).toBe('niedrig');
+    expect(filmGuete(2, 1)).toBe('niedrig');
+    // … und mehr als zwei Bereiche mit Unschärfe kosten die volle Grösse die Güte.
+    expect(filmGuete(0, 2)).toBe('mittel');
+    expect(filmGuete(0, 3)).toBe('niedrig');
+    expect(filmGuete(0, 4)).toBe('niedrig');
   });
 
   it('tastet jede Strecke mindestens einmal und höchstens 63-mal ab', () => {

@@ -1066,6 +1066,10 @@ test('Grafikeinheit und Prozessor zeichnen dieselbe Unschärfe', async ({ page }
   await page.goto('/');
   const ergebnis = await page.evaluate(async (pfad) => {
     const m = (await import(/* @vite-ignore */ pfad)) as Messgeraet;
+    const ladeTon = '/src/modules/bild/ton.ts';
+    const ton = (await import(
+      /* @vite-ignore */ ladeTon
+    )) as typeof import('../src/modules/bild/ton.js');
     type Mass = { max: number; mittel: number };
     const berichte: {
       name: string;
@@ -1073,6 +1077,8 @@ test('Grafikeinheit und Prozessor zeichnen dieselbe Unschärfe', async ({ page }
       cpu: string;
       gleich: Mass;
       geaendert15: number[];
+      /** Schärfe des Grundes weit vom Motiv: vorher, nach GPU, nach Prozessor. */
+      scharf?: number[];
     }[] = [];
     const W = 600;
 
@@ -1151,16 +1157,49 @@ test('Grafikeinheit und Prozessor zeichnen dieselbe Unschärfe', async ({ page }
         });
       }
     }
+
+    // 4. Mit Schärfe zugleich: Sie schärft nur obendrauf und holt das
+    // Verwischte nicht zurück – auf beiden Wegen dasselbe.
+    {
+      const sz = m.szeneHolen('A', W);
+      const teil = m.netzTeil(m.maskeAlpha(sz, 'netz'), W, sz.H, true);
+      const szene = m.bereichSzene(W, sz.H, [teil], { bokeh: 1 });
+      const global = { ...ton.NEUTRAL, schaerfe: 0.8 };
+      const g = m.rendern(sz.orig, W, sz.H, szene, 'gpu', 'hoch', global);
+      const c = m.rendern(sz.orig, W, sz.H, szene, 'cpu', 'hoch', global);
+      berichte.push({
+        name: 'Bokeh und Schärfe',
+        gpu: g.weg,
+        cpu: c.weg,
+        gleich: m.unterschied(g.daten, c.daten),
+        geaendert15: [],
+        scharf: [
+          m.schaerfeBand(sz, sz.orig, 32, 64),
+          m.schaerfeBand(sz, g.daten, 32, 64),
+          m.schaerfeBand(sz, c.daten, 32, 64),
+        ],
+      });
+    }
     return berichte;
   }, MESSGERAET);
 
-  expect(ergebnis).toHaveLength(12);
+  expect(ergebnis).toHaveLength(13);
   for (const b of ergebnis) {
     expect(b.gpu, `${b.name}: es hat nicht die Grafikeinheit gerechnet`).toBe('gpu');
     expect(b.cpu, `${b.name}: der Rückfallweg wurde nicht erzwungen`).toBe('leinwand');
     expect(b.gleich.max, `${b.name}: grösster Unterschied`).toBeLessThanOrEqual(2);
     expect(b.gleich.mittel, `${b.name}: mittlerer Unterschied`).toBeLessThan(0.05);
     for (const n of b.geaendert15) expect(n, `${b.name}: Bildpunkte ausserhalb`).toBe(0);
+    if (b.scharf) {
+      // Der Grund bleibt verwischt, auch wenn geschärft wird.
+      const [vorher, gpu, cpu] = b.scharf;
+      expect(gpu, `${b.name}: Schärfe holt die Grafikeinheit-Unschärfe zurück`).toBeLessThan(
+        vorher * 0.3,
+      );
+      expect(cpu, `${b.name}: Schärfe holt die Prozessor-Unschärfe zurück`).toBeLessThan(
+        vorher * 0.3,
+      );
+    }
   }
 });
 

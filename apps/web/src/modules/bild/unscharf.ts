@@ -143,6 +143,20 @@ export const GUETEN: Readonly<Record<StufenGuete, GueteWerte>> = {
   niedrig: { arbeitsradius: 4, stufenSilhouette: 2, stufenGlatt: 4, dichte: 0.5 },
 };
 
+/**
+ * Die Güte der Filmvorschau, aus der Stufe der Vorschau-Leiter (0 volle
+ * Grösse, 1 kleiner, 2 rohes Video) und der Zahl der Bereiche mit Unschärfe.
+ *
+ * Volle Grösse bekommt „mittel“ (so viel wie das Standbild am Bildschirm),
+ * die kleinere Stufe „niedrig“. Die Kosten wachsen mit jedem Bereich, der
+ * unscharf zeichnet: Bei mehr als zwei fällt die Vorschau gleich eine Güte
+ * tiefer, ehe das Gerät es am Ruckeln merkt. Die dritte Stufe, das rohe Video,
+ * rechnet gar nicht – ihre Güte ist gleichgültig.
+ */
+export function filmGuete(stufe: 0 | 1 | 2, bereicheMitUnschaerfe: number): StufenGuete {
+  return stufe === 0 && bereicheMitUnschaerfe <= 2 ? 'mittel' : 'niedrig';
+}
+
 /** Wieviele Stufen der Radius bei dieser Maskenart und Güte bekommt. */
 export function stufenAnzahl(reinheit: Reinheit, guete: StufenGuete): number {
   const g = GUETEN[guete];
