@@ -113,6 +113,36 @@ export function istAnfangVon(kurz: readonly Tipp[], lang: readonly Tipp[]): bool
   return true;
 }
 
+/**
+ * Liegt die Stelle in der Maske dieses Tippteils – oder höchstens einen Punkt
+ * daneben?
+ *
+ * Für den Film: Dort bekommt jeder angetippte Gegenstand ein EIGENES Teil,
+ * weil die Verfolgung eine Maske je Teil als EINEN Körper führt, und zwei
+ * Gegenstände, die sich verschieden bewegen, passen in keinen. Ein weiterer
+ * Tipp auf denselben Gegenstand (um die Fläche zu füllen) gehört dagegen in
+ * sein Teil. Entscheidend ist, ob die Stelle schon gedeckt ist.
+ *
+ * Ein Punkt Nachbarschaft, weil die Maske eine weiche Kante hat und ein Tipp
+ * auf den Rand sonst als „anderer Gegenstand" gälte. Die Schwelle ist die
+ * halbe Deckung, wie überall, wo eine Maske zu „ja oder nein" wird.
+ */
+export function tippGehoertDazu(
+  teil: Pick<TippTeil, 'alpha' | 'breite' | 'hoehe'>,
+  stelle: Tipp,
+): boolean {
+  const x0 = Math.round(stelle.x);
+  const y0 = Math.round(stelle.y);
+  for (let y = y0 - 1; y <= y0 + 1; y += 1) {
+    if (y < 0 || y >= teil.hoehe) continue;
+    for (let x = x0 - 1; x <= x0 + 1; x += 1) {
+      if (x < 0 || x >= teil.breite) continue;
+      if (teil.alpha[y * teil.breite + x] >= 128) return true;
+    }
+  }
+  return false;
+}
+
 /** Zwei Masken vereinigen – die hellere Stelle gewinnt. */
 export function vereinigen(a: Uint8Array, b: Uint8Array): Uint8Array {
   for (let i = 0; i < a.length; i += 1) if (b[i] > a[i]) a[i] = b[i];

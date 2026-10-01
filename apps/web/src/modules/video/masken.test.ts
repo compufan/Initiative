@@ -11,15 +11,18 @@ import {
   ankerFuer,
   ankerKetten,
   bahnZustand,
+  bereichNeuMoeglich,
   bereichePlatz,
   bereicheUmwandeln,
   bildDocAn,
   editorAenderung,
+  eindeutigerName,
   feldArt,
   filmStandAn,
   geltungNachTeilen,
   geltungAbHier,
   geltungBisHier,
+  geltungImFilm,
   geltungLeer,
   geltungNurAbschnitt,
   geltungStuecke,
@@ -1637,6 +1640,141 @@ describe('editorAenderung', () => {
 });
 
 /* ---------- Werkzeuge der Bahn ---------- */
+
+describe('mehrere gleichzeitig bewegte Gegenstände in einem Bereich', () => {
+  const bezug = { abschnitte: EINER, s: S };
+
+  /** Ein Bereich „Motiv" mit EINEM Tipp (Gegenstand A), angelegt bei Bild 10. */
+  function aufbau() {
+    const motiv = maske('motiv', [spur('t1', [10, tipp('t1', scheibe(10, 10))])], {
+      name: 'Motiv',
+    });
+    const masken = [motiv];
+    const karten = new Karten();
+    const z = bildDocAn(neuesDoc(B, H), masken, karten, 10, 'editor', RAHMEN);
+    const gezeigt: Gezeigt = { k: 10, z, vorSitzung: masken };
+    return { motiv, masken, gezeigt, z };
+  }
+
+  it('gibt jedem Tippteil seine eigene Spur – je ein Anker HIER, getrennte Ketten', () => {
+    const { masken, gezeigt, z, motiv } = aufbau();
+    const doc = docKopie(z.doc);
+    // Der zweite Gegenstand B als EIGENES Teil desselben Bereichs, wie es der Film-Editor anlegt.
+    const zweites = tipp('t2', scheibe(30, 20), [{ x: 30, y: 20 }]);
+    doc.bereiche[0].teile = [...doc.bereiche[0].teile, zweites];
+    const erg = editorAenderung(doc, gezeigt, masken, new Map(), bezug);
+    const teile = erg.masken[0].teile;
+    expect(teile.map((t) => t.id)).toEqual(['t1', 't2']);
+    // Das erste bleibt, wie es war – kein neuer Anker, keine neue Kette.
+    expect(teile[0]).toBe(motiv.teile[0]);
+    // Das zweite hat genau einen Anker, hier, mit dem Teil des Editors selbst.
+    expect(teile[1].anker).toHaveLength(1);
+    expect(teile[1].anker[0].k).toBe(10);
+    expect(teile[1].anker[0].teil).toBe(zweites);
+    // Die Ketten sind getrennte Arbeit: verschiedene Anker, verschiedene Schlüssel.
+    const schluessel = teile.map((t) => kettenSchluessel(t.anker[0], S, B, H, 4));
+    expect(new Set(schluessel).size).toBe(2);
+    // Und derselbe Bereich bleibt EINE Maske – eine Bahn, ein Satz Regler.
+    expect(erg.masken).toHaveLength(1);
+  });
+
+  it('setzt die Spuren zusammen: Maske A und Maske B stehen je an ihrer eigenen Stelle', () => {
+    const { masken, gezeigt, z } = aufbau();
+    const doc = docKopie(z.doc);
+    doc.bereiche[0].teile = [
+      ...doc.bereiche[0].teile,
+      tipp('t2', scheibe(30, 20), [{ x: 30, y: 20 }]),
+    ];
+    const erg = editorAenderung(doc, gezeigt, masken, new Map(), bezug);
+    // Bild 14: A ist bei (14,10), B bei (30,24) – jede Kette trägt ihre eigene Maske.
+    const karten = new Karten();
+    const [a, b] = erg.masken[0].teile;
+    karten.legen(a.anker[0], 'vor', 14, 'fein', scheibe(14, 10));
+    karten.legen(b.anker[0], 'vor', 14, 'fein', scheibe(30, 24));
+    const zusammen = bildDocAn(neuesDoc(B, H), erg.masken, karten, 14, 'editor', RAHMEN);
+    expect(zusammen.fehlend).toEqual([]);
+    const teile = zusammen.doc.bereiche[0].teile;
+    expect(teile).toHaveLength(2);
+    const alphas = teile.map(alphaVon);
+    expect(alphas[0][10 * B + 14]).toBe(255);
+    expect(alphas[0][24 * B + 30]).toBe(0);
+    expect(alphas[1][24 * B + 30]).toBe(255);
+    expect(alphas[1][10 * B + 14]).toBe(0);
+  });
+});
+
+describe('eindeutigerName', () => {
+  const namen = (...n: string[]) => n.map((name, i) => maske(`m${i}`, [], { name }));
+
+  it('lässt einen freien Namen, wie er ist', () => {
+    expect(eindeutigerName('Motiv', namen('Himmel'))).toBe('Motiv');
+  });
+
+  it('hängt eine 2 an, wenn der Name vergeben ist', () => {
+    expect(eindeutigerName('Motiv', namen('Motiv'))).toBe('Motiv 2');
+    expect(eindeutigerName('Motiv', namen('Motiv', 'Motiv 2'))).toBe('Motiv 3');
+  });
+
+  it('zählt eine Zahl am Ende weiter, statt noch eine anzuhängen', () => {
+    expect(eindeutigerName('Bereich 2', namen('Bereich 1', 'Bereich 2'))).toBe('Bereich 3');
+    expect(eindeutigerName('Bereich 2', namen('Bereich 2', 'Bereich 3'))).toBe('Bereich 4');
+  });
+
+  it('versteht „Bereich 12" als Zahl, nicht als „Bereich 1" und „2"', () => {
+    expect(eindeutigerName('Bereich 12', namen('Bereich 12'))).toBe('Bereich 13');
+  });
+
+  it('hält eine Zahl mitten im Namen für Teil des Namens', () => {
+    expect(eindeutigerName('Kamera 2 links', namen('Kamera 2 links'))).toBe('Kamera 2 links 2');
+  });
+});
+
+describe('Platz und Zeitraum für die Zeitleiste', () => {
+  const bezug = { abschnitte: EINER, s: S };
+
+  function gezeigtMit(masken: readonly Maske[]): Gezeigt {
+    const z = bildDocAn(neuesDoc(B, H), masken, new Karten(), 10, 'editor', RAHMEN);
+    return { k: 10, z, vorSitzung: masken };
+  }
+
+  it('bietet „＋ Bereich" an, solange der Editor einen anlegen dürfte', () => {
+    const eine = [maske('a', [spur('r', [10, radial('r', 5, 5)])])];
+    expect(bereichNeuMoeglich(eine, gezeigtMit(eine), bezug)).toBe(true);
+  });
+
+  it('bietet es bei vier Bereichen an einem Bild nicht an – der Editor könnte es nicht', () => {
+    const vier = Array.from({ length: 4 }, (_, i) =>
+      maske(`m${i}`, [spur(`r${i}`, [10, radial(`r${i}`, 5 + i, 5)])], { farbe: i }),
+    );
+    expect(bereichNeuMoeglich(vier, gezeigtMit(vier), bezug)).toBe(false);
+  });
+
+  it('nennt, von wo bis wo eine Geltung im Film gilt', () => {
+    expect(geltungImFilm({ art: 'ganz' }, bezug)).toEqual({ vonMs: 0, bisMs: 100 * S });
+    expect(geltungImFilm({ art: 'stuecke', stuecke: [{ vonK: 40, bisK: 90 }] }, bezug)).toEqual({
+      vonMs: 40 * S,
+      bisMs: 90 * S,
+    });
+  });
+
+  it('nennt bei zwei Stücken die äusseren Enden', () => {
+    const g: Geltung = {
+      art: 'stuecke',
+      stuecke: [
+        { vonK: 10, bisK: 20 },
+        { vonK: 60, bisK: 70 },
+      ],
+    };
+    expect(geltungImFilm(g, bezug)).toEqual({ vonMs: 10 * S, bisMs: 70 * S });
+  });
+
+  it('nennt nichts, wo eine Geltung nirgends im Film liegt', () => {
+    expect(
+      geltungImFilm({ art: 'stuecke', stuecke: [{ vonK: 200, bisK: 210 }] }, bezug),
+    ).toBeNull();
+    expect(geltungImFilm({ art: 'abschnitte', ids: ['gibtEsNicht'] }, bezug)).toBeNull();
+  });
+});
 
 describe('Hier trennen', () => {
   const bezug = { abschnitte: EINER, s: S };

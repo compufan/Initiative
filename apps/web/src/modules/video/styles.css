@@ -702,23 +702,78 @@
 
 /*
  * Die Einstellungen der gewählten Maske – statt der Knopfzeile. Auf einem
- * Telefon passen sie nicht in eine Zeile; sie lassen sich seitlich
- * schieben, statt die Bühne um eine zweite Zeile zu kürzen.
+ * Telefon passen sie nicht in eine Zeile; der mittlere Teil (`.mb-schieber`)
+ * lässt sich seitlich schieben, statt die Bühne um eine zweite Zeile zu
+ * kürzen. Abspielen links und „Fertig" rechts stehen fest: Beide sind
+ * Wege, die nie hinter einer Kante liegen dürfen.
  */
 .zl-leiste.mb-chips {
   flex-wrap: nowrap;
+}
+
+.mb-schieber {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   overflow-x: auto;
   scrollbar-width: none;
   overscroll-behavior-x: contain;
+  /*
+   * Ein weicher Rand dort, wo es noch etwas zu schieben gibt: Die beiden
+   * ersten Verläufe haften am Inhalt (`local`) und decken den Schatten ab,
+   * sobald man am Ende ist; die beiden anderen stehen am Rahmen. Ohne das
+   * verrät nur ein abgeschnittener Knopf, dass hinter der Kante mehr kommt.
+   */
+  background:
+    linear-gradient(to right, var(--bg-elevated) 30%, transparent) left center / 18px 100% no-repeat
+      local,
+    linear-gradient(to left, var(--bg-elevated) 30%, transparent) right center / 18px 100% no-repeat
+      local,
+    radial-gradient(farthest-side at 0 50%, rgba(0, 0, 0, 0.28), transparent) left center / 8px 100%
+      no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, rgba(0, 0, 0, 0.28), transparent) right center / 8px
+      100% no-repeat scroll;
 }
 
-.zl-leiste.mb-chips::-webkit-scrollbar {
+.mb-schieber::-webkit-scrollbar {
   display: none;
 }
 
 .mb-chips .btn {
   flex: none;
   white-space: nowrap;
+}
+
+/*
+ * Schmale Telefone: Das Wichtige – Abspielen, Name, „Ganzer Film" und
+ * „Zeitraum", Ein/Aus, „Fertig" – soll ohne Wischen sichtbar sein. Dafür
+ * werden die Knöpfe enger, und der Stand der Verfolgung („fertig verfolgt")
+ * wandert aus dem Namen in den Tooltip; die Bahn zeigt ihn ohnehin.
+ */
+@media (max-width: 430px) {
+  .mb-chips .btn {
+    padding-inline: 6px;
+    font-size: 0.8rem;
+  }
+
+  .mb-chips .btn.btn-sm {
+    min-width: 32px;
+  }
+
+  .mb-chips .mb-stand {
+    display: none;
+  }
+
+  .mb-name {
+    max-width: 28vw;
+  }
+
+  .mb-schieber,
+  .zl-leiste.mb-chips {
+    gap: 4px;
+  }
 }
 
 .mb-chips .btn.is-active {

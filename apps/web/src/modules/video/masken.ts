@@ -660,14 +660,8 @@ export function bereichePlatz(
   gezeigt: Gezeigt,
   bezug: Bezug,
 ): { max: number; grund?: string } {
+  const { imEditor, frei, imFilm } = platzZaehlen(masken, gezeigt, bezug);
   const z = gezeigt.z;
-  const vorher = new Set(gezeigt.vorSitzung.map((maske) => maske.id));
-  const imEditor = masken.filter(
-    (maske) => z.enthalten.has(maske.id) || imEditorAngelegt(maske, gezeigt.k, vorher),
-  ).length;
-  const imFilm = MASKEN_MAX - masken.length;
-  const anEinemBild = BEREICHE_MAX - hoechstJeBild(masken, bezug).anzahl;
-  const frei = Math.max(0, Math.min(imFilm, anEinemBild));
   if (frei > 0 || imEditor >= BEREICHE_MAX) {
     return { max: Math.min(BEREICHE_MAX, imEditor + frei) };
   }
@@ -684,6 +678,62 @@ export function bereichePlatz(
       ? `${MASKEN_MAX} Masken im Film – mehr gehen nicht. In der Zeitleiste eine löschen.`
       : `An einer Stelle im Film wirken schon ${BEREICHE_MAX} Masken – eine neue gälte auch dort. In der Zeitleiste eine eingrenzen oder löschen.`;
   return { max: imEditor, grund: warten + draussen + grund };
+}
+
+/** Die Zahlen hinter `bereichePlatz` und `bereichNeuMoeglich`. */
+function platzZaehlen(
+  masken: readonly Maske[],
+  gezeigt: Gezeigt,
+  bezug: Bezug,
+): { imEditor: number; frei: number; imFilm: number } {
+  const vorher = new Set(gezeigt.vorSitzung.map((maske) => maske.id));
+  const imEditor = masken.filter(
+    (maske) => gezeigt.z.enthalten.has(maske.id) || imEditorAngelegt(maske, gezeigt.k, vorher),
+  ).length;
+  const imFilm = MASKEN_MAX - masken.length;
+  const anEinemBild = BEREICHE_MAX - hoechstJeBild(masken, bezug).anzahl;
+  return { imEditor, frei: Math.max(0, Math.min(imFilm, anEinemBild)), imFilm };
+}
+
+/**
+ * Darf der Editor an diesem Bild noch einen Bereich anlegen?
+ *
+ * Für den Knopf „＋ Bereich" in der Zeitleiste: Er soll fehlen, wo der
+ * Editor ihn nicht erfüllen könnte, statt eine Absage zu bringen.
+ */
+export function bereichNeuMoeglich(
+  masken: readonly Maske[],
+  gezeigt: Gezeigt,
+  bezug: Bezug,
+): boolean {
+  const { imEditor, frei } = platzZaehlen(masken, gezeigt, bezug);
+  return frei > 0 && imEditor < BEREICHE_MAX;
+}
+
+/**
+ * Von wo bis wo im FILM eine Geltung gilt – oder `null`, wenn nirgends.
+ *
+ * Nur die äusseren Enden: Hat die Geltung mehrere Stücke, steht dazwischen
+ * eine Lücke, die ein Satz wie „von 1,6 s bis 3,6 s" nicht abbildet. Er ist
+ * für den Hinweis gedacht, wo man hinspringen kann, nicht für die Bahn.
+ */
+export function geltungImFilm(
+  geltung: Geltung,
+  bezug: Bezug,
+): { vonMs: number; bisMs: number } | null {
+  const stuecke = geltungStuecke(geltung, bezug);
+  let von = Infinity;
+  let bis = -Infinity;
+  let start = 0;
+  for (const abschnitt of bezug.abschnitte) {
+    const { k0, k1 } = bildBereich(abschnitt, bezug.s);
+    for (const st of stueckeSchnitt([{ vonK: k0, bisK: k1 }], stuecke)) {
+      von = Math.min(von, start + (st.vonK - k0) * bezug.s);
+      bis = Math.max(bis, start + (st.bisK - k0) * bezug.s);
+    }
+    start += Math.max(0, abschnitt.bisMs - abschnitt.vonMs);
+  }
+  return von < bis ? { vonMs: von, bisMs: bis } : null;
 }
 
 /* ---------- Ketten: was die Verfolgung rechnet ---------- */
@@ -2729,12 +2779,20 @@ export function freieFarbe(masken: readonly Maske[]): number {
   return masken.length % MASKEN_MAX;
 }
 
-/** „Motiv", „Motiv 2", „Motiv 3" – damit zwei Bahnen nicht gleich heissen. */
+/**
+ * „Motiv", „Motiv 2", „Motiv 3" – damit zwei Bahnen nicht gleich heissen.
+ *
+ * Eine Zahl am Ende wird weitergezählt statt noch eine anzuhängen: „Bereich 2"
+ * wird „Bereich 3", nicht „Bereich 2 2" – so hiess die zweite Hälfte nach
+ * „Hier trennen", und aus zwei Namen wurde ein Rätsel.
+ */
 export function eindeutigerName(name: string, masken: readonly Maske[]): string {
   const belegt = new Set(masken.map((maske) => maske.name));
   if (!belegt.has(name)) return name;
-  for (let n = 2; ; n += 1) {
-    const versuch = `${name} ${n}`;
+  const mitZahl = /^(.*\S)\s+(\d+)$/.exec(name);
+  const stamm = mitZahl ? mitZahl[1] : name;
+  for (let n = mitZahl ? Number(mitZahl[2]) + 1 : 2; ; n += 1) {
+    const versuch = `${stamm} ${n}`;
     if (!belegt.has(versuch)) return versuch;
   }
 }

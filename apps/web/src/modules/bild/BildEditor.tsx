@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
@@ -68,7 +69,7 @@ import { maskeFuerBereich } from './maskenSpeicher.js';
 import { teilBefund } from './maske.js';
 import { netzGrund, netzTeilRechnen, netzVerfuegbar, type Netzart } from './netzMaske.js';
 import { tiefeGrund, tiefeVerfuegbar, tiefenTeilRechnen } from './tiefeNetz.js';
-import { tippNetzVerfuegbar, tippTeilRechnen, tippVorlage } from './tippMaske.js';
+import { tippGehoertDazu, tippNetzVerfuegbar, tippTeilRechnen, tippVorlage } from './tippMaske.js';
 import { engineInfo, firstUseMb } from '../stickers/engines/index.js';
 import {
   freistellerFuer,
@@ -289,6 +290,9 @@ const ANSICHT_KANTE_MAX = 1400;
 
 const VERLAUF_MAX = 25;
 
+/** Wie lang der Name eines Bereichs sein darf – er steht in Chips und Bahnen, die schmal sind. */
+const BEREICH_NAME_MAX = 24;
+
 /**
  * Trägt das Dokument etwas, das zu EINEM Bild gehört?
  *
@@ -432,6 +436,51 @@ interface BildEditorProps {
    * `eintrag` ist ein alter Stand, `neu` das Dokument des neuen Bildes.
    */
   verlaufAnpassen?: (eintrag: BildDoc, neu: BildDoc) => BildDoc;
+  /**
+   * Der Bereich, den die Umgebung gewählt hat – im Videoeditor die Maske,
+   * die in der Zeitleiste gewählt ist.
+   *
+   * Ohne das gäbe es zwei Auswahlen: Die Chips im Reiter „Bereiche" und die
+   * Bahn in der Zeitleiste wüssten nichts voneinander, und „Zeitraum",
+   * „Hier trennen" und die Regler wirkten auf verschiedene Bereiche, ohne
+   * dass die Oberfläche es sagt. Beim Foto gibt es nur die eine Auswahl.
+   *
+   * Der Editor behält seinen eigenen Zustand (ein Tipp legt einen Bereich an
+   * und braucht ihn SOFORT, nicht erst nach einer Runde durch die Umgebung);
+   * von aussen kommt nur, was sich dort ÄNDERT. `null` – „Fertig" in der
+   * Zeitleiste – lässt die Wahl im Editor stehen.
+   */
+  bereichGewaehlt?: string | null;
+  /** Ein Chip im Reiter „Bereiche" wurde gewählt – die Umgebung zieht nach. */
+  onBereichGewaehlt?: (id: string) => void;
+  /**
+   * Ein Satz, wenn der von aussen gewählte Bereich an DIESEM Bild nicht gilt.
+   *
+   * Im Videoeditor gilt eine Maske nur in einem Zeitraum. Ist sie gewählt und
+   * das Stellbild liegt davor, stünde im Reiter sonst der Leerzustand „Leg
+   * oben eine Form an" – und ein Tipp legte stillschweigend einen NEUEN
+   * Bereich an, statt die gewählte Maske zu ergänzen.
+   */
+  bereichFehlt?: string;
+  /** Die Farbe, in der die Zeitleiste einen Bereich zeichnet – als Punkt im Chip. */
+  bereichFarbe?: (id: string) => string | undefined;
+  /**
+   * Der Editor arbeitet für einen FILM.
+   *
+   * Zwei Dinge hängen daran. Jeder angetippte Gegenstand bekommt ein EIGENES
+   * Teil (siehe `tippGehoertDazu`): Die Verfolgung rechnet eine Maske je Teil
+   * als EINEN Körper, und zwei Gegenstände, die sich verschieden bewegen,
+   * passen in keinen. Und Formen (Verlauf, Ellipse, Pinsel) bekommen den
+   * Hinweis, dass sie an der Szene bleiben und nicht am Gegenstand.
+   */
+  imFilm?: boolean;
+  /**
+   * Ein Zähler, der „＋ Bereich" von aussen auslöst – die Zeitleiste hat
+   * einen eigenen Knopf dafür, und der Editor soll dann auf den Reiter
+   * „Bereiche" gehen. Jeder Anstieg legt einen Bereich an; der Anfangswert
+   * tut nichts.
+   */
+  bereichNeu?: number;
 }
 
 /** `foto.jpg` → `foto-bearbeitet.webp`. Das Original behält seinen Namen. */
@@ -471,6 +520,12 @@ export function BildEditor({
   bereicheMax = BEREICHE_MAX,
   bereicheGrund,
   verlaufAnpassen,
+  bereichGewaehlt,
+  onBereichGewaehlt,
+  bereichFehlt,
+  bereichFarbe,
+  imFilm = false,
+  bereichNeu,
 }: BildEditorProps) {
   useHideNav(true);
 
@@ -682,6 +737,8 @@ export function BildEditor({
    * die jemand gerade zurückgenommen hat.
    */
   const tippLaufRef = useRef(0);
+  /** Das Tippteil, das zuletzt einen Tipp bekam – „Letzten Tipp zurück" meint dieses. */
+  const tippLetzteRef = useRef<string | null>(null);
   /** Der Wecker des Toleranzreglers – siehe `toleranzSchieben`. */
   const toleranzUhr = useRef<number | null>(null);
   const pinselModusRef = useRef(pinselModus);
@@ -738,6 +795,40 @@ export function BildEditor({
   useEffect(() => {
     teilRef.current = teilId;
   }, [teilId]);
+  /*
+   * Die Wahl von aussen übernehmen – siehe `bereichGewaehlt`.
+   *
+   * Reagiert wird auf eine ÄNDERUNG der Angabe, nicht auf ihren Wert: Legt
+   * ein Tipp hier einen Bereich an, kennt die Umgebung ihn erst eine Runde
+   * später, und ein Vergleich mit dem Wert risse die Wahl in der Zwischenzeit
+   * auf den alten zurück. `wunschOffen` hält, was von aussen kam und noch
+   * nicht angekommen ist: Nach „Hier trennen" und nach einem Wechsel des
+   * Abschnitts steht der Bereich erst im Dokument, wenn es neu geladen ist.
+   */
+  const wunsch = useRef<{ id: string | null; offen: boolean }>({
+    id: bereichGewaehlt ?? null,
+    offen: bereichGewaehlt != null,
+  });
+  useEffect(() => {
+    if ((bereichGewaehlt ?? null) !== wunsch.current.id) {
+      wunsch.current = { id: bereichGewaehlt ?? null, offen: bereichGewaehlt != null };
+    }
+    if (!wunsch.current.offen || !doc) return;
+    const bereich = doc.bereiche.find((b) => b.id === wunsch.current.id);
+    if (!bereich) {
+      // An diesem Bild gibt es ihn nicht: Der Reiter zeigt keinen anderen
+      // Bereich, dessen Regler der Zeitleiste widersprächen (`bereichFehlt`).
+      if (bereichRef.current !== null) {
+        setBereichId(null);
+        setTeilId(null);
+      }
+      return;
+    }
+    wunsch.current.offen = false;
+    if (bereichRef.current === bereich.id) return;
+    setBereichId(bereich.id);
+    setTeilId(bereich.teile[0]?.id ?? null);
+  }, [bereichGewaehlt, doc]);
   useEffect(() => {
     pinselBreiteRef.current = pinselBreite;
   }, [pinselBreite]);
@@ -1014,6 +1105,8 @@ export function BildEditor({
           setBereichId(null);
           setTeilId(null);
           setLupe({ zoom: 1, x: 0, y: 0 });
+          // Was die Umgebung gewählt hat, gilt auch im anderen Abschnitt.
+          wunsch.current.offen = wunsch.current.id !== null;
         }
         /*
          * Ein mitgebrachtes Dokument gilt – aber nur, wenn es zu DIESEM Bild
@@ -2133,13 +2226,15 @@ export function BildEditor({
    * Spiegeln – hier hängt eine Zahl daran („3 Stellen“) und ob „Letzten Tipp
    * zurück“ überhaupt etwas zurücknehmen kann.
    */
-  const tippTeilJetzt = useMemo(
-    () =>
-      (aktiverBereich?.teile.find(
-        (t) => t.art === 'tipp' && t.modus === tippVorzeichen && t.mitNetz === tippNetzGilt,
-      ) as (TippTeil & { id: string }) | undefined) ?? null,
-    [aktiverBereich, tippVorzeichen, tippNetzGilt],
-  );
+  const tippTeilJetzt = useMemo(() => {
+    const passend = (aktiverBereich?.teile ?? []).filter(
+      (t): t is TippTeil & { id: string; modus: Maskenmodus; umkehren: boolean } =>
+        t.art === 'tipp' && t.modus === tippVorzeichen && t.mitNetz === tippNetzGilt,
+    );
+    return (
+      passend.find((t) => t.id === tippLetzteRef.current) ?? passend[passend.length - 1] ?? null
+    );
+  }, [aktiverBereich, tippVorzeichen, tippNetzGilt]);
 
   /**
    * Legt ein Maskenteil an – und mit ihm bei Bedarf einen neuen Bereich.
@@ -2195,6 +2290,10 @@ export function BildEditor({
      * bekam nicht einmal gesagt, warum nichts passiert ist.
      */
     const vorhanden = aktuell.bereiche.find((b) => b.id === bereichRef.current);
+    if (!vorhanden && bereichFehlt) {
+      toast(bereichFehlt, 'info');
+      return;
+    }
     if (!vorhanden && aktuell.bereiche.length >= bereicheMax) {
       toast(
         bereicheGrund ??
@@ -2275,13 +2374,27 @@ export function BildEditor({
     bereichId: string | null,
     modus: 'dazu' | 'weg',
     mitNetz: boolean,
+    stelle?: { x: number; y: number },
   ): (TippTeil & { id: string; modus: Maskenmodus; umkehren: boolean }) | null {
     const bereich = aktuell.bereiche.find((b) => b.id === bereichId);
     if (!bereich) return null;
-    for (const teil of bereich.teile) {
-      if (teil.art === 'tipp' && teil.modus === modus && teil.mitNetz === mitNetz) return teil;
-    }
-    return null;
+    const passend = bereich.teile.filter(
+      (teil): teil is TippTeil & { id: string; modus: Maskenmodus; umkehren: boolean } =>
+        teil.art === 'tipp' && teil.modus === modus && teil.mitNetz === mitNetz,
+    );
+    /*
+     * Im Film (siehe `imFilm`): Mit einer Stelle gilt nur ein Teil, dessen
+     * Maske sie schon deckt – sonst ist es ein neuer Gegenstand und braucht
+     * sein eigenes Teil. Ohne Stelle (zurücknehmen, Toleranz) das zuletzt
+     * angefasste, sonst das jüngste: Wer den letzten Tipp zurücknimmt,
+     * meint den, den er gerade gemacht hat.
+     */
+    if (stelle) return passend.find((teil) => tippGehoertDazu(teil, stelle)) ?? null;
+    return (
+      passend.find((teil) => teil.id === tippLetzteRef.current) ??
+      passend[passend.length - 1] ??
+      null
+    );
   }
 
   /**
@@ -2342,6 +2455,7 @@ export function BildEditor({
        * weggenommen hat – ein Bild, das sich von selbst ändert.
        */
       if (!teil || meinLauf !== tippLaufRef.current || bildRef.current !== quellBild) return;
+      tippLetzteRef.current = teil.id;
       if (vorlageTeil) {
         merken();
         const bereichJetzt = bereichRef.current;
@@ -2361,7 +2475,7 @@ export function BildEditor({
         // Kein `merken()` davor: `teilEinsetzen` merkt selbst, und zwei
         // Schritte für einen Tipp hiessen, dass der erste Druck auf ↺ nichts
         // tut. Denselben Fehler gab es einmal beim Löschen von Pinselstrichen.
-        teilEinsetzen([teil], 'Antippen');
+        teilEinsetzen([teil], `Bereich ${aktuell.bereiche.length + 1}`);
         setTeilId(teil.id);
       }
     } catch (fehler) {
@@ -2412,7 +2526,11 @@ export function BildEditor({
     const modus = tippVorzeichenRef.current;
     const mitNetz = tippMitNetzRef.current && tippNetzVerfuegbar();
     const toleranz = tippToleranzRef.current;
-    const vorher = tippTeilFinden(aktuell, bereichRef.current, modus, mitNetz);
+    // Im Film bekommt jeder neue Gegenstand sein eigenes Teil – siehe `imFilm`.
+    const vorher =
+      imFilm && modus === 'dazu'
+        ? tippTeilFinden(aktuell, bereichRef.current, modus, mitNetz, stelle)
+        : tippTeilFinden(aktuell, bereichRef.current, modus, mitNetz);
     await tippTeilSetzen(vorher, [...(vorher?.punkte ?? []), stelle], {
       modus,
       mitNetz,
@@ -2636,6 +2754,11 @@ export function BildEditor({
    */
   function vorhandenOderPlatz(aktuell: BildDoc): boolean {
     if (aktuell.bereiche.some((b) => b.id === bereichRef.current)) return true;
+    // Der gewählte Bereich gilt hier nicht: nichts anlegen, das ihn ersetzte.
+    if (bereichFehlt) {
+      toast(bereichFehlt, 'info');
+      return false;
+    }
     if (aktuell.bereiche.length < bereicheMax) return true;
     toast(
       bereicheGrund ??
@@ -2659,6 +2782,50 @@ export function BildEditor({
     setDoc((wert) => (wert ? { ...wert, bereiche: [...wert.bereiche, neu] } : wert));
     setBereichId(neu.id);
     setTeilId(null);
+  }
+
+  /*
+   * „＋ Bereich" aus der Zeitleiste: auf den Reiter, dann anlegen.
+   *
+   * Der Zähler steigt, die Funktion wird mit dem Stand dieses Renders
+   * gerufen. Der Anfangswert zählt nicht – ein Editor, der mit `bereichNeu`
+   * 3 aufgeht, hat nichts angefordert.
+   */
+  const bereichNeuGesehen = useRef(bereichNeu ?? 0);
+  useEffect(() => {
+    const jetzt = bereichNeu ?? 0;
+    if (jetzt === bereichNeuGesehen.current) return;
+    bereichNeuGesehen.current = jetzt;
+    if (!doc) return;
+    setWerkzeug('bereich');
+    bereichAnlegen();
+  });
+
+  /**
+   * Benennt den gewählten Bereich um.
+   *
+   * Leer darf das Feld beim Tippen sein – wer den Namen löschen will, um
+   * einen neuen zu schreiben, braucht diesen Augenblick –, bleibt es nach dem
+   * Verlassen leer, kehrt der Standardname zurück (`bereichNameFertig`): Ein
+   * Chip ohne Beschriftung wäre nicht zu finden.
+   */
+  function bereichUmbenennen(name: string) {
+    if (!aktiverBereich) return;
+    merkenGebuendelt(`bereichname-${aktiverBereich.id}`);
+    setDoc((wert) =>
+      wert
+        ? {
+            ...wert,
+            bereiche: wert.bereiche.map((b) => (b.id === aktiverBereich.id ? { ...b, name } : b)),
+          }
+        : wert,
+    );
+  }
+
+  function bereichNameFertig() {
+    if (!aktiverBereich || aktiverBereich.name.trim() !== '') return;
+    const nummer = (doc?.bereiche.findIndex((b) => b.id === aktiverBereich.id) ?? 0) + 1;
+    bereichUmbenennen(`Bereich ${nummer}`);
   }
 
   function bereichLoeschen(id: string) {
@@ -3357,10 +3524,20 @@ export function BildEditor({
                   className={`btn btn-sm ${bereich.id === bereichId ? 'is-active' : ''}`}
                   aria-pressed={bereich.id === bereichId}
                   onClick={() => {
+                    // Die Umgebung zieht nach (`bereichGewaehlt`) – ihr Echo
+                    // ist dann keine neue Wahl von aussen.
+                    wunsch.current = { id: bereich.id, offen: false };
                     setBereichId(bereich.id);
                     setTeilId(bereich.teile[0]?.id ?? null);
+                    onBereichGewaehlt?.(bereich.id);
                   }}
+                  style={
+                    bereichFarbe?.(bereich.id)
+                      ? ({ ['--mb-farbe' as string]: bereichFarbe(bereich.id) } as CSSProperties)
+                      : undefined
+                  }
                 >
+                  {bereichFarbe?.(bereich.id) && <span className="mb-punkt" aria-hidden="true" />}
                   {bereich.aktiv ? '' : '✗ '}
                   {bereich.name}
                 </button>
@@ -3370,10 +3547,16 @@ export function BildEditor({
                   ＋ Bereich
                 </button>
               ) : (
-                bereicheGrund &&
-                doc.bereiche.length < BEREICHE_MAX && (
-                  <span className="bild-hinweis">{bereicheGrund}</span>
-                )
+                /*
+                 * Der Knopf verschwindet nie wortlos: Wer vier Bereiche hat
+                 * und einen fünften sucht, hielt das Fehlen für einen Fehler.
+                 */
+                <span className="bild-hinweis">
+                  {bereicheGrund ??
+                    `Mehr als ${bereicheMax} Bereiche gehen nicht – lösch einen${
+                      imFilm ? ', oder tipp weitere Gegenstände in einen Bereich' : ''
+                    }.`}
+                </span>
               )}
             </div>
 
@@ -3558,6 +3741,8 @@ export function BildEditor({
                   {tippNetzGilt
                     ? 'Tippe mitten auf das Ding – das Netz nimmt es mit seiner ganzen Kante.'
                     : 'Tippe auf eine Farbfläche. Passt der Ausschnitt nicht, zieh die Toleranz – die Maske rechnet mit.'}
+                  {imFilm &&
+                    ' Jeder Gegenstand, den du antippst, wird für sich verfolgt – auch mehrere in einem Bereich.'}
                 </p>
               </div>
             )}
@@ -3726,6 +3911,24 @@ export function BildEditor({
                     <span className="bild-hinweis">Noch keine Maske – wähle oben eine Form.</span>
                   )}
                 </div>
+
+                {/*
+                    Im Film bleibt eine Form an der Szene: Sie folgt der Kamera
+                    (`bildweise.ts`), nicht einem Gegenstand, der sich bewegt.
+                    Das steht nirgends sonst – und wer eine Ellipse um einen
+                    Läufer legt, erwartet, dass sie mitläuft.
+                */}
+                {imFilm &&
+                  !tippAktiv &&
+                  aktivesTeil &&
+                  (aktivesTeil.art === 'verlauf' ||
+                    aktivesTeil.art === 'radial' ||
+                    aktivesTeil.art === 'pinsel') && (
+                    <p className="bild-hinweis">
+                      Diese Form bleibt an der Szene – sie folgt der Kamera, nicht einem Gegenstand.
+                      Für etwas, das sich bewegt: 👆 Antippen.
+                    </p>
+                  )}
 
                 {aktivesTeil && (
                   <div className="bild-reihe">
@@ -3976,6 +4179,17 @@ export function BildEditor({
                   </button>
                 </div>
 
+                <label className="feld bild-tipp-regler">
+                  <span>Name</span>
+                  <input
+                    type="text"
+                    value={aktiverBereich.name}
+                    maxLength={BEREICH_NAME_MAX}
+                    onChange={(ereignis) => bereichUmbenennen(ereignis.target.value)}
+                    onBlur={bereichNameFertig}
+                  />
+                </label>
+
                 {BEREICHSREGLER.map((regler) => {
                   const wert = aktiverBereich.anpassung[regler.key];
                   return (
@@ -4007,6 +4221,15 @@ export function BildEditor({
                   zeigen“ an ist. Zieh an den weissen Griffen im Bild.
                 </p>
               </>
+            ) : bereichFehlt ? (
+              /*
+               * Nicht der Leerzustand: Der gewählte Bereich gibt es, nur nicht
+               * an diesem Bild – „Leg oben eine Form an" wäre hier falsch und
+               * legte einen zweiten Bereich neben ihn.
+               */
+              <p className="bild-hinweis" role="status">
+                {bereichFehlt}
+              </p>
             ) : (
               <p className="bild-hinweis">
                 Ein Bereich ist eine Anpassung, die nur an einer Stelle wirkt: der Himmel dunkler,

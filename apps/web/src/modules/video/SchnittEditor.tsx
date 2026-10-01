@@ -11,7 +11,14 @@ import { masse } from './bilderLesen.js';
 import { useVorschauDoc } from './filmDoc.js';
 import { springenZu, useFilmWiedergabe } from './filmWiedergabe.js';
 import { restText, type MaskenLeiste } from './Maskenbahnen.js';
-import { bereichePlatz, bildDocAn, type Gezeigt } from './masken.js';
+import {
+  bereichNeuMoeglich,
+  bereichePlatz,
+  bildDocAn,
+  geltungImFilm,
+  giltAn,
+  type Gezeigt,
+} from './masken.js';
 import { bildIndex, bildMitte } from './raster.js';
 import { MAX_BILDER_FILM } from './einstellungen.js';
 import { filmZuQuelle, standImRaster } from './schnitt.js';
@@ -454,6 +461,17 @@ export function SchnittEditor({
 
   /* ---------- Die Masken in der Zeitleiste ---------- */
 
+  /*
+   * „＋ Bereich" in der Zeitleiste: ein Zähler, den der Editor liest.
+   * Gezeigt wird der Knopf nur, wo der Editor einen Bereich anlegen darf –
+   * sonst brächte er eine Absage statt eines Bereichs.
+   */
+  const [bereichNeu, setBereichNeu] = useState(0);
+  const neuMoeglich =
+    gezeigt !== null &&
+    bereit &&
+    bereichNeuMoeglich(masken, gezeigt.stand, { abschnitte, s: schrittMs });
+
   const maskenLeiste: MaskenLeiste = {
     masken,
     gewaehlt: schnitt.gewaehlt,
@@ -469,6 +487,7 @@ export function SchnittEditor({
     onTrennen: schnitt.maskeTrennen,
     onZurueck: schnitt.leisteZurueck,
     onZurueckHalten: schnitt.leisteZurueckHalten,
+    onNeu: neuMoeglich ? () => setBereichNeu((zahl) => zahl + 1) : undefined,
     onGriffZug: (filmMs, fertig) => {
       // Das Video folgt dem Griff, und beim Loslassen steht das Stellbild
       // dort – man sieht, wo die Maske jetzt anfängt oder endet.
@@ -669,6 +688,40 @@ export function SchnittEditor({
       gezeigt ? bereichePlatz(masken, gezeigt.stand, { abschnitte, s: schrittMs }) : undefined,
     [abschnitte, gezeigt, masken, schrittMs],
   );
+  /*
+   * Die Maske, die in der Zeitleiste gewählt ist, aber an diesem Bild nicht
+   * im Editor steht – mit dem Grund, als Satz für den Reiter „Bereiche".
+   * Sie gilt an einer anderen Stelle des Films, oder sie wird hier noch
+   * verfolgt; in beiden Fällen soll der Editor nichts anlegen, das sie
+   * ersetzte, und nicht „Leg oben eine Form an" sagen.
+   */
+  const bereichFehlt = useMemo(() => {
+    if (!gezeigt || !schnitt.gewaehlt || gezeigt.stand.z.enthalten.has(schnitt.gewaehlt)) {
+      return undefined;
+    }
+    const maske = masken.find((eintrag) => eintrag.id === schnitt.gewaehlt);
+    // Eine Maske, die der Editor in dieser Sitzung selbst angelegt hat, ist
+    // da – sie steht nur noch nicht in dem, was er beim Laden bekam.
+    if (!maske || !gezeigt.stand.vorSitzung.some((eintrag) => eintrag.id === maske.id)) {
+      return undefined;
+    }
+    const bezug = { abschnitte, s: schrittMs };
+    if (giltAn(maske.geltung, gezeigt.stand.k, bezug)) {
+      return `„${maske.name}“ wird an diesem Bild noch verfolgt und erscheint hier, sobald es so weit ist.`;
+    }
+    const zeit = geltungImFilm(maske.geltung, bezug);
+    const wann = zeit
+      ? ` – sie ist von ${sekundenText(zeit.vonMs)} bis ${sekundenText(zeit.bisMs)} zu sehen`
+      : '';
+    return `„${maske.name}“ gilt an diesem Bild nicht${wann}. „Zur Maske“ in der Zeitleiste bringt dich hin.`;
+  }, [abschnitte, gezeigt, masken, schnitt.gewaehlt, schrittMs]);
+  const bereichFarbe = useCallback(
+    (maskeId: string) => {
+      const maske = masken.find((eintrag) => eintrag.id === maskeId);
+      return maske ? `var(--maske-${maske.farbe % 8})` : undefined;
+    },
+    [masken],
+  );
   const schliessenRef = useRef(onClose);
   schliessenRef.current = onClose;
   const schliessen = useCallback(() => schliessenRef.current(), []);
@@ -707,6 +760,12 @@ export function SchnittEditor({
           gesperrt={!bereit}
           bereicheMax={platz?.max}
           bereicheGrund={platz?.grund}
+          bereichGewaehlt={schnitt.gewaehlt}
+          onBereichGewaehlt={schnitt.waehlen}
+          bereichFehlt={bereichFehlt}
+          bereichFarbe={bereichFarbe}
+          bereichNeu={bereichNeu}
+          imFilm
           verlaufAnpassen={verlaufMitMasken}
           onAenderung={aenderung}
           onClose={schliessen}
@@ -770,6 +829,11 @@ interface Anzeige {
  */
 function verlaufMitMasken(eintrag: BildDoc, neu: BildDoc): BildDoc {
   return { ...eintrag, bereiche: neu.bereiche };
+}
+
+/** „1,6 s" – eine Zeit im Film, auf Zehntel gerundet. */
+function sekundenText(ms: number): string {
+  return `${(ms / 1000).toFixed(1).replace('.', ',')} s`;
 }
 
 /** „A", „A und B", „A, B und C" – mit Anführungszeichen. */

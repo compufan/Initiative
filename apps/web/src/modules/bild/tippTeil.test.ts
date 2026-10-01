@@ -4,7 +4,7 @@ import { BEREICH_NEUTRAL, TOLERANZ_VORGABE, neuesDoc, type Maskenteil } from './
 import { teilBauen, teilSchluessel } from './maske.js';
 import { REZEPT_GRENZEN, docAusRoh, docNachRoh } from './rezept.js';
 import { flutmaske } from '../stickers/engines/flutung.js';
-import { istAnfangVon } from './tippMaske.js';
+import { istAnfangVon, tippGehoertDazu } from './tippMaske.js';
 
 /**
  * Die Prüfungen zum Antippen in den Bereichen.
@@ -290,5 +290,49 @@ describe('Abkürzung beim Weiterrechnen', () => {
         ],
       ),
     ).toBe(false);
+  });
+});
+
+describe('Gehört ein Tipp zu einem Teil? – ein Teil je Gegenstand im Film', () => {
+  /** Ein 10 × 6 Raster, in dem die Spalten 2 bis 4 gedeckt sind. */
+  function teilMitSaeule() {
+    const alpha = new Uint8Array(10 * 6);
+    for (let y = 0; y < 6; y += 1) for (let x = 2; x <= 4; x += 1) alpha[y * 10 + x] = 255;
+    return { alpha, breite: 10, hoehe: 6 };
+  }
+
+  it('sagt ja für eine Stelle in der Maske', () => {
+    expect(tippGehoertDazu(teilMitSaeule(), { x: 3, y: 3 })).toBe(true);
+  });
+
+  it('sagt nein für eine Stelle weit daneben – das ist ein anderer Gegenstand', () => {
+    expect(tippGehoertDazu(teilMitSaeule(), { x: 8, y: 3 })).toBe(false);
+  });
+
+  it('lässt einen Punkt Nachbarschaft gelten und keinen mehr', () => {
+    const teil = teilMitSaeule();
+    expect(tippGehoertDazu(teil, { x: 5, y: 3 })).toBe(true);
+    expect(tippGehoertDazu(teil, { x: 6, y: 3 })).toBe(false);
+    expect(tippGehoertDazu(teil, { x: 1, y: 3 })).toBe(true);
+    expect(tippGehoertDazu(teil, { x: 0, y: 3 })).toBe(false);
+  });
+
+  it('rechnet mit einer Stelle zwischen zwei Bildpunkten', () => {
+    expect(tippGehoertDazu(teilMitSaeule(), { x: 4.6, y: 2.4 })).toBe(true);
+  });
+
+  it('bleibt am Rand des Rasters im Raster', () => {
+    const teil = teilMitSaeule();
+    expect(tippGehoertDazu(teil, { x: 2, y: 0 })).toBe(true);
+    expect(tippGehoertDazu(teil, { x: 2, y: 5 })).toBe(true);
+    expect(tippGehoertDazu(teil, { x: -3, y: 3 })).toBe(false);
+    expect(tippGehoertDazu(teil, { x: 3, y: 40 })).toBe(false);
+  });
+
+  it('zählt eine halb durchsichtige Kante nicht als Deckung', () => {
+    const teil = { alpha: new Uint8Array(30).fill(100), breite: 5, hoehe: 6 };
+    expect(tippGehoertDazu(teil, { x: 2, y: 2 })).toBe(false);
+    teil.alpha[2 * 5 + 2] = 128;
+    expect(tippGehoertDazu(teil, { x: 2, y: 2 })).toBe(true);
   });
 });
