@@ -649,7 +649,10 @@ export const api = {
         attendeeIds: [...new Set([...bisher, ...neue])].filter((person) => person !== ersteller),
         zustellung: { senden: true, einzelchats: true },
       }),
-    /** Und wieder ausladen. Nur der Ersteller; ihre Einzelkarte wird gelöscht. */
+    /**
+     * Und wieder ausladen: der Ersteller jede Person (ihre Einzelkarte wird
+     * gelöscht), jede eingeladene Person sich selbst.
+     */
     uninvite: (id: string, userId: string) =>
       del<TerminAntwort>(`/calendar/events/${id}/attendees/${userId}`),
     /** Absagen lässt den Termin und seine Karten stehen („Abgesagt“), Zusagen sind dann gesperrt. */

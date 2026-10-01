@@ -629,7 +629,7 @@ describe('aenderungsVorschau', () => {
     });
     expect(zeilen).toEqual([
       'Neu eingeladen: 1 → Karte im Einzelchat und Benachrichtigung.',
-      'Entfernt: 1 → verliert den Zugang, die Karte im Einzelchat wird gelöscht. BEN hatte zugesagt.',
+      'Entfernt: 1 (BEN) → verliert den Zugang, die Karte im Einzelchat wird gelöscht. BEN hatte zugesagt.',
     ]);
   });
 
@@ -643,6 +643,82 @@ describe('aenderungsVorschau', () => {
     expect(zeilen[0]).toBe(
       'Neu eingeladen: 2 → Karte im Einzelchat und Benachrichtigung (2 Einzelchats werden neu angelegt).',
     );
+  });
+
+  it('nennt bei „Entfernt“ immer die Namen, nicht nur die der Zusagenden', () => {
+    const zeilen = aenderungsVorschau({
+      ...basis,
+      auswahl: auswahl(['anna']),
+      vorher: ['anna', 'ben', 'clara', 'dora', 'emil'],
+      bestehendeGruppen: null,
+    });
+    expect(zeilen).toEqual([
+      'Entfernt: 4 (BEN, CLARA, DORA und 1 weitere) → verlieren den Zugang, die Karten im Einzelchat werden gelöscht.',
+    ]);
+  });
+
+  it('ohne Karte im Einzelchat gibt es auch keine Benachrichtigung', () => {
+    // Der Server benachrichtigt nur über eine Karte, die er zugestellt hat:
+    // „Benachrichtigung, ohne Karte“ versprach etwas, das nicht geschieht.
+    const zeilen = aenderungsVorschau({
+      ...basis,
+      eingabe: { senden: true, einzelchats: false },
+      auswahl: auswahl(['anna', 'clara']),
+      vorher: ['anna'],
+      bestehendeGruppen: null,
+    });
+    expect(zeilen).toEqual([
+      'Neu eingeladen: 1 → keine Karte, keine Benachrichtigung – nur im Kalender.',
+    ]);
+  });
+
+  it('ohne Einzelkarte erreicht eine neue Gruppenkarte die Neuen darin', () => {
+    const zeilen = aenderungsVorschau({
+      ...basis,
+      eingabe: { senden: true, einzelchats: false },
+      // Ben ist neu und sitzt in Skat, Clara ist neu und nicht.
+      auswahl: auswahl(['anna', 'ben', 'clara'], ['skat']),
+      vorher: ['anna'],
+      bestehendeGruppen: [],
+    });
+    expect(zeilen).toEqual([
+      'Neu eingeladen: 2 → 1 über die Karte im Gruppenchat benachrichtigt, 1 ohne Karte und ohne Benachrichtigung – nur im Kalender.',
+      'Gruppenchat „Skat“: Karte wird gepostet.',
+    ]);
+
+    const alleDrin = aenderungsVorschau({
+      ...basis,
+      eingabe: { senden: true, einzelchats: false },
+      auswahl: auswahl(['anna', 'ben'], ['skat']),
+      vorher: [],
+      bestehendeGruppen: [],
+    });
+    expect(alleDrin[0]).toBe(
+      'Neu eingeladen: 2 → Benachrichtigung über die Karte im Gruppenchat, ohne Karte im Einzelchat.',
+    );
+  });
+
+  it('beim nachträglichen Einladen („nur Neue“) steht nichts über Entfernte da', () => {
+    // Die Terminseite kennt nur die Neuen in der Wahl: Wer schon eingeladen
+    // ist, wird nicht ausgeladen und gehört nicht in die Rechnung.
+    expect(
+      aenderungsVorschau({
+        ...basis,
+        auswahl: auswahl([]),
+        vorher: [],
+        bestehendeGruppen: null,
+      }),
+    ).toEqual([]);
+    expect(
+      aenderungsVorschau({
+        ...basis,
+        auswahl: auswahl(['clara']),
+        vorher: [],
+        bestehendeGruppen: null,
+      }),
+    ).toEqual([
+      'Neu eingeladen: 1 → Karte im Einzelchat und Benachrichtigung (ein Einzelchat wird neu angelegt).',
+    ]);
   });
 
   it('ohne Senden kommen die Neuen nur in den Kalender', () => {

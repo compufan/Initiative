@@ -83,6 +83,15 @@ interface ChatState {
   typing: Record<string, TypingEntry[]>;
   presence: Record<string, { online: boolean; lastSeenAt: string | null }>;
   initialised: boolean;
+  /**
+   * Ob die Chatliste wirklich schon vom Server kam. `initialised` gilt schon,
+   * wenn der lokale Zwischenspeicher gelesen ist – bei einem kalten Start (neues
+   * Gerät, frische Anmeldung) ist die Liste dann noch leer, obwohl sie gleich
+   * kommt. Wer daraus „du hast keine Kontakte“ schließt, irrt.
+   */
+  conversationsLoaded: boolean;
+  /** Das Laden der Chatliste ist gescheitert – bis zum nächsten Erfolg. */
+  conversationsFailed: boolean;
   hydrate: () => Promise<void>;
   loadConversations: () => Promise<void>;
   ensureConversation: (conversationId: string) => Promise<ConversationDto | null>;
@@ -127,6 +136,8 @@ export const useChat = create<ChatState>((set, get) => ({
   typing: {},
   presence: {},
   initialised: false,
+  conversationsLoaded: false,
+  conversationsFailed: false,
 
   async hydrate() {
     const [conversations, outbox] = await Promise.all([readCachedConversations(), readOutbox()]);
@@ -155,9 +166,10 @@ export const useChat = create<ChatState>((set, get) => ({
   async loadConversations() {
     try {
       const { items } = await api.conversations.list();
-      set({ conversations: items });
+      set({ conversations: items, conversationsLoaded: true, conversationsFailed: false });
       void cacheConversations(items);
     } catch (error) {
+      set({ conversationsFailed: true });
       if (!(error instanceof ApiError && error.isOffline)) throw error;
     }
   },

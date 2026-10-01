@@ -13,7 +13,22 @@ import { toast } from '../../state/ui.js';
  * **dauerhaft**: Ein Hinweis, der nur beim Speichern aufblitzt, ist beim
  * nächsten Öffnen vergessen, die Einladung aber weiter nicht angekommen.
  */
-export function ZustellungHinweis({ eventId }: { eventId: string }) {
+export function ZustellungHinweis({
+  eventId,
+  antwort,
+  stand,
+}: {
+  eventId: string;
+  /**
+   * Was die Seite aus einer Antwort des Servers schon weiß (Einladen, Ausladen,
+   * Speichern): Die Antwort nennt `zustellung.ausstehend`, und es wäre falsch, bis
+   * zum nächsten Laden zu warten. Jede Antwort ist ein neues Objekt – auch zweimal
+   * dieselbe Zahl muss sich melden, etwa nach „Erneut zustellen“.
+   */
+  antwort?: { ausstehend: number } | null;
+  /** Der Stand des Termins – ändert er sich, wird neu nachgesehen (auch von einem anderen Gerät aus). */
+  stand?: number;
+}) {
   const [ausstehend, setAusstehend] = useState(0);
   const [laeuft, setLaeuft] = useState(false);
 
@@ -28,7 +43,12 @@ export function ZustellungHinweis({ eventId }: { eventId: string }) {
 
   useEffect(() => {
     void laden();
-  }, [laden]);
+  }, [laden, stand]);
+
+  // Eine Antwort des Servers geht dem Laden vor.
+  useEffect(() => {
+    if (antwort) setAusstehend(antwort.ausstehend);
+  }, [antwort]);
 
   async function nachliefern() {
     setLaeuft(true);

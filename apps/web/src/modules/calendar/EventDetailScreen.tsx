@@ -50,6 +50,8 @@ export function EventDetailScreen() {
   const [deleting, setDeleting] = useState(false);
   const [absagenOpen, setAbsagenOpen] = useState(false);
   const [absagend, setAbsagend] = useState(false);
+  const [austragenOpen, setAustragenOpen] = useState(false);
+  const [austragend, setAustragend] = useState(false);
   /** Wen der Ersteller gerade ausladen will und der schon zugesagt hatte – die Rückfrage. */
   const [ausladenFrage, setAusladenFrage] = useState<string | null>(null);
 
@@ -78,6 +80,12 @@ export function EventDetailScreen() {
 
   const [einladenAuswahl, setEinladenAuswahl] = useState<Auswahl>(LEERE_AUSWAHL);
   const [laedtEin, setLaedtEin] = useState(false);
+  /**
+   * Was der Server zuletzt über die Zustellung gesagt hat (Einladen, Ausladen).
+   * Das Hinweisfeld „Einladungen nicht zugestellt“ richtet sich danach, statt bis
+   * zum erneuten Öffnen der Seite zu warten.
+   */
+  const [zustellAntwort, setZustellAntwort] = useState<{ ausstehend: number } | null>(null);
 
   async function einladen(neue: string[]) {
     if (!event || neue.length === 0) return;
@@ -91,7 +99,17 @@ export function EventDetailScreen() {
       );
       setEvent(terminOhneZustellung(antwort));
       setEinladenAuswahl(LEERE_AUSWAHL);
-      toast(neue.length === 1 ? 'Eingeladen.' : `${neue.length} eingeladen.`, 'success');
+      const ausstehend = antwort.zustellung?.ausstehend ?? 0;
+      if (antwort.zustellung) setZustellAntwort({ ausstehend });
+      const eingeladen = neue.length === 1 ? 'Eingeladen.' : `${neue.length} eingeladen.`;
+      // Fehlt eine Karte, meldet es der Ton – wie im Editor. Ein grünes
+      // „Eingeladen“ ließe den Ersteller glauben, es sei alles angekommen.
+      toast(
+        ausstehend > 0
+          ? `${eingeladen} ${ausstehend === 1 ? 'Eine Einladung konnte' : `${ausstehend} Einladungen konnten`} nicht zugestellt werden – unten lässt sich das erneut versuchen.`
+          : eingeladen,
+        ausstehend > 0 ? 'error' : 'success',
+      );
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Einladen fehlgeschlagen', 'error');
     } finally {
@@ -102,9 +120,30 @@ export function EventDetailScreen() {
   async function ausladen(userId: string) {
     if (!event) return;
     try {
-      setEvent(terminOhneZustellung(await api.calendar.uninvite(event.id, userId)));
+      const antwort = await api.calendar.uninvite(event.id, userId);
+      setEvent(terminOhneZustellung(antwort));
+      if (antwort.zustellung) setZustellAntwort({ ausstehend: antwort.zustellung.ausstehend });
     } catch (error) {
       toast(error instanceof Error ? error.message : 'Ausladen fehlgeschlagen', 'error');
+    }
+  }
+
+  /**
+   * Sich selbst austragen. Wer eingeladen wurde, ohne gefragt zu werden, hat
+   * sonst keine Möglichkeit, den Termin wieder loszuwerden: Er bliebe im Kalender
+   * und in den Chats, bis der Ersteller ihn entfernt. Der Zugang endet sofort.
+   */
+  async function austragen() {
+    if (!event || austragend) return;
+    setAustragend(true);
+    try {
+      await api.calendar.uninvite(event.id, myId);
+      toast('Du bist nicht mehr zu diesem Termin eingeladen.', 'success');
+      setAustragenOpen(false);
+      navigate('/kalender');
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Austragen fehlgeschlagen', 'error');
+      setAustragend(false);
     }
   }
 
@@ -120,6 +159,7 @@ export function EventDetailScreen() {
         ? await api.calendar.wiederaufnehmen(event.id)
         : await api.calendar.absagen(event.id);
       setEvent(terminOhneZustellung(antwort));
+      if (antwort.zustellung) setZustellAntwort({ ausstehend: antwort.zustellung.ausstehend });
       toast(wiederaufnehmen ? 'Termin findet wieder statt' : 'Termin abgesagt', 'success');
       setAbsagenOpen(false);
     } catch (error) {
@@ -300,7 +340,9 @@ export function EventDetailScreen() {
         <EventPollCard event={event} canManage={isCreator} onConfirmed={setEvent} />
       )}
 
-      {isCreator && <ZustellungHinweis eventId={event.id} />}
+      {isCreator && (
+        <ZustellungHinweis eventId={event.id} antwort={zustellAntwort} stand={event.stand} />
+      )}
 
       <section className="card cal-block" aria-label="Deine Antwort">
         <h2 className="cal-block-title">
@@ -314,6 +356,13 @@ export function EventDetailScreen() {
             ? `Du hast ${rsvpMeta(mine).label.toLowerCase()}.`
             : 'Du hast noch nicht geantwortet.'}
         </p>
+        {/* Wer nicht dabei sein will, trägt sich aus: Mit „Nein“ bliebe der
+            Termin in Kalender und Chats stehen. */}
+        {!isCreator && (
+          <button type="button" className="btn btn-sm" onClick={() => setAustragenOpen(true)}>
+            Aus dem Termin austragen
+          </button>
+        )}
       </section>
 
       <section className="card cal-block" aria-label="Teilnehmende">
@@ -365,7 +414,9 @@ export function EventDetailScreen() {
 
         {/* Nachtraeglich einladen. Ging vorher gar nicht – die Runde stand mit
             dem Anlegen fest. */}
-        {isCreator && (
+        {/* Nicht, solange über den Zeitpunkt abgestimmt wird: Wer jetzt dazukäme,
+            bekäme eine Karte, könnte aber nicht abstimmen. */}
+        {isCreator && event.status !== 'planning' && (
           <details className="cal-invite">
             <summary>Jemanden einladen</summary>
             {/*
@@ -519,6 +570,31 @@ export function EventDetailScreen() {
             onClick={() => void absagen(false)}
           >
             {absagend ? 'Wird abgesagt …' : 'Absagen'}
+          </button>
+        </div>
+      </Sheet>
+
+      <Sheet
+        open={austragenOpen}
+        onClose={() => setAustragenOpen(false)}
+        variant="modal"
+        title="Aus dem Termin austragen?"
+      >
+        <p className="muted">
+          „{event.title}“ verschwindet aus deinem Kalender und deinen Chats, und du siehst weder
+          Notizen noch Unterlagen mehr. Nur wer den Termin angelegt hat, kann dich wieder einladen.
+        </p>
+        <div className="cal-confirm-actions">
+          <button type="button" className="btn" onClick={() => setAustragenOpen(false)}>
+            Abbrechen
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger"
+            disabled={austragend}
+            onClick={() => void austragen()}
+          >
+            {austragend ? 'Wird ausgetragen …' : 'Austragen'}
           </button>
         </div>
       </Sheet>

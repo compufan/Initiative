@@ -1360,15 +1360,20 @@
 
 /* Die Vorschau: was mit der Einladung geschieht, in Sätzen. */
 .cal-einl-vorschau {
-  list-style: none;
   margin: var(--space-2) 0 0;
   padding: var(--space-3);
   border-radius: var(--radius);
   background: var(--accent-soft);
+  font-size: 0.86rem;
+}
+
+.cal-einl-vorschau ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 0.86rem;
 }
 
 /* Leer bleibt die Live-Region im Baum (sie muss da sein, bevor sich etwas in

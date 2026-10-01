@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
-import { LIMITS, type RsvpStatus } from '@initiative/shared';
+import { LIMITS, type ConversationDto, type RsvpStatus } from '@initiative/shared';
 import { Avatar } from '../../components/Avatar.js';
 import { Spinner } from '../../components/Feedback.js';
 import { api } from '../../lib/api.js';
@@ -43,9 +43,31 @@ const SCHRITT = 100;
  */
 export function useEinladungsDaten(myId: string) {
   const conversations = useChat((state) => state.conversations);
-  const initialised = useChat((state) => state.initialised);
+  const geladen = useChat((state) => state.conversationsLoaded);
+  const fehlgeschlagen = useChat((state) => state.conversationsFailed);
   const aktuell = useRef(conversations);
   aktuell.current = conversations;
+
+  // Archivierte Einzelchats kennt der Speicher nicht (die Chatliste lädt sie
+  // nicht), der Server nimmt für eine Einladung aber auch einen archivierten.
+  // Ohne sie meldete die Vorschau bei jedem, der Chats archiviert, „neu
+  // angelegt“, wo nichts entsteht. Einmal beim Öffnen geholt; schlägt es fehl,
+  // bleibt die Zahl eine obere Grenze.
+  const [archiviert, setArchiviert] = useState<ConversationDto[]>([]);
+  const archiviertRef = useRef(archiviert);
+  archiviertRef.current = archiviert;
+  useEffect(() => {
+    let abgebrochen = false;
+    api.conversations
+      .list(true)
+      .then(({ items }) => {
+        if (!abgebrochen) setArchiviert(items);
+      })
+      .catch(() => {});
+    return () => {
+      abgebrochen = true;
+    };
+  }, []);
 
   const signatur = useMemo(
     () =>
@@ -63,19 +85,37 @@ export function useEinladungsDaten(myId: string) {
         .join('|'),
     [conversations],
   );
+  const archivSignatur = useMemo(
+    () => archiviert.map((chat) => `${chat.id}:${chat.members.length}`).join('|'),
+    [archiviert],
+  );
 
   const daten = useMemo(
     () => ({
       kontakte: kontakteAus(aktuell.current, myId),
       gruppen: gruppenAus(aktuell.current, myId),
-      einzelchatMit: einzelchatMit(aktuell.current, myId),
+      einzelchatMit: einzelchatMit([...aktuell.current, ...archiviertRef.current], myId),
     }),
     // `signatur` steht stellvertretend für den Inhalt von `conversations`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [signatur, myId],
+    [signatur, archivSignatur, myId],
   );
 
-  return { ...daten, bereit: initialised || conversations.length > 0 };
+  // „Bereit“ erst, wenn die Chatliste wirklich vom Server kam (oder aus dem
+  // Zwischenspeicher da ist): `initialised` gilt schon nach dem Lesen des
+  // Zwischenspeichers, bei einem kalten Start ist die Liste dann noch leer.
+  const bereit = geladen || conversations.length > 0;
+  return {
+    ...daten,
+    bereit,
+    listeFehler: !bereit && fehlgeschlagen,
+    listeNochmal: () => {
+      void useChat
+        .getState()
+        .loadConversations()
+        .catch(() => {});
+    },
+  };
 }
 
 interface ZeileProps {
@@ -132,8 +172,10 @@ export interface EinladungsWahlProps {
    * und der Editor schickt `gruppenChatIds` nicht mit.
    */
   bestehendeGruppen?: string[] | null;
-  /** Das Laden der bestehenden Gruppenkarten ist gescheitert: Sie bleiben unverändert. */
+  /** Das Laden der bestehenden Gruppenkarten ist gescheitert. */
   gruppenFehler?: boolean;
+  /** Versucht, die bestehenden Gruppenkarten noch einmal zu laden. */
+  onGruppenNochmal?: () => void;
   /**
    * Nachträglich einladen (Detailseite): Wer schon eingeladen ist, steht nicht
    * zur Wahl, und es gibt keine Gruppenchats – nur Personen.
@@ -168,11 +210,23 @@ export function EinladungsWahl({
   bisher,
   bestehendeGruppen,
   gruppenFehler = false,
+  onGruppenNochmal,
   nurNeue = false,
   zusatzZeilen = [],
 }: EinladungsWahlProps) {
-  const { kontakte, gruppen, einzelchatMit: mitEinzelchat, bereit } = useEinladungsDaten(myId);
+  const {
+    kontakte,
+    gruppen,
+    einzelchatMit: mitEinzelchat,
+    bereit,
+    listeFehler,
+    listeNochmal,
+  } = useEinladungsDaten(myId);
   const leute = useLeute((state) => state.byId);
+
+  // Solange nicht bekannt ist, wo der Termin schon als Karte steht (Bearbeiten),
+  // lässt sich keine Gruppe wählen: Die Wahl würde beim Speichern verworfen.
+  const gruppenUnbekannt = bestehendeGruppen === null;
 
   const panelId = useId();
   const [suche, setSuche] = useState('');
@@ -181,8 +235,16 @@ export function EinladungsWahl({
   const [gruppenOffen, setGruppenOffen] = useState(false);
   const [meldung, setMeldung] = useState<string | null>(null);
   const [niemandFrage, setNiemandFrage] = useState(false);
+  /**
+   * Wer beim Wechsel in die Ansicht „Gewählt“ gewählt war: Diese Zeilen bleiben
+   * stehen, auch wenn man sie dort abwählt – sonst verschwindet die Zeile samt
+   * Fokus unter der Hand, und wer mit der Tastatur arbeitet, verliert seine
+   * Stelle. Beim Verlassen der Ansicht räumt sich die Liste auf.
+   */
+  const [festgehalten, setFestgehalten] = useState<Set<string>>(new Set());
   const gruppenKnopf = useRef<HTMLButtonElement>(null);
   const gruppenPanel = useRef<HTMLDivElement>(null);
+  const frageRef = useRef<HTMLDivElement>(null);
 
   // Der Aufrufer reicht `onChange` meist als frische Funktion durch; über eine
   // Referenz bleiben die Rückrufe der Zeilen stabil, und die Zeilen bleiben
@@ -254,10 +316,33 @@ export function EinladungsWahl({
     () => auswahl.personen.filter((id) => !kontaktIds.has(id)),
     [auswahl.personen, kontaktIds],
   );
+  /*
+   * Auch wer abgewählt wurde, bleibt in der Liste: Wer schon eingeladen war oder
+   * in diesem Blatt einmal gewählt wurde und kein Kontakt ist, ließe sich sonst
+   * nur über eine neue Suche (oder durch Abbrechen des ganzen Blatts) wieder
+   * zurückwählen – genau diese Leute erreicht man nur über die Suche.
+   */
+  const [fremdGemerkt, setFremdGemerkt] = useState<string[]>([]);
   const fremdSchluessel = fremdGewaehlt.join(',');
   useEffect(() => {
-    if (fremdSchluessel) useLeute.getState().sicherstellen(fremdSchluessel.split(','));
+    if (!fremdSchluessel) return;
+    setFremdGemerkt((bisherGemerkt) => {
+      const neu = fremdSchluessel.split(',').filter((id) => !bisherGemerkt.includes(id));
+      return neu.length > 0 ? [...bisherGemerkt, ...neu] : bisherGemerkt;
+    });
   }, [fremdSchluessel]);
+  const fremdBisher = useMemo(
+    () => (nurNeue ? [] : Object.keys(bisher ?? {}).filter((id) => !kontaktIds.has(id))),
+    [nurNeue, bisher, kontaktIds],
+  );
+  const fremdAlle = useMemo(
+    () => [...new Set([...fremdGewaehlt, ...fremdBisher, ...fremdGemerkt])],
+    [fremdGewaehlt, fremdBisher, fremdGemerkt],
+  );
+  const fremdAlleSchluessel = fremdAlle.join(',');
+  useEffect(() => {
+    if (fremdAlleSchluessel) useLeute.getState().sicherstellen(fremdAlleSchluessel.split(','));
+  }, [fremdAlleSchluessel]);
 
   const weitere = useMemo(() => {
     const liste: Kontakt[] = [];
@@ -268,7 +353,7 @@ export function EinladungsWahl({
       gesehen.add(kontakt.id);
       liste.push(kontakt);
     };
-    for (const id of fremdGewaehlt) {
+    for (const id of fremdAlle) {
       const nutzer = leute[id];
       aufnehmen(
         nutzer
@@ -278,7 +363,7 @@ export function EinladungsWahl({
     }
     for (const kontakt of treffer) aufnehmen(kontakt);
     return liste;
-  }, [fremdGewaehlt, leute, treffer, kontaktIds, myId, ausschluss]);
+  }, [fremdAlle, leute, treffer, kontaktIds, myId, ausschluss]);
 
   const nameVon = useCallback(
     (id: string): string => {
@@ -308,10 +393,9 @@ export function EinladungsWahl({
   }
 
   function keinen() {
-    const ausgeladen = nurNeue ? [] : auswahl.personen.filter((id) => id in (bisher ?? {}));
     // Beim Bearbeiten heisst „Niemand“ auch: die schon Eingeladenen ausladen.
     // Das fragt vorher nach – ein Fehlgriff liesse sich nur einzeln zurücknehmen.
-    if (ausgeladen.length > 0 && !niemandFrage) {
+    if (!nurNeue && ausgeladenAnzahl > 0 && !niemandFrage) {
       setNiemandFrage(true);
       return;
     }
@@ -321,6 +405,15 @@ export function EinladungsWahl({
   }
 
   function waehleGruppe(gruppe: Gruppe) {
+    if (gruppenUnbekannt) {
+      setMeldung(
+        gruppenFehler
+          ? 'Erst muss sich laden lassen, wo der Termin schon steht – versuche es unten noch einmal.'
+          : 'Einen Augenblick – es wird noch geladen, wo der Termin schon steht.',
+      );
+      setGruppenOffen(false);
+      return;
+    }
     const ergebnis = gruppeWaehlen(auswahl, gruppe);
     if (ergebnis.zuViele) {
       setMeldung(
@@ -342,33 +435,71 @@ export function EinladungsWahl({
     if (gruppenOffen) gruppenPanel.current?.querySelector<HTMLButtonElement>('button')?.focus();
   }, [gruppenOffen]);
 
+  // Die Rückfrage meldet sich als Hinweis und nimmt den Fokus mit: Wer mit
+  // Tastatur oder Vorlesehilfe arbeitet, merkt sonst nicht, dass etwas gefragt wird.
+  useEffect(() => {
+    if (niemandFrage) frageRef.current?.focus();
+  }, [niemandFrage]);
+
+  /**
+   * Esc schließt im geöffneten Gruppenfeld nur das Feld. Das Blatt hört auf
+   * dasselbe Esc am Fenster und schlösse sonst alles, samt aller Eingaben.
+   */
+  function gruppenTaste(taste: React.KeyboardEvent) {
+    if (taste.key !== 'Escape' || !gruppenOffen) return;
+    taste.preventDefault();
+    taste.stopPropagation();
+    setGruppenOffen(false);
+    gruppenKnopf.current?.focus();
+  }
+
   /* ---------- Anzeige ---------- */
 
   const gefiltert = useMemo(() => filtern(waehlbar, suche), [waehlbar, suche]);
   const gezeigt = useMemo(
     () =>
-      anzeige === 'gewaehlt' ? gefiltert.filter((kontakt) => gewaehlt.has(kontakt.id)) : gefiltert,
-    [gefiltert, anzeige, gewaehlt],
+      anzeige === 'gewaehlt'
+        ? gefiltert.filter((kontakt) => gewaehlt.has(kontakt.id) || festgehalten.has(kontakt.id))
+        : gefiltert,
+    [gefiltert, anzeige, gewaehlt, festgehalten],
   );
   const weitereGezeigt =
-    anzeige === 'gewaehlt' ? weitere.filter((k) => gewaehlt.has(k.id)) : weitere;
+    anzeige === 'gewaehlt'
+      ? weitere.filter((kontakt) => gewaehlt.has(kontakt.id) || festgehalten.has(kontakt.id))
+      : weitere;
 
   const moeglich = waehlbar.length + weitere.filter((kontakt) => gewaehlt.has(kontakt.id)).length;
   const anzahl = auswahl.personen.filter((id) => id !== myId).length;
+
+  // Der Umschalter „Alle · Gewählt“ steht nur bei vielen Personen. Verschwindet
+  // er (die wählbare Menge schrumpft, etwa nach dem Einladen), darf die Ansicht
+  // nicht auf „Gewählt“ hängenbleiben: Die Liste bliebe leer, und der Weg zurück
+  // wäre weg.
+  const umschalterSichtbar = moeglich > 8;
+  useEffect(() => {
+    if (!umschalterSichtbar && anzeige === 'gewaehlt') setAnzeige('alle');
+  }, [umschalterSichtbar, anzeige]);
+
+  function anzeigeWechseln(neu: 'alle' | 'gewaehlt') {
+    setAnzeige(neu);
+    setFestgehalten(neu === 'gewaehlt' ? new Set(auswahl.personen) : new Set());
+  }
   const gruppenNachId = useMemo(
     () => new Map(gruppen.map((gruppe) => [gruppe.id, gruppe])),
     [gruppen],
   );
 
   const vorgeschlagen = useMemo(
-    () => (nurNeue ? [] : vorgeschlageneGruppen(gruppen, auswahl)),
-    [gruppen, auswahl, nurNeue],
+    () => (nurNeue || gruppenUnbekannt ? [] : vorgeschlageneGruppen(gruppen, auswahl)),
+    [gruppen, auswahl, nurNeue, gruppenUnbekannt],
   );
 
   const zeilen = useMemo(() => {
     const eingabe = { senden, einzelchats };
     if (bisher) {
-      const vorher = Object.keys(bisher);
+      // Beim nachträglichen Einladen enthält die Wahl nur die Neuen; die schon
+      // Eingeladenen werden nicht ausgeladen und gehören nicht in den Vergleich.
+      const vorher = nurNeue ? [] : Object.keys(bisher);
       return aenderungsVorschau({
         myId,
         auswahl,
@@ -402,21 +533,50 @@ export function EinladungsWahl({
     nameVon,
   ]);
 
-  const keineKontakte =
-    bereit && waehlbar.length === 0 && weitere.length === 0 && suche.trim() === '';
   const suchtext = suche.trim();
+  // „Du hast noch keine Kontakte“ gilt nur, wenn es wirklich keine gibt. Beim
+  // nachträglichen Einladen ist die wählbare Liste auch dann leer, wenn alle
+  // Kontakte schon eingeladen sind – das ist etwas anderes.
+  const keineKontakte =
+    bereit &&
+    kontakte.length === 0 &&
+    waehlbar.length === 0 &&
+    weitere.length === 0 &&
+    suchtext === '';
+  const alleEingeladen =
+    bereit &&
+    nurNeue &&
+    kontakte.length > 0 &&
+    waehlbar.length === 0 &&
+    weitere.length === 0 &&
+    suchtext === '';
+
+  // Wie viele schon Eingeladene würde „Niemand“ ausladen?
+  const ausgeladenAnzahl = auswahl.personen.filter((id) => id in (bisher ?? {})).length;
 
   return (
     <fieldset className="field cal-einl">
       <legend>{nurNeue ? 'Wen einladen?' : 'Eingeladen'}</legend>
 
-      <p className="cal-einl-zahl" role="status" aria-live="polite">
-        {zaehlerText(anzahl, moeglich)}
-      </p>
+      {/* „0 von 0 Personen“ sagt nichts, was die Hinweise darunter nicht besser sagen. */}
+      {!keineKontakte && !alleEingeladen && (
+        <p className="cal-einl-zahl" role="status" aria-live="polite">
+          {zaehlerText(anzahl, moeglich)}
+        </p>
+      )}
       {!nurNeue && <p className="cal-hint">Du bist immer dabei.</p>}
 
       {!bereit ? (
-        <Spinner label="Kontakte werden geladen …" />
+        listeFehler ? (
+          <p className="cal-hint" role="alert">
+            Deine Kontakte konnten nicht geladen werden.{' '}
+            <button type="button" className="btn btn-sm" onClick={listeNochmal}>
+              Erneut versuchen
+            </button>
+          </p>
+        ) : (
+          <Spinner label="Kontakte werden geladen …" />
+        )
       ) : (
         <>
           <div className="cal-einl-schnell">
@@ -444,6 +604,11 @@ export function EinladungsWahl({
                 className="btn btn-sm"
                 aria-expanded={gruppenOffen}
                 aria-controls={panelId}
+                disabled={gruppenUnbekannt}
+                title={
+                  gruppenUnbekannt ? 'Es wird noch geladen, wo der Termin schon steht.' : undefined
+                }
+                onKeyDown={gruppenTaste}
                 onClick={() => setGruppenOffen((offen) => !offen)}
               >
                 Gruppenchat … <span aria-hidden="true">{gruppenOffen ? '▴' : '▾'}</span>
@@ -464,10 +629,17 @@ export function EinladungsWahl({
           )}
 
           {niemandFrage && (
-            <div className="cal-einl-frage" role="group" aria-label="Rückfrage">
+            <div
+              ref={frageRef}
+              tabIndex={-1}
+              className="cal-einl-frage"
+              role="alert"
+              aria-label="Rückfrage"
+            >
               <p>
-                {auswahl.personen.filter((id) => id in (bisher ?? {})).length} Personen werden
-                ausgeladen. Ihre Karten im Einzelchat werden gelöscht.
+                {ausgeladenAnzahl === 1 ? '1 Person wird' : `${ausgeladenAnzahl} Personen werden`}{' '}
+                ausgeladen. {ausgeladenAnzahl === 1 ? 'Ihre Karte' : 'Ihre Karten'} im Einzelchat{' '}
+                {ausgeladenAnzahl === 1 ? 'wird' : 'werden'} gelöscht.
               </p>
               <div className="cal-einl-frage-knoepfe">
                 <button type="button" className="btn btn-sm btn-danger" onClick={keinen}>
@@ -487,6 +659,7 @@ export function EinladungsWahl({
               className="cal-einl-gruppenwahl"
               role="group"
               aria-label="Gruppenchat wählen"
+              onKeyDown={gruppenTaste}
             >
               {gruppen.map((gruppe) => {
                 const gewaehltChip = auswahl.gruppen.includes(gruppe.id);
@@ -520,23 +693,25 @@ export function EinladungsWahl({
             }}
           />
 
-          {moeglich > 8 && (
+          {umschalterSichtbar && (
             <div className="cal-einl-anzeige" role="group" aria-label="Anzeige">
+              {/* Der sichtbare Text steht am Anfang des Namens: Wer „Gewählt 3“
+                  sagt, trifft die Taste, und die Zahl wird mitgelesen. */}
               <button
                 type="button"
                 aria-pressed={anzeige === 'alle'}
-                aria-label="Alle Personen anzeigen"
+                aria-label={`Alle ${waehlbar.length} Personen anzeigen`}
                 className={anzeige === 'alle' ? 'is-active' : undefined}
-                onClick={() => setAnzeige('alle')}
+                onClick={() => anzeigeWechseln('alle')}
               >
                 Alle {waehlbar.length}
               </button>
               <button
                 type="button"
                 aria-pressed={anzeige === 'gewaehlt'}
-                aria-label="Nur gewählte Personen anzeigen"
+                aria-label={`Gewählt ${anzahl}: nur gewählte Personen anzeigen`}
                 className={anzeige === 'gewaehlt' ? 'is-active' : undefined}
-                onClick={() => setAnzeige('gewaehlt')}
+                onClick={() => anzeigeWechseln('gewaehlt')}
               >
                 Gewählt {anzahl}
               </button>
@@ -546,6 +721,10 @@ export function EinladungsWahl({
           {keineKontakte ? (
             <p className="cal-hint">
               Du hast noch keine Kontakte – such eine Person mit dem Suchfeld.
+            </p>
+          ) : alleEingeladen ? (
+            <p className="cal-hint">
+              Alle deine Kontakte sind schon eingeladen – such eine weitere Person mit dem Suchfeld.
             </p>
           ) : (
             <div className="cal-einl-liste" role="group" aria-label="Personen">
@@ -558,10 +737,13 @@ export function EinladungsWahl({
                   onUmschalten={umschalten}
                 />
               ))}
-              {gezeigt.length === 0 && suchtext !== '' && (
-                <p className="cal-hint">
-                  {anzeige === 'gewaehlt' ? 'Niemand gewählt.' : 'Keiner deiner Kontakte passt.'}
-                </p>
+              {/* Der Leerzustand steht unabhängig vom Suchtext da: In der Ansicht
+                  „Gewählt“ ohne Auswahl bliebe die Fläche sonst völlig leer. */}
+              {gezeigt.length === 0 && weitereGezeigt.length === 0 && anzeige === 'gewaehlt' && (
+                <p className="cal-hint">Niemand gewählt.</p>
+              )}
+              {gezeigt.length === 0 && anzeige === 'alle' && suchtext !== '' && (
+                <p className="cal-hint">Keiner deiner Kontakte passt.</p>
               )}
               {gezeigt.length > sichtbar && (
                 <button
@@ -619,9 +801,20 @@ export function EinladungsWahl({
               vorgeschlagen.length > 0) && (
               <>
                 <h3 className="cal-einl-titel">Gruppenchats</h3>
-                {bestehendeGruppen === null && (
-                  <p className="cal-hint">Gruppenkarten werden geladen …</p>
-                )}
+                {bestehendeGruppen === null &&
+                  (gruppenFehler ? (
+                    <p className="cal-hint is-warnung" role="alert">
+                      Wo der Termin schon steht, ließ sich nicht laden. Solange das fehlt, lässt
+                      sich kein Gruppenchat wählen.{' '}
+                      {onGruppenNochmal && (
+                        <button type="button" className="btn btn-sm" onClick={onGruppenNochmal}>
+                          Erneut versuchen
+                        </button>
+                      )}
+                    </p>
+                  ) : (
+                    <p className="cal-hint">Gruppenkarten werden geladen …</p>
+                  ))}
                 {auswahl.gruppen.length > 0 && (
                   <ul className="cal-einl-chips" aria-label="Ausgewählte Gruppenchats">
                     {auswahl.gruppen.map((id) => {
@@ -725,17 +918,23 @@ export function EinladungsWahl({
             </>
           )}
 
-          <ul
+          {/* Die Live-Region ist der Behälter, die Liste darin eine echte Liste:
+              `role="status"` an der `ul` nähme den Einträgen ihren Listenkontext. */}
+          <div
             className="cal-einl-vorschau"
             role="status"
             aria-live="polite"
             aria-atomic="true"
             aria-label="Was mit der Einladung geschieht"
           >
-            {[...zeilen, ...zusatzZeilen].map((zeile) => (
-              <li key={zeile}>{zeile}</li>
-            ))}
-          </ul>
+            {zeilen.length + zusatzZeilen.length > 0 && (
+              <ul>
+                {[...zeilen, ...zusatzZeilen].map((zeile) => (
+                  <li key={zeile}>{zeile}</li>
+                ))}
+              </ul>
+            )}
+          </div>
         </>
       )}
     </fieldset>

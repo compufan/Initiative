@@ -175,6 +175,8 @@ export function EventEditor(props: EventEditorProps) {
    */
   const [bestehendeGruppen, setBestehendeGruppen] = useState<string[] | null>(null);
   const [gruppenFehler, setGruppenFehler] = useState(false);
+  /** Zählt die Wiederholungen des Ladens („Erneut versuchen“). */
+  const [gruppenNochmal, setGruppenNochmal] = useState(0);
   /**
    * Wiederholungsschutz: Wer wegen eines Funklochs oder Doppeltippens noch
    * einmal sendet, bekommt denselben Termin zurück statt eines zweiten. Der
@@ -230,7 +232,7 @@ export function EventEditor(props: EventEditorProps) {
     return () => {
       abgebrochen = true;
     };
-  }, [open, eventId, eventStamp, istErsteller]);
+  }, [open, eventId, eventStamp, istErsteller, gruppenNochmal]);
 
   const patch = (changes: Partial<FormState>) => setForm((current) => ({ ...current, ...changes }));
   const patchRepeat = (changes: Partial<RepeatState>) =>
@@ -656,7 +658,14 @@ export function EventEditor(props: EventEditorProps) {
 
       {/* Eingeladen. Der Teilnehmerkreis ist die Wahl hier – ein Chat verleiht
           keinen Zugang mehr, er ist nur ein Ort, an dem eine Karte steht. */}
-      {istErsteller && (
+      {/* Solange über den Zeitpunkt abgestimmt wird, lassen sich keine weiteren
+          Personen einladen – sie könnten nicht abstimmen. Der Server lehnt es ab. */}
+      {istErsteller && event?.status === 'planning' && (
+        <p className="cal-hint">
+          Weitere Personen lassen sich einladen, sobald der Zeitpunkt feststeht.
+        </p>
+      )}
+      {istErsteller && event?.status !== 'planning' && (
         <EinladungsWahl
           myId={myId}
           auswahl={auswahl}
@@ -668,6 +677,10 @@ export function EventEditor(props: EventEditorProps) {
           bisher={bisher}
           bestehendeGruppen={event ? bestehendeGruppen : undefined}
           gruppenFehler={gruppenFehler}
+          onGruppenNochmal={() => {
+            setGruppenFehler(false);
+            setGruppenNochmal((zaehler) => zaehler + 1);
+          }}
           zusatzZeilen={zusatzZeilen}
         />
       )}

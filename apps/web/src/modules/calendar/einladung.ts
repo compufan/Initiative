@@ -105,6 +105,11 @@ export function kontakteAus(conversations: ConversationDto[], myId: string): Kon
  * die anderen legt er einen neuen an. Die Vorschau schätzt daraus, wie viele
  * Chats neu entstehen. Ein Einzelchat, den das Gegenüber verlassen hat (nur noch
  * ein Mitglied), zählt nicht – wie auf dem Server.
+ *
+ * Der Chat-Speicher kennt **keine archivierten** Chats (die Chatliste lädt sie
+ * nicht). Wer sie einrechnen will, übergibt sie zusätzlich: `EinladungsWahl`
+ * holt sie einmal beim Öffnen vom Server. Ohne sie ist die Zahl eine obere
+ * Grenze.
  */
 export function einzelchatMit(conversations: ConversationDto[], myId: string): Set<string> {
   const personen = new Set<string>();
@@ -505,47 +510,71 @@ export function aenderungsVorschau(eingabe: AenderungsEingabe): string[] {
   const personen = auswahl.personen.filter((id) => id !== eingabe.myId);
   const { neu, entfernt } = unterschied(eingabe.vorher, personen);
   const zeilen: string[] = [];
+  const nachId = new Map(gruppen.map((gruppe) => [gruppe.id, gruppe]));
+  const titel = (id: string) => nachId.get(id)?.titel ?? 'Gruppe';
+  const bestehende = eingabe.bestehendeGruppen;
+  const plan = eingabe.eingabe.senden
+    ? planen(eingabe.myId, auswahl, eingabe.eingabe, gruppen)
+    : null;
+  // Gruppenchats, die mit dieser Änderung eine Karte BEKOMMEN. Wer darin sitzt,
+  // wird über diese Karte benachrichtigt – auch ohne Karte im Einzelchat.
+  const neueGruppen =
+    plan && bestehende ? plan.gruppen.filter((id) => !bestehende.includes(id)) : [];
 
   if (neu.length > 0) {
     if (!eingabe.eingabe.senden) {
       zeilen.push(`Neu eingeladen: ${neu.length} – nur im Kalender, ohne Nachricht.`);
-    } else {
+    } else if (eingabe.eingabe.einzelchats) {
       const neueChats = neu.filter((id) => !eingabe.einzelchatMit.has(id)).length;
-      const ziel = eingabe.eingabe.einzelchats
-        ? 'Karte im Einzelchat und Benachrichtigung'
-        : 'Benachrichtigung, ohne Karte im Einzelchat';
       zeilen.push(
-        `Neu eingeladen: ${neu.length} → ${ziel}${neueChats > 0 ? ` (${neueChats === 1 ? 'ein Einzelchat wird' : `${neueChats} Einzelchats werden`} neu angelegt)` : ''}.`,
+        `Neu eingeladen: ${neu.length} → Karte im Einzelchat und Benachrichtigung${neueChats > 0 ? ` (${neueChats === 1 ? 'ein Einzelchat wird' : `${neueChats} Einzelchats werden`} neu angelegt)` : ''}.`,
       );
+    } else {
+      // Ohne Karte gibt es keinen Chat, über den eine Benachrichtigung liefe –
+      // der Server benachrichtigt nur über eine Karte, die er zugestellt hat.
+      const ueberGruppe = neu.filter((id) =>
+        neueGruppen.some((chat) => nachId.get(chat)?.mitglieder.includes(id)),
+      ).length;
+      const ohne = neu.length - ueberGruppe;
+      if (ohne === 0) {
+        zeilen.push(
+          `Neu eingeladen: ${neu.length} → Benachrichtigung über die Karte im Gruppenchat, ohne Karte im Einzelchat.`,
+        );
+      } else if (ueberGruppe === 0) {
+        zeilen.push(
+          `Neu eingeladen: ${neu.length} → keine Karte, keine Benachrichtigung – nur im Kalender.`,
+        );
+      } else {
+        zeilen.push(
+          `Neu eingeladen: ${neu.length} → ${ueberGruppe} über die Karte im Gruppenchat benachrichtigt, ${ohne} ohne Karte und ohne Benachrichtigung – nur im Kalender.`,
+        );
+      }
     }
   }
 
   if (entfernt.length > 0) {
     const zugesagt = entfernt.filter((id) => eingabe.zugesagt.has(id));
-    let zeile = `Entfernt: ${entfernt.length} → ${entfernt.length === 1 ? 'verliert' : 'verlieren'} den Zugang, ${entfernt.length === 1 ? 'die Karte' : 'die Karten'} im Einzelchat ${entfernt.length === 1 ? 'wird' : 'werden'} gelöscht.`;
+    // Mit Namen: Wer versehentlich abgewählt hat, sieht, wen es trifft.
+    let zeile = `Entfernt: ${entfernt.length} (${aufzaehlung(entfernt.map(name))}) → ${entfernt.length === 1 ? 'verliert' : 'verlieren'} den Zugang, ${entfernt.length === 1 ? 'die Karte' : 'die Karten'} im Einzelchat ${entfernt.length === 1 ? 'wird' : 'werden'} gelöscht.`;
     if (zugesagt.length > 0) {
       zeile += ` ${aufzaehlung(zugesagt.map(name))} ${zugesagt.length === 1 ? 'hatte' : 'hatten'} zugesagt.`;
     }
     zeilen.push(zeile);
   }
 
-  if (eingabe.bestehendeGruppen) {
+  if (bestehende) {
     const soll = new Set(postendeGruppen(auswahl));
-    const nachId = new Map(gruppen.map((gruppe) => [gruppe.id, gruppe]));
-    const titel = (id: string) => nachId.get(id)?.titel ?? 'Gruppe';
-
-    for (const id of eingabe.bestehendeGruppen) {
+    for (const id of bestehende) {
       if (!soll.has(id)) zeilen.push(`Die Karte im Gruppenchat „${titel(id)}“ wird gelöscht.`);
     }
-    if (eingabe.eingabe.senden) {
-      const plan = planen(eingabe.myId, auswahl, eingabe.eingabe, gruppen);
+    if (plan) {
       for (const id of plan.gruppen) {
-        if (!eingabe.bestehendeGruppen.includes(id)) {
+        if (!bestehende.includes(id)) {
           zeilen.push(`Gruppenchat „${titel(id)}“: Karte wird gepostet.`);
         }
       }
       for (const eintrag of plan.ausgelassen) {
-        if (!eingabe.bestehendeGruppen.includes(eintrag.chat)) {
+        if (!bestehende.includes(eintrag.chat)) {
           zeilen.push(
             `Gruppenchat „${titel(eintrag.chat)}“: keine Karte – ${aufzaehlung(eintrag.fehlend.map(name))} ${eintrag.fehlend.length === 1 ? 'fehlt' : 'fehlen'}.`,
           );
