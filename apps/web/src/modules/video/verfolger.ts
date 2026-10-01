@@ -38,7 +38,6 @@ import {
   type FensterStart,
   type InhaltsFensterPlan,
   type TiefenLauf,
-  type Tor,
   type Zaehler,
 } from './maskenVerfolgen.js';
 import type { Punkt } from './objektFolge.js';
@@ -46,6 +45,7 @@ import { bildMitte, fensterGroesse, filmRaster, grobAbstand, schluesselAbstand }
 import { rleDekodieren } from './rle.js';
 import type { Abschnitt } from './schnitt.js';
 import { Vorrat, type KettenEintrag, type Pass, type Tiefenkarte } from './spurVorrat.js';
+import { WEITER_MS, Ruhetor } from './ruhetor.js';
 import { teilRechnen } from './teilRechnen.js';
 import { LAGE_RUHE, grauMass, maskeZiehen, type Lage } from './verfolgung.js';
 
@@ -126,10 +126,8 @@ import { LAGE_RUHE, grauMass, maskeZiehen, type Lage } from './verfolgung.js';
 
 /** Ein neuer Anker wartet so lange – drei schnelle Tipps sind EIN Auftrag. */
 export const ENTPRELL_MS = 600;
-/** So lange nach dem letzten Grund geht es weiter. */
-export const WEITER_MS = 300;
-/** Nach einem Zug mindestens so lange Ruhe. */
-export const ZUG_RUHE_MS = 500;
+// Das Tor wohnt in `ruhetor.ts` – auch der Wischspeicher benutzt es.
+export { WEITER_MS, ZUG_RUHE_MS } from './ruhetor.js';
 /** So oft höchstens meldet `stand()` Neues. */
 export const MELDEN_MS = 250;
 /** So lange bleibt der Bildschirm nach dem letzten Fenster wach. */
@@ -275,75 +273,6 @@ type Gefunden =
   | 'verloren'
   | { readonly eintrag: Extract<KettenEintrag, { rle: Uint8Array }>; readonly stand: Guete };
 
-/** Das Tor: zu, solange ein Grund besteht, und noch ein wenig länger. */
-class Ruhetor implements Tor {
-  private readonly gruende = new Set<RuheGrund>();
-  private frei = 0;
-  private zugEnde = 0;
-  private readonly wartende = new Set<() => void>();
-
-  constructor(private readonly weiterMs: number) {}
-
-  get zu(): boolean {
-    return this.gruende.size > 0;
-  }
-
-  setzen(grund: RuheGrund, an: boolean): void {
-    if (an) this.gruende.add(grund);
-    else if (this.gruende.delete(grund)) {
-      const jetzt = Date.now();
-      if (this.gruende.size === 0) this.frei = jetzt + this.weiterMs;
-      if (grund === 'zug') this.zugEnde = jetzt;
-    }
-    this.wecken();
-  }
-
-  /**
-   * Wie lange insgesamt am Tor gewartet wurde, in ms – damit die Schätzung
-   * der Restzeit nur lernt, was gerechnet wurde, nicht wie lange der
-   * Anwender gewischt hat (siehe `ausfuehren`).
-   */
-  gewartet = 0;
-
-  async offen(ruheNachZugMs = 0): Promise<void> {
-    const beginn = Date.now();
-    try {
-      for (;;) {
-        if (this.gruende.size > 0) {
-          await this.schlafen(null);
-          continue;
-        }
-        const jetzt = Date.now();
-        const warten = Math.max(
-          this.frei - jetzt,
-          this.zugEnde + Math.max(ZUG_RUHE_MS, ruheNachZugMs) - jetzt,
-        );
-        if (warten <= 0) return;
-        await this.schlafen(warten);
-      }
-    } finally {
-      this.gewartet += Date.now() - beginn;
-    }
-  }
-
-  wecken(): void {
-    for (const weiter of [...this.wartende]) weiter();
-  }
-
-  private schlafen(ms: number | null): Promise<void> {
-    return new Promise((weiter) => {
-      let zeitgeber: ReturnType<typeof setTimeout> | null = null;
-      const fertig = () => {
-        this.wartende.delete(fertig);
-        if (zeitgeber) clearTimeout(zeitgeber);
-        weiter();
-      };
-      this.wartende.add(fertig);
-      if (ms !== null) zeitgeber = setTimeout(fertig, ms);
-    });
-  }
-}
-
 /** Das erste Netz- oder Tippteil – eine Maske damit hat Formen, die ihm folgen. */
 function hatInhalt(maske: Maske): boolean {
   return maske.teile.some((teil) => {
@@ -387,7 +316,7 @@ export class Verfolger implements SpurQuelle {
   private readonly kGrob: number;
   private readonly fensterBilder: number;
   private readonly vorrat: Vorrat;
-  private readonly tor: Ruhetor;
+  private readonly tor: Ruhetor<RuheGrund>;
   private readonly entprellMs: number;
   private readonly meldenMs: number;
 
@@ -447,7 +376,7 @@ export class Verfolger implements SpurQuelle {
     this.fensterBilder = fensterGroesse(this.b, this.h, this.K);
     const grau = grauMass(this.b, this.h);
     this.vorrat = new Vorrat(optionen.budget, grau.b * grau.h);
-    this.tor = new Ruhetor(optionen.weiterMs ?? WEITER_MS);
+    this.tor = new Ruhetor<RuheGrund>(optionen.weiterMs ?? WEITER_MS);
     this.entprellMs = optionen.entprellMs ?? ENTPRELL_MS;
     this.meldenMs = optionen.meldenMs ?? MELDEN_MS;
     this.ausgepackt = new BytesLru(4 * this.b * this.h);
