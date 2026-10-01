@@ -160,7 +160,7 @@ export function TerminSammlungSheet({
     <Sheet
       open={open}
       onClose={onClose}
-      title="Neue Sammlung zum Termin"
+      title="Neue Sammlung"
       actions={
         rest ? undefined : (
           <button

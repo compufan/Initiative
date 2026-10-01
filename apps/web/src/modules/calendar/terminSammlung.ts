@@ -75,6 +75,22 @@ export function istEndgueltig(fehler: unknown): boolean {
   );
 }
 
+/**
+ * Hat der Server womöglich doch gearbeitet, obwohl keine Antwort kam?
+ *
+ * Bei einer Zeitüberschreitung ist die Anfrage hinausgegangen – ob die
+ * Sammlung entstanden ist, weiss niemand. „Keine Verbindung“ meint dagegen
+ * meist, dass sie gar nicht erst loskam.
+ */
+export function istUnklar(fehler: unknown): boolean {
+  return (
+    fehler instanceof ApiError &&
+    fehler.status === 0 &&
+    fehler.details instanceof DOMException &&
+    fehler.details.name === 'TimeoutError'
+  );
+}
+
 export interface Beteiligte {
   id: string;
   name: string;

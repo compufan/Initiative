@@ -11,6 +11,7 @@ import { ApiError } from '../../lib/api.js';
 import {
   erbtVon,
   istEndgueltig,
+  istUnklar,
   nochmalVerknuepfen,
   sammlungAnlegenUndVerknuepfen,
   standardName,
@@ -229,6 +230,22 @@ describe('Standardname', () => {
     expect(standardName('  Hüttenwochenende  ')).toBe('Hüttenwochenende');
     expect(standardName('')).toBe('Neue Sammlung');
     expect(standardName('   ')).toBe('Neue Sammlung');
+  });
+});
+
+describe('Unklarer Ausgang', () => {
+  it('ist nur die Zeitüberschreitung – die Anfrage ist hinausgegangen', () => {
+    const zeit = new ApiError(
+      0,
+      'offline',
+      'Der Server antwortet nicht',
+      new DOMException('x', 'TimeoutError'),
+    );
+    expect(istUnklar(zeit)).toBe(true);
+    expect(
+      istUnklar(new ApiError(0, 'offline', 'Keine Verbindung zum Server', new TypeError('x'))),
+    ).toBe(false);
+    expect(istUnklar(fehler(500))).toBe(false);
   });
 });
 

@@ -10,6 +10,7 @@ import { useFiles } from '../files/state.js';
 import { SammlungZugriff } from './SammlungZugriff.js';
 import { TerminSammlungSheet, type BlattMeldung } from './TerminSammlungSheet.js';
 import {
+  istUnklar,
   nochmalVerknuepfen,
   sammlungAnlegenUndVerknuepfen,
   verwerfen,
@@ -197,7 +198,13 @@ export function EventCollection({ event, canManage, onChanged }: Props) {
 
     if (ergebnis.art === 'nichtAngelegt') {
       const { fehler } = ergebnis;
-      if (fehler instanceof ApiError && fehler.isOffline) {
+      if (istUnklar(fehler)) {
+        // Ein „es wurde nichts angelegt“ wäre hier geraten.
+        melden({
+          feld: 'allgemein',
+          text: 'Der Server antwortet nicht. Ob die Sammlung angelegt wurde, ist unklar – sieh in Dateien nach, bevor du es noch einmal versuchst.',
+        });
+      } else if (fehler instanceof ApiError && fehler.isOffline) {
         melden({
           feld: 'allgemein',
           text: 'Keine Verbindung zum Server – es wurde nichts angelegt.',
