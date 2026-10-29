@@ -288,6 +288,12 @@ interface Zwischen {
   readonly start: number;
   readonly vomStart: Ort;
   readonly vomEnde: Ort;
+  /**
+   * Der Weg kommt aus der Geschwindigkeit, nicht aus der Suche: Der
+   * Gegenstand läuft hinaus, und die Suche sieht ihn dort kaum noch. Dann
+   * darf die Maske ihm auch über die Hälfte der Strecke hinaus folgen.
+   */
+  readonly traegt?: boolean;
 }
 
 /**
@@ -529,10 +535,41 @@ export class Spur {
 
   private async weiter(alt: Stand, ziel: number): Promise<Stand> {
     const { breite, hoehe } = this.auftrag;
-    const { weg, sicher } = this.suchen(alt, ziel);
+    const gefunden = this.suchen(alt, ziel);
+    const { sicher } = gefunden;
+    let weg = gefunden.weg;
+    let wegVonGeschwindigkeit = false;
+    const altMitte = alt.mass.mitte;
+    /*
+     * Läuft er gerade hinaus, trägt die Geschwindigkeit den Weg, wenn sie
+     * weiter reicht als die Suche.
+     *
+     * Von einem Gegenstand, der halb draussen ist, liegen nur noch wenige
+     * Stellen im Bild, und ein Versatz, der sie alle hinausschöbe, ist bei der
+     * Suche nicht wählbar (`mindest`): Sie findet dann einen kürzeren Weg und
+     * lässt den Rest am Rand stehen. Gemessen mit einer Scheibe, die mit 8
+     * Punkten je Bild hinausläuft: Die Suche meldete 8 statt 32 für vier
+     * Bilder, und die Maske klebte noch vier Bilder am Rand, als die Scheibe
+     * längst weg war.
+     */
+    if (altMitte && alt.tempo && alt.punkte && hinaus(alt, weg[weg.length - 1])) {
+      const schritte = Math.abs(ziel - alt.bild);
+      const suche = weg[weg.length - 1];
+      const traegt = {
+        x: Math.abs(alt.tempo.x * schritte) > Math.abs(suche.x) ? alt.tempo.x * schritte : suche.x,
+        y: Math.abs(alt.tempo.y * schritte) > Math.abs(suche.y) ? alt.tempo.y * schritte : suche.y,
+      };
+      if (traegt.x !== suche.x || traegt.y !== suche.y) {
+        wegVonGeschwindigkeit = true;
+        // Der Unterschied wird gleichmässig auf die Bilder verteilt, damit die Zwischenbilder stimmen.
+        weg = weg.map((ort, i) => ({
+          x: ort.x + ((i + 1) / weg.length) * (traegt.x - suche.x),
+          y: ort.y + ((i + 1) / weg.length) * (traegt.y - suche.y),
+        }));
+      }
+    }
     const gesamt = weg[weg.length - 1];
     const erwartet = maskeVerschieben(alt.maske, breite, hoehe, gesamt.x, gesamt.y);
-    const altMitte = alt.mass.mitte;
 
     /*
      * Die Punkte wandern mit. Wer dabei das Bild verlässt, fällt WEG und
@@ -545,7 +582,22 @@ export class Spur {
       for (const p of alt.punkte) {
         const x = p.x + gesamt.x;
         const y = p.y + gesamt.y;
-        if (x < 0 || y < 0 || x > breite - 1 || y > hoehe - 1) continue;
+        if (x < 0 || y < 0 || x > breite - 1 || y > hoehe - 1) {
+          /*
+           * Der Punkt ist draussen – der Gegenstand oft noch nicht. Wer einen
+           * Gegenstand in seiner Mitte antippt, hat den Punkt schon verloren,
+           * wenn der Gegenstand erst zur Hälfte hinaus ist: gemessen mit 20 von
+           * 40 Spalten noch im Bild und einer Maske, die dort verschwand. Also
+           * in den SICHTBAREN Teil der Vorhersage ziehen – nicht an den Rand
+           * klemmen, dort läge er auf dem Hintergrund –, und nur wo die
+           * Vorhersage dort nichts mehr hat, fällt er weg.
+           */
+          if (!altMitte) continue;
+          const draussen = { x, y };
+          const hinein = einrasten(draussen, erwartet, breite, hoehe, altMitte.flaeche);
+          if (hinein !== draussen) punkte.push(hinein);
+          continue;
+        }
         punkte.push(
           altMitte ? einrasten({ x, y }, erwartet, breite, hoehe, altMitte.flaeche) : { x, y },
         );
@@ -679,6 +731,7 @@ export class Spur {
           start: alt.bild,
           vomStart: hier,
           vomEnde: { x: hier.x - ende.x, y: hier.y - ende.y },
+          ...(wegVonGeschwindigkeit ? { traegt: true } : {}),
         });
       }
     }
@@ -837,7 +890,7 @@ export class Spur {
      * bliebe am Rand kleben.
      */
     const allein =
-      z && ma.mitte && ma.kasten && !mb.mitte && anteil < 0.5
+      z && ma.mitte && ma.kasten && !mb.mitte && (anteil < 0.5 || z.traegt)
         ? {
             maske: maskeA,
             mitte: ma.mitte,

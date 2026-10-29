@@ -74,6 +74,11 @@ export interface MaskenLeiste {
   onLoeschen(id: string): void;
   onTrennen(id: string, filmMs: number): void;
   onZurueck(): void;
+  /**
+   * Einen weiteren Bereich anlegen – die Namenswahl bekommt dann „＋ Bereich".
+   * Fehlt es, gibt es den Knopf nicht (der Editor könnte ihn nicht erfüllen).
+   */
+  onNeu?(): void;
   /** ↺ bleibt, solange der Finger oder der Fokus darauf liegt – sonst verschwände er unter der Hand. */
   onZurueckHalten?(an: boolean): void;
   /**
@@ -446,7 +451,7 @@ export function Maskenbahnen({
       ref={rahmen}
       className={`mb${lesend ? ' ist-lesend' : ''}${gesperrt ? ' ist-aus' : ''}`}
       role="group"
-      aria-label={`Masken: ${masken.map((maske) => maske.name).join(', ')}`}
+      aria-label={`Bahnen: ${masken.map((maske) => maske.name).join(', ')}`}
       onPointerDown={(ereignis) => {
         if (gesperrt || (ereignis.target as HTMLElement).closest('.mb-griff')) return;
         zug.current = { x: ereignis.clientX, wischt: false, letzte: filmAus(ereignis.clientX) };
@@ -593,7 +598,7 @@ function Bahnzeile({
 
   const maske = masken[0];
   const beschreibung = sammel
-    ? `${masken.length} Masken – antippen, um eine zu wählen`
+    ? `${masken.length} Bereiche – antippen, um einen zu wählen`
     : zusammenfassen(werte.get(maske.id) ?? new Uint8Array(), umfangMs, gesamtMs);
   const geltungText =
     maske.geltung.art === 'ganz'
@@ -607,7 +612,7 @@ function Bahnzeile({
       className={`mb-zeile${gewaehlt ? ' ist-gewaehlt' : ''}${sammel ? ' ist-sammel' : ''}`}
       style={{ height: `${hoehe}px`, ['--mb-farbe' as string]: `var(--maske-${maske.farbe % 8})` }}
       role="group"
-      aria-label={sammel ? 'Masken' : `Maske ${maske.name}, ${geltungText}`}
+      aria-label={sammel ? 'Masken' : `Bereich ${maske.name}, ${geltungText}`}
     >
       {!sammel && <span className="mb-streifen" aria-hidden="true" />}
       <canvas ref={leinwand} className="mb-leinwand" role="img" aria-label={beschreibung} />
@@ -835,7 +840,15 @@ export function MaskenChips({
       for (let d = 0; d < werte.length && beste === null; d += 1) {
         for (const x of [kopf - d, kopf + d]) {
           if (x >= 0 && x < werte.length && zuSehen(werte[x])) {
-            beste = Math.min(ende - s / 2, (x + 0.5) * msJe);
+            /*
+             * Ein halbes Bild TIEFER in die Strecke hinein, von der Seite
+             * des Kopfes aus gesehen: Die Spalte der Bahn ist gröber als ein
+             * Bild, und ihre Mitte kann noch vor dem ersten Bild liegen, an
+             * dem die Maske gilt – dann landete der Kopf auf dem Bild davor
+             * und der Editor sagte „gilt hier nicht".
+             */
+            const hinein = x === kopf ? 0 : x > kopf ? s / 2 : -s / 2;
+            beste = Math.min(ende - s / 2, Math.max(s / 2, (x + 0.5) * msJe + hinein));
             break;
           }
         }
@@ -858,116 +871,127 @@ export function MaskenChips({
 
   return (
     <>
-      <div className="zl-leiste mb-chips" role="toolbar" aria-label={`Maske ${maske.name}`}>
-        {vorne}
-        <span
-          className="mb-name"
-          style={{ ['--mb-farbe' as string]: `var(--maske-${maske.farbe % 8})` }}
-          title={stand ? `${maske.name} · ${stand}` : maske.name}
-        >
-          <span className="mb-punkt" aria-hidden="true" />
-          {maske.name}
-          {stand && <span className="mb-stand"> · {stand}</span>}
-        </span>
-        <div className="mb-wahl" role="radiogroup" aria-label="Wo die Maske gilt">
-          <button
-            type="button"
-            role="radio"
-            aria-checked={ganz}
-            className={`btn btn-sm${ganz ? ' is-active' : ''}`}
-            onClick={() => {
-              if (!ganz) setzen({ art: 'ganz' });
-            }}
-          >
-            Ganzer Film
-          </button>
-          <button
-            type="button"
-            role="radio"
-            aria-checked={!ganz}
-            className={`btn btn-sm${!ganz ? ' is-active' : ''}`}
-            onClick={() => {
-              if (!ganz) return;
-              if (maske.zuletzt) setzen(maske.zuletzt);
-              else if (abschnittHier) setzen(geltungNurAbschnitt(abschnittHier.id));
-            }}
-          >
-            Zeitraum
-          </button>
-        </div>
-        {abschnitte.length > 1 && abschnittHier && hier && (
-          <button
-            type="button"
-            className={`btn btn-sm${nurHier ? ' is-active' : ''}`}
-            aria-pressed={nurHier}
-            onClick={() => {
-              if (!nurHier) setzen(geltungNurAbschnitt(abschnittHier.id));
-            }}
-          >
-            Nur Abschnitt {hier.nummer + 1}
-          </button>
-        )}
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={() => setzen(geltungAbHier(g, bezug, spielkopfMs))}
-          title="Die Maske gilt ab der Wiedergabestelle"
-        >
-          Ab hier
-        </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={() => setzen(geltungBisHier(g, bezug, spielkopfMs))}
-          title="Die Maske gilt bis zur Wiedergabestelle"
-        >
-          Bis hier
-        </button>
-        <button type="button" className="btn btn-sm" onClick={zurMaske}>
-          Zur Maske
-        </button>
+      <div className="zl-leiste mb-chips" role="toolbar" aria-label={`Bereich ${maske.name}`}>
         {/*
-            Ein Umschalter mit FESTEM Namen: „wirkt", gedrückt oder nicht.
-            Ein Name, der mit dem Zustand wechselt („ausschalten" –
-            gedrückt), sagte einer Vorlesehilfe das Gegenteil.
+            Reihenfolge nach Gewicht, nicht nach Entstehung: Vorne steht, was
+            man ständig braucht (Abspielen, welche Maske, wo sie gilt, ob sie
+            wirkt, löschen), dahinter, was seltener ist. Auf einem Telefon
+            lässt sich der Schieber seitlich bewegen – das Wichtige soll dort
+            liegen, wo man es ohne Wischen sieht, und „Fertig" steht fest
+            daneben: Es ist der Rückweg zu den Schnittknöpfen und darf nie
+            hinter einer Kante liegen.
         */}
-        <button
-          type="button"
-          className="btn btn-sm"
-          aria-pressed={maske.aktiv}
-          onClick={() => leiste.onAn(maske.id, !maske.aktiv)}
-          title={maske.aktiv ? 'Maske ausschalten' : 'Maske einschalten'}
-          aria-label={`„${maske.name}" wirkt`}
-        >
-          {maske.aktiv ? '👁' : '🚫'}
-        </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={() => leiste.onTrennen(maske.id, spielkopfMs)}
-          title="Zwei Masken daraus machen, getrennt an der Wiedergabestelle – dann lassen sie sich verschieden einstellen"
-        >
-          Hier trennen
-        </button>
-        <button
-          type="button"
-          className="btn btn-sm"
-          onClick={() => leiste.onLoeschen(maske.id)}
-          aria-label={`Maske „${maske.name}" löschen`}
-        >
-          🗑
-        </button>
-        {leiste.zurueckMoeglich && (
+        {vorne}
+        <div className="mb-schieber">
+          <span
+            className="mb-name"
+            style={{ ['--mb-farbe' as string]: `var(--maske-${maske.farbe % 8})` }}
+            title={stand ? `${maske.name} · ${stand}` : maske.name}
+          >
+            <span className="mb-punkt" aria-hidden="true" />
+            {maske.name}
+            {stand && <span className="mb-stand"> · {stand}</span>}
+          </span>
+          <div className="mb-wahl" role="radiogroup" aria-label="Wo der Bereich gilt">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={ganz}
+              className={`btn btn-sm${ganz ? ' is-active' : ''}`}
+              onClick={() => {
+                if (!ganz) setzen({ art: 'ganz' });
+              }}
+            >
+              Ganzer Film
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!ganz}
+              className={`btn btn-sm${!ganz ? ' is-active' : ''}`}
+              onClick={() => {
+                if (!ganz) return;
+                if (maske.zuletzt) setzen(maske.zuletzt);
+                else if (abschnittHier) setzen(geltungNurAbschnitt(abschnittHier.id));
+              }}
+            >
+              Zeitraum
+            </button>
+          </div>
+          {/*
+              Ein Umschalter mit FESTEM Namen: „wirkt", gedrückt oder nicht.
+              Ein Name, der mit dem Zustand wechselt („ausschalten" –
+              gedrückt), sagte einer Vorlesehilfe das Gegenteil.
+          */}
           <button
             type="button"
             className="btn btn-sm"
-            onClick={leiste.onZurueck}
-            aria-label="Letzte Änderung an den Masken zurücknehmen"
-            {...halten}
+            aria-pressed={maske.aktiv}
+            onClick={() => leiste.onAn(maske.id, !maske.aktiv)}
+            title={maske.aktiv ? 'Bereich ausschalten' : 'Bereich einschalten'}
+            aria-label={`„${maske.name}" wirkt`}
           >
-            ↺
+            {maske.aktiv ? '👁' : '🚫'}
           </button>
-        )}
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => leiste.onLoeschen(maske.id)}
+            aria-label={`Bereich „${maske.name}" löschen`}
+          >
+            🗑
+          </button>
+          {abschnitte.length > 1 && abschnittHier && hier && (
+            <button
+              type="button"
+              className={`btn btn-sm${nurHier ? ' is-active' : ''}`}
+              aria-pressed={nurHier}
+              onClick={() => {
+                if (!nurHier) setzen(geltungNurAbschnitt(abschnittHier.id));
+              }}
+            >
+              Nur Abschnitt {hier.nummer + 1}
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setzen(geltungAbHier(g, bezug, spielkopfMs))}
+            title="Der Bereich gilt ab der Wiedergabestelle"
+          >
+            Ab hier
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setzen(geltungBisHier(g, bezug, spielkopfMs))}
+            title="Der Bereich gilt bis zur Wiedergabestelle"
+          >
+            Bis hier
+          </button>
+          <button type="button" className="btn btn-sm" onClick={zurMaske}>
+            Zum Bereich
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => leiste.onTrennen(maske.id, spielkopfMs)}
+            title="Zwei Bereiche daraus machen, getrennt an der Wiedergabestelle – dann lassen sie sich verschieden einstellen"
+          >
+            Hier trennen
+          </button>
+          {leiste.zurueckMoeglich && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={leiste.onZurueck}
+              aria-label="Letzte Änderung an den Bereichen zurücknehmen"
+              {...halten}
+            >
+              ↺
+            </button>
+          )}
+        </div>
         <button
           type="button"
           className="btn btn-sm btn-primary"
@@ -977,7 +1001,7 @@ export function MaskenChips({
            * schliesst. Zwei gleich benannte Knöpfe liessen eine Vorlesehilfe
            * raten, welcher was tut.
            */
-          aria-label="Maske fertig – zurück zu den Knöpfen der Zeitleiste"
+          aria-label="Bereich fertig – zurück zu den Knöpfen der Zeitleiste"
         >
           Fertig
         </button>
@@ -989,7 +1013,7 @@ export function MaskenChips({
       )}
       {leer && (
         <p className="mb-hinweis" role="status">
-          Der Abschnitt dieser Maske ist nicht mehr im Film – sie wirkt nirgends.
+          Der Abschnitt dieses Bereichs ist nicht mehr im Film – er wirkt nirgends.
         </p>
       )}
     </>
@@ -1014,7 +1038,7 @@ export function MaskenNamen({
     erster.current?.focus();
   }, []);
   return (
-    <div className="zl-leiste mb-chips" role="toolbar" aria-label="Maske wählen">
+    <div className="zl-leiste mb-chips" role="toolbar" aria-label="Bereich wählen">
       {vorne}
       {leiste.masken.map((maske, i) => (
         <button
@@ -1033,6 +1057,18 @@ export function MaskenNamen({
           {maske.name}
         </button>
       ))}
+      {leiste.onNeu && (
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={() => {
+            leiste.onNeu?.();
+            onZu();
+          }}
+        >
+          ＋ Bereich
+        </button>
+      )}
       <button type="button" className="btn btn-sm" onClick={onZu}>
         Abbrechen
       </button>

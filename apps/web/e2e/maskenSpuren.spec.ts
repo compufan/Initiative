@@ -93,7 +93,7 @@ function bereichsKnoepfe(editor: Locator): Locator {
 }
 
 function einstellungen(editor: Locator): Locator {
-  return editor.getByRole('toolbar', { name: /^Maske / });
+  return editor.getByRole('toolbar', { name: /^Bereich / });
 }
 
 const OHNE_KODIERER = 'Kein Videokodierer in diesem Browser';
@@ -143,7 +143,7 @@ test('eine angetippte Maske gilt im ganzen Film – die Zeitleiste zeigt, wo sie
   await editor.getByRole('button', { name: 'Fertig', exact: true }).click();
   await expect(editor).toBeHidden();
   await expect(page.locator('.mb.ist-lesend .mb-zeile')).toHaveCount(1);
-  await expect(page.getByText(/Eine Maske gilt im Film/)).toBeVisible();
+  await expect(page.getByText(/Ein Bereich gilt im Film/)).toBeVisible();
 });
 
 test('eine Maske verschwindet in der Bahn, sobald ihr Gegenstand das Bild verlässt', async ({
@@ -245,7 +245,9 @@ test('Löschen in der Zeitleiste nimmt die Maske auch aus dem Editor – ↺ hol
   await expect(editor.locator('.mb-zeile')).toHaveCount(0);
   await expect(bereichsKnoepfe(editor)).toHaveCount(1, { timeout: 20_000 });
 
-  await editor.getByRole('button', { name: 'Letzte Änderung an den Masken zurücknehmen' }).click();
+  await editor
+    .getByRole('button', { name: 'Letzte Änderung an den Bereichen zurücknehmen' })
+    .click();
   await expect(editor.locator('.mb-zeile')).toHaveCount(1);
   await expect(bereichsKnoepfe(editor)).toHaveCount(2, { timeout: 20_000 });
 });
@@ -446,7 +448,7 @@ test('ab drei Masken: ein Tipp auf die Sammelbahn zeigt die Namen, jede ist wäh
   }
   await expect(einstellungen(editor)).toBeVisible();
   await einstellungen(editor)
-    .getByRole('button', { name: /Maske fertig/ })
+    .getByRole('button', { name: /Bereich fertig/ })
     .click();
   await expect(editor.locator('.mb-zeile')).toHaveCount(1);
 
@@ -454,7 +456,7 @@ test('ab drei Masken: ein Tipp auf die Sammelbahn zeigt die Namen, jede ist wäh
   const sammel = await editor.locator('.mb-zeile').first().boundingBox();
   if (!sammel) throw new Error('keine Sammelbahn');
   await page.mouse.click(sammel.x + sammel.width / 3, sammel.y + sammel.height / 2);
-  const wahl = editor.getByRole('toolbar', { name: 'Maske wählen' });
+  const wahl = editor.getByRole('toolbar', { name: 'Bereich wählen' });
   await expect(wahl).toBeVisible();
   const namen = wahl.locator('.mb-namenwahl');
   await expect(namen).toHaveCount(3);
@@ -462,11 +464,11 @@ test('ab drei Masken: ein Tipp auf die Sammelbahn zeigt die Namen, jede ist wäh
   await namen.nth(1).click();
   await expect(einstellungen(editor).locator('.mb-name')).toContainText(zweiter);
 
-  // Und mit der Tastatur: „Maske wählen" in der Knopfzeile, dann die dritte.
+  // Und mit der Tastatur: „Bereich wählen" in der Knopfzeile, dann die dritte.
   await einstellungen(editor)
-    .getByRole('button', { name: /Maske fertig/ })
+    .getByRole('button', { name: /Bereich fertig/ })
     .click();
-  const knopf = editor.getByRole('button', { name: 'Maske wählen' });
+  const knopf = editor.getByRole('button', { name: 'Bereich wählen' });
   await expect(knopf).toBeFocused();
   await page.keyboard.press('Enter');
   await expect(wahl.locator('.mb-namenwahl').first()).toBeFocused();

@@ -156,9 +156,12 @@ async function messen(szene: Szene, art: 'netz' | 'tipp', anzahl = 40) {
     // Das Netz wird an seiner eigenen Wahrheit gemessen (alles Rote), die
     // Flutung an der Flutung von der wahren Mitte aus – beide mit derselben
     // Kante wie das, was sie prüfen.
+    // Liegt die Mitte schon draussen, gibt es nichts zu fluten – dann gilt, was
+    // von der Scheibe noch zu sehen ist.
+    const mitteDrin = m !== null && m.x >= 0 && m.x < B && m.y >= 0 && m.y < H;
     const wahr = !m
       ? new Uint8Array(B * H)
-      : art === 'tipp'
+      : art === 'tipp' && mitteDrin
         ? flutmaske(b.daten, [m], 40)
         : rot(b.daten);
     const maske = jeBild[n].get(eintrag.teil.id)?.werte ?? new Uint8Array(B * H);
@@ -262,8 +265,12 @@ describe('Masken folgen ihrem Gegenstand', () => {
     /*
      * Die Punkte blieben am Rand stehen, auf dem Hintergrund; die Flutung
      * griff von dort nach allem, was ähnlich aussah, und nach drei
-     * Ablehnungen galt das: 83 % des Bildes, bis zum Ende. Jetzt fallen
-     * Punkte, die das Bild verlassen, weg.
+     * Ablehnungen galt das: 83 % des Bildes, bis zum Ende. Jetzt wandern
+     * Punkte, die das Bild verlassen, in den noch sichtbaren Teil der
+     * Vorhersage – oder fallen weg, wenn dort nichts mehr ist.
+     *
+     * Ab Bild 18 ist die Scheibe ganz draussen: Dann darf nichts stehen
+     * bleiben, auch kein Streifen, der der Vorhersage noch gefolgt wäre.
      */
     const szene: Szene = {
       mitte: (n) => (n < 20 ? { x: 200 + 8 * n, y: 90 } : null),
@@ -272,8 +279,31 @@ describe('Masken folgen ihrem Gegenstand', () => {
     };
     const erg = await messen(szene, 'tipp', 40);
     const text = erg.werte.map((w) => w.toFixed(2)).join(' ');
-    expect(Math.min(...erg.werte.slice(15)), text).toBe(1);
+    expect(Math.min(...erg.werte.slice(18)), text).toBe(1);
     expect(Math.min(...erg.werte.slice(0, 14)), text).toBeGreaterThan(0.9);
+  }, 30_000);
+
+  it('bleibt auf dem sichtbaren Rest, solange ein Gegenstand halb hinaus ist', async () => {
+    /*
+     * Die Mitte, an der angetippt wurde, verlässt das Bild, wenn die Scheibe
+     * erst zur Hälfte draussen ist. Vorher fielen die Punkte dann weg und
+     * die Maske verschwand bei 20 von 40 Spalten noch im Bild – gemessen mit
+     * einem Quadrat: Deckung 0,00 ab da, obwohl die Hälfte zu sehen war.
+     *
+     * Hier läuft die Scheibe nach und nach hinaus (Mitte bei 150 + 8n; ab
+     * Bild 22 liegt sie draussen, ab 24 ist nichts mehr von ihr im Bild).
+     */
+    const szene: Szene = {
+      mitte: (n) => ({ x: 150 + 8 * n, y: 90 }),
+      kamera: ruhig,
+      gemustert: true,
+    };
+    const erg = await messen(szene, 'tipp', 36);
+    const text = erg.werte.map((w) => w.toFixed(2)).join(' ');
+    // Solange mindestens ein Drittel der Scheibe zu sehen ist (bis Bild 22), sitzt die Maske darauf.
+    expect(Math.min(...erg.werte.slice(0, 23)), text).toBeGreaterThan(0.5);
+    // Und danach bleibt nichts zurück.
+    expect(Math.min(...erg.werte.slice(25)), text).toBe(1);
   }, 30_000);
 
   it('folgt einem Gegenstand, der ins Bild hereinkommt', async () => {
@@ -803,6 +833,121 @@ describe('Die Spur in Fenstern und beim Verschwinden', () => {
       });
     });
   });
+});
+
+describe('Verdeckung: ein Gegenstand läuft vor einem anderen vorbei', () => {
+  /*
+   * Zwei Quadrate (40 × 40) auf ruhigem Grund. A wandert nach rechts, B nach
+   * unten; ihre Wege kreuzen sich, und B (oder A) liegt dabei oben. Verfolgt
+   * wird A mit EINEM Tipp, wie im Editor.
+   *
+   * Die Wahrheit ist die sichtbare Fläche von A – dort, wo B liegt, ist A
+   * verdeckt und gehört nicht zur Maske. Die weiche Kante der Flutung lässt
+   * die Deckung auch im besten Fall bei rund 0,83 enden.
+   */
+  const KANTE = 40;
+  type Ecke = { x: number; y: number };
+  interface Zwei {
+    readonly a: (n: number) => Ecke;
+    readonly b: (n: number) => Ecke;
+    /** Wer oben liegt, wo sich beide überdecken. */
+    readonly oben: 'a' | 'b';
+  }
+
+  const drin = (e: Ecke, x: number, y: number) =>
+    x >= e.x && x < e.x + KANTE && y >= e.y && y < e.y + KANTE;
+
+  function bildZwei(n: number, film: Zwei): GelesenesBild {
+    const data = new Uint8ClampedArray(B * H * 4);
+    const a = film.a(n);
+    const b = film.b(n);
+    for (let y = 0; y < H; y += 1) {
+      for (let x = 0; x < B; x += 1) {
+        const at = (y * B + x) * 4;
+        let farbe = [36, 64, 92];
+        const inA = drin(a, x, y);
+        const inB = drin(b, x, y);
+        // Zuerst der untere, dann der obere.
+        if (film.oben === 'a') {
+          if (inB) farbe = [240, 176, 64];
+          if (inA) farbe = [16, 112, 48];
+        } else {
+          if (inA) farbe = [16, 112, 48];
+          if (inB) farbe = [240, 176, 64];
+        }
+        data[at] = farbe[0];
+        data[at + 1] = farbe[1];
+        data[at + 2] = farbe[2];
+        data[at + 3] = 255;
+      }
+    }
+    return {
+      zeitMs: n * 40,
+      daten: { data, width: B, height: H, colorSpace: 'srgb' } as ImageData,
+    };
+  }
+
+  function sichtbarVonA(n: number, film: Zwei): Uint8Array {
+    const maske = new Uint8Array(B * H);
+    const a = film.a(n);
+    const b = film.b(n);
+    for (let y = 0; y < H; y += 1) {
+      for (let x = 0; x < B; x += 1) {
+        if (drin(a, x, y) && !(film.oben === 'b' && drin(b, x, y))) maske[y * B + x] = 255;
+      }
+    }
+    return maske;
+  }
+
+  async function verfolgeA(film: Zwei, anzahl = 50) {
+    const bilder = Array.from({ length: anzahl }, (_, n) => bildZwei(n, film));
+    const start = film.a(0);
+    const roh = teil('tipp', { x: start.x + KANTE / 2, y: start.y + KANTE / 2 });
+    // Eine engere Toleranz als sonst: Grün und Grund liegen nicht weit auseinander.
+    const eintrag = { ...roh, teil: { ...roh.teil, toleranz: 25 } } as InhaltsTeil;
+    const { jeBild } = await folgeTeile(bilder, { teile: [eintrag], schluesselAbstand: 4 });
+    return bilder.map((_, n) =>
+      deckung(jeBild[n].get('t1')?.werte ?? new Uint8Array(B * H), sichtbarVonA(n, film)),
+    );
+  }
+
+  const kreuzend = {
+    a: (n: number) => ({ x: 20 + 4 * n, y: 50 }),
+    b: (n: number) => ({ x: 140, y: 10 + 2 * n }),
+  };
+
+  it('hält den Verdecker: Liegt A oben, bleibt seine Maske auf ihm', async () => {
+    const werte = await verfolgeA({ ...kreuzend, oben: 'a' });
+    const text = werte.map((w) => w.toFixed(2)).join(' ');
+    expect(Math.min(...werte), text).toBeGreaterThan(0.8);
+  }, 60_000);
+
+  /*
+   * Bekannte Grenze, mit Absicht als „muss scheitern" festgehalten: Liegt B
+   * über A, nimmt B die Maske mit. Die Suche nimmt die Bildpunkte unter der
+   * Maske und sucht sie im nächsten Bild; A ist einfarbig, und ob er nach
+   * rechts weiterläuft oder stehen bleibt und nur seinen linken Streifen
+   * verliert, unterscheidet allein der Rand zum Verdecker – der selbst wandert.
+   * Gemessen: Deckung 0,83 bis Bild 20, dann bricht sie ein, ab Bild 35 null.
+   *
+   * Ein Ansatz, der hier tragen könnte (ungeprüft): die Vorlage vom
+   * letzten unverdeckten Bild behalten und nur die besten Bildpunkte zählen –
+   * dann fiele der verdeckte Teil als Ausreisser heraus, und der sichtbare
+   * Rest entschiede. Wer das umsetzt, nimmt `.fails` weg.
+   *
+   * Dem Anwender bleibt der Weg, den `e2e/videoBereiche.spec.ts` prüft: den
+   * Bereich an der Kreuzung trennen und dahinter neu antippen.
+   */
+  it.fails(
+    'hält einen verdeckten Gegenstand (bekannte Grenze)',
+    async () => {
+      const werte = await verfolgeA({ ...kreuzend, oben: 'b' });
+      const text = werte.map((w) => w.toFixed(2)).join(' ');
+      // Vier Bilder nach dem Ende der Überdeckung (A ist ab Bild 30 frei) muss die Maske wieder auf A sitzen.
+      expect(Math.min(...werte.slice(34, 45)), text).toBeGreaterThan(0.7);
+    },
+    60_000,
+  );
 });
 
 describe('komponentenFiltern', () => {

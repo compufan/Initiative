@@ -182,7 +182,8 @@ Fünf Werkzeuge, alle im Gerät – kein Bild verlässt es dabei.
   dunkler, das Gesicht heller. Die Fläche dafür entsteht als Verlauf, Ellipse,
   gemalter Pinselstrich, durch **Antippen** oder aus einem der Freistellmodelle
   („Person", „Motiv"). Bis zu vier Bereiche je Bild, jeder mit denselben
-  Farbreglern und den zwei Unschärfe-Reglern (siehe unten).
+  Farbreglern, den zwei Unschärfe-Reglern (siehe unten) und einem Namen, den du
+  ändern kannst.
 - **Antippen**: Derselbe Griff wie im Sticker-Studio, jetzt auch für Bereiche.
   Du tippst ins Bild auf das, was in den Bereich gehört – **ohne Netz** flutet
   die App nach Farbe (auf jedem Gerät, sofort, ohne Download; die Toleranz
@@ -237,7 +238,7 @@ und bearbeiten an einem Ort, alles im Gerät.
 - **Abschnitte**: an der Wiedergabestelle teilen, Anfang und Ende ziehen,
   umstellen, entfernen, einen weiteren anhängen. Jeder Abschnitt trägt seine
   eigene Bearbeitung (Licht, Farbe, Zuschnitt).
-- **Wischen zeigt das Bild unter dem Finger** – mit Bearbeitung und Masken,
+- **Wischen zeigt das Bild unter dem Finger** – mit Bearbeitung und Bereichen,
   nicht erst beim Loslassen. Dafür legt die App beim Öffnen im Hintergrund
   kleine Bilder des ganzen Films an, grob zuerst (erst jedes 16., dann jedes
   8., 4., 2., zuletzt jedes Bild): Nach wenigen Sekunden liegt zu jeder Stelle
@@ -255,23 +256,60 @@ und bearbeiten an einem Ort, alles im Gerät.
   Abspielen nicht mitkommt, zeichnet es kleiner, beim Wischen zuletzt ohne
   Bearbeitung („zum Wischen mit Bearbeitung zu langsam – sie erscheint,
   sobald du anhältst“).
-- **Masken gehören dem Film, nicht einem Bild.** Eine Maske (Antippen,
-  Person, Motiv, Tiefe, Verlauf, Ellipse, Pinsel) gilt entweder im
-  **ganzen Film** oder in einem **Zeitraum** („Ab hier", „Bis hier", „Nur
-  Abschnitt 2", Griffe zum Ziehen). Die App verfolgt ihren Gegenstand im
-  Hintergrund über alle Bilder; läuft er aus dem Bild oder aus dem Zuschnitt,
-  verschwindet die Maske dort und kommt wieder, wenn er zurückkehrt.
-- **Jede Maske hat eine Bahn** unter den Abschnitten: kräftig, wo sie zu
-  sehen ist, eine dünne Linie, wo ihr Gegenstand nicht im Bild ist,
-  gestreift, wo sie erst grob verfolgt ist, grau, wo noch gerechnet wird,
-  rot, wo die Verfolgung ihn verloren hat (dort neu antippen). Ein Tipp auf
-  die Bahn wählt die Maske; ihre Einstellungen stehen dann statt der
-  Schnittknöpfe – dazu „Hier trennen" für verschiedene Einstellungen vor und
-  nach einer Stelle, Ausschalten, Löschen und ↺. Jede Maske hat ihre eigenen
-  Regler – auch Weichzeichnen und Bokeh, ein Wert für ihren ganzen Lauf – und
-  ihre eigene Verfolgung.
-- Höchstens acht Masken im Film und vier an einem Bild.
-- **Film bauen** wartet, bis alle eingeschalteten Masken überall verfolgt
+- **Bereiche gehören dem Film, nicht einem Bild.** Ein Bereich (mit
+  Antippen, Person, Motiv, Tiefe, Verlauf, Ellipse oder Pinsel angelegt) gilt
+  entweder im **ganzen Film** oder in einem **Zeitraum** („Ab hier", „Bis
+  hier", „Nur Abschnitt 2", Griffe zum Ziehen). Die App verfolgt seinen
+  Gegenstand im Hintergrund über alle Bilder; läuft er aus dem Bild oder aus
+  dem Zuschnitt, verschwindet die Maske dort und kommt wieder, wenn er
+  zurückkehrt.
+- **Jeder Bereich hat eine Bahn** unter den Abschnitten: kräftig, wo er zu
+  sehen ist, eine dünne Linie, wo sein Gegenstand nicht im Bild ist,
+  gestreift, wo er erst grob verfolgt ist, grau, wo noch gerechnet wird,
+  rot, wo die Verfolgung den Gegenstand verloren hat (dort neu antippen). Ein
+  Tipp auf die Bahn wählt den Bereich; seine Einstellungen stehen dann statt
+  der Schnittknöpfe – Abspielen links und „Fertig" rechts bleiben fest, dazwischen
+  liegen Name, „Ganzer Film" und „Zeitraum", Ein/Aus, Löschen und – nach
+  seitlichem Schieben – „Ab hier", „Bis hier", „Zum Bereich" und „Hier
+  trennen" für verschiedene Einstellungen vor und nach einer Stelle, dazu ↺. Jeder
+  Bereich hat seine eigenen Regler – auch Weichzeichnen und Bokeh, ein Wert für
+  seinen ganzen Lauf.
+- **Mehrere Bereiche, jeder mit eigener Maske, jeder getrennt verfolgt** – wie
+  beim Foto, nur über die Zeit. Zwei Gegenstände, die sich verschieden
+  bewegen, bekommen je einen Bereich; im fertigen Film trägt jeder seine
+  eigene Bearbeitung und keiner die des anderen.
+  - **Anlegen**: im Reiter „Bereiche" mit „＋ Bereich" (oder durch den ersten
+    Tipp ins Bild), und an der Zeitleiste mit ◐ („Bereich wählen") → „＋
+    Bereich" – von jedem Reiter aus. Der Knopf fehlt, wo kein weiterer
+    Bereich mehr geht; der Reiter sagt dann, warum.
+  - **Wählen**: ein Chip im Reiter „Bereiche" oder die Bahn in der Zeitleiste
+    – beides ist DIESELBE Auswahl. Die Regler, „Zeitraum", „Hier trennen" und
+    Löschen gelten immer dem gewählten Bereich, und der Farbpunkt im Chip ist
+    die Farbe seiner Bahn. „Fertig" in der Zeitleiste bringt die
+    Schnittknöpfe zurück, ohne die Wahl im Reiter aufzuheben.
+  - **Eingrenzen**: „Zeitraum" mit „Ab hier" und „Bis hier". Gilt der
+    gewählte Bereich am gezeigten Bild nicht, steht im Reiter ein Satz mit
+    seinem Zeitraum statt des Leerzustands – ein Tipp ins Bild legt dann
+    nichts an –, und „Zum Bereich" holt die Wiedergabestelle dorthin.
+  - **Benennen**: im Reiter, Feld „Name" (auch beim Foto). Der erste Name ist
+    „Bereich 1", „Bereich 2" …
+  - **Mehrere Gegenstände in einem Bereich**: Jeder Gegenstand, den du
+    antippst, wird für sich verfolgt – er bekommt sein eigenes Teil im selben
+    Bereich, und die Regler gelten allen. Soll jeder anders aussehen, gib ihm
+    einen eigenen Bereich. Zwei Bereiche auf demselben Gegenstand stapeln ihre
+    Wirkung. Jeder Gegenstand wird im Hintergrund für sich verfolgt – das
+    kostet Rechenzeit, mit Netz deutlich mehr als nach Farbe.
+  - **Formen** (Verlauf, Ellipse, Pinsel) bleiben an der Szene und folgen der
+    Kamera, nicht einem Gegenstand – für etwas, das sich bewegt, ist
+    „Antippen" der Weg.
+- Höchstens acht Bereiche im Film und vier an einem Bild.
+- **Wo die Verfolgung an ihre Grenze kommt**: Läuft ein Gegenstand vor einem
+  anderen vorbei und verdeckt ihn, kann die Maske des hinteren am Verdecker
+  hängen bleiben – die Bahn zeigt das nicht. Bis das behoben ist, hilft:
+  den Bereich dort, wo sich die Wege treffen, mit „Hier trennen" teilen, den
+  Gegenstand im hinteren Teil noch einmal antippen und die alte Maske dort
+  mit „🗑 Maske" wegnehmen. Der Teil davor behält seine gute Verfolgung.
+- **Film bauen** wartet, bis alle eingeschalteten Bereiche überall verfolgt
   sind (meist ist das längst geschehen), und nimmt dann an jedem Bild die
   verfolgte Maske.
 

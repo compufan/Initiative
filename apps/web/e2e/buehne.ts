@@ -63,3 +63,6 @@ export function bildEditorZeigen(bild: Blob): { weg: () => void } {
   );
   return { weg };
 }
+
+/** Derselbe Weg unter dem Namen, den die Bereichs-Tests benutzen. */
+export const fotoEditorZeigen = bildEditorZeigen;
