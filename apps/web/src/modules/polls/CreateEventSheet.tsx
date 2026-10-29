@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { LIMITS, bestOption, type CalendarEventDto, type PollDto } from '@initiative/shared';
+import { OrtHinweis } from '../../components/OrtHinweis.js';
 import { Sheet } from '../../components/Sheet.js';
 import { ApiError, api } from '../../lib/api.js';
 import { toast } from '../../state/ui.js';
@@ -128,8 +129,10 @@ export function CreateEventSheet({ poll, onClose, onCreated }: CreateEventSheetP
           value={location}
           maxLength={300}
           placeholder="z. B. Vereinsheim"
+          aria-describedby="poll-event-location-hint"
           onChange={(event) => setLocation(event.target.value)}
         />
+        <OrtHinweis ort={location} id="poll-event-location-hint" />
       </div>
 
       <div className="field">

@@ -460,3 +460,64 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* --- Wahl aus einer Liste (Karten-App) ----------------------------------- */
+
+.prf-wahl {
+  display: flex;
+  flex-direction: column;
+}
+
+.prf-wahl-zeile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 56px;
+  padding: var(--space-2) 0;
+  text-align: left;
+  color: inherit;
+}
+
+.prf-wahl-zeile + .prf-wahl-zeile {
+  border-top: 1px solid var(--border);
+}
+
+.prf-wahl-punkt {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-full);
+  border: 2px solid var(--surface-3);
+}
+
+.prf-wahl-zeile.is-active .prf-wahl-punkt {
+  border-color: var(--accent);
+}
+
+.prf-wahl-zeile.is-active .prf-wahl-punkt::after {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+}
+
+.prf-wahl-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.prf-wahl-name {
+  font-weight: 600;
+  font-size: 0.94rem;
+}
+
+.prf-wahl-hinweis {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
