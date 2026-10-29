@@ -1,6 +1,9 @@
 import { AbbruchError } from '../stickers/engines/index.js';
-import { videoLeserOeffnen, type VideoLeser } from './bilderLesen.js';
+import { videoLeserOeffnen, type KleinWunsch, type VideoLeser } from './bilderLesen.js';
+import { bildIndex, bildMitte } from './raster.js';
 import { grauMass, graustufen, type Grau } from './verfolgung.js';
+
+export type { KleinWunsch } from './bilderLesen.js';
 
 /**
  * EIN Dekodierer für Editor, Verfolgung und Filmbau – mit Vorfahrt für den
@@ -19,13 +22,38 @@ import { grauMass, graustufen, type Grau } from './verfolgung.js';
  *
  * Ein `VideoLeser` springt zu einem Zeitpunkt und wartet auf das Bild – zwei
  * Sprünge zugleich gingen durcheinander. Die Aufträge laufen deshalb einer
- * nach dem anderen, und `'vorn'` (der Editor, der ein Bild zeigen will)
- * kommt vor jedem wartenden `'hinten'` (die Verfolgung). Ein laufender
- * Sprung der Verfolgung wird nicht abgebrochen; er dauert 20 – 300 ms.
+ * nach dem anderen, in drei Stufen:
+ *
+ * - `'vorn'`: der Editor, der ein Bild zeigen will (das Standbild). Kommt vor
+ *   allem anderen; er wartet nur auf den Sprung, der gerade läuft.
+ * - `'mitte'`: die groben Stufen des Wischspeichers (`wischspeicher.ts`).
+ *   Wer den Editor aufmacht und wischt, will sofort „ungefähr richtig" –
+ *   dafür reichen 75 Bilder –, und die Verfolgung dauert je nach Verfahren
+ *   eine halbe Minute bis mehrere Minuten. Also vor ihr.
+ * - `'hinten'`: die Verfolgung – und die feinen Stufen des Speichers,
+ *   abwechselnd mit ihr: Jeder wartet auf seine eigene Lesung und reiht sich
+ *   dann wieder hinten ein, die Warteschlange wechselt von selbst.
+ *
+ * Ein laufender Sprung wird nicht abgebrochen; er dauert 20 – 300 ms.
  *
  * Voll und grau aus EINEM Auftrag: Der zweite `bildAn` an derselben Stelle
  * springt nicht noch einmal (`bilderLesen.ts`), das kleine Bild kommt
  * verkleinert von der Grafikeinheit – gemessen 19 statt 144 ms je Bild.
+ *
+ * # Das kleine Bild und der Mitschnitt
+ *
+ * Für den Wischspeicher liefert ein Auftrag mit `klein` ein verkleinertes,
+ * KODIERTES Bild (`Lesung.klein`): Die Kodierung läuft nebenher, der
+ * Dekodierer ist schon frei, wenn der Auftrag erfüllt ist. Höchstens
+ * `KODIERUNGEN_MAX` laufen zugleich – sonst wüchse bei einem Browser, der auf
+ * dem Hauptfaden kodiert, ein Rückstau im Arbeitsspeicher, und ein Auftrag,
+ * der nur ein kleines Bild will, wartet am Eingang der Schlange statt im
+ * Dekodierer.
+ *
+ * Der Mitschnitt (`mitschnittSetzen`) macht aus jeder Lesung der Verfolgung
+ * ein Bild weniger zu füllen: Steht das Video nach einem anderen Auftrag an
+ * `bildMitte(k)` und fehlt dem Speicher dieses Bild, wird es aus demselben
+ * Stand verkleinert (kein zweiter Sprung, 0,3 ms) und nebenher kodiert.
  *
  * # Wann er schliesst
  *
@@ -38,7 +66,7 @@ import { grauMass, graustufen, type Grau } from './verfolgung.js';
  * läuft, und danach liest der Editor weiter).
  */
 
-export type Prioritaet = 'vorn' | 'hinten';
+export type Prioritaet = 'vorn' | 'mitte' | 'hinten';
 
 /** Was ein Auftrag liefert. */
 export interface Lesung {
@@ -46,17 +74,44 @@ export interface Lesung {
   readonly voll: ImageData | null;
   /** Die Graustufen in `grauMass`-Grösse – `null`, wenn nicht verlangt. */
   readonly grau: Grau | null;
+  /**
+   * Das kleine, kodierte Bild – nur mit `LeseOptionen.klein`. Die Kodierung
+   * läuft nebenher: Der Dekodierer ist schon frei, wenn der Auftrag fertig
+   * ist, und das Bild kommt erst mit diesem Versprechen. `null`, wo der
+   * Browser das Format nicht kodiert.
+   */
+  readonly klein?: Promise<Blob | null> | null;
 }
 
 export interface LeseOptionen {
-  /** Das volle Bild – ohne Angabe genau dann, wenn kein Grau verlangt ist. */
+  /**
+   * Das volle Bild – ohne Angabe genau dann, wenn weder Grau noch ein
+   * kleines Bild verlangt ist.
+   */
   readonly voll?: boolean;
   readonly grau?: boolean;
+  /** Ein kleines, kodiertes Bild für den Wischspeicher. */
+  readonly klein?: KleinWunsch;
   readonly abbruch?: AbortSignal;
+}
+
+/**
+ * Ein Wunsch, den der Dienst NEBENHER erfüllt: Jede Lesung eines anderen
+ * Auftrags an `bildMitte(k)`, bei der dem Speicher das Bild fehlt, gibt ein
+ * kleines Bild ab.
+ */
+export interface Mitschnitt {
+  readonly wunsch: KleinWunsch;
+  /** Fehlt dem Speicher das Bild k? */
+  braucht(k: number): boolean;
+  /** Das kodierte Bild – erst, wenn die Kodierung fertig ist. */
+  ablegen(k: number, blob: Blob): void;
 }
 
 export interface Leserdienst {
   holen(ms: number, prioritaet: Prioritaet, optionen?: LeseOptionen): Promise<Lesung>;
+  /** Setzt den Mitschnitt – `null` nimmt ihn zurück. */
+  mitschnittSetzen(mitschnitt: Mitschnitt | null): void;
   /** Die Masse des Videos – öffnet den Leser, wenn er zu ist. */
   masse(): Promise<{
     readonly breite: number;
@@ -73,6 +128,8 @@ export interface Leserdienst {
 
 /** Nach so langer Ruhe wird der Dekodierer freigegeben. */
 export const LEERLAUF_MS = 30_000;
+/** So viele Kodierungen kleiner Bilder laufen höchstens zugleich. */
+export const KODIERUNGEN_MAX = 2;
 
 type Oeffnen = (
   datei: Blob,
@@ -84,6 +141,7 @@ interface Auftrag {
   readonly prioritaet: Prioritaet;
   readonly voll: boolean;
   readonly grau: boolean;
+  readonly klein?: KleinWunsch;
   readonly abbruch?: AbortSignal;
   readonly erfuellen: (lesung: Lesung) => void;
   readonly ablehnen: (fehler: unknown) => void;
@@ -137,6 +195,9 @@ export function leserDienst(
   let ruhe: ReturnType<typeof setTimeout> | null = null;
   /** Bricht ab, was läuft, wenn `schliessen` kommt – danach ein neues. */
   let sitzung = new AbortController();
+  let mitschnitt: Mitschnitt | null = null;
+  /** Kodierungen kleiner Bilder, die noch laufen. */
+  let kodierungen = 0;
 
   const zu = () => {
     leser?.schliessen();
@@ -182,14 +243,43 @@ export function leserDienst(
     }, leerlaufMs);
   };
 
+  /** Ein kleines Bild abgeben und mitzählen – der Dekodierer wartet nicht darauf. */
+  const kodierungMerken = (kodiert: Promise<Blob | null>): Promise<Blob | null> => {
+    kodierungen += 1;
+    const ende = () => {
+      kodierungen -= 1;
+      // Ein Auftrag, der wegen voller Kodierung wartete, darf jetzt.
+      pumpen();
+    };
+    kodiert.then(ende, ende);
+    return kodiert;
+  };
+
+  /**
+   * Darf dieser Auftrag jetzt anfangen? Einer, der NUR ein kleines Bild will,
+   * wartet, solange zwei Kodierungen offen sind – alle anderen laufen.
+   */
+  const darfLaufen = (a: Auftrag) =>
+    !(a.klein && !a.voll && !a.grau && kodierungen >= KODIERUNGEN_MAX);
+
+  const naechster = (): number => {
+    for (const prioritaet of ['vorn', 'mitte', 'hinten'] as const) {
+      const stelle = reihe.findIndex((a) => a.prioritaet === prioritaet && darfLaufen(a));
+      if (stelle >= 0) return stelle;
+    }
+    return -1;
+  };
+
   const pumpen = () => {
     if (laeuft) return;
-    const stelle = reihe.findIndex((a) => a.prioritaet === 'vorn');
-    const auftrag = reihe.splice(stelle >= 0 ? stelle : 0, 1)[0];
-    if (!auftrag) {
-      ruheStellen();
+    const stelle = naechster();
+    if (stelle < 0) {
+      // Nichts, was jetzt laufen dürfte: entweder leer (Ruhe stellen) oder
+      // nur kleine Bilder bei voller Kodierung – dann weckt deren Ende uns.
+      if (reihe.length === 0) ruheStellen();
       return;
     }
+    const auftrag = reihe.splice(stelle, 1)[0];
     if (ruhe) clearTimeout(ruhe);
     ruhe = null;
     laeuft = true;
@@ -208,7 +298,14 @@ export function leserDienst(
           const klein = grauMass(offen.breite, offen.hoehe);
           grau = graustufen(await offen.bildAn(auftrag.ms, signal, klein));
         }
-        auftrag.erfuellen({ voll, grau });
+        let klein: Promise<Blob | null> | null = null;
+        if (auftrag.klein) {
+          const kleinBild = await offen.kleinAn(auftrag.ms, auftrag.klein, signal);
+          klein = kodierungMerken(kleinBild.kodiert);
+        } else if (mitschnitt) {
+          await mitschneiden(offen, auftrag.ms, mitschnitt, signal);
+        }
+        auftrag.erfuellen({ voll, grau, klein });
       } catch (fehler) {
         auftrag.ablehnen(fehler);
       } finally {
@@ -219,13 +316,42 @@ export function leserDienst(
     })();
   };
 
+  /**
+   * Das Bild, das das Video gerade zeigt, als kleines Bild abgeben – wenn
+   * der Speicher es braucht. Ein Fehler hier darf den Auftrag nicht
+   * verderben: Der Mitschnitt ist ein Geschenk, kein Teil des Auftrags.
+   */
+  const mitschneiden = async (
+    offen: VideoLeser,
+    ms: number,
+    wunsch: Mitschnitt,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    const k = bildIndex(ms, s);
+    // Nur an der Mitte eines Rasterbildes: Ein Standbild an anderer Stelle
+    // gehört keinem Rasterbild, und der Speicher hielte ein falsches.
+    if (Math.abs(ms - bildMitte(k, s)) > 1e-3) return;
+    if (kodierungen >= KODIERUNGEN_MAX || !wunsch.braucht(k)) return;
+    try {
+      const kleinBild = await offen.kleinAn(ms, wunsch.wunsch, signal);
+      void kodierungMerken(kleinBild.kodiert).then((blob) => {
+        if (blob && mitschnitt === wunsch) wunsch.ablegen(k, blob);
+      });
+    } catch {
+      // Abgebrochen oder nicht zu zeichnen: Dann fehlt dem Speicher eben ein Bild.
+    }
+  };
+
   return {
     get offen() {
       return leser !== null;
     },
+    mitschnittSetzen(neu) {
+      mitschnitt = neu;
+    },
     holen(ms, prioritaet, wahl = {}) {
       const grau = wahl.grau === true;
-      const voll = wahl.voll ?? !grau;
+      const voll = wahl.voll ?? (!grau && !wahl.klein);
       if (wahl.abbruch?.aborted) return Promise.reject(new AbbruchError());
       return new Promise<Lesung>((erfuellen, ablehnen) => {
         const auftrag: Auftrag = {
@@ -233,6 +359,7 @@ export function leserDienst(
           prioritaet,
           voll,
           grau,
+          klein: wahl.klein,
           abbruch: wahl.abbruch,
           erfuellen,
           ablehnen,

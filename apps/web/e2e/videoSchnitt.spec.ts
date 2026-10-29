@@ -1051,22 +1051,21 @@ test('ein Zug an der Leiste, während der Editor aufgeht, bleibt nicht hängen',
   await expect(editor.locator('.zl-zeit')).toHaveText(vorher ?? '');
 });
 
-test('beim Wischen läuft das Video mit, statt erst am Ende zu springen', async ({ page }) => {
-  /*
-   * Die Beschwerde: „Wenn man in der Zeitleiste wischt, sollte das Video live
-   * aktualisieren und nicht nur bei einzelnen Tipps auf die richtige Stelle
-   * springen." Jede Fingerbewegung setzte `currentTime` neu und brach damit
-   * den laufenden Sprung ab – auf einem langsamen Gerät kam mitten im Zug
-   * über Sekunden kein Bild an.
-   *
-   * Nachgestellt mit einem Video, dessen Schlüsselbilder vier Sekunden
-   * auseinanderliegen (jeder Sprung muss weit zurück dekodieren), und
-   * sechsfach gedrosselter Rechenleistung. Gemessen wird, wie weit zwei
-   * Bilder, die beim Ziehen wirklich angezeigt wurden, im Video
-   * auseinanderliegen. Vorher: über drei Sekunden. Jetzt: unter einer.
-   */
-  test.setTimeout(180_000);
-  await page.setViewportSize({ width: 412, height: 880 });
+/**
+ * Ein Video, dessen Schlüsselbilder vier Sekunden auseinanderliegen (jeder
+ * Sprung muss weit zurück dekodieren), im Blatt – für die beiden Wischtests
+ * unten. `speicherAus`: Der Wischspeicher wird weder gefüllt noch benutzt,
+ * das Video springt dann wie vor dem Speicher.
+ */
+async function blattMitSchwerenSpruengen(
+  page: Page,
+  optionen: { speicherAus: boolean },
+): Promise<boolean> {
+  if (optionen.speicherAus) {
+    await page.addInitScript(() => {
+      (window as unknown as { __wisch: object }).__wisch = { aus: true };
+    });
+  }
   await page.goto('/');
   await page.waitForLoadState('networkidle');
   const bereit = await page.evaluate(async () => {
@@ -1098,23 +1097,23 @@ test('beim Wischen läuft das Video mit, statt erst am Ende zu springen', async 
     buehne.videoBlattZeigen(datei);
     return true;
   });
-  if (!bereit) {
-    test.skip(true, 'Kein Videokodierer in diesem Browser');
-    return;
-  }
+  if (!bereit) return false;
   await expect(page.getByRole('button', { name: /Bearbeiten und schneiden/ })).toBeEnabled({
     timeout: 60_000,
   });
+  return true;
+}
 
-  await page.evaluate(() => {
-    const video = document.querySelector('video.vg-quelle') as HTMLVideoElement;
-    const w = window as unknown as { gezeigt: number[] };
-    w.gezeigt = [];
-    video.addEventListener('seeked', () => w.gezeigt.push(video.currentTime * 1000));
-  });
+/**
+ * Zieht den Finger über 70 % der Leiste, bei sechsfach gedrosselter
+ * Rechenleistung. `page.mouse.move` wartet auf jede Antwort: Bei so langsamer
+ * Seite liegen zwischen zwei Ereignissen über 100 ms – für die App ruht der
+ * Finger dann, und das Video schärft nach. Das Video soll hier springen
+ * (der Weg ohne Speicher), das stört nicht.
+ */
+async function wischenGedrosselt(page: Page): Promise<void> {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Emulation.setCPUThrottlingRate', { rate: 6 });
-
   const bahn = (await page.locator('.zl-bahn').first().boundingBox())!;
   const y = bahn.y + bahn.height / 2;
   await page.mouse.move(bahn.x + 5, y);
@@ -1123,9 +1122,73 @@ test('beim Wischen läuft das Video mit, statt erst am Ende zu springen', async 
     await page.mouse.move(bahn.x + 5 + (bahn.width * 0.7 * i) / 60, y);
     await page.waitForTimeout(16);
   }
+}
+
+/**
+ * Zieht den Finger über 70 % der Leiste wie ein Finger: Die Ereignisse gehen
+ * alle 16 ms los, ohne auf die Antwort der Seite zu warten – ein langsamer
+ * Treiber ließe die Seite sonst „ruhen". `beiHalten` läuft, solange der Finger
+ * noch liegt.
+ */
+async function wischenWieEinFinger<T>(page: Page, beiHalten: () => Promise<T>): Promise<T> {
+  const cdp = await page.context().newCDPSession(page);
+  const bahn = (await page.locator('.zl-bahn').first().boundingBox())!;
+  const y = bahn.y + bahn.height / 2;
+  const offen: Array<Promise<unknown>> = [];
+  const maus = (type: string, x: number) =>
+    cdp.send('Input.dispatchMouseEvent', {
+      type,
+      x,
+      y,
+      button: 'left',
+      buttons: type === 'mouseReleased' ? 0 : 1,
+      clickCount: 1,
+    } as never);
+  offen.push(maus('mousePressed', bahn.x + 5));
+  for (let i = 1; i <= 60; i += 1) {
+    await page.waitForTimeout(16);
+    offen.push(maus('mouseMoved', bahn.x + 5 + (bahn.width * 0.7 * i) / 60));
+  }
+  await Promise.all(offen);
+  const erg = await beiHalten();
+  await maus('mouseReleased', bahn.x + 5 + bahn.width * 0.7);
+  return erg;
+}
+
+test('beim Wischen läuft das Video mit, statt erst am Ende zu springen', async ({ page }) => {
+  /*
+   * Die Beschwerde: „Wenn man in der Zeitleiste wischt, sollte das Video live
+   * aktualisieren und nicht nur bei einzelnen Tipps auf die richtige Stelle
+   * springen." Jede Fingerbewegung setzte `currentTime` neu und brach damit
+   * den laufenden Sprung ab – auf einem langsamen Gerät kam mitten im Zug
+   * über Sekunden kein Bild an.
+   *
+   * Nachgestellt mit einem Video, dessen Schlüsselbilder vier Sekunden
+   * auseinanderliegen (jeder Sprung muss weit zurück dekodieren), und
+   * sechsfach gedrosselter Rechenleistung. Gemessen wird, wie weit zwei
+   * Bilder, die beim Ziehen wirklich angezeigt wurden, im Video
+   * auseinanderliegen. Vorher: über drei Sekunden. Jetzt: unter einer.
+   *
+   * Das ist der Weg OHNE Wischspeicher (`__wisch.aus`) – so wischt es, solange
+   * der Speicher noch nicht gefüllt ist, und überall, wo der Browser keine
+   * kleinen Bilder kodiert. Mit Speicher springt das Video im Zug gar nicht
+   * mehr: siehe den Zwilling gleich darunter.
+   */
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 412, height: 880 });
+  if (!(await blattMitSchwerenSpruengen(page, { speicherAus: true }))) {
+    test.skip(true, 'Kein Videokodierer in diesem Browser');
+    return;
+  }
+  await page.evaluate(() => {
+    const video = document.querySelector('video.vg-quelle') as HTMLVideoElement;
+    const w = window as unknown as { gezeigt: number[] };
+    w.gezeigt = [];
+    video.addEventListener('seeked', () => w.gezeigt.push(video.currentTime * 1000));
+  });
+  await wischenGedrosselt(page);
   const gezeigt = await page.evaluate(() => (window as unknown as { gezeigt: number[] }).gezeigt);
   await page.mouse.up();
-  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
 
   // Ein Zug über gut fünf Sekunden Video: Es müssen viele Bilder ankommen,
   // und keine Lücke darf grösser als anderthalb Sekunden Video sein.
@@ -1136,6 +1199,58 @@ test('beim Wischen läuft das Video mit, statt erst am Ende zu springen', async 
   }
   expect(sortiert.length, `angezeigt: ${sortiert.join(', ')}`).toBeGreaterThanOrEqual(15);
   expect(luecke, `angezeigt: ${sortiert.join(', ')}`).toBeLessThan(1500);
+});
+
+test('beim Wischen springt das Video nicht, wenn der Wischspeicher das Bild hat', async ({
+  page,
+}) => {
+  /*
+   * Der Zwilling des Tests darüber: dasselbe Video – aber der Wischspeicher
+   * ist gefüllt. Dann kommen die Bilder beim Wischen aus ihm, nicht aus
+   * Sprüngen: Das Video springt im Zug nicht (oben ≥ 15 Sprünge, jeder
+   * dekodierte hier Sekunden), und die Leinwand der Blattvorschau zeigt
+   * trotzdem laufend neue Bilder. Die Ereignisse gehen los wie bei einem
+   * Finger, ohne auf die Seite zu warten (siehe `wischenWieEinFinger`).
+   */
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 412, height: 880 });
+  if (!(await blattMitSchwerenSpruengen(page, { speicherAus: false }))) {
+    test.skip(true, 'Kein Videokodierer in diesem Browser');
+    return;
+  }
+  // Jedes 2. Bild reicht: Zu jeder Stelle liegt dann eines höchstens ein Bild daneben.
+  await page.waitForFunction(
+    () => ((window as unknown as { __wisch?: { stufe: number } }).__wisch?.stufe ?? -1) >= 3,
+    null,
+    { timeout: 180_000, polling: 250 },
+  );
+  await page.evaluate(() => {
+    const video = document.querySelector('video.vg-quelle') as HTMLVideoElement;
+    const w = window as unknown as { gezeigt: number[]; vorher: number };
+    w.gezeigt = [];
+    w.vorher =
+      (window as unknown as { __vorschau?: { speicherGezeichnet: number } }).__vorschau
+        ?.speicherGezeichnet ?? 0;
+    video.addEventListener('seeked', () => w.gezeigt.push(video.currentTime * 1000));
+  });
+  const erg = await wischenWieEinFinger(page, () =>
+    page.evaluate(() => {
+      const w = window as unknown as {
+        gezeigt: number[];
+        vorher: number;
+        __vorschau?: { speicherGezeichnet: number };
+      };
+      return {
+        spruenge: w.gezeigt.length,
+        zeichnungen: (w.__vorschau?.speicherGezeichnet ?? 0) - w.vorher,
+      };
+    }),
+  );
+  expect(erg.spruenge, `Sprünge des Videos im Zug: ${JSON.stringify(erg)}`).toBeLessThanOrEqual(3);
+  expect(
+    erg.zeichnungen,
+    `Zeichnungen aus dem Speicher im Zug: ${JSON.stringify(erg)}`,
+  ).toBeGreaterThanOrEqual(10);
 });
 
 test('ein Weichzeichnerstrich friert in der Filmvorschau nicht auf dem ersten Bild ein', async ({

@@ -11,6 +11,7 @@ import {
   filmZuBild,
   grobAbstand,
   quellBilder,
+  rasterbildImVideobild,
   rasterEnde,
   rasterRunden,
   schluesselAbstand,
@@ -209,5 +210,41 @@ describe('Schlüssel und Fenster', () => {
     expect(fensterGroesse(1280, 720, 4)).toBe(12);
     expect(fensterGroesse(640, 360, 4)).toBe(48);
     expect(fensterGroesse(4000, 3000, 4)).toBe(8);
+  });
+});
+
+describe('rasterbildImVideobild', () => {
+  /*
+   * Das Bild, das ein Sprung auf `bildMitte(k)` liefert, ist das Videobild
+   * mit dem grössten Anfang ≤ Mitte. Sein `mediaTime` wird in der Vorschau
+   * wieder auf ein Rasterbild zurückgerechnet – für jede Film- und Quellrate.
+   */
+  const QUELLEN = [24, 25, 30, 50, 60];
+
+  const videobildAn = (ms: number, sq: number) => Math.floor(ms / sq + 1e-7) * sq;
+
+  it.each(RATEN)('gibt bei Film mit %i Bildern je Sekunde jedem Bild sein k zurück', (rate) => {
+    const s = filmSchrittMs(rate);
+    for (const quelle of QUELLEN) {
+      const sq = filmSchrittMs(quelle);
+      for (let k = 0; k < 600; k += 1) {
+        const m = videobildAn(bildMitte(k, s), sq);
+        const zurueck = rasterbildImVideobild(m, s);
+        const text = `Film ${rate}/s, Quelle ${quelle}/s, k = ${k}`;
+        // Die Mitte des gefundenen Rasterbildes liegt im Videobild …
+        expect(bildMitte(zurueck, s), text).toBeGreaterThanOrEqual(m - 1e-6);
+        expect(bildMitte(zurueck, s), text).toBeLessThan(m + sq + 1e-6);
+        // … und es ist das erste, dessen Mitte darin liegt.
+        if (zurueck > 0) expect(bildMitte(zurueck - 1, s), text).toBeLessThan(m - 1e-9);
+        expect(zurueck, text).toBeLessThanOrEqual(k);
+        // Ist das Videobild nicht länger als ein Rasterbild, ist es genau k – das Bild, das gemeint war.
+        if (sq <= s + 1e-9) expect(zurueck, text).toBe(k);
+      }
+    }
+  });
+
+  it('rechnet nie unter null', () => {
+    expect(rasterbildImVideobild(0, 40)).toBe(0);
+    expect(rasterbildImVideobild(-5, 40)).toBe(0);
   });
 });

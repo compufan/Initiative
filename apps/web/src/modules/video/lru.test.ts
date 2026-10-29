@@ -45,4 +45,19 @@ describe('BytesLru', () => {
     lru.leeren();
     expect(lru.anzahl).toBe(0);
   });
+
+  it('meldet beim Leeren auf Wunsch jeden Eintrag – zum Freigeben', () => {
+    const frei: string[] = [];
+    const lru = new BytesLru<string, number>(100, (schluessel) => frei.push(schluessel));
+    lru.ablegen('a', 1, 10);
+    lru.ablegen('b', 2, 10);
+    lru.leeren();
+    expect(frei).toEqual([]);
+    lru.ablegen('c', 3, 10);
+    lru.ablegen('d', 4, 10);
+    lru.leeren(true);
+    expect(frei).toEqual(['c', 'd']);
+    expect(lru.anzahl).toBe(0);
+    expect(lru.bytes).toBe(0);
+  });
 });
