@@ -210,9 +210,15 @@ test('Anna legt einen Termin mit Adresse an, Bodo sieht Karte und Chatkarte', as
     'Adresse erkannt: Wer eingeladen ist, kann sie in seiner Karten-App öffnen.',
   );
 
-  await anna.page.locator('#cal-conversation').selectOption({ label: s.gruppe.title });
+  // Seit dem Einladen gibt es keine Chatauswahl mehr: Der Gruppenchat wird über die
+  // Schnellwahl eingeladen, die Karte kommt dorthin, wenn alle Mitglieder dabei sind.
+  await anna.page.getByRole('button', { name: /Gruppenchat …/ }).click();
+  await anna.page
+    .getByRole('dialog')
+    .getByRole('button', { name: new RegExp(s.gruppe.title) })
+    .click();
   await anna.page.getByRole('button', { name: 'Termin erstellen' }).click();
-  await expect(anna.page.getByText('Termin erstellt')).toBeVisible({ timeout: 15_000 });
+  await expect(anna.page.getByText(/^Termin erstellt/)).toBeVisible({ timeout: 15_000 });
 
   // ---- Bodo sieht die Karte im Chat – die Adresse ist ein eigener Knopf ----
   await bodo.page.goto(`${s.wurzel}/chats/${s.gruppe.id}`);
