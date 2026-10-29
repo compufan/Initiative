@@ -44,6 +44,94 @@
   cursor: pointer;
 }
 
+/* ---- Gruppen im Blatt „Neue Sammlung zum Termin“ ---- */
+
+/* `fieldset` bringt Rand, Innenabstand und eine Mindestbreite mit, die ein
+   Blatt auf dem Telefon sprengt. Das hier sind nur Gruppierungen. */
+.fil-sperre,
+.fil-gruppe {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.fil-gruppe {
+  gap: 6px;
+}
+
+/* Wie die Beschriftung eines Feldes (`.field label`), aber für Gruppen. */
+.fil-gruppe-titel {
+  padding: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+/* Eine Meldung, die stehen bleibt, bis der Anwender etwas tut. */
+.fil-meldung {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 0.88rem;
+}
+
+.fil-meldung p {
+  margin: 0;
+}
+
+.fil-meldung-knoepfe {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* ---- Ordnerwahl ---- */
+
+.fil-baum {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* Bei vielen Ordnern darf die Liste nicht das ganze Blatt füllen – sonst
+   liegt der Knopf zum Bestätigen ausser Reichweite. */
+.fil-baum-liste {
+  display: flex;
+  flex-direction: column;
+  max-height: 34vh;
+  overflow-y: auto;
+}
+
+/* Die Einrückung kommt aus `--tiefe` (0 = oberste Ebene), damit sie nicht in
+   jeder Zeile als Zahl im Quelltext steht und sich an einer Stelle ändern lässt. */
+.fil-baum-zeile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 4px 2px;
+  padding-inline-start: calc(2px + var(--tiefe, 0) * 16px);
+  min-width: 0;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.fil-baum-zeile.is-grau {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.fil-baum-zeile.is-gedaempft > .truncate {
+  color: var(--text-muted);
+}
+
 /* ---- Pfad ---- */
 
 .fil-breadcrumb {
