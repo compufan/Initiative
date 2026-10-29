@@ -19,6 +19,8 @@ import { EventCollection } from './EventCollection.js';
 import { EinladungsWahl } from './EinladungsWahl.js';
 import { LEERE_AUSWAHL, terminOhneZustellung, type Auswahl } from './einladung.js';
 import { RsvpButtons } from './RsvpButtons.js';
+import { ErinnernStand } from './ErinnernStand.js';
+import { erinnernText } from './erinnern.js';
 import { ZustellungHinweis } from './ZustellungHinweis.js';
 import { useLiveEvent } from './useCalendarEvents.js';
 import {
@@ -331,6 +333,12 @@ export function EventDetailScreen() {
         </p>
       )}
 
+      {event.erinnern && (
+        <p className="cal-detail-line">
+          🔔 Erinnerungen an Ausstehende: {erinnernText(event.erinnern)}
+        </p>
+      )}
+
       {event.status === 'cancelled' && (
         <p className="cal-note" role="status">
           ⛔ Dieser Termin ist abgesagt. Zu- und Absagen sind gesperrt.
@@ -344,6 +352,7 @@ export function EventDetailScreen() {
       {isCreator && (
         <ZustellungHinweis eventId={event.id} antwort={zustellAntwort} stand={event.stand} />
       )}
+      {isCreator && <ErinnernStand event={event} />}
 
       <section className="card cal-block" aria-label="Deine Antwort">
         <h2 className="cal-block-title">

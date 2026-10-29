@@ -867,6 +867,32 @@ Was nicht geht, ehrlich:
   ablehnen oder den Absender sperren; lädt der ihn erneut ein, muss er sich erneut
   austragen (begrenzt durch die Drossel, 30 Einladungen je Stunde).
 
+### Erinnern an ausstehende Antworten
+
+- Beim Anlegen oder Bearbeiten stellt der **Ersteller** ein: „Ausstehende
+  erinnern“, **nach einer Weile** (1, 2, 3 Tage, 1 Woche oder eine eigene Dauer
+  von 12 bis 720 Stunden) und **wie oft** (einmal, zweimal, dreimal, 5-mal oder
+  bis zum Termin – nie mehr als 10-mal). Vorgabe: aus; eingeschaltet 2 Tage,
+  dreimal.
+- Erinnert wird **nur im Einzelchat** und **nur, wer noch nicht geantwortet
+  hat**. Es kommt eine Termin-Karte mit dem Hinweis „🔔 Automatische Erinnerung“,
+  Zu- und Absage gehen direkt darin; die Karte sagt nach der Antwort „Deine
+  Antwort: Zugesagt.“ statt „nicht geantwortet“. Jede Antwort – auch „Vielleicht“
+  – beendet das Erinnern. Im Gruppenchat erscheint nie eine Erinnerung.
+- Es gibt **keine Erinnerung kurz vor dem Beginn**: Die letzten zwei Stunden
+  davor werden ausgelassen. Der Editor sagt live, wie viele Erinnerungen bis zum
+  Beginn passen – und „der Termin beginnt vor der ersten Erinnerung“, wenn keine.
+  Bei Serien gilt der erste Termin der Serie; bei ganztägigen Terminen der
+  Beginn des Tages.
+- Wer abgesagt, ausgeladen oder gelöscht ist, wird nicht erinnert; bei einem
+  abgesagten Termin ruht es und beginnt nach der Wiederaufnahme neu.
+- Wer keine Einzelkarte bekommen hat (Einzelchats beim Einladen abgewählt),
+  wird nicht erinnert – der Ersteller sieht auf der Terminseite, **wer** nicht
+  erinnerbar ist und wie oft die anderen schon erinnert wurden.
+- Die Erinnerungen „vor dem Termin“ (10 Minuten, 1 Stunde, 1 Tag) sind etwas
+  anderes: Sie kommen aus der Kalender-App und sind im Editor jetzt so
+  beschriftet.
+
 ### Notizen und Listen am Termin
 
 - An jedem Termin hängen **Notizen** (ein Text) und **Listen** (Punkte zum

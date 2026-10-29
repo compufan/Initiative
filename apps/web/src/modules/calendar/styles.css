@@ -1416,3 +1416,99 @@
 .cal-zustellung {
   border-color: var(--warning);
 }
+
+/* ---------- Erinnerung bei offener Antwort – siehe `ErinnernWahl.tsx` ---------- */
+
+.cal-erinn {
+  gap: var(--space-2);
+}
+
+.cal-erinn-gruppe {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.cal-erinn-gruppe > legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.cal-erinn-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 0;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+/* Das Optionsfeld bleibt bedienbar (Tastatur, Vorlesehilfe), nur unsichtbar. */
+.cal-erinn-chip input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.cal-erinn-chip.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.cal-erinn-chip:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cal-erinn-eigen {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.cal-erinn-eigen .input {
+  width: 6rem;
+}
+
+.cal-erinn-eigen .cal-hint,
+.cal-erinn-eigen .cal-error {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.cal-erinn-stand h3 {
+  margin: 0 0 4px;
+  font-size: 0.9rem;
+}
+
+.cal-erinn-stand ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+}
+
+/* Die Kopfzeile der Erinnerungskarte – sie sagt in jedem Zustand, dass sie automatisch kam. */
+.cal-bubble-erinnerung {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}

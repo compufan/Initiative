@@ -347,7 +347,7 @@ function ChatRow({
     preview = 'tippt …';
   } else if (last) {
     const prefix =
-      last.type === 'system'
+      last.type === 'system' || last.metadata?.erinnerung
         ? ''
         : last.senderId === myId || last.senderId == null
           ? 'Du: '

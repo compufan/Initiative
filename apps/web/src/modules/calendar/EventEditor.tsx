@@ -14,6 +14,8 @@ import { useChat } from '../../state/chat.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 import { EinladungsWahl } from './EinladungsWahl.js';
+import { ErinnernWahl } from './ErinnernWahl.js';
+import { erinnernBody, wirkungsHinweis } from './erinnern.js';
 import {
   aendernBody,
   anlegenBody,
@@ -169,6 +171,8 @@ export function EventEditor(props: EventEditorProps) {
   const [auswahl, setAuswahl] = useState<Auswahl>(() => startAuswahl(event, props, myId));
   const [senden, setSenden] = useState(true);
   const [einzelchats, setEinzelchats] = useState(true);
+  const [erinnern, setErinnern] = useState<CalendarEventDto['erinnern']>(event?.erinnern ?? null);
+  const [erinnernFehler, setErinnernFehler] = useState<string | null>(null);
   /**
    * Wo der Termin schon als Karte steht. `null`, solange das nicht geladen ist:
    * Bis dahin schickt der Editor `gruppenChatIds` NICHT mit, sonst wählte er
@@ -337,11 +341,22 @@ export function EventEditor(props: EventEditorProps) {
         : {}
       : anlegenBody(auswahl, { senden, einzelchats }, clientId, myId);
 
+    if (erinnern && erinnernFehler) {
+      toast(`Erinnerung: ${erinnernFehler}`, 'error');
+      return;
+    }
+    // Nur bei einem Unterschied: Der Server startet die Uhr bei jeder Änderung der
+    // Einstellung neu, und ein Termin, an dem nur der Titel geändert wurde, soll sie
+    // nicht anfassen.
+    const erinnernAngabe = istErsteller
+      ? erinnernBody(event?.erinnern ?? null, erinnern, !event)
+      : {};
+
     setSaving(true);
     try {
       const antwort = event
-        ? await api.calendar.update(event.id, { ...body, ...einladung })
-        : await api.calendar.create({ ...body, ...einladung });
+        ? await api.calendar.update(event.id, { ...body, ...einladung, ...erinnernAngabe })
+        : await api.calendar.create({ ...body, ...einladung, ...erinnernAngabe });
       // `zustellung` gehört in die Meldung, nicht in den Termin, den die
       // Ansichten halten.
       const { zustellung, ...saved } = antwort;
@@ -364,6 +379,26 @@ export function EventEditor(props: EventEditorProps) {
       setSaving(false);
     }
   }
+
+  const erinnernGesperrt = !senden
+    ? 'Erinnerungen gehen in die Einzelchats – schalte „Einladung im Chat senden“ ein.'
+    : !einzelchats
+      ? 'Erinnerungen gehen in die Einzelchats – schalte „Einzelchats“ ein.'
+      : auswahl.personen.length === 0 && !event
+        ? 'Wähle zuerst Personen aus.'
+        : null;
+  const erinnernBeginn = form.allDay
+    ? noonOf(form.startDate)
+    : fromInputs(form.startDate, form.startTime);
+  const erinnernHinweise = erinnern
+    ? wirkungsHinweis({
+        erinnern,
+        ab: new Date(),
+        beginn: erinnernBeginn,
+        ganztaegig: form.allDay,
+        wiederholt: form.repeat.freq !== 'none',
+      })
+    : [];
 
   const repeatOption = REPEAT_OPTIONS.find((option) => option.value === form.repeat.freq);
   const repeatPreview = describeRrule(buildRrule(form.repeat));
@@ -517,7 +552,7 @@ export function EventEditor(props: EventEditorProps) {
       </div>
 
       <div className="field">
-        <span className="cal-field-label">Erinnerungen</span>
+        <span className="cal-field-label">Erinnerung vor dem Termin</span>
         <div className="cal-chip-row">
           {REMINDER_OPTIONS.map((option) => {
             const active = form.reminders.includes(option.minutes);
@@ -688,10 +723,22 @@ export function EventEditor(props: EventEditorProps) {
         />
       )}
 
+      {/* Die Erinnerung hängt an der Einladung: Sie geht in die Einzelchats, in denen
+          die Karte steht – ohne Einzelkarte gibt es nichts, woran erinnert würde. */}
+      {istErsteller && event?.status !== 'planning' && (
+        <ErinnernWahl
+          wert={erinnern}
+          onChange={setErinnern}
+          onFehler={setErinnernFehler}
+          gesperrt={erinnernGesperrt}
+          hinweise={erinnernHinweise}
+        />
+      )}
+
       <button
         type="button"
         className="btn btn-primary btn-block"
-        disabled={saving}
+        disabled={saving || (erinnern !== null && erinnernFehler !== null)}
         onClick={() => void save()}
       >
         {saving ? 'Wird gespeichert …' : event ? 'Änderungen speichern' : 'Termin erstellen'}

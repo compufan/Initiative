@@ -34,6 +34,7 @@ function event(overrides: Partial<CalendarEventDto> = {}): CalendarEventDto {
     attendees: [],
     reminderMinutes: [],
     stand: 0,
+    erinnern: null,
     createdAt: '2026-08-01T10:00:00.000Z',
     updatedAt: '2026-08-01T10:00:00.000Z',
     ...overrides,

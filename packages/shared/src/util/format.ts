@@ -23,6 +23,7 @@ export function formatDuration(ms: number): string {
 export function messagePreview(message: {
   type: string;
   body?: string | null;
+  metadata?: { erinnerung?: unknown } | null;
   deletedAt?: string | null;
 }): string {
   if (message.deletedAt) return 'Nachricht gelöscht';
@@ -42,7 +43,7 @@ export function messagePreview(message: {
     case 'poll':
       return '📊 Umfrage';
     case 'event':
-      return '📅 Termin';
+      return message.metadata?.erinnerung ? '🔔 Erinnerung' : '📅 Termin';
     case 'game':
       return '🎮 Spiel';
     default:

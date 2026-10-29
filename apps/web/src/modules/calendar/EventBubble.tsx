@@ -1,10 +1,15 @@
 import { Link } from 'react-router-dom';
+import { useChat } from '../../state/chat.js';
+import { useMyId } from '../../state/session.js';
 import { OrtZeile } from '../../components/OrtZeile.js';
 import type { MessageRendererProps } from '../types.js';
+import { erinnerungsZeile } from './erinnern.js';
 import { RsvpButtons } from './RsvpButtons.js';
 import { useLiveEvent } from './useCalendarEvents.js';
 import {
+  conversationLabel,
   eventColor,
+  myRsvp,
   formatMonthShort,
   formatOccurrenceTime,
   nextOccurrence,
@@ -42,6 +47,11 @@ export function EventBubble({ message, isMine }: MessageRendererProps) {
     message.terminGrund ? null : (message.event ?? null),
   );
   const tone = isMine ? 'is-mine' : '';
+  const myId = useMyId();
+  const chat = useChat((state) =>
+    state.conversations.find((eintrag) => eintrag.id === message.conversationId),
+  );
+  const erinnerung = message.metadata.erinnerung;
 
   if (message.deletedAt) {
     return (
@@ -102,7 +112,29 @@ export function EventBubble({ message, isMine }: MessageRendererProps) {
         </div>
       )}
 
-      {message.body && message.body.trim().length > 0 && (
+      {/* Eine Erinnerung formuliert die Karte selbst, je Betrachter und Zustand:
+          Der gespeicherte Text würde nach der Antwort lügen. */}
+      {erinnerung &&
+        (() => {
+          const zeile = erinnerungsZeile({
+            ichBinErsteller: message.senderId === myId,
+            partner: conversationLabel(chat, myId) ?? 'die Eingeladenen',
+            status: myRsvp(event, myId) ?? null,
+            titel: event.title,
+            nummer: erinnerung.nummer,
+          });
+          return (
+            <p className="cal-bubble-erinnerung" role="note">
+              <strong>
+                <span aria-hidden="true">🔔 </span>
+                {zeile.kopf}
+              </strong>
+              {zeile.text && <> – {zeile.text}</>}
+            </p>
+          );
+        })()}
+
+      {!erinnerung && message.body && message.body.trim().length > 0 && (
         <p className="cal-bubble-body">{message.body}</p>
       )}
 

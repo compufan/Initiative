@@ -34,6 +34,7 @@ import type {
   UserDto,
   VerlaufsantragDto,
   ZustellungStandDto,
+  ErinnernStandDto,
 } from '@initiative/shared';
 import { API_PREFIX } from '@initiative/shared';
 
@@ -670,6 +671,8 @@ export const api = {
     /** Legt Karten nach, die beim Anlegen nicht zugestellt werden konnten. */
     nachliefern: (id: string) =>
       post<TerminAntwort>(`/calendar/events/${id}/zustellung/nachliefern`),
+    /** Wie weit das Erinnern eines Termins ist – nur für den Ersteller. */
+    erinnerungen: (id: string) => get<ErinnernStandDto>(`/calendar/events/${id}/erinnerungen`),
     byId: (id: string) => get<CalendarEventDto>(`/calendar/events/${id}`),
     icsUrl: (calendarToken: string) =>
       `${API_BASE}${API_PREFIX}/calendar/${calendarToken}/feed.ics`,

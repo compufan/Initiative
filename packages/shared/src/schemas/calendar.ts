@@ -20,6 +20,30 @@ export interface EventAttendeeDto {
   respondedAt: string | null;
 }
 
+/** Wie an ausstehende Antworten erinnert wird; `null` am Termin: gar nicht. */
+export interface ErinnernDto {
+  /** Stunden bis zur ersten Erinnerung und zwischen allen weiteren. */
+  nachStunden: number;
+  /** Wie oft höchstens je Person; `null`: bis zum Termin (höchstens zehn). */
+  anzahl: number | null;
+}
+
+/** Wie weit das Erinnern eines Termins ist – nur für den Ersteller. */
+export interface ErinnernStandDto {
+  aktiv: boolean;
+  /** Die wirksame Obergrenze je Person (1 bis 10); 0, solange nicht aktiv. */
+  hoechstens: number;
+  /** Die noch Ausstehenden, die erinnert werden können. */
+  personen: { userId: string; gesendet: number; zuletztAm: string | null }[];
+  /** Ausstehende, die nicht erinnert werden können: keine Einzelkarte bekommen. */
+  ohneEinzelchat: string[];
+}
+
+export const erinnernSchema = z.object({
+  nachStunden: z.number().int().min(LIMITS.erinnernNachStdMin).max(LIMITS.erinnernNachStdMax),
+  anzahl: z.number().int().min(1).max(LIMITS.erinnernAnzahlMax).nullable(),
+});
+
 export interface CalendarEventDto {
   id: string;
   /** Group events belong to a conversation, personal events do not. */
@@ -53,6 +77,8 @@ export interface CalendarEventDto {
    * einander überholen.
    */
   stand: number;
+  /** Ob und wie an ausstehende Antworten erinnert wird; `null`: gar nicht. */
+  erinnern: ErinnernDto | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -161,6 +187,8 @@ export const createEventSchema = z
     /** Post an event card into the conversation (default true for group events). */
     announce: z.boolean().optional(),
     zustellung: zustellungSchema.optional(),
+    /** Erinnern an ausstehende Antworten; fehlt es oder ist es `null`: aus. */
+    erinnern: erinnernSchema.nullable().optional(),
     /**
      * Wiederholungsschutz: Wer denselben Schlüssel noch einmal schickt
      * (Funkloch, Doppeltipp), bekommt den schon angelegten Termin zurück.

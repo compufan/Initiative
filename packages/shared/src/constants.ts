@@ -73,6 +73,16 @@ export const LIMITS = {
   einladungenMax: 200,
   /** In wie viele Gruppenchats eine Einladung höchstens als Karte kommt. */
   einladungGruppenMax: 10,
+  /**
+   * Erinnern an ausstehende Antworten – `ERINNERN_*` in `apps/api/src/constants.rs`.
+   * Der Abstand schützt den Empfänger, der die Einstellung nicht beeinflusst:
+   * höchstens zweimal am Tag, höchstens zehnmal im Ganzen.
+   */
+  erinnernNachStdMin: 12,
+  erinnernNachStdMax: 720,
+  erinnernAnzahlMax: 10,
+  /** So kurz vor dem Beginn wird nicht mehr erinnert – die Antwort hilft der Planung dann nicht mehr. */
+  erinnernReserveStd: 2,
   stickerPackNameMax: 60,
   /**
    * Wie lang die Tonspur eines Stickers hoechstens sein darf.

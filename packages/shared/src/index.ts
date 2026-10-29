@@ -35,3 +35,4 @@ export * from './util/recurrence.js';
 export * from './util/ics.js';
 export * from './util/format.js';
 export * from './util/zustellung.js';
+export * from './util/erinnern.js';
