@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { NEUTRAL, tonSchluessel } from './ton.js';
 import { BEREICH_NEUTRAL, neuesDoc, type Bereich, type BildDoc, type Maskenteil } from './doc.js';
 import {
+  reinheitFuer,
   speicherLeeren,
   szeneBauen,
   szeneNeutral,
@@ -122,6 +123,12 @@ describe('szeneBauen', () => {
     expect(szeneBauen(d, B, H).bereiche.map((b) => b.id)).toEqual(['bokeh']);
   });
 
+  it('behält einen Bereich, der nur Bokeh einstellt', () => {
+    // Dieselbe Falle für den zweiten Regler: neun Farbregler auf null.
+    const d = doc([bereich({ id: 'linse', anpassung: { ...BEREICH_NEUTRAL, bokeh: 0.4 } })]);
+    expect(szeneBauen(d, B, H).bereiche.map((b) => b.id)).toEqual(['linse']);
+  });
+
   it('behält die Reihenfolge der übrigen Bereiche', () => {
     const d = doc([
       bereich({ id: 'eins' }),
@@ -164,6 +171,7 @@ describe('szeneSchluessel', () => {
       'saettigung',
       'dynamik',
       'unschaerfe',
+      'bokeh',
     ] as const;
     for (const feld of felder) {
       const anders = szeneBauen(
@@ -244,5 +252,145 @@ describe('szeneNeutral', () => {
   it('ist mit einem reinen Unschärfe-Bereich ebenfalls falsch', () => {
     const d = doc([bereich({ anpassung: { ...BEREICH_NEUTRAL, unschaerfe: 1 } })]);
     expect(szeneNeutral(NEUTRAL, szeneBauen(d, B, H))).toBe(false);
+  });
+
+  it('ist mit einem reinen Bokeh-Bereich ebenfalls falsch', () => {
+    const d = doc([bereich({ anpassung: { ...BEREICH_NEUTRAL, bokeh: 0.5 } })]);
+    expect(szeneNeutral(NEUTRAL, szeneBauen(d, B, H))).toBe(false);
+  });
+});
+
+describe('Reinheit und Kernfeld', () => {
+  beforeEach(speicherLeeren);
+
+  const netz = (id: string, modus: Maskenteil['modus'] = 'dazu', alpha = 255): Maskenteil =>
+    ({
+      id,
+      modus,
+      umkehren: false,
+      art: 'netz',
+      netz: 'person',
+      breite: 8,
+      hoehe: 8,
+      alpha: new Uint8Array(64).fill(alpha),
+      marke: 1,
+    }) as Maskenteil;
+  const tiefe = (id: string, modus: Maskenteil['modus'] = 'dazu'): Maskenteil =>
+    ({
+      id,
+      modus,
+      umkehren: false,
+      art: 'tiefe',
+      breite: 4,
+      hoehe: 4,
+      karte: new Uint8Array(16).fill(200),
+      fokus: 0.5,
+      spanne: 0.3,
+      marke: 2,
+    }) as Maskenteil;
+  const pinsel = (id: string): Maskenteil => ({
+    id,
+    modus: 'dazu',
+    umkehren: false,
+    art: 'pinsel',
+    striche: [{ punkte: [10, 10, 40, 40], breite: 20, haerte: 0.5, abziehen: false }],
+  });
+  const radial = (id: string): Maskenteil => ({
+    id,
+    modus: 'dazu',
+    umkehren: false,
+    art: 'radial',
+    mitte: { x: 400, y: 300 },
+    rx: 100,
+    ry: 80,
+    winkel: 0,
+    weichheit: 0.5,
+  });
+
+  it('nennt Netz, Tipp und Pinsel Silhouetten – Reinheit 0', () => {
+    expect(reinheitFuer([netz('a')])).toBe(0);
+    expect(reinheitFuer([pinsel('p')])).toBe(0);
+    expect(reinheitFuer([netz('a'), pinsel('p')])).toBe(0);
+  });
+
+  it('nennt Verlauf, Ellipse und Tiefe glatt – Reinheit 1', () => {
+    expect(reinheitFuer([verlauf()])).toBe(1);
+    expect(reinheitFuer([radial('r')])).toBe(1);
+    expect(reinheitFuer([tiefe('t')])).toBe(1);
+    expect(reinheitFuer([verlauf(), tiefe('t')])).toBe(1);
+  });
+
+  it('nennt die Mischung gemischt – Reinheit 2', () => {
+    expect(reinheitFuer([tiefe('t'), netz('n', 'weg')])).toBe(2);
+    expect(reinheitFuer([netz('n'), verlauf()])).toBe(2);
+  });
+
+  it('baut das Kernfeld von „Motiv + Tiefe“ als 255 minus Silhouette', () => {
+    /*
+     * Die Tiefe `dazu` zählt als 255, das Netz `weg` zieht seine Silhouette
+     * ab: Im Motiv ist der Kern null (dort wirkt keine Unschärfe), ausserhalb
+     * voll. Ein Kern aus der Maske selbst machte bei der Tiefe die halbe
+     * Fläche „ungültig“ – gemessen blieben die Scheiben dort bei 1,6 Punkten.
+     */
+    const d = doc([
+      bereich({
+        id: 'kombi',
+        teile: [tiefe('t'), netz('n', 'weg', 255)],
+        anpassung: { ...BEREICH_NEUTRAL, bokeh: 0.6 },
+      }),
+    ]);
+    const szene = szeneBauen(d, B, H);
+    expect(szene.bereiche[0].reinheit).toBe(2);
+    const kern = szene.bereiche[0].maske.kern;
+    expect(kern).toBeDefined();
+    expect(kern?.length).toBe(szene.bereiche[0].maske.feld.length);
+    // Das Netz deckt alles: 255 − 255.
+    expect(new Set(kern)).toEqual(new Set([0]));
+
+    const halb = doc([
+      bereich({
+        id: 'halb',
+        teile: [tiefe('t2'), netz('n2', 'weg', 100)],
+        anpassung: { ...BEREICH_NEUTRAL, bokeh: 0.6 },
+      }),
+    ]);
+    const kern2 = szeneBauen(halb, B, H).bereiche[0].maske.kern;
+    expect(new Set(kern2)).toEqual(new Set([155]));
+  });
+
+  it('übergeht glatte weg- und nur-Teile im Kern', () => {
+    const d = doc([
+      bereich({
+        id: 'm',
+        teile: [netz('n', 'dazu', 200), { ...verlauf('v'), modus: 'nur' }],
+        anpassung: { ...BEREICH_NEUTRAL, bokeh: 1 },
+      }),
+    ]);
+    const szene = szeneBauen(d, B, H);
+    expect(szene.bereiche[0].reinheit).toBe(2);
+    // Das Kernfeld kennt nur das Netz: überall 200, nicht min(200, Verlauf).
+    expect(new Set(szene.bereiche[0].maske.kern)).toEqual(new Set([200]));
+  });
+
+  it('legt nur bei gemischter Maske ein Kernfeld an', () => {
+    const rein = szeneBauen(doc([bereich({ teile: [netz('n')] })]), B, H);
+    expect(rein.bereiche[0].maske.kern).toBeUndefined();
+    const glatt = szeneBauen(doc([bereich()]), B, H);
+    expect(glatt.bereiche[0].maske.kern).toBeUndefined();
+  });
+
+  it('rechnet das Kernfeld beim Reglerzug nicht neu', () => {
+    const teile = [tiefe('t'), netz('n', 'weg', 100)];
+    const a = szeneBauen(
+      doc([bereich({ teile, anpassung: { ...BEREICH_NEUTRAL, bokeh: 0.2 } })]),
+      B,
+      H,
+    );
+    const b = szeneBauen(
+      doc([bereich({ teile, anpassung: { ...BEREICH_NEUTRAL, bokeh: 0.9 } })]),
+      B,
+      H,
+    );
+    expect(b.bereiche[0].maske.kern).toBe(a.bereiche[0].maske.kern);
   });
 });

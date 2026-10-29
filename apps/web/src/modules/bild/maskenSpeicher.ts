@@ -38,10 +38,34 @@ import {
 import type { Bereich, BildDoc, Maskenteil, PinselTeil, Bereichston } from './doc.js';
 import { farbNeutral, istNeutral, tonSchluessel, type Anpassung } from './ton.js';
 
+/**
+ * Wie „rein“ die Bildpunkte unter einer Maske sind – für die Unschärfen.
+ *
+ * Eine Unschärfe darf nur Farbe einsammeln, die wirklich zum Bereich gehört.
+ * Ob das aus der Maske selbst folgt, hängt von ihrer Art ab:
+ *
+ * - **0, Silhouette** (Netz, Tipp, Pinsel): Die Maske ist eine
+ *   ZUGEHÖRIGKEIT. Im Saum liegen Mischfarben aus Motiv und Grund – wer sie
+ *   mitmittelt, holt den Hof herein. Gültig ist nur, was nahe 1 liegt.
+ * - **1, glatt** (Verlauf, Ellipse, Tiefe): Die Maske ist ein BETRAG. Jeder
+ *   Bildpunkt ist ein reiner Bildpunkt, nur die Stärke wechselt; ein Kern aus
+ *   der Maske machte bei einem Verlauf die halbe Fläche „ungültig“.
+ * - **2, gemischt** („Motiv + Tiefe“): Die Maske trägt beides. Gültig ist, was
+ *   das Kernfeld sagt – die Faltung nur der Silhouettenteile.
+ *
+ * Ohne Angabe gilt 1: Eine von Hand gebaute Szene hat keinen Saum.
+ */
+export type Reinheit = 0 | 1 | 2;
+
 /** Eine fertig gerasterte Maske. `stand` steigt, sobald sich `feld` ändert. */
 export interface Maskenfeld {
   raster: Raster;
   feld: Uint8Array;
+  /**
+   * Nur bei Reinheit 2: das Kernfeld im selben Raster. Gehört zu `stand` –
+   * wer das Feld neu faltet, rechnet auch dieses neu.
+   */
+  kern?: Uint8Array;
   /**
    * Die Ersatzidentität des Feldes.
    *
@@ -56,6 +80,8 @@ export interface GerechneterBereich {
   id: string;
   maske: Maskenfeld;
   anpassung: Bereichston;
+  /** Siehe `Reinheit`; ohne Angabe 1. */
+  reinheit?: Reinheit;
 }
 
 export interface Szene {
@@ -166,11 +192,78 @@ function maskeFuer(bereich: Bereich, raster: Raster): Maskenfeld {
   // Die Teilfelder kommen aus Ebene 1; gefaltet wird mit derselben Vorschrift
   // wie in `teileFalten`, nur ohne sie noch einmal zu bauen.
   const felder = bereich.teile.map((teil) => feldFuerTeil(teil, raster));
-  const feld = felderFalten(bereich.teile, felder, raster.breite * raster.hoehe);
+  const laenge = raster.breite * raster.hoehe;
+  const feld = felderFalten(bereich.teile, felder, laenge);
   zaehler.falten += 1;
   const maske: Maskenfeld = { raster, feld, stand: naechsteMarke() };
+  if (reinheitFuer(bereich.teile) === 2) maske.kern = kernFalten(bereich.teile, felder, laenge);
   faltzettel.set(bereich.teile, maske);
   return maske;
+}
+
+/** Teile, deren Maske eine Zugehörigkeit mit Saum aus Mischfarben ist. */
+const SILHOUETTEN: ReadonlySet<Maskenteil['art']> = new Set(['netz', 'tipp', 'pinsel']);
+
+/**
+ * Die Reinheit der Maske eines Bereichs – allein aus der Art seiner Teile,
+ * deterministisch und ohne einen einzigen Bildpunkt anzusehen.
+ *
+ * Gemessen wurde auch eine Schätzung aus der Steilheit je Bildpunkt; sie war
+ * eine Heuristik, die bei mittelweichen Ellipsen kippt. Die Art des Teils
+ * sagt genau, was seine Maske bedeutet.
+ *
+ * Eine Setzung bleibt: Silhouette `dazu` neben einem Verlauf `dazu` („Motiv
+ * und Himmel“) hat ein Kernfeld von 255 – die Netzkante ist dort ungeschützt.
+ */
+export function reinheitFuer(teile: readonly Maskenteil[]): Reinheit {
+  let silhouette = false;
+  let glatt = false;
+  for (const teil of teile) {
+    if (SILHOUETTEN.has(teil.art)) silhouette = true;
+    else glatt = true;
+  }
+  if (silhouette && glatt) return 2;
+  return glatt ? 1 : 0;
+}
+
+/**
+ * Das Kernfeld: dieselbe Faltung wie `felderFalten`, aber nur über die
+ * Silhouetten.
+ *
+ * Ein glattes `dazu` zählt als 255 (es deckt alles, die Silhouette darunter
+ * wird danach abgezogen), glatte `weg`/`nur` werden übersprungen (sie sind
+ * Betrag, nicht Zugehörigkeit). Beispiel: `[Tiefe dazu, Netz weg]` ergibt
+ * 255 − Silhouette – im Motiv null, draussen voll.
+ */
+function kernFalten(
+  teile: readonly Maskenteil[],
+  felder: readonly Uint8Array[],
+  laenge: number,
+): Uint8Array {
+  const werk = new Uint8Array(laenge);
+  for (const [nummer, teil] of teile.entries()) {
+    if (!SILHOUETTEN.has(teil.art)) {
+      if (teil.modus === 'dazu') werk.fill(255);
+      continue;
+    }
+    const g = felder[nummer];
+    if (!g) continue;
+    switch (teil.modus) {
+      case 'dazu':
+        for (let i = 0; i < laenge; i += 1) if (g[i] > werk[i]) werk[i] = g[i];
+        break;
+      case 'weg':
+        for (let i = 0; i < laenge; i += 1) {
+          const neu = 255 - g[i];
+          if (neu < werk[i]) werk[i] = neu;
+        }
+        break;
+      case 'nur':
+        for (let i = 0; i < laenge; i += 1) if (g[i] < werk[i]) werk[i] = g[i];
+        break;
+    }
+  }
+  return werk;
 }
 
 /* ---------- die Aussenseite ---------- */
@@ -179,7 +272,13 @@ function maskeFuer(bereich: Bereich, raster: Raster): Maskenfeld {
 function bereichWirkt(bereich: Bereich): boolean {
   if (!bereich.aktiv) return false;
   if (bereich.teile.length === 0) return false;
-  return !farbNeutral(bereich.anpassung) || bereich.anpassung.unschaerfe !== 0;
+  // Ein Bereich nur mit Bokeh ist NICHT neutral, obwohl alle Farbregler auf
+  // null stehen – sonst machte der Kurzschluss in `bildRechnen` ihn wirkungslos.
+  return (
+    !farbNeutral(bereich.anpassung) ||
+    bereich.anpassung.unschaerfe !== 0 ||
+    bereich.anpassung.bokeh !== 0
+  );
 }
 
 /**
@@ -216,6 +315,7 @@ export function szeneBauen(doc: BildDoc, breite: number, hoehe: number): Szene {
     id: bereich.id,
     maske: maskeFuer(bereich, raster),
     anpassung: bereich.anpassung,
+    reinheit: reinheitFuer(bereich.teile),
   }));
   return { bereiche, schluessel: szeneSchluessel(doc.anpassung, bereiche) };
 }
@@ -240,7 +340,9 @@ export function szeneSchluessel(global: Anpassung, bereiche: GerechneterBereich[
           `${b.anpassung.belichtung},${b.anpassung.kontrast},${b.anpassung.lichter},` +
           `${b.anpassung.tiefen},${b.anpassung.schwarz},${b.anpassung.waerme},` +
           `${b.anpassung.toenung},${b.anpassung.saettigung},${b.anpassung.dynamik},` +
-          `u:${b.anpassung.unschaerfe}`,
+          // Beide Unschärfen: Ohne sie zeigte der Merkzettel des Renderers beim
+          // Zug an einem dieser Regler das alte Bild.
+          `u:${b.anpassung.unschaerfe},b:${b.anpassung.bokeh}`,
       )
       .join('#')
   );
@@ -256,9 +358,9 @@ function leereSzene(global: Anpassung): Szene {
  * Daran hängt mehr als eine gesparte Rechnung: Der Renderer gibt bei „nichts
  * zu tun“ das **Quellbild selbst** zurück, und eine Ebene darüber hängt an
  * genau dieser Objektidentität die Umrechnung der Verpixel-Ausschnitte
- * (`quellSkala`). Ein Bereich, der nur `unschaerfe` setzt, ist deshalb
- * ausdrücklich **nicht** neutral, obwohl seine Farbregler alle auf null
- * stehen.
+ * (`quellSkala`). Ein Bereich, der nur `unschaerfe` oder `bokeh` setzt, ist
+ * deshalb ausdrücklich **nicht** neutral, obwohl seine Farbregler alle auf
+ * null stehen.
  */
 export function szeneNeutral(a: Anpassung, szene: Szene): boolean {
   return istNeutral(a) && szene.bereiche.length === 0;

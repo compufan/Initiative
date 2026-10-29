@@ -375,7 +375,7 @@ test('die Tiefenkarte läuft über den Film – mit EINER Sitzung', async ({ pag
               marke: 1,
             },
           ],
-          anpassung: { ...docModul.BEREICH_NEUTRAL, unschaerfe: 0.8 },
+          anpassung: { ...docModul.BEREICH_NEUTRAL, bokeh: 0.8 },
         },
       ],
     };

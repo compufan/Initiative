@@ -22,16 +22,29 @@
 import { BEREICHE_MAX } from './doc.js';
 import type { Szene } from './maskenSpeicher.js';
 import { maskeUmrastern } from './maske.js';
-import { bokehRgba } from './bokeh.js';
 import { ABTAST_N, schaerfenFeld } from './schaerfe.js';
 import { flaeche2d, glRaum } from './farbraum.js';
-import { bokehRadius } from './weich.js';
+import {
+  unscharfAufBytes,
+  unscharfEbenen,
+  type StufenGuete,
+  type UnscharfEbene,
+  type UnscharfQuelle,
+} from './unscharf.js';
+import {
+  glslZahl,
+  unscharfRechnen,
+  unscharfVerwerfen,
+  unscharfWerk,
+  type UnscharfWerk,
+} from './unscharfGpu.js';
 import {
   LUT_KANTE,
   formHin,
   istNeutral,
   lutAnwenden,
   lutBauen,
+  farbNeutral,
   farbSchluessel,
   tonSchluessel,
   vignetteFaktor,
@@ -60,19 +73,6 @@ void main() {
   vUv = aOrt * 0.5 + 0.5;
   gl_Position = vec4(aOrt, 0.0, 1.0);
 }`;
-
-/**
- * Eine Zahl als GLSL-Gleitkommaliteral.
- *
- * `0` allein waere in GLSL eine ganze Zahl, und `const float x = 0;` ist ein
- * Uebersetzungsfehler – nicht irgendwann zur Laufzeit, sondern beim Bau des
- * Schattierers, also fuer jedes Bild auf jedem Geraet. Die Bandmitte von Rot
- * ist genau diese Null.
- */
-function glslZahl(wert: number): string {
-  const text = String(wert);
-  return text.includes('.') || text.includes('e') ? text : `${text}.0`;
-}
 
 /**
  * Der Bildpunkt-Schattierer.
@@ -144,9 +144,13 @@ uniform float uSaettigungB[BEREICHE];
 uniform float uDynamikB[BEREICHE];
 uniform float uSwRotB[BEREICHE];
 uniform float uSwGruenB[BEREICHE];
-uniform float uUnschaerfeB[BEREICHE];
-/** Der Bokeh-Radius in Texturkoordinaten. Null heisst: kein Bokeh. */
-uniform vec2 uBokeh;
+/**
+ * Das Zwischenbild der Unschaerfe (Weichzeichnen und Bokeh), siehe
+ * „unscharfGpu.ts“: RGB in Anzeigewerten, Alpha ist der Einfluss. Alpha 0
+ * heisst unberuehrt – dann gilt das Original, Byte fuer Byte.
+ */
+uniform sampler2D uUnscharf;
+uniform int uHatUnscharf;
 
 /*
  * Der Feinschliff: vier Kurven zu je STUETZEN Werten, acht Farbbaender.
@@ -270,103 +274,6 @@ float maskeAn(vec2 uv, vec4 kanal) {
   return clamp(dot(texture(uMasken, vec2(uv.x, 1.0 - uv.y)), kanal), 0.0, 1.0);
 }
 
-/** Wieviel Unschaerfe an dieser Stelle gilt – es gewinnt der staerkste Bereich. */
-float bokehAn(vec2 uv) {
-  float w = 0.0;
-  for (int i = 0; i < BEREICHE; i++) {
-    if (i >= uAnzahl) break;
-    if (uUnschaerfeB[i] <= 0.0) continue;
-    w = max(w, maskeAn(uv, uKanal[i]) * uUnschaerfeB[i]);
-  }
-  return clamp(w, 0.0, 1.0);
-}
-
-const int TUPFEN = 48;
-
-/**
- * Die Spreizung: „SPREIZUNG" aus „bokeh.ts", als Multiplikation
- * ausgeschrieben. Die Umkehr ist zweimal die Quadratwurzel.
- */
-vec3 spreizen(vec3 lin) {
-  vec3 q = lin * lin;
-  return q * q;
-}
-
-/**
- * Die Zerstreuungsscheibe.
- *
- * Eine Scheibe und keine Glocke: Ein Gauss macht aus einem Lichtpunkt einen
- * verwaschenen Fleck, eine echte Linse einen KREIS. Genau daran erkennt man
- * Bokeh, und genau das ist der Unterschied zwischen "unscharf" und "schoen
- * unscharf".
- *
- * Drei Feinheiten, ohne die es nicht aussieht:
- *
- * 1. Die Tupfen liegen auf einer Spirale im goldenen Winkel, mit „sqrt“ im
- *    Radius – sonst haeuft sich alles in der Mitte und der Rand der Scheibe
- *    bleibt duenn. Und sie wird je Bildpunkt verdreht: Feste Tupfen zeichnen
- *    Ringe, und Ringe sieht man in einem Himmel sofort. Rauschen sieht man
- *    nicht.
- * 2. Jeder Tupfen wird mit der Maske AM ORT DES TUPFENS gewichtet. Punkte des
- *    scharfen Motivs wiegen damit fast nichts, und seine Farbe blutet nicht
- *    nach aussen. Ohne das bekaeme jedes freigestellte Motiv einen
- *    Heiligenschein – den Fehler sieht man auf jedem Portraetmodus, der ihn
- *    nicht vermeidet.
- * 3. Gemittelt wird im LINEAREN Licht und mit Spreizung – nicht ueber
- *    Anzeigewerte. Eine Linse verteilt Licht, keine Bildschirmzahlen, und
- *    genau daran haengt, ob ein Lichtpunkt im Unscharfen ein Lichtpunkt
- *    bleibt. Vorher stand hier ein gewichtetes Mittel ueber Anzeigewerte mit
- *    einem Glanzfaktor von 3; nachgemessen an einem Punkt 255 auf Grund 10,
- *    Radius 24, blieben davon 24 von 255 uebrig – ein grauer Schleier. Mit
- *    linearem Licht sind es 152, und der Prozessorweg, der dasselbe rechnet,
- *    kommt auf 105. Es kostet 15 Prozent (975 ms → 1122 ms auf 1200 × 1200
- *    unter SwiftShader, wo eine Potenz teuer und eine Texturabfrage billig
- *    ist; auf echter Hardware faellt es schwaecher aus).
- *
- * „weite“ ist der Anteil des vollen Radius fuer DIESEN Bildpunkt. Die Maske
- * bestimmt also, wie GROSS die Scheibe ist – nicht, wie stark ein Bild mit
- * fester Scheibe eingeblendet wird. Der Unterschied ist der zwischen einer
- * Linse und einer Ueberblendung: Bei halbem Gewicht zeichnet eine Linse halb
- * so gross, waehrend die Ueberblendung ein halbdurchsichtiges Doppelbild
- * ergibt. Beim harten Rand einer Freistellmaske faellt das kaum auf, bei
- * einem Verlauf ueber die ganze Tiefe einer Szene ist es der ganze Effekt.
- */
-vec3 zerstreuen(vec2 uv, float weite) {
-  float dreh = fract(sin(dot(uv, vec2(12.9898, 78.233))) * 43758.5453) * 6.2831853;
-  vec3 summe = vec3(0.0);
-  float gewicht = 0.0;
-  for (int i = 0; i < TUPFEN; i++) {
-    float t = (float(i) + 0.5) / float(TUPFEN);
-    float r = sqrt(t);
-    float a = float(i) * 2.39996323 + dreh;
-    vec2 p = uv + vec2(cos(a), sin(a)) * r * uBokeh * weite;
-    vec3 f = texture(uBild, p).rgb;
-    /*
-     * Ein Tupfen zaehlt nur, wenn SEINE eigene Scheibe bis hierher reicht.
-     *
-     * Wir sammeln ein, was eine Linse verstreut. Ein Bildpunkt bei Abstand
-     * „r · weite“ landet nur dann auf uns, wenn er selbst mindestens so weit
-     * streut – also wenn sein eigener Radiusanteil groesser ist als der
-     * Abstand. Vorher stand hier ein fester Mindestwert von 0,02, und damit
-     * lieh sich ein unscharfer Punkt Farbe von einem scharfen Nachbarn.
-     *
-     * Bei einer harten Freistellmaske faellt das nicht auf: Dort ist das
-     * Motiv innen ueberall gleich scharf, es gibt kein Innen-Gefaelle. Sobald
-     * eine Tiefenkarte im Spiel ist, gibt es das sehr wohl – ein unscharfer
-     * Teil des Motivs saugte dann Farbe aus einem scharfen Teil desselben
-     * Motivs.
-     */
-    float wp = bokehAn(p);
-    float g = wp >= r * weite ? wp : 0.0;
-    summe += spreizen(zuLinear(f)) * g;
-    gewicht += g;
-  }
-  // Faellt jeder Tupfen durch die Pruefung, bleibt der Punkt, wie er war -
-  // sonst stuende hier Schwarz.
-  if (gewicht <= 1e-4) return texture(uBild, uv).rgb;
-  return zuSrgb(sqrt(sqrt(max(summe / gewicht, 0.0))));
-}
-
 /** Aus der Kurventabelle lesen – linear, genau wie „kurveAn" in fein.ts. */
 float kurveAn(int kurve, float x) {
   float letzte = float(STUETZEN - 1);
@@ -487,24 +394,32 @@ void main() {
   vec3 c = scharf;
 
   /*
-   * Die Tiefenschaerfe ganz am Anfang: Eine Linse zeichnet unscharf, die
+   * Weichzeichnen und Bokeh ganz am Anfang: Eine Linse zeichnet unscharf, die
    * Entwicklung kommt danach. Waere es umgekehrt, verteilte die Scheibe
    * bereits getoente Farben und der Kontrast wuerde zweimal angefasst.
+   *
+   * Gerechnet ist das schon, in einer eigenen Vorstufe (unscharfGpu.ts); hier
+   * wird nur gelesen. Alpha 0 heisst, dass die Vorstufe diesen Bildpunkt nicht
+   * angefasst hat – dann bleibt das Original, und zwar das Byte selbst und
+   * nicht ein Umweg ueber Gleitkomma.
    */
-  float bokeh = uBokeh.x > 0.0 ? bokehAn(vUv) : 0.0;
-  // Kein „mix“ mehr: Die Scheibe ist schon auf die richtige Groesse
-  // geschrumpft. Wer beides tut, rechnet das Gewicht zweimal und bekommt
-  // seinen halben Radius auch noch halb durchsichtig. Unterhalb von 0,002
-  // waere die Scheibe schmaler als ein Bildpunkt – dann lohnen die 48 Tupfen
-  // nicht, und alle traefen ohnehin denselben Punkt.
-  if (bokeh > 0.002) c = zerstreuen(vUv, bokeh);
+  float unscharf = 0.0;
+  if (uHatUnscharf == 1) {
+    vec4 u = texelFetch(uUnscharf, ivec2(gl_FragCoord.xy), 0);
+    unscharf = u.a;
+    if (u.a > 0.0) c = u.rgb;
+  }
 
   /*
    * Unschärfemaske: die Differenz zum Mittel der vier Nachbarn, verstärkt.
    *
-   * Mit „(1 − bokeh)“ gedaempft. Ohne das holte die Schaerfe genau die
-   * Hochfrequenz aus dem scharfen Quellbild zurueck, die das Bokeh gerade
+   * Mit „(1 − unscharf)“ gedaempft. Ohne das holte die Schaerfe genau die
+   * Hochfrequenz aus dem scharfen Quellbild zurueck, die die Unschaerfe gerade
    * entfernt hat – der Hintergrund waere unscharf UND kantig.
+   *
+   * Und nur als ZUWACHS auf das, was dasteht: Vorher ersetzte die Schaerfe „c“
+   * durch das geschaerfte Original, und wer Schaerfe und Unschaerfe zugleich
+   * einstellte, verlor die Unschaerfe.
    */
   if (uSchaerfe > 0.0) {
     /*
@@ -543,9 +458,11 @@ void main() {
     vec3 anteil = uSchaerfeSchwelle <= 0.0
       ? vec3(1.0)
       : smoothstep(vec3(0.0), vec3(1.0), (abs(diff) - uSchaerfeSchwelle) / uSchaerfeSchwelle);
-    vec3 roh = mitte + diff * uSchaerfe * 1.5 * (1.0 - bokeh) * anteil;
+    vec3 roh = mitte + diff * uSchaerfe * 1.5 * (1.0 - unscharf) * anteil;
     // Die Saumbegrenzung: steiler ja, ueber die Nachbarschaft hinaus nein.
-    c = zuSrgb(clamp(min(groesst, max(kleinst, roh)), 0.0, 1.0));
+    vec3 geschaerft = min(groesst, max(kleinst, roh));
+    vec3 lin = unscharf > 0.0 ? zuLinear(c) + (geschaerft - mitte) : geschaerft;
+    c = zuSrgb(clamp(lin, 0.0, 1.0));
   }
 
   // Die globale Anpassung.
@@ -596,7 +513,14 @@ void main() {
  * zählen können. Zeitmessungen an derselben Stelle wären auf einem
  * ausgelasteten Bauserver launisch; ein Zähler ist es nie.
  */
-export const zaehler = { quellHochladen: 0, maskenHochladen: 0 };
+export const zaehler = {
+  quellHochladen: 0,
+  maskenHochladen: 0,
+  /** Wie oft die Vorstufe der Unschaerfe wirklich gerechnet wurde. */
+  stufenGerechnet: 0,
+  /** Wieviele Texturen die Vorstufe gerade lebend haelt (Vorrat eingeschlossen). */
+  texturenLebend: 0,
+};
 
 /**
  * Von aussen die Grafikeinheit abschalten – nur für Prüfungen.
@@ -615,6 +539,12 @@ interface Werk {
   textur: WebGLTexture;
   /** Der Maskenatlas: ein Kanal je Bereich, in Rastergrösse. */
   masken: WebGLTexture;
+  /** Die Kernfelder gemischter Masken, im selben Aufbau wie der Atlas. */
+  kern: WebGLTexture;
+  /** Das Zwischenbild der Unschaerfe, wenn es der Prozessor gerechnet hat. */
+  hybrid: WebGLTexture;
+  /** Eine Textur ohne Inhalt für Einheit 3, wenn nichts unscharf ist. */
+  leer: WebGLTexture;
   orte: Record<string, WebGLUniformLocation | null>;
   leinwand: HTMLCanvasElement;
 }
@@ -673,6 +603,12 @@ export function quellstand(bild: CanvasImageSource): number {
  * je Bild über den Bus, für ein Ergebnis, das sich nicht geändert hat.
  */
 let atlasZettel: string | null = null;
+
+/** Wofür das Kernfeld-Atlas gilt – derselbe Schlüssel wie beim Maskenatlas, oder `null`. */
+let kernZettel: string | null = null;
+
+/** Wofür das vom Prozessor gerechnete Zwischenbild der Unschärfe gilt. */
+let hybridZettel: string | null = null;
 
 /**
  * Eine eigene Leinwand zum Vorverkleinern.
@@ -784,6 +720,48 @@ function werkzeug(): Werk | null {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+    /*
+     * Das Kernfeld auf Einheit 2, im selben Aufbau. Es wird nur gebraucht, wenn
+     * ein Bereich eine gemischte Maske hat („Motiv + Tiefe“); sonst bleibt es
+     * der eine Bildpunkt, mit dem es angelegt wurde – ein Abtaster ohne
+     * Textur wäre ein Fehler, auch wenn er nie gelesen wird.
+     */
+    const kern = gl.createTexture();
+    if (!kern) return null;
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, kern);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+
+    // Einheit 3: das Zwischenbild der Unschärfe. Zwei Texturen, weil es von
+    // zwei Wegen kommen kann (Vorstufe oder Prozessor) und eine leere, wenn
+    // nichts unscharf ist.
+    const hybrid = gl.createTexture();
+    const leer = gl.createTexture();
+    if (!hybrid || !leer) return null;
+    for (const t of [hybrid, leer]) {
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        1,
+        1,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        new Uint8Array(4),
+      );
+    }
     gl.activeTexture(gl.TEXTURE0);
 
     const namen = [
@@ -805,7 +783,8 @@ function werkzeug(): Werk | null {
       'uVignette',
       'uMasken',
       'uAnzahl',
-      'uBokeh',
+      'uUnscharf',
+      'uHatUnscharf',
       /*
        * Das GANZE Kurvenfeld unter EINEM Namen.
        *
@@ -832,17 +811,134 @@ function werkzeug(): Werk | null {
         `uDynamikB[${i}]`,
         `uSwRotB[${i}]`,
         `uSwGruenB[${i}]`,
-        `uUnschaerfeB[${i}]`,
       );
     }
     const orte: Record<string, WebGLUniformLocation | null> = {};
     for (const name of namen) orte[name] = gl.getUniformLocation(programm, name);
 
-    werk = { gl, programm, textur, masken, orte, leinwand };
+    werk = { gl, programm, textur, masken, kern, hybrid, leer, orte, leinwand };
     return werk;
   } catch {
     return null;
   }
+}
+
+/**
+ * Die Bereiche mit Unschärfe für die Rechnung auf dem Prozessor: Masken (und
+ * Kernfelder) vom Raster auf die Arbeitsgrösse gebracht.
+ *
+ * Bilinear – dasselbe, was die Grafikeinheit mit `LINEAR` tut. Mit dem
+ * nächsten Nachbarn zeigte der Prozessorweg an jeder Maskenkante eine Treppe.
+ */
+function prozessorQuellen(
+  szene: Szene,
+  ebenen: readonly UnscharfEbene[],
+  breite: number,
+  hoehe: number,
+): UnscharfQuelle[] {
+  return ebenen.map((ebene) => {
+    const b = szene.bereiche[ebene.platz];
+    const { raster } = b.maske;
+    const hoch = (feld: Uint8Array) =>
+      maskeUmrastern(feld, raster.breite, raster.hoehe, breite, hoehe);
+    return {
+      ebene,
+      maske: hoch(b.maske.feld),
+      kern: ebene.reinheit === 2 && b.maske.kern ? hoch(b.maske.kern) : null,
+    };
+  });
+}
+
+/**
+ * Das Zwischenbild der Unschärfe als Textur – von der Vorstufe auf der
+ * Grafikeinheit, oder, wo die nicht geht, vom Prozessor.
+ *
+ * Der Schlüssel enthält alles, wovon das Bild abhängt: welches Bild hochgeladen
+ * ist (`quellHochladen` zählt jedes Hochladen), welche Masken im Atlas liegen,
+ * die Radien, die Güte und die Grösse. Ein Zug an „Belichtung“ ändert keins
+ * davon – und die Unschärfe kostet dann nichts.
+ */
+function unscharfHolen(
+  w: Werk,
+  bild: CanvasImageSource,
+  breite: number,
+  hoehe: number,
+  szene: Szene,
+  ebenen: readonly UnscharfEbene[],
+  guete: StufenGuete,
+): WebGLTexture | null {
+  const schluessel = [
+    zaehler.quellHochladen,
+    atlasZettel,
+    ebenen.map((e) => `${e.platz}:${e.bokehPx}:${e.weichPx}:${e.reinheit}`).join(','),
+    guete,
+    `${breite}x${hoehe}`,
+  ].join('|');
+  const stufe: UnscharfWerk | null = unscharfWerk(w.gl, zaehler);
+  if (stufe) {
+    const textur = unscharfRechnen(
+      stufe,
+      { quelle: w.textur, atlas: w.masken, kernAtlas: w.kern, breite, hoehe, guete },
+      ebenen,
+      schluessel,
+    );
+    if (textur) return textur;
+  }
+  return unscharfHybrid(w, bild, breite, hoehe, szene, ebenen, guete, schluessel);
+}
+
+/**
+ * Der Hybrid-Weg: Fehlen float-renderbare Ziele (`EXT_color_buffer_float`),
+ * rechnet der Prozessor die Vorstufe und lädt das Ergebnis als 8 Bit hoch –
+ * Anzeigewerte, Alpha ist der Einfluss, genau das Format der Vorstufe.
+ *
+ * Der Rest bleibt auf der Grafikeinheit. Das kostet ein halbe bis eine
+ * Sekunde, aber nur, wenn sich etwas an der Unschärfe ändert – dank des
+ * Zettels nicht bei jedem Zug an einem anderen Regler.
+ */
+function unscharfHybrid(
+  w: Werk,
+  bild: CanvasImageSource,
+  breite: number,
+  hoehe: number,
+  szene: Szene,
+  ebenen: readonly UnscharfEbene[],
+  guete: StufenGuete,
+  schluessel: string,
+): WebGLTexture | null {
+  const { gl } = w;
+  if (hybridZettel === schluessel) return w.hybrid;
+  const flaeche = verkleinern(bild, breite, hoehe);
+  const ctx = flaeche instanceof HTMLCanvasElement ? flaeche2d(flaeche) : null;
+  if (!ctx) return null;
+  const bilddaten = ctx.getImageData(0, 0, breite, hoehe);
+  const einfluss = unscharfAufBytes(
+    bilddaten.data,
+    breite,
+    hoehe,
+    prozessorQuellen(szene, ebenen, breite, hoehe),
+    guete,
+  );
+  for (let i = 0; i < einfluss.length; i += 1) bilddaten.data[i * 4 + 3] = einfluss[i];
+  gl.activeTexture(gl.TEXTURE3);
+  gl.bindTexture(gl.TEXTURE_2D, w.hybrid);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  gl.texImage2D(
+    gl.TEXTURE_2D,
+    0,
+    gl.RGBA,
+    breite,
+    hoehe,
+    0,
+    gl.RGBA,
+    gl.UNSIGNED_BYTE,
+    bilddaten.data,
+  );
+  gl.activeTexture(gl.TEXTURE0);
+  hybridZettel = schluessel;
+  zaehler.stufenGerechnet += 1;
+  return w.hybrid;
 }
 
 /** Rechnet ein Bild auf der Grafikeinheit durch. Gibt `null` zurück, wenn nicht. */
@@ -852,11 +948,18 @@ function aufGpu(
   hoehe: number,
   a: Anpassung,
   szene: Szene,
+  guete: StufenGuete,
 ): HTMLCanvasElement | null {
   if (gpuVerboten) return null;
   const w = werkzeug();
   if (!w) return null;
   const { gl, orte } = w;
+  // Schon vor dem Hochladen: Ein Kontext, der zwischen zwei Bildern verloren
+  // ging, kostet sonst einen Durchlauf ins Leere.
+  if (gl.isContextLost()) {
+    werkVerwerfen();
+    return null;
+  }
   try {
     if (w.leinwand.width !== breite) w.leinwand.width = breite;
     if (w.leinwand.height !== hoehe) w.leinwand.height = hoehe;
@@ -895,9 +998,29 @@ function aufGpu(
 
     atlasHochladen(w, szene);
 
+    /*
+     * Die Vorstufe der Unschärfe – vor allem anderen, weil sie Programm,
+     * Ziel und Texturbindungen verstellt. Danach wird der Hauptdurchlauf
+     * ausdrücklich wiederhergestellt.
+     */
+    const ebenen = unscharfEbenen(szene.bereiche, breite, hoehe);
+    const unscharf =
+      ebenen.length > 0 ? unscharfHolen(w, bild, breite, hoehe, szene, ebenen, guete) : null;
+    gl.useProgram(w.programm);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, breite, hoehe);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, unscharf ?? w.leer);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, w.masken);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, w.textur);
+
     const [wr, wg, wb] = weissFaktoren(a.waerme, a.toenung);
     gl.uniform1i(orte.uBild, 0);
     gl.uniform1i(orte.uMasken, 1);
+    gl.uniform1i(orte.uUnscharf, 3);
+    gl.uniform1i(orte.uHatUnscharf, unscharf ? 1 : 0);
     gl.uniform1i(orte.uAnzahl, szene.bereiche.length);
     for (let i = 0; i < BEREICHE_MAX; i += 1) {
       const b = szene.bereiche[i];
@@ -922,24 +1045,8 @@ function aufGpu(
       gl.uniform1f(orte[`uDynamikB[${i}]`], t ? t.dynamik : 0);
       gl.uniform1f(orte[`uSwRotB[${i}]`], t ? t.swRot : 0);
       gl.uniform1f(orte[`uSwGruenB[${i}]`], t ? t.swGruen : 0);
-      gl.uniform1f(orte[`uUnschaerfeB[${i}]`], t ? t.unschaerfe : 0);
     }
 
-    /*
-     * Der Bokeh-Radius, in Texturkoordinaten.
-     *
-     * EIN Radius für alle Bereiche, aus der stärksten Einstellung – ein
-     * schwächer eingestellter Bereich bekommt stattdessen ein kleineres
-     * Mischgewicht. Das ist nicht dasselbe wie ein eigener Radius je Bereich,
-     * sieht aber genauso aus und spart einen zweiten Durchgang über 48
-     * Tupfen. Wer das ändern will, sollte vorher messen, ob es jemand sieht.
-     *
-     * Als Anteil der Bildkante, damit die 1200er Vorschau aussieht wie die
-     * 2560er Ausgabe.
-     */
-    const stärkste = szene.bereiche.reduce((max, b) => Math.max(max, b.anpassung.unschaerfe), 0);
-    const r = bokehRadius(stärkste, Math.max(breite, hoehe));
-    gl.uniform2f(orte.uBokeh, r / breite, r / hoehe);
     gl.uniform2f(orte.uTexel, 1 / breite, 1 / hoehe);
     gl.uniform1f(orte.uBelichtung, a.belichtung);
     gl.uniform1f(orte.uKontrast, a.kontrast);
@@ -983,17 +1090,39 @@ function aufGpu(
     }
 
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-    if (gl.isContextLost()) return null;
+    if (gl.isContextLost()) {
+      // Ein toter Kontext wirft nichts, er tut nur nichts: ohne das Verwerfen
+      // blieb er für die ganze Sitzung der „Werkzeugkasten“, und jedes Bild
+      // lief über Aufrufe ins Leere zum Prozessor.
+      werkVerwerfen();
+      return null;
+    }
     return w.leinwand;
   } catch {
     // Ein verlorener Kontext ist auf einem Telefon Alltag, kein Fehler.
-    // Der Quellzettel MUSS dabei mitfallen: Er behauptete sonst, in einer
-    // Textur aus einem toten Kontext liege noch das richtige Bild.
-    werk = undefined;
-    quellzettel = null;
-    atlasZettel = null;
+    werkVerwerfen();
     return null;
   }
+}
+
+/**
+ * Vergisst alles, was an einem Kontext hing – nach einem Verlust zeigen
+ * Texturen und Zettel ins Leere.
+ *
+ * Der Quellzettel MUSS dabei mitfallen: Er behauptete sonst, in einer Textur
+ * aus einem toten Kontext liege noch das richtige Bild. Dasselbe gilt für den
+ * Atlas, die Kernfelder, das Zwischenbild der Unschärfe samt Vorrat – und der
+ * Zähler der lebenden Texturen beginnt von vorn. Das nächste Bild legt einen
+ * neuen Kontext an; solange der Prozessor rechnet, sieht niemand etwas.
+ */
+function werkVerwerfen(): void {
+  werk = undefined;
+  quellzettel = null;
+  atlasZettel = null;
+  kernZettel = null;
+  hybridZettel = null;
+  unscharfVerwerfen();
+  zaehler.texturenLebend = 0;
 }
 
 /**
@@ -1009,6 +1138,7 @@ function atlasHochladen(w: Werk, szene: Szene): void {
   gl.bindTexture(gl.TEXTURE_2D, w.masken);
   if (atlasZettel === schluessel) {
     gl.activeTexture(gl.TEXTURE0);
+    kernHochladen(w, szene, schluessel);
     return;
   }
 
@@ -1043,6 +1173,39 @@ function atlasHochladen(w: Werk, szene: Szene): void {
   gl.activeTexture(gl.TEXTURE0);
   atlasZettel = schluessel;
   zaehler.maskenHochladen += 1;
+  kernHochladen(w, szene, schluessel);
+}
+
+/**
+ * Das Kernfeld-Atlas: derselbe Aufbau wie der Maskenatlas, nur mit den
+ * Kernfeldern gemischter Masken. Gebraucht wird es nur, wo eine Maske
+ * Silhouette und glatte Teile mischt – sonst bleibt es leer, und es kostet
+ * nichts.
+ */
+function kernHochladen(w: Werk, szene: Szene, schluessel: string): void {
+  const { gl } = w;
+  const hat = szene.bereiche.some((b) => b.maske.kern);
+  const soll = hat ? schluessel : null;
+  if (kernZettel === soll) return;
+  kernZettel = soll;
+  if (!hat) return;
+  const erste = szene.bereiche[0];
+  const rb = erste.maske.raster.breite;
+  const rh = erste.maske.raster.hoehe;
+  const atlas = new Uint8Array(rb * rh * 4);
+  for (let i = 0; i < szene.bereiche.length && i < BEREICHE_MAX; i += 1) {
+    const feld = szene.bereiche[i].maske.kern;
+    if (!feld) continue;
+    for (let at = 0; at < feld.length; at += 1) atlas[at * 4 + i] = feld[at];
+  }
+  gl.activeTexture(gl.TEXTURE2);
+  gl.bindTexture(gl.TEXTURE_2D, w.kern);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, rb, rh, 0, gl.RGBA, gl.UNSIGNED_BYTE, atlas);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  gl.activeTexture(gl.TEXTURE0);
 }
 
 /* ---------- Leinwand als Rückfall ---------- */
@@ -1088,6 +1251,7 @@ function aufLeinwand(
   hoehe: number,
   a: Anpassung,
   szene: Szene,
+  guete: StufenGuete,
 ): HTMLCanvasElement | null {
   const flaeche = document.createElement('canvas');
   flaeche.width = breite;
@@ -1099,96 +1263,28 @@ function aufLeinwand(
   const daten = bilddaten.data;
 
   /*
-   * Die Tiefenschärfe auf dem Prozessor: DREI Stufen statt einer.
+   * Weichzeichnen und Bokeh ganz am Anfang: Eine Linse zeichnet unscharf, die
+   * Entwicklung kommt danach. Wäre es umgekehrt, verteilte die Scheibe
+   * bereits getönte Farben, und der Kontrast würde zweimal angefasst.
    *
-   * Näher an der Grafikeinheit, als es hier lange stand – aber immer noch
-   * nicht gleich. Dort ist es eine Scheibe aus 48 Tupfen, hier ein Sechseck
-   * aus drei gerichteten Kästen. Was inzwischen auf BEIDEN Wegen gilt: Beide
-   * mitteln im linearen Licht und spreizen helle Stellen mit derselben
-   * vierten Potenz, ein Lichtpunkt bleibt also auf beiden Wegen ein
-   * Lichtpunkt. Solange hier ein Kastenmittel über Anzeigewerten stand, war
-   * das der eine Unterschied, den man sofort sah – aus demselben Bild wurde
-   * auf dem einen Gerät ein Licht und auf dem anderen ein grauer Schleier.
-   *
-   * Der Vergleichstest nimmt Bereiche mit Unschärfe trotzdem weiter AUS:
-   * Sechseck und Scheibe verteilen dasselbe Licht anders, und eine
-   * Gleichheit zu behaupten, die nicht gilt, wäre schlimmer als der
-   * Unterschied.
-   *
-   * Was hier aber gleich sein MUSS, ist die Regel: Das Maskengewicht steuert
-   * die GRÖSSE der Unschärfe, nicht die Durchsichtigkeit eines Bildes mit
-   * fester Grösse. Mit einer einzigen Stufe – so stand es hier – bekam ein
-   * Bildpunkt bei halbem Gewicht ein halb durchsichtiges Doppelbild statt
-   * einer halb so grossen Zerstreuung. Solange die Maske ein freigestelltes
-   * Motiv war, fiel das nicht auf; sobald sie ein Verlauf über die Tiefe der
-   * Szene ist, ist es der ganze Unterschied.
-   *
-   * Drei Stufen und nicht acht, weil jede eine volle Kopie des Bildes kostet:
-   * bei 2000 × 1500 sind das 12 MB je Stufe. Zwischen den Stufen wird linear
-   * überblendet – innerhalb einer Stufe bleibt also die Überblendung, aber
-   * über einen Sprung von einem Drittel Radius statt über den ganzen.
+   * Dieselbe Rechnung wie die Grafikeinheit (`unscharf.ts`, `unscharfGpu.ts`):
+   * gleiche Strecken, gleicher Kern, gleiche Stufen. Dass es hier einmal ein
+   * Kastenmittel und ein anderes Bild als auf dem Telefon mit Grafikeinheit
+   * war, ist der Fehler, den es nicht wieder geben soll – der Vergleichstest
+   * hält beide Wege jetzt auch mit Unschärfe gegeneinander.
    */
-  const staerkste = szene.bereiche.reduce((max, b) => Math.max(max, b.anpassung.unschaerfe), 0);
-  // Das Bild, wie es vor der Tiefenschärfe war – die Schärfe liest daraus.
+  // Das Bild, wie es vor der Unschärfe war – die Schärfe liest daraus.
   const unverwischt = a.schaerfe > 0 ? new Uint8ClampedArray(daten) : daten;
-  let bokehGewicht: Uint8Array | null = null;
-  if (staerkste > 0) {
-    bokehGewicht = new Uint8Array(breite * hoehe);
-    for (const b of szene.bereiche) {
-      if (b.anpassung.unschaerfe <= 0) continue;
-      const w = maskeUmrastern(
-        b.maske.feld,
-        b.maske.raster.breite,
-        b.maske.raster.hoehe,
-        breite,
-        hoehe,
-      );
-      for (let i = 0; i < bokehGewicht.length; i += 1) {
-        const wert = Math.round(w[i] * b.anpassung.unschaerfe);
-        if (wert > bokehGewicht[i]) bokehGewicht[i] = wert;
-      }
-    }
-    const vollerRadius = bokehRadius(staerkste, Math.max(breite, hoehe));
-    const STUFEN = 3;
-    /** Stufe 0 ist das scharfe Bild; danach ein Drittel, zwei Drittel, ganz. */
-    const stufen: Uint8ClampedArray[] = [];
-    for (let k = 1; k <= STUFEN; k += 1) {
-      const kopie = new Uint8ClampedArray(daten);
-      /*
-       * Hier stand ein Kastenweichzeichner – und damit rechnete der
-       * Rückfallweg etwas anderes als der Schattierer.
-       *
-       * Auf der Grafikeinheit zerstreut `zerstreuen` über eine SCHEIBE im
-       * linearen Licht; ohne Grafikeinheit kam ein quadratisches Mittel über
-       * Anzeigewerte heraus. Aus einem Lichtpunkt wurde dort ein heller Fleck
-       * und hier ein grauer Schleier – gemessen 142 gegen 11 von 255.
-       * Dasselbe Bild, zwei Geräte, zwei Ergebnisse.
-       *
-       * `bokehRgba` schliesst den Abstand: Sechseck statt Quadrat, lineares
-       * Licht statt Anzeigewerte, und helle Stellen wiegen schwerer. Es
-       * kostet rund das Dreieinhalbfache (gemessen 150 ms gegen 42 ms bei
-       * 1200 × 900) – und dieser Weg läuft ohnehin nur dort, wo keine
-       * Grafikeinheit da ist.
-       */
-      bokehRgba(kopie, breite, hoehe, (vollerRadius * k) / STUFEN);
-      stufen.push(kopie);
-    }
-    for (let i = 0; i < bokehGewicht.length; i += 1) {
-      const g = bokehGewicht[i];
-      if (g === 0) continue;
-      const at = i * 4;
-      // Wo zwischen den Stufen liegt dieser Bildpunkt?
-      const lage = (g / 255) * STUFEN;
-      const unten = Math.min(Math.floor(lage), STUFEN - 1);
-      const t = lage - unten;
-      // `unten === 0` heisst: zwischen dem scharfen Bild und der ersten Stufe.
-      const a0 = unten === 0 ? daten : stufen[unten - 1];
-      const a1 = stufen[unten];
-      for (let k = 0; k < 3; k += 1) {
-        const von = a0[at + k];
-        daten[at + k] = von + (a1[at + k] - von) * t;
-      }
-    }
+  let daempfung: Uint8Array | null = null;
+  const ebenen = unscharfEbenen(szene.bereiche, breite, hoehe);
+  if (ebenen.length > 0) {
+    daempfung = unscharfAufBytes(
+      daten,
+      breite,
+      hoehe,
+      prozessorQuellen(szene, ebenen, breite, hoehe),
+      guete,
+    );
   }
 
   if (a.schaerfe > 0) {
@@ -1199,12 +1295,22 @@ function aufLeinwand(
       a.schaerfe,
       a.schaerfeRadius,
       a.schaerfeSchwelle,
-      bokehGewicht,
+      daempfung,
       unverwischt,
     );
   }
 
-  const lut = lutHolen(a);
+  /*
+   * Die Farbtabelle nur, wo es Farbe zu rechnen gibt.
+   *
+   * Sie hat 33 Stützstellen je Achse, auf ganze Bytes gerundet, und
+   * interpoliert trilinear – auch eine neutrale Tabelle verändert deshalb
+   * Bytes, gemessen 12 % der Kanalwerte um eine Stufe. Ein Bereich, der nur
+   * unscharf zeichnet, soll aber ausserhalb seiner Maske jedes Byte lassen,
+   * und die Grafikeinheit rechnet bei neutralen Reglern ohnehin gar nichts.
+   */
+  const globalFarbe = !farbNeutral(a);
+  const lut = globalFarbe ? lutHolen(a) : null;
   /*
    * Die Kurventabelle einmal je Bild, nicht einmal je Bildpunkt.
    *
@@ -1224,22 +1330,26 @@ function aufLeinwand(
    * Maskenkante eine Treppe, wo die Grafikeinheit weich ist, und der
    * Vergleichstest zwischen beiden Wegen fiele zu Recht.
    */
-  const bereiche = szene.bereiche.map((b) => ({
-    lut: lutHolen(b.anpassung),
-    gewicht: maskeUmrastern(
-      b.maske.feld,
-      b.maske.raster.breite,
-      b.maske.raster.hoehe,
-      breite,
-      hoehe,
-    ),
-  }));
+  const bereiche = szene.bereiche
+    .filter((b) => !farbNeutral(b.anpassung))
+    .map((b) => ({
+      lut: lutHolen(b.anpassung),
+      gewicht: maskeUmrastern(
+        b.maske.feld,
+        b.maske.raster.breite,
+        b.maske.raster.hoehe,
+        breite,
+        hoehe,
+      ),
+    }));
 
   for (let y = 0; y < hoehe; y += 1) {
     const v = (y + 0.5) / hoehe;
     for (let x = 0; x < breite; x += 1) {
       const at = (y * breite + x) * 4;
-      let [r, g, b] = lutAnwenden(lut, daten[at], daten[at + 1], daten[at + 2]);
+      let [r, g, b] = lut
+        ? lutAnwenden(lut, daten[at], daten[at + 1], daten[at + 2])
+        : [daten[at], daten[at + 1], daten[at + 2]];
       for (const bereich of bereiche) {
         const w = bereich.gewicht[y * breite + x];
         if (w === 0) continue;
@@ -1296,6 +1406,8 @@ interface Merkzettel {
   hoehe: number;
   quelle: CanvasImageSource;
   stand: number;
+  /** Zur Güte gehört das Ergebnis: ein Standbild in „mittel“ ist keins in „hoch“. */
+  guete: StufenGuete;
 }
 
 let gemerkt: Merkzettel | null = null;
@@ -1360,6 +1472,12 @@ export function bildRechnen(
      * selbst; sie gilt nur bis zum nächsten Aufruf.
      */
     readonly fluechtig?: boolean;
+    /**
+     * Wie genau Weichzeichnen und Bokeh rechnen – ohne Angabe `hoch`.
+     * Beide Wege, Grafikeinheit und Prozessor, halten sich daran; der
+     * Vergleichstest rechnet sie auf derselben Güte.
+     */
+    readonly guete?: StufenGuete;
   },
 ): CanvasImageSource {
   /*
@@ -1376,6 +1494,7 @@ export function bildRechnen(
   if ((istNeutral(a) && szene.bereiche.length === 0) || breite <= 0 || hoehe <= 0) return bild;
   const schluessel = szene.bereiche.length > 0 ? szene.schluessel : tonSchluessel(a);
   const stand = quellstand(bild);
+  const guete = optionen?.guete ?? 'hoch';
   if (
     !optionen?.fluechtig &&
     gemerkt &&
@@ -1383,13 +1502,14 @@ export function bildRechnen(
     gemerkt.breite === breite &&
     gemerkt.hoehe === hoehe &&
     gemerkt.quelle === bild &&
-    gemerkt.stand === stand
+    gemerkt.stand === stand &&
+    gemerkt.guete === guete
   ) {
     return gemerkt.flaeche;
   }
-  const aufDerGpu = aufGpu(bild, breite, hoehe, a, szene);
+  const aufDerGpu = aufGpu(bild, breite, hoehe, a, szene, guete);
   letzterWeg = aufDerGpu ? 'gpu' : 'leinwand';
-  const fertig = aufDerGpu ?? aufLeinwand(bild, breite, hoehe, a, szene);
+  const fertig = aufDerGpu ?? aufLeinwand(bild, breite, hoehe, a, szene, guete);
   if (!fertig) {
     letzterWeg = 'keiner';
     return bild;
@@ -1412,7 +1532,7 @@ export function bildRechnen(
   const ectx = flaeche2d(eigen);
   if (!ectx) return fertig;
   ectx.drawImage(fertig, 0, 0);
-  gemerkt = { flaeche: eigen, schluessel, breite, hoehe, quelle: bild, stand };
+  gemerkt = { flaeche: eigen, schluessel, breite, hoehe, quelle: bild, stand, guete };
   return eigen;
 }
 

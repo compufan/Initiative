@@ -81,6 +81,7 @@ describe('docNachRoh / docAusRoh', () => {
         swRot: 0,
         swGruen: 0,
         unschaerfe: 0.75,
+        bokeh: 0.3,
       },
     });
 
@@ -100,6 +101,7 @@ describe('docNachRoh / docAusRoh', () => {
     expect(zurueck.texte[0].fett).toBe(true);
     expect(zurueck.bereiche).toHaveLength(1);
     expect(zurueck.bereiche[0].anpassung.unschaerfe).toBeCloseTo(0.75);
+    expect(zurueck.bereiche[0].anpassung.bokeh).toBeCloseTo(0.3);
     expect(zurueck.bereiche[0].teile).toHaveLength(2);
   });
 
@@ -158,6 +160,7 @@ function bereichNeutral() {
     swRot: 0,
     swGruen: 0,
     unschaerfe: 0,
+    bokeh: 0,
   };
 }
 
@@ -426,7 +429,7 @@ describe('Datei schreiben und lesen', () => {
       name: 'Motiv',
       aktiv: true,
       teile: [netzTeil({ breite: 32, hoehe: 32, alpha: new Uint8Array(1024).fill(180) })],
-      anpassung: { ...bereichNeutral(), unschaerfe: 0.5 },
+      anpassung: { ...bereichNeutral(), unschaerfe: 0.5, bokeh: 0.25 },
     });
 
     const datei = await rezeptSchreiben(doc, 1200, 900);
@@ -435,6 +438,7 @@ describe('Datei schreiben und lesen', () => {
     expect(zurueck?.anpassung.belichtung).toBeCloseTo(1.5);
     expect(zurueck?.anpassung.vignette).toBeCloseTo(-0.4);
     expect(zurueck?.bereiche[0].anpassung.unschaerfe).toBeCloseTo(0.5);
+    expect(zurueck?.bereiche[0].anpassung.bokeh).toBeCloseTo(0.25);
   });
 
   it('packt ein glattes Rasterfeld klein', async () => {
@@ -659,17 +663,23 @@ describe('Kurven und Bänder im Rezept', () => {
 });
 
 describe('rezeptHindernis und die Unschärfe', () => {
-  function mitBereich(unschaerfe: number): BildDoc {
+  function mitBereich(unschaerfe: number, bokeh = 0): BildDoc {
     const doc = bild();
     doc.bereiche.push({
       id: 'b',
       name: 'Gesicht',
       aktiv: true,
       teile: [netzTeil()],
-      anpassung: { ...bereichNeutral(), unschaerfe },
+      anpassung: { ...bereichNeutral(), unschaerfe, bokeh },
     });
     return doc;
   }
+
+  it('hält einen Bereich mit Bokeh genauso zurück', () => {
+    // Eine Blendenscheibe über einem Gesicht verdeckt es wie ein Gauss.
+    expect(rezeptHindernis(mitBereich(0, 0.4), 1200, 900)).toMatch(/unkenntlich/);
+    expect(rezeptHindernis(mitBereich(0.2, 0.4), 1200, 900)).toMatch(/unkenntlich/);
+  });
 
   it('hält einen weichgezeichneten Bereich zurück', () => {
     /*
@@ -817,5 +827,77 @@ describe('das Punktebudget über das ganze Dokument', () => {
     };
     const doc = docAusRoh(roh, 1200, 900);
     expect(doc.striche[0].punkte).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe('die zwei Unschärfen im Rezept', () => {
+  function mitRohAnpassung(roh: Record<string, unknown>): BildDoc {
+    const doc = docAusRoh(
+      { bereiche: [{ id: 'b', name: 'Grund', teile: [], anpassung: roh }] },
+      1200,
+      900,
+    );
+    return doc;
+  }
+
+  it('deutet ein altes Weichzeichnen als Bokeh um', () => {
+    /*
+     * Das alte `unschaerfe` war eine Zerstreuungsscheibe. Würde es zum Gauss,
+     * sähe ein gespeichertes Porträt mit Hintergrundunschärfe nach dem
+     * Laden anders aus als vorher – und der Anwender hat nichts getan.
+     */
+    const doc = mitRohAnpassung({ belichtung: 0.5, unschaerfe: 0.6 });
+    expect(doc.bereiche[0].anpassung.bokeh).toBeCloseTo(0.6);
+    expect(doc.bereiche[0].anpassung.unschaerfe).toBe(0);
+    expect(doc.bereiche[0].anpassung.belichtung).toBeCloseTo(0.5);
+  });
+
+  it('lässt eine Datei mit beiden Schlüsseln, wie sie ist', () => {
+    const beide = mitRohAnpassung({ unschaerfe: 0.3, bokeh: 0.7 });
+    expect(beide.bereiche[0].anpassung.unschaerfe).toBeCloseTo(0.3);
+    expect(beide.bereiche[0].anpassung.bokeh).toBeCloseTo(0.7);
+    // `bokeh: 0` ist ein Wert von heute, kein fehlender Schlüssel.
+    const null0 = mitRohAnpassung({ unschaerfe: 0.3, bokeh: 0 });
+    expect(null0.bereiche[0].anpassung.unschaerfe).toBeCloseTo(0.3);
+    expect(null0.bereiche[0].anpassung.bokeh).toBe(0);
+  });
+
+  it('bringt beide Werte unverändert durch die Runde', () => {
+    const doc = bild();
+    doc.bereiche.push({
+      id: 'b',
+      name: 'Motiv',
+      aktiv: true,
+      teile: [netzTeil()],
+      anpassung: { ...bereichNeutral(), unschaerfe: 0.35, bokeh: 0.8 },
+    });
+    const einmal = docAusRoh(docNachRoh(doc), 1200, 900);
+    const zweimal = docAusRoh(docNachRoh(einmal), 1200, 900);
+    expect(zweimal.bereiche[0].anpassung).toEqual(einmal.bereiche[0].anpassung);
+    expect(einmal.bereiche[0].anpassung.unschaerfe).toBeCloseTo(0.35);
+    expect(einmal.bereiche[0].anpassung.bokeh).toBeCloseTo(0.8);
+  });
+
+  it('klemmt Bokeh auf 0 … 1 und wirft Unsinn weg', () => {
+    for (const [roh, soll] of [
+      [Number.NaN, 0],
+      [Number.POSITIVE_INFINITY, 0],
+      [2, 1],
+      [-1, 0],
+      ['viel', 0],
+    ] as const) {
+      const doc = mitRohAnpassung({ unschaerfe: 0, bokeh: roh });
+      expect(doc.bereiche[0].anpassung.bokeh, `bokeh ${String(roh)}`).toBe(soll);
+    }
+  });
+
+  it('übersteht eine Anpassung, die gar kein Gebilde ist', () => {
+    const doc = docAusRoh(
+      { bereiche: [{ id: 'b', name: 'x', teile: [], anpassung: 'kaputt' }] },
+      1200,
+      900,
+    );
+    expect(doc.bereiche[0].anpassung.bokeh).toBe(0);
+    expect(doc.bereiche[0].anpassung.unschaerfe).toBe(0);
   });
 });

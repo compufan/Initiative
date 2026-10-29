@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 
 import { docUnberuehrt, type BildDoc } from '../bild/doc.js';
 import { quelleVeraendert } from '../bild/tonGpu.js';
+import { filmGuete, type StufenGuete } from '../bild/unscharf.js';
 import { zeichneAnsicht, zeichneAusgabe } from '../bild/zeichnen.js';
 
 /**
@@ -94,6 +95,18 @@ function pruefhaken(): Pruefhaken {
   return fenster.__vorschau;
 }
 
+/**
+ * Wie genau Weichzeichnen und Bokeh in dieser Stufe rechnen.
+ *
+ * Dieselbe Leiter wie oben, nur für die Unschärfe – siehe `filmGuete`.
+ */
+function unscharfGuete(guete: Guete, doc: BildDoc): StufenGuete {
+  const bereiche = doc.bereiche.filter(
+    (b) => b.aktiv && (b.anpassung.unschaerfe > 0 || b.anpassung.bokeh > 0),
+  ).length;
+  return filmGuete(guete, bereiche);
+}
+
 /** Ab so vielen Millisekunden je Bild beim Wischen wird kleiner gezeichnet. */
 const WISCH_GRENZE_MS = 120;
 /** So viele Zeichnungen beim Abspielen werden für die Stufenleiter betrachtet. */
@@ -166,11 +179,13 @@ export function useBearbeiteteVorschau(auftrag: VorschauAuftrag): VorschauStand 
           maxKante: gueteRef.current >= 1 ? Math.round(kante * 0.6) : kante,
           zuschnittZeigen: false,
           fluechtig: true,
+          guete: unscharfGuete(gueteRef.current, doc),
         });
       } else {
         const fertig = zeichneAusgabe(q.flaeche, mass.b, mass.h, doc, {
           ziel: arbeitsLeinwand(),
           fluechtig: true,
+          guete: unscharfGuete(gueteRef.current, doc),
         });
         einpassen(ziel, fertig, film ?? { w: fertig.width, h: fertig.height });
       }

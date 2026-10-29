@@ -182,7 +182,7 @@ Fünf Werkzeuge, alle im Gerät – kein Bild verlässt es dabei.
   dunkler, das Gesicht heller. Die Fläche dafür entsteht als Verlauf, Ellipse,
   gemalter Pinselstrich, durch **Antippen** oder aus einem der Freistellmodelle
   („Person", „Motiv"). Bis zu vier Bereiche je Bild, jeder mit denselben
-  Farbreglern.
+  Farbreglern und den zwei Unschärfe-Reglern (siehe unten).
 - **Antippen**: Derselbe Griff wie im Sticker-Studio, jetzt auch für Bereiche.
   Du tippst ins Bild auf das, was in den Bereich gehört – **ohne Netz** flutet
   die App nach Farbe (auf jedem Gerät, sofort, ohne Download; die Toleranz
@@ -199,12 +199,29 @@ Fünf Werkzeuge, alle im Gerät – kein Bild verlässt es dabei.
   zwischen zwei Ästen ist er sogar der bessere: Beides ist für kein Modell ein
   Gegenstand.
 
-- **Tiefenschärfe**: Ein Regler „Weichzeichnen" je Bereich zerstreut das Bild
-  dahinter zu einer Scheibe – wie ein Objektiv, nicht wie ein Weichzeichner.
-  Mit dem Knopf **„Tiefe"** schätzt ein Modell für jeden Bildpunkt die
-  Entfernung, sodass die Unschärfe mit dem Abstand _wächst_; **„Motiv + Tiefe"**
-  nimmt zusätzlich die Kante vom Freistellmodell, damit das Motiv scharf
-  bleibt. Auch das rechnet vollständig im Gerät.
+- **Weichzeichnen und Bokeh** (die Tiefenschärfe): Zwei Regler je Bereich,
+  denn es sind zwei verschiedene Dinge, und beide dürfen zugleich wirken.
+  **„Weichzeichnen"** macht den Bereich gleichmässig weich, wie eine
+  Mattscheibe. **„Bokeh"** zeichnet unscharf wie eine Linse: Lichter werden zu
+  hellen, flachen Scheiben mit scharfer Kante (sechseckig, wie von einer
+  Blende mit sechs Lamellen), und die Scheibe wird grösser, wo die Maske
+  stärker greift – weiter hinten ist es unschärfer.
+
+  Beides endet an der Maske: Ausserhalb bleibt jedes Byte, wie es war, und die
+  Unschärfe holt keine Farbe von draussen herein – es gibt keinen Hof um ein
+  freigestelltes Motiv. Ein langer Druck auf einen Regler erklärt das, ein
+  Doppeltipp setzt ihn auf 0. Mit dem Knopf **„Tiefe"** schätzt ein Modell für
+  jeden Bildpunkt die Entfernung, sodass die Unschärfe mit dem Abstand
+  _wächst_ (der Bereich beginnt mit Bokeh 60); **„Motiv + Tiefe"** nimmt
+  zusätzlich die Kante vom Freistellmodell, damit das Motiv scharf bleibt.
+  Das alles rechnet vollständig im Gerät – mit Grafikeinheit und ohne
+  kommt dasselbe Bild heraus.
+
+  Bilder und Entwürfe aus früheren Fassungen, in denen „Weichzeichnen"
+  eingestellt war, zeigen den Wert jetzt als „Bokeh": Der alte Regler war eine
+  Linse, und so sehen sie ähnlich aus wie vorher – nur ohne Hof und Körnung. Ein Rezept mit Weichzeichnen oder
+  Bokeh gibt es nicht – es würde das scharfe Original mitschicken.
+
 - **Malen**: Stift und Marker in mehreren Farben und Breiten, Pixelbalken zum
   Unkenntlichmachen, Radiergummi. Einzelne Striche lassen sich gezielt
   antippen und entfernen – auch alte, ohne alles danach zurückzunehmen.
@@ -235,7 +252,9 @@ und bearbeiten an einem Ort, alles im Gerät.
   rot, wo die Verfolgung ihn verloren hat (dort neu antippen). Ein Tipp auf
   die Bahn wählt die Maske; ihre Einstellungen stehen dann statt der
   Schnittknöpfe – dazu „Hier trennen" für verschiedene Einstellungen vor und
-  nach einer Stelle, Ausschalten, Löschen und ↺.
+  nach einer Stelle, Ausschalten, Löschen und ↺. Jede Maske hat ihre eigenen
+  Regler – auch Weichzeichnen und Bokeh, ein Wert für ihren ganzen Lauf – und
+  ihre eigene Verfolgung.
 - Höchstens acht Masken im Film und vier an einem Bild.
 - **Film bauen** wartet, bis alle eingeschalteten Masken überall verfolgt
   sind (meist ist das längst geschehen), und nimmt dann an jedem Bild die

@@ -25,6 +25,7 @@ import { bildRechnen, quellstand } from './tonGpu.js';
 import { griffeVon, radialRand, verlaufLinien } from './bereichGriffe.js';
 import type { Raster } from './maske.js';
 import { szeneBauen } from './maskenSpeicher.js';
+import type { StufenGuete } from './unscharf.js';
 import { neigungImOriginal, zuschnittMitte } from './neigen.js';
 
 /*
@@ -173,6 +174,8 @@ interface MalOptionen {
   versatz: { x: number; y: number };
   /** Für ein Bild, das gleich wieder vergeht – siehe `bildRechnen`. */
   fluechtig?: boolean;
+  /** Wie genau Weichzeichnen und Bokeh rechnen – siehe `bildRechnen`. */
+  guete: StufenGuete;
 }
 
 /**
@@ -509,6 +512,7 @@ function malen(
   const szene = szeneBauen(doc, width, height);
   const bild = bildRechnen(roh, bw, bh, doc.anpassung, szene, {
     fluechtig: optionen.fluechtig,
+    guete: optionen.guete,
   });
   /*
    * Wieviele Bildpunkte des gelieferten Bildes auf einen Quellbildpunkt
@@ -624,6 +628,12 @@ export function zeichneAnsicht(
     versatz?: { x: number; y: number };
     /** Für die Vorschau eines laufenden Films – siehe `bildRechnen`. */
     fluechtig?: boolean;
+    /**
+     * Wie genau Weichzeichnen und Bokeh rechnen. Am Bildschirm genügt
+     * `mittel` (die Voreinstellung); der Film beim Wischen und Abspielen
+     * nimmt `niedrig`.
+     */
+    guete?: StufenGuete;
     /** Der gewählte Bereich: Maskenschleier und Griffe darüberlegen. */
     bereichZeigen?: {
       maske: { feld: Uint8Array; raster: Raster } | null;
@@ -656,7 +666,12 @@ export function zeichneAnsicht(
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, breite, hoehe);
   ctx.imageSmoothingQuality = 'high';
-  malen(ctx, bild, width, height, doc, { faktor, versatz, fluechtig: optionen.fluechtig });
+  malen(ctx, bild, width, height, doc, {
+    faktor,
+    versatz,
+    fluechtig: optionen.fluechtig,
+    guete: optionen.guete ?? 'mittel',
+  });
 
   if (optionen.zuschnittZeigen) {
     zeichneZuschnitt(
@@ -709,7 +724,7 @@ function zeichneBereich(
     teil: Maskenteil | null;
     schleier: boolean;
   },
-  optionen: MalOptionen,
+  optionen: Pick<MalOptionen, 'faktor' | 'versatz'>,
 ): void {
   const { maske, teil, schleier } = zeigen;
 
@@ -870,6 +885,11 @@ export function zeichneAusgabe(
     readonly ziel?: HTMLCanvasElement;
     /** Für ein Bild, das gleich wieder vergeht – siehe `bildRechnen`. */
     readonly fluechtig?: boolean;
+    /**
+     * Wie genau Weichzeichnen und Bokeh rechnen. Die Ausgabe nimmt `hoch`,
+     * die Vorschau eines Films darf kleiner rechnen.
+     */
+    readonly guete?: StufenGuete;
   },
 ): HTMLCanvasElement {
   const mass = ausgabeGroesse(wirksamerZuschnitt(doc, width, height), doc.drehung);
@@ -886,6 +906,7 @@ export function zeichneAusgabe(
     faktor: mass.faktor,
     versatz: { x: ausschnitt.x, y: ausschnitt.y },
     fluechtig: optionen?.fluechtig,
+    guete: optionen?.guete ?? 'hoch',
   });
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   return canvas;

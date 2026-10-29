@@ -690,7 +690,10 @@ function bereichNachRoh(b: Bereich): unknown {
     teile: b.teile.map(teilNachRoh).filter((t) => t !== null),
     anpassung: {
       ...anpassungNachRoh(b.anpassung, FARB_SCHLUESSEL),
+      // Immer BEIDE Schlüssel: Steht `bokeh` in der Datei, gilt `unschaerfe`
+      // als Weichzeichnen und wird nicht mehr umgedeutet (siehe `bereichAusRoh`).
       unschaerfe: b.anpassung.unschaerfe,
+      bokeh: b.anpassung.bokeh,
     },
   };
 }
@@ -709,9 +712,26 @@ function bereichAusRoh(
     if (teil) teile.push(teil);
   }
   const farben = anpassungAusRoh<Farbanpassung>(q.anpassung, FARB_NEUTRAL, FARB_SCHLUESSEL);
+  const rohAnpassung = (
+    q.anpassung && typeof q.anpassung === 'object' ? q.anpassung : {}
+  ) as Record<string, unknown>;
+  const alterWert = zahl(rohAnpassung.unschaerfe, 0, 1, 0);
+  /*
+   * Alte Dateien kennen nur `unschaerfe`, und das war eine Zerstreuungsscheibe
+   * mit Radius je Maskenstärke – also das, was jetzt „Bokeh“ heisst. Der Wert
+   * wandert deshalb hinüber, statt aus einem Linsenbild ein Gauss-Bild zu
+   * machen: Die neue Scheibe ist die saubere Fassung der alten bei gleichem
+   * Radius und liegt dem gespeicherten Bild damit am nächsten.
+   *
+   * Steht `bokeh` in der Datei – auch mit 0 –, ist sie von heute und bleibt,
+   * wie sie ist. Ein Formatzähler wäre dafür zu schwer: Das Fehlen des
+   * Schlüssels ist das Merkmal.
+   */
+  const neu = 'bokeh' in rohAnpassung;
   const anpassung: Bereichston = {
     ...farben,
-    unschaerfe: zahl((q.anpassung as Record<string, unknown> | undefined)?.unschaerfe, 0, 1, 0),
+    unschaerfe: neu ? alterWert : 0,
+    bokeh: neu ? zahl(rohAnpassung.bokeh, 0, 1, 0) : alterWert,
   };
   return {
     id: text(q.id, 64) || `b${naechsteMarke()}`,
@@ -780,7 +800,9 @@ export function docAusRoh(roh: unknown, breite: number, hoehe: number): BildDoc 
     const schrift = textAusRoh(t, breite, hoehe);
     if (schrift) doc.texte.push(schrift);
   }
-  const rohAnpassung = (q.anpassung ?? {}) as Record<string, unknown>;
+  const rohAnpassung = (
+    q.anpassung && typeof q.anpassung === 'object' ? q.anpassung : {}
+  ) as Record<string, unknown>;
   doc.anpassung = {
     ...anpassungAusRoh<Anpassung>(q.anpassung, NEUTRAL, TON_SCHLUESSEL),
     kurven: kurvenAusRoh(rohAnpassung.kurven),
@@ -833,9 +855,12 @@ export function rezeptHindernis(doc: BildDoc, breite: number, hoehe: number): st
    * Verdecken. Jeden Bereich zu sperren nähme dem Rezept seinen besten
    * Anwendungsfall (Himmel abdunkeln, Porträt freistellen) für einen
    * Gewinn, den es nicht gibt.
+   *
+   * Bokeh zählt mit: Eine Blendenscheibe über einem Gesicht verdeckt es
+   * genauso wie ein Gauss, nur mit schönerem Namen.
    */
-  if (doc.bereiche.some((b) => b.anpassung.unschaerfe > 0)) {
-    return 'Ein weichgezeichneter Bereich macht etwas unkenntlich. Ein Rezept würde das scharfe Original mitschicken.';
+  if (doc.bereiche.some((b) => b.anpassung.unschaerfe > 0 || b.anpassung.bokeh > 0)) {
+    return 'Ein weichgezeichneter oder unscharfer Bereich macht etwas unkenntlich. Ein Rezept würde das scharfe Original mitschicken.';
   }
   return null;
 }

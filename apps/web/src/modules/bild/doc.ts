@@ -284,19 +284,31 @@ export type Maskenteil = { id: string; modus: Maskenmodus; umkehren: boolean } &
 );
 
 /**
- * Die Regler eines Bereichs: die neun Farbregler plus die Tiefenschärfe.
+ * Die Regler eines Bereichs: die neun Farbregler plus die zwei Unschärfen.
  *
  * Kein `schaerfe` und kein `vignette`. Beide brauchen etwas, das es an dieser
  * Stelle nicht gibt: Die Unschärfemaske braucht die Nachbarn eines noch
  * ungetönten Bildpunkts, die Vignette den Ort im Bild – und ein Bereich hat
  * keinen eigenen Bildrand.
+ *
+ * Die zwei Unschärfen sind verschiedene Dinge und dürfen zugleich wirken: erst
+ * die Linse (`bokeh`), dann die Mattscheibe davor (`unschaerfe`). Beide
+ * rechnen in `unscharf.ts`.
  */
 export interface Bereichston extends Farbanpassung {
-  /** Tiefenschärfe: 0 … 1, wieviel Unschärfe der Bereich bekommt. */
+  /**
+   * Weichzeichnen: 0 … 1, ein gewöhnlicher Gauss, an der Maske begrenzt.
+   *
+   * Der Name stammt aus der Zeit, als dieser Regler die einzige Unschärfe war
+   * und eine Zerstreuungsscheibe rechnete. Er bleibt, damit Rezepte, Entwürfe
+   * und Filmdokumente nicht stolpern – gelesen wird er als „Weichzeichnen“.
+   */
   unschaerfe: number;
+  /** Bokeh: 0 … 1, Radius der Blendenscheibe; Lichter werden zu hellen Scheiben. */
+  bokeh: number;
 }
 
-export const BEREICH_NEUTRAL: Bereichston = { ...FARB_NEUTRAL, unschaerfe: 0 };
+export const BEREICH_NEUTRAL: Bereichston = { ...FARB_NEUTRAL, unschaerfe: 0, bokeh: 0 };
 
 export interface Bereich {
   id: string;
