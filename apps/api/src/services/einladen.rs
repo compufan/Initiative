@@ -513,6 +513,23 @@ pub async fn offene_karten_zustellen(
             _ => None,
         })
         .collect();
+    /*
+     * Nicht löschen, was inzwischen eine Zeile trägt: Die Kennung der Karte
+     * (`karte:<Zeile>`) macht das Anlegen wiederholbar – der Verlierer eines
+     * Wettlaufs bekommt dieselbe Nachricht zurück wie der Gewinner. Sie als
+     * verwaist zu löschen, nähme dem Gewinner seine Karte.
+     */
+    let verwaist: Vec<Uuid> = if verwaist.is_empty() {
+        verwaist
+    } else {
+        sqlx::query_scalar(
+            "select id from unnest($1::uuid[]) as t(id)
+              where not exists (select 1 from event_placements p where p.message_id = t.id)",
+        )
+        .bind(&verwaist)
+        .fetch_all(&state.pool)
+        .await?
+    };
     if !verwaist.is_empty() {
         let mut tx = state.pool.begin().await?;
         let geloescht = nachrichten_loeschen(&mut tx, &verwaist).await?;
