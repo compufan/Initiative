@@ -161,6 +161,10 @@ pub struct Config {
     pub kalt_grenze_gb: i64,
     /// Ab wie viel Gigabyte auch Wichtiges drankommt.
     pub kalt_grenze_hoch_gb: i64,
+    /// Wie oft der Erinnerungsdienst nach Fälligem sieht, in Sekunden; 0
+    /// schaltet ihn aus. Der Dienst klemmt den Wert auf 30 bis 3600 (siehe
+    /// `services::erinnern::takt`).
+    pub erinnern_takt_s: u64,
     pub cors_origins: Vec<String>,
     /**
      * Ob `X-Forwarded-For` geglaubt werden darf.
@@ -436,6 +440,10 @@ impl Config {
             kalt_grenze_hoch_gb: var("KALT_GRENZE_HOCH_GB")
                 .and_then(|g| g.parse().ok())
                 .unwrap_or(120),
+            erinnern_takt_s: number(
+                "ERINNERN_TAKT_S",
+                crate::services::erinnern::TAKT_VORGABE_S,
+            ),
             cors_origins: list("CORS_ORIGINS").into_iter().map(trim_slash).collect(),
 
             trust_proxy: flag("TRUST_PROXY", false),

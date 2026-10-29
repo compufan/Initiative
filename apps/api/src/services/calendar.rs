@@ -15,6 +15,7 @@ use crate::recurrence::expand_occurrences;
 use crate::state::AppState;
 
 use super::einladen::{self, Reservierung, Wunsch};
+use super::erinnern::{self, Erinnern};
 use super::expanders::{metadata_id, Expansion, MessageExpander};
 use super::notify::Aenderung;
 
@@ -45,6 +46,7 @@ pub fn to_event_dto(row: &CalendarEventRow, attendees: &[EventAttendeeRow]) -> C
             .collect(),
         reminder_minutes: json_to_i32_vec(&row.reminder_minutes),
         stand: row.stand,
+        erinnern: erinnern::einstellung_von(row),
         created_at: row.created_at,
         updated_at: row.updated_at,
     }
@@ -206,6 +208,10 @@ pub struct NewEvent {
     pub zustellung: Option<Wunsch>,
     /// Wiederholungsschutz: derselbe Schlüssel, derselbe Termin.
     pub client_id: Option<String>,
+    /// Ob und wie an ausstehende Antworten erinnert wird. Alle Aufrufer ausser
+    /// dem Editor (Umfrage, Terminfindung, Demo-Daten, ältere App-Stände) lassen
+    /// es leer: Dann verhält sich alles wie vorher.
+    pub erinnern: Option<Erinnern>,
 }
 
 /// Was `anlegen` ergeben hat.
@@ -231,6 +237,9 @@ pub async fn create_event(state: &AppState, input: NewEvent) -> AppResult<Calend
 pub async fn anlegen(state: &AppState, input: NewEvent) -> AppResult<Angelegt> {
     let ersteller = input.created_by;
     let explizit = input.zustellung.is_some();
+    if let Some(einstellung) = input.erinnern {
+        erinnern::pruefen(einstellung.nach_std, einstellung.anzahl)?;
+    }
 
     if let Some(client_id) = input.client_id.as_deref() {
         if let Some(vorhanden) = vorhandener_termin(&state.pool, ersteller, client_id).await? {
@@ -313,8 +322,10 @@ pub async fn anlegen(state: &AppState, input: NewEvent) -> AppResult<Angelegt> {
     let eingefuegt = sqlx::query(
         "insert into calendar_events
            (id, conversation_id, created_by, title, description, location, starts_at, ends_at,
-            all_day, rrule, color, reminder_minutes, source_poll_id, status, poll_id, client_id)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+            all_day, rrule, color, reminder_minutes, source_poll_id, status, poll_id, client_id,
+            erinnern_nach_std, erinnern_anzahl, erinnern_seit)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                 $17, $18, case when $17::int is null then null else now() end)",
     )
     .bind(event_id)
     .bind(conversation_id)
@@ -332,6 +343,13 @@ pub async fn anlegen(state: &AppState, input: NewEvent) -> AppResult<Angelegt> {
     .bind(&input.status)
     .bind(input.poll_id)
     .bind(&input.client_id)
+    .bind(input.erinnern.map(|einstellung| einstellung.nach_std))
+    .bind(
+        input
+            .erinnern
+            .and_then(|einstellung| einstellung.anzahl)
+            .map(|anzahl| anzahl as i16),
+    )
     .execute(&mut *tx)
     .await;
     match eingefuegt {
@@ -650,6 +668,9 @@ mod tests {
             collection_id: None,
             stand: 0,
             client_id: None,
+            erinnern_nach_std: None,
+            erinnern_anzahl: None,
+            erinnern_seit: None,
             created_at: beginn,
             updated_at: beginn,
             deleted_at: None,

@@ -277,6 +277,41 @@ impl NewMessage {
         }
     }
 
+    /// Die Karte einer Erinnerung an eine ausstehende Antwort.
+    ///
+    /// Eine `event`-Karte mit Zusatz (`metadata.erinnerung`): Es ist dieselbe
+    /// Blase mit Datum, Ort und Zu-/Absage-Knöpfen, und die Antwort darin gilt in
+    /// allen Karten des Termins – ohne dass dafür etwas Neues nachgebaut werden
+    /// müsste. Der Zusatz hängt an der `eventId`, die der Client nicht senden
+    /// darf (`modules::messages`): Eine Erinnerung lässt sich nicht fälschen.
+    ///
+    /// Stumm, aus demselben Grund wie die Einladungskarte: Die Mitteilung kommt
+    /// einmal, gesondert und mit eigenem Text (`notify::benachrichtige_erinnerungen`).
+    /// Absender ist der Ersteller – es gibt im Bestand keine absenderlose
+    /// Automatik, und nur so ist die Karte für den Eingeladenen eingehend und für
+    /// den Ersteller nicht ungelesen. Die Karte sagt in jedem Zustand, dass sie
+    /// eine automatische Erinnerung ist.
+    ///
+    /// Der feste `client_id` hängt an der Kennung der Zeile und nicht an
+    /// (Termin, Person, Nummer): Wird jemand ausgeladen und später wieder
+    /// eingeladen, beginnt die Zählung bei eins – mit der Nummer im Schlüssel
+    /// bekäme die neue Erinnerung die gelöschte Nachricht von damals zurück.
+    pub fn erinnerung(
+        conversation_id: Uuid,
+        sender_id: Uuid,
+        event_id: Uuid,
+        zeile_id: Uuid,
+        nummer: i16,
+        titel: &str,
+    ) -> Self {
+        let mut karte = Self::entity(conversation_id, sender_id, "event", "eventId", event_id);
+        karte.client_id = Some(format!("erinnerung:{zeile_id}"));
+        karte.silent = true;
+        karte.body = Some(super::erinnern::erinnerungstext(titel));
+        karte.metadata = json!({ "eventId": event_id, "erinnerung": { "nummer": nummer } });
+        karte
+    }
+
     pub fn entity(
         conversation_id: Uuid,
         sender_id: Uuid,
@@ -501,4 +536,53 @@ pub async fn republish_message(
         publish_message_update(state, &message).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eine_erinnerung_ist_eine_stumme_termin_karte_mit_festem_schluessel() {
+        let chat = Uuid::from_u128(1);
+        let ersteller = Uuid::from_u128(2);
+        let termin = Uuid::from_u128(3);
+        let zeile = Uuid::from_u128(4);
+        let karte = NewMessage::erinnerung(chat, ersteller, termin, zeile, 2, "Grillen");
+
+        assert_eq!(karte.r#type, "event");
+        assert!(karte.silent, "die Mitteilung kommt gesondert, einmal");
+        assert_eq!(karte.conversation_id, chat);
+        assert_eq!(karte.sender_id, Some(ersteller));
+        assert_eq!(karte.client_id, Some(format!("erinnerung:{zeile}")));
+        assert_eq!(
+            karte.body.as_deref(),
+            Some("Erinnerung: Du hast noch nicht auf „Grillen“ geantwortet.")
+        );
+        assert_eq!(karte.metadata["eventId"], json!(termin));
+        assert_eq!(karte.metadata["erinnerung"]["nummer"], json!(2));
+    }
+
+    #[test]
+    fn der_schluessel_haengt_an_der_zeile_nicht_an_der_nummer() {
+        let chat = Uuid::from_u128(1);
+        let a = NewMessage::erinnerung(
+            chat,
+            Uuid::from_u128(2),
+            Uuid::from_u128(3),
+            Uuid::from_u128(4),
+            1,
+            "X",
+        );
+        // Dieselbe Nummer nach einer Wiedereinladung: andere Zeile, anderer Schlüssel.
+        let b = NewMessage::erinnerung(
+            chat,
+            Uuid::from_u128(2),
+            Uuid::from_u128(3),
+            Uuid::from_u128(5),
+            1,
+            "X",
+        );
+        assert_ne!(a.client_id, b.client_id);
+    }
 }

@@ -49,6 +49,21 @@ pub const EINLADUNG_GRUPPEN_MAX: usize = 10;
 /// Wie viele Karten einer Einladung gleichzeitig zugestellt werden. Der
 /// Verbindungsvorrat ist begrenzt, und andere Anfragen brauchen Luft.
 pub const EINLADUNG_PARALLEL: usize = 4;
+/// Erinnern an ausstehende Antworten: der kürzeste Abstand in Stunden.
+///
+/// Zwei Erinnerungen am Tag sind Nachfassen, mehr ist Belästigung – die Grenze
+/// schützt den Empfänger, der auf die Einstellung keinen Einfluss hat. Gespiegelt
+/// in `LIMITS` im gemeinsamen Paket (ein Test vergleicht beide Seiten).
+pub const ERINNERN_NACH_STD_MIN: i32 = 12;
+/// Der längste Abstand: dreissig Tage. Wer länger wartet, erinnert nicht mehr.
+pub const ERINNERN_NACH_STD_MAX: i32 = 720;
+/// Wie viele Erinnerungen eine Person je Termin höchstens bekommt – auch bei
+/// „bis zum Termin“. Bei einem Abstand von einem Tag und einem Termin in
+/// neunzig Tagen wären es sonst neunzig Nachrichten.
+pub const ERINNERN_ANZAHL_MAX: i32 = 10;
+/// In den letzten Stunden vor dem Beginn wird nicht mehr erinnert: Eine Bitte um
+/// Antwort kurz vorher hilft der Planung nicht mehr, sie ist nur Lärm.
+pub const ERINNERN_RESERVE_STD: i32 = 2;
 pub const STICKER_PACK_NAME_MAX: usize = 60;
 
 /**

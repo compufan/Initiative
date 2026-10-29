@@ -301,8 +301,47 @@ pub struct CalendarEventDto {
     /// desselben Termins hat, nimmt die mit dem höheren Stand: Rundrufe können
     /// einander überholen.
     pub stand: i64,
+    /// Ob und wie an ausstehende Antworten erinnert wird; `null`: gar nicht.
+    /// Alle Teilnehmer sehen es – wer erinnert wird, soll wissen, dass und wie
+    /// oft. Wie oft jemand schon erinnert wurde, steht hier **nicht**
+    /// (`ErinnernStandDto`, nur für den Ersteller).
+    pub erinnern: Option<ErinnernDto>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// Die Erinnerungs-Einstellung eines Termins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ErinnernDto {
+    /// Stunden bis zur ersten Erinnerung und zwischen allen weiteren.
+    pub nach_stunden: i32,
+    /// Wie oft höchstens je Person; `null`: „bis zum Termin“ (höchstens zehn).
+    pub anzahl: Option<i32>,
+}
+
+/// Wie weit das Erinnern eines Termins ist – nur für den Ersteller.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ErinnernStandDto {
+    /// Ob der Termin überhaupt erinnert.
+    pub aktiv: bool,
+    /// Die wirksame Obergrenze je Person (1 bis 10); 0, solange nicht aktiv.
+    pub hoechstens: i32,
+    /// Die noch Ausstehenden, die erinnert werden können.
+    pub personen: Vec<ErinnerterDto>,
+    /// Ausstehende, die **nicht** erinnert werden können: Ihnen wurde keine
+    /// Einzelkarte zugestellt, oder einer der beiden hat den Einzelchat verlassen.
+    pub ohne_einzelchat: Vec<Uuid>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ErinnerterDto {
+    pub user_id: Uuid,
+    /// Wie viele Erinnerungen als Nachricht angekommen sind.
+    pub gesendet: i64,
+    pub zuletzt_am: Option<DateTime<Utc>>,
 }
 
 /// Die Antwort auf Anlegen und Ändern eines Termins mit ausdrücklicher

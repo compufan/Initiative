@@ -122,6 +122,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.config.clone(),
     );
 
+    /*
+     * Der Erinnerungsdienst.
+     *
+     * Erst NACH den Migrationen: Vorher gibt es `event_erinnerungen` beim
+     * allerersten Start noch nicht. Mehrere Instanzen dürfen laufen – wer eine
+     * Erinnerung beansprucht, entscheidet die Datenbank, nicht der Zufall der
+     * Uhren. `ERINNERN_TAKT_S=0` schaltet ihn ab.
+     */
+    initiative_api::services::erinnern::starten(state.clone());
+
     let router = app::build(state.clone());
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(

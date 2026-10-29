@@ -140,6 +140,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             announce: Some(true),
             zustellung: None,
             client_id: None,
+            erinnern: None,
         },
     )
     .await?;

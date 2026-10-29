@@ -1,0 +1,140 @@
+{
+  "hinweis": "Gemeinsame Testfälle für „Bis zum Beginn passen N Erinnerungen“. Die Rust-Seite (apps/api/tests/erinnern.rs) lässt den echten Erinnerungsdienst zu den Fälligkeitszeitpunkten laufen und zählt die zugestellten Karten; die TypeScript-Fassung (src/util/erinnern.ts, `erinnerungenBisBeginn`) rechnet dasselbe aus. `ab` ist der Zeitpunkt, ab dem gerechnet wird (Einladung bzw. Einstellung), `beginn` der gespeicherte Beginn des Termins (bei ganztägigen 12:00 Ortszeit). Die Erinnerungen kommen bei ab + k × Abstand, solange das nicht später als zwei Stunden vor dem Beginn liegt (ganztägig: zwei Stunden vor dem Tagesbeginn, zwölf Stunden vor `beginn`), höchstens `anzahl` (null: bis zum Termin, höchstens zehn).",
+  "faelle": [
+    {
+      "name": "24 Stunden Abstand, Termin in zehn Tagen, dreimal",
+      "ab": "2030-03-01T10:00:00Z",
+      "beginn": "2030-03-11T10:00:00Z",
+      "ganztaegig": false,
+      "nachStunden": 24,
+      "anzahl": 3,
+      "erwartet": 3
+    },
+    {
+      "name": "bis zum Termin hört bei zehn auf, auch bei einem Termin in 90 Tagen",
+      "ab": "2030-03-01T10:00:00Z",
+      "beginn": "2030-05-30T10:00:00Z",
+      "ganztaegig": false,
+      "nachStunden": 24,
+      "anzahl": null,
+      "erwartet": 10
+    },
+    {
+      "name": "bis zum Termin in drei Tagen: die dritte fiele in die letzten zwei Stunden",
+      "ab": "2030-03-01T10:00:00Z",
+      "beginn": "2030-03-04T10:00:00Z",
+      "ganztaegig": false,
+      "nachStunden": 24,
+      "anzahl": null,
+      "erwartet": 2
+    },
+    {
+      "name": "der Termin beginnt in 20 Stunden, der Abstand beträgt 24: keine",
+      "ab": "2030-03-01T10:00:00Z",
+      "beginn": "2030-03-02T06:00:00Z",
+      "ganztaegig": false,
+      "nachStunden": 24,
+      "anzahl": 3,
+      "erwartet": 0
+    },
+    {
+      "name": "die Grenze zwei Stunden vor dem Beginn zählt noch mit",
+      "ab": "2030-03-01T10:00:00Z",
+      "beginn": "2030-03-02T12:00:00Z",
+      "ganztaegig": false,
+      "nachStunden": 12,
+      "anzahl": null,
+      "erwartet": 2
+    },
+    {
+      "name": "eine Minute zu knapp für die zweite",
+      "ab": "2030-03-01T10:00:00Z",
+      "beginn": "2030-03-02T11:59:00Z",
+      "ganztaegig": false,
+      "nachStunden": 12,
+      "anzahl": null,
+      "erwartet": 1
+    },
+    {
+      "name": "der Termin beginnt vor der ersten Erinnerung",
+      "ab": "2030-03-01T10:00:00Z",
+      "beginn": "2030-03-01T20:00:00Z",
+      "ganztaegig": false,
+      "nachStunden": 12,
+      "anzahl": 5,
+      "erwartet": 0
+    },
+    {
+      "name": "ganztägig: der Tag beginnt zwölf Stunden vor dem gespeicherten Beginn",
+      "ab": "2030-03-01T10:00:00Z",
+      "beginn": "2030-03-03T02:00:00Z",
+      "ganztaegig": true,
+      "nachStunden": 12,
+      "anzahl": null,
+      "erwartet": 2
+    },
+    {
+      "name": "ganztägig: die Grenze zwei Stunden vor Tagesbeginn zählt noch mit",
+      "ab": "2030-03-01T10:00:00Z",
+      "beginn": "2030-03-03T00:00:00Z",
+      "ganztaegig": true,
+      "nachStunden": 24,
+      "anzahl": 3,
+      "erwartet": 1
+    },
+    {
+      "name": "Serie, deren erster Termin schon vorbei ist",
+      "ab": "2030-03-10T10:00:00Z",
+      "beginn": "2030-03-05T10:00:00Z",
+      "ganztaegig": false,
+      "nachStunden": 24,
+      "anzahl": null,
+      "erwartet": 0
+    },
+    {
+      "name": "dreissig Tage Abstand, einmal",
+      "ab": "2030-03-01T10:00:00Z",
+      "beginn": "2030-05-01T10:00:00Z",
+      "ganztaegig": false,
+      "nachStunden": 720,
+      "anzahl": 1,
+      "erwartet": 1
+    },
+    {
+      "name": "dreissig Tage Abstand, bis zum Termin in 61 Tagen",
+      "ab": "2030-03-01T10:00:00Z",
+      "beginn": "2030-05-01T10:00:00Z",
+      "ganztaegig": false,
+      "nachStunden": 720,
+      "anzahl": null,
+      "erwartet": 2
+    },
+    {
+      "name": "fünfmal bei einem fernen Termin",
+      "ab": "2030-03-01T10:00:00Z",
+      "beginn": "2030-06-09T10:00:00Z",
+      "ganztaegig": false,
+      "nachStunden": 24,
+      "anzahl": 5,
+      "erwartet": 5
+    },
+    {
+      "name": "einmal bei einem fernen Termin",
+      "ab": "2030-03-01T10:00:00Z",
+      "beginn": "2030-06-09T10:00:00Z",
+      "ganztaegig": false,
+      "nachStunden": 48,
+      "anzahl": 1,
+      "erwartet": 1
+    },
+    {
+      "name": "zwölf Stunden Abstand, bis zum Termin in dreissig Tagen: gedeckelt auf zehn",
+      "ab": "2030-03-01T10:00:00Z",
+      "beginn": "2030-03-31T10:00:00Z",
+      "ganztaegig": false,
+      "nachStunden": 12,
+      "anzahl": null,
+      "erwartet": 10
+    }
+  ]
+}
