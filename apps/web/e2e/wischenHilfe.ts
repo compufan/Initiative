@@ -405,7 +405,7 @@ export async function maskeVerfolgt(
 /** „Fertig“ der Maskenzeile: bringt die Knöpfe der Zeitleiste zurück. */
 export async function maskeFertig(editor: Locator): Promise<void> {
   await editor
-    .getByRole('toolbar', { name: /^Maske / })
+    .getByRole('toolbar', { name: /^(Maske|Bereich) / })
     .getByRole('button', { name: 'Fertig' })
     .click();
   await expect(editor.locator('.bild-wiedergabe')).toBeHidden({ timeout: 40_000 });
