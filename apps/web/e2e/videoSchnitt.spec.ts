@@ -165,6 +165,16 @@ test('in der Zeitleiste teilen, nur den zweiten Abschnitt bearbeiten, Film bauen
  * Quadrat (40 × 40) wandert je Bild acht Punkte nach rechts über Rot.
  * Bild n: Quadrat bei x = 20 + 8n.
  */
+/**
+ * Ab wann das Quadrat als abgedunkelt gilt. Belichtung −2 macht aus Weiss
+ * rechnerisch 137 (`tonPunkt`); der Videokodierer legt im Film einige Stufen
+ * darauf – gemessen 141 in Chromium. Unbearbeitet stünde dort 255, und genau
+ * diesen Unterschied prüfen die Tests: ob die Maske wirkt, nicht wie genau
+ * der Kodierer rundet. Vorher stand hier 140, und die Tests fielen an einer
+ * Stufe Kodierrauschen.
+ */
+const ABGEDUNKELT = 160;
+
 const QUADRAT_FILM = `
   async (schreiben) => {
     const leinwand = document.createElement('canvas');
@@ -389,9 +399,9 @@ test('ein Abschnitt mit Stellbild in der Mitte: die Maske gilt davor und danach'
   expect(ergebnis).not.toHaveProperty('fehler');
   const { anfang, stand, ende } = ergebnis as { anfang: number; stand: number; ende: number };
   // Unbearbeitet wäre das Quadrat weiss (255); abgedunkelt deutlich darunter.
-  expect(stand, 'am Stellbild').toBeLessThan(140);
-  expect(anfang, 'rückwärts bis zum Anfang').toBeLessThan(140);
-  expect(ende, 'vorwärts bis zum Ende').toBeLessThan(140);
+  expect(stand, 'am Stellbild').toBeLessThan(ABGEDUNKELT);
+  expect(anfang, 'rückwärts bis zum Anfang').toBeLessThan(ABGEDUNKELT);
+  expect(ende, 'vorwärts bis zum Ende').toBeLessThan(ABGEDUNKELT);
 });
 
 test('verschieden zugeschnittene Abschnitte werden in EINE Filmgrösse eingepasst', async ({
@@ -863,8 +873,8 @@ test('ein abgeschnittenes Stellbild: die Maske wird vorher an den Film geholt', 
     acht: { quadrat: number; grundRot: number };
   };
   expect(e.bilder).toBe(10);
-  expect(e.zwei.quadrat, 'Quadrat in Bild 2 abgedunkelt').toBeLessThan(140);
-  expect(e.acht.quadrat, 'Quadrat in Bild 8 abgedunkelt').toBeLessThan(140);
+  expect(e.zwei.quadrat, 'Quadrat in Bild 2 abgedunkelt').toBeLessThan(ABGEDUNKELT);
+  expect(e.acht.quadrat, 'Quadrat in Bild 8 abgedunkelt').toBeLessThan(ABGEDUNKELT);
   // Und der rote Grund bleibt, wie er ist – kein Fluten des Hintergrunds.
   expect(e.zwei.grundRot).toBeGreaterThan(150);
 });
@@ -983,8 +993,8 @@ test('eine Maske in EINEM Abschnitt kürzt nicht den ganzen Film', async ({ page
   // Ist die Gruppe zu lang, endet der Film an ihrer Grenze: 10 + 6 Bilder.
   expect(e.knapp).toBe(16);
   // Die Maske gilt im mittleren Abschnitt – und nur dort.
-  expect(e.mitte, 'mittlerer Abschnitt, vor dem Stellbild').toBeLessThan(140);
-  expect(e.stand, 'am Stellbild').toBeLessThan(140);
+  expect(e.mitte, 'mittlerer Abschnitt, vor dem Stellbild').toBeLessThan(ABGEDUNKELT);
+  expect(e.stand, 'am Stellbild').toBeLessThan(ABGEDUNKELT);
   expect(e.vorn, 'erster Abschnitt').toBeGreaterThan(200);
   expect(e.hinten, 'dritter Abschnitt').toBeGreaterThan(200);
 });
