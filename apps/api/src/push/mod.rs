@@ -16,6 +16,9 @@ use crate::config::Config;
 use crate::db::PushSubscriptionRow;
 use crate::dto::PushPayload;
 
+/// Wie viele Push-Anfragen gleichzeitig unterwegs sein dürfen.
+const PUSH_PARALLEL: usize = 8;
+
 /// Was ein Mitschnitt festhält: an wen welche Mitteilung gegangen wäre.
 pub type Mitschnitt = Arc<Mutex<Vec<(Uuid, PushPayload)>>>;
 
@@ -140,10 +143,24 @@ impl PushService {
         let mut delivered = 0usize;
         let mut dead: Vec<Uuid> = Vec::new();
 
-        for subscription in subscriptions {
-            match self.send_one(vapid, &subscription, &body).await {
+        // Begrenzt parallel statt nacheinander: Jeder Versand ist eine eigene
+        // HTTP-Anfrage mit bis zu fünfzehn Sekunden Frist. Nacheinander
+        // brauchte eine Gruppe mit hundert Geräten im schlechtesten Fall
+        // 25 Minuten, und ein einziger hängender Dienst hielt alle dahinter
+        // auf. Die Grenze schont den Rechner (Verschlüsseln, Signieren) und
+        // die Push-Dienste.
+        use futures_util::stream::{self, StreamExt};
+        let body = &body;
+        let mut ergebnisse = stream::iter(subscriptions)
+            .map(|subscription| async move {
+                let ausgang = self.send_one(vapid, &subscription, body).await;
+                (subscription.id, ausgang)
+            })
+            .buffer_unordered(PUSH_PARALLEL);
+        while let Some((id, ausgang)) = ergebnisse.next().await {
+            match ausgang {
                 Ok(true) => delivered += 1,
-                Ok(false) => dead.push(subscription.id),
+                Ok(false) => dead.push(id),
                 Err(error) => tracing::debug!(%error, "push delivery failed"),
             }
         }

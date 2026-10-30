@@ -110,6 +110,13 @@ pub async fn notify_new_message(state: &AppState, message: &MessageDto, member_i
         140,
     );
 
+    // Gesendet wird im Hintergrund. Hier stand ein `await` auf jeden Versand:
+    // `create_message` – und damit die Anfrage „Nachricht senden“ – wartete,
+    // bis jeder Push-Dienst jedes Empfängers geantwortet hatte, nacheinander
+    // und mit fünfzehn Sekunden Frist je Gerät. Ein einziger träger Endpunkt
+    // hielt den Absender so lange fest; in einer grossen Gruppe summierte es
+    // sich zu Sekunden für jede Nachricht.
+    let mut ziele: Vec<(Vec<Uuid>, PushPayload)> = Vec::new();
     if !with_preview.is_empty() {
         let payload = PushPayload {
             title: title.clone(),
@@ -120,10 +127,7 @@ pub async fn notify_new_message(state: &AppState, message: &MessageDto, member_i
             message_id: Some(message.id),
             kind: "message".to_string(),
         };
-        state
-            .push
-            .send_to_users(&state.pool, &with_preview, &payload)
-            .await;
+        ziele.push((with_preview, payload));
     }
 
     if !without_preview.is_empty() {
@@ -136,22 +140,23 @@ pub async fn notify_new_message(state: &AppState, message: &MessageDto, member_i
             message_id: None,
             kind: "message".to_string(),
         };
-        state
-            .push
-            .send_to_users(&state.pool, &without_preview, &payload)
-            .await;
+        ziele.push((without_preview, payload));
     }
+    state.push.im_hintergrund(state.pool.clone(), ziele);
 }
 
 /// Generic helper for modules (your turn, poll closed, event reminder …).
+///
+/// Im Hintergrund, aus demselben Grund wie bei Nachrichten: Ein Zug im Spiel
+/// soll nicht auf den Push-Dienst des Gegners warten.
 pub async fn notify_users(state: &AppState, user_ids: &[Uuid], payload: &PushPayload) {
     if !state.push.enabled() || user_ids.is_empty() {
         return;
     }
-    state
-        .push
-        .send_to_users(&state.pool, user_ids, payload)
-        .await;
+    state.push.im_hintergrund(
+        state.pool.clone(),
+        vec![(user_ids.to_vec(), payload.clone())],
+    );
 }
 
 /// Was jemand für Mitteilungen eingestellt hat: (Push an, Vorschau an).

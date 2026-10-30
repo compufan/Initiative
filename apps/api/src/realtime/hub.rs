@@ -54,17 +54,24 @@ impl Hub {
     }
 
     pub fn unregister(&self, user_id: Uuid, connection_id: Uuid) -> PresenceChange {
-        let mut change = PresenceChange::Unchanged;
         if let Some(mut entry) = self.connections.get_mut(&user_id) {
             entry.retain(|connection| connection.id != connection_id);
-            if entry.is_empty() {
-                change = PresenceChange::WentOffline;
-            }
         }
-        if change == PresenceChange::WentOffline {
-            self.connections.remove(&user_id);
+        // Entfernt wird nur, was im Augenblick des Entfernens leer ist – unter
+        // derselben Sperre geprüft. Hier stand „leer gesehen, Sperre los,
+        // dann `remove`“: Meldete sich dazwischen ein neues Gerät desselben
+        // Menschen an (Seite neu geladen, zweiter Tab), landete sein Socket in
+        // der Liste und wurde mit ihr weggeworfen. Er blieb offen, bekam aber
+        // nie wieder ein Ereignis, und die Person galt als abwesend.
+        if self
+            .connections
+            .remove_if(&user_id, |_, entry| entry.is_empty())
+            .is_some()
+        {
+            PresenceChange::WentOffline
+        } else {
+            PresenceChange::Unchanged
         }
-        change
     }
 
     pub fn is_online(&self, user_id: &Uuid) -> bool {
@@ -118,5 +125,74 @@ impl Hub {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Barrier};
+
+    use super::*;
+    use crate::config::RealtimeBus as BusKind;
+
+    fn hub() -> Arc<Hub> {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://niemand@127.0.0.1:1/keine")
+            .expect("träger Vorrat");
+        Arc::new(Hub::new(Arc::new(RealtimeBus::new(BusKind::Memory, pool))))
+    }
+
+    /// Ein Gerät geht, ein anderes desselben Menschen kommt im selben Moment.
+    ///
+    /// Vorher sah `unregister` die Liste leer, liess die Sperre los und
+    /// entfernte sie dann – samt dem Socket, der sich dazwischen eingetragen
+    /// hatte. Der Wettlauf ist eng; viele Runden machen ihn sichtbar (mit der
+    /// alten Fassung schlug dieser Test zuverlässig fehl).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ein_neues_geraet_ueberlebt_das_gleichzeitige_abmelden_des_alten() {
+        let hub = hub();
+        let person = Uuid::now_v7();
+        for runde in 0..5_000 {
+            let (alt, _empfang_alt, _) = hub.register(person);
+            let schranke = Arc::new(Barrier::new(2));
+            let abmelden = {
+                let hub = hub.clone();
+                let schranke = schranke.clone();
+                std::thread::spawn(move || {
+                    schranke.wait();
+                    hub.unregister(person, alt);
+                })
+            };
+            let anmelden = {
+                let hub = hub.clone();
+                let schranke = schranke.clone();
+                std::thread::spawn(move || {
+                    schranke.wait();
+                    hub.register(person)
+                })
+            };
+            abmelden.join().expect("abmelden");
+            let (neu, _empfang_neu, _) = anmelden.join().expect("anmelden");
+            assert!(
+                hub.is_online(&person),
+                "Runde {runde}: das neue Gerät wurde mit dem alten entfernt"
+            );
+            assert_eq!(hub.unregister(person, neu), PresenceChange::WentOffline);
+        }
+    }
+
+    #[tokio::test]
+    async fn abwesend_erst_wenn_das_letzte_geraet_geht() {
+        let hub = hub();
+        let person = Uuid::now_v7();
+        let (a, _ra, erst) = hub.register(person);
+        let (b, _rb, zweit) = hub.register(person);
+        assert_eq!(erst, PresenceChange::CameOnline);
+        assert_eq!(zweit, PresenceChange::Unchanged);
+        assert_eq!(hub.unregister(person, a), PresenceChange::Unchanged);
+        assert_eq!(hub.unregister(person, b), PresenceChange::WentOffline);
+        assert!(!hub.is_online(&person));
+        // Ein zweites Abmelden derselben Verbindung meldet nichts mehr.
+        assert_eq!(hub.unregister(person, b), PresenceChange::Unchanged);
     }
 }

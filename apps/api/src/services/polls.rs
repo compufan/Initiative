@@ -299,15 +299,31 @@ pub async fn set_votes(
             .map(|(id,)| id)
             .collect();
 
+    // Jede Option höchstens einmal: Dieselbe Kennung zweimal in einer Anfrage
+    // scheiterte sonst am Primärschlüssel (poll_id, option_id, user_id) – ein
+    // Serverfehler für eine harmlose Eingabe.
+    let mut gesehen: HashSet<Uuid> = HashSet::new();
     let mut accepted: Vec<(Uuid, String)> = votes
         .into_iter()
-        .filter(|(option_id, _)| valid.contains(option_id))
+        .filter(|(option_id, _)| valid.contains(option_id) && gesehen.insert(*option_id))
         .collect();
     if !poll.multiple && poll.kind != "date" {
         accepted.truncate(1);
     }
 
     let mut tx = state.pool.begin().await?;
+    // Je (Umfrage, Person) nacheinander. „Löschen, dann einfügen“ ist unter
+    // `read committed` kein Ersetzen: Zwei schnelle Stimmen derselben Person
+    // (Doppeltipp, zwei Geräte) löschen beide nichts, was die andere schon
+    // sieht, und fügen beide ein – bei einer Einfachauswahl standen danach
+    // ZWEI Stimmen, bei derselben Option scheiterte die zweite am
+    // Primärschlüssel mit einem Serverfehler. Die Sperre gilt nur für diese
+    // eine Person; andere stimmen ungehindert parallel ab.
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended('umfrage:' || $1::text || ':' || $2::text, 0))")
+        .bind(poll.id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("delete from poll_votes where poll_id = $1 and user_id = $2")
         .bind(poll.id)
         .bind(user_id)

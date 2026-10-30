@@ -188,14 +188,24 @@ pub async fn load_conversation_dtos(
     // der Chatliste der Text einer Nachricht, die sich nicht öffnen lässt.
     // Bei einem frisch beigetretenen Chat bleibt die Zeile leer, bis das Erste
     // ankommt – das ist die richtige Auskunft.
+    //
+    // Je Chat **eine** Indexsuche rückwärts (`lateral … limit 1`). Hier stand
+    // `distinct on (conversation_id) … order by conversation_id, id desc`:
+    // Postgres las dafür JEDE Nachricht aller dreihundert Chats und sortierte
+    // sie, um je Chat die erste zu behalten. Gemessen bei 600 000 Nachrichten:
+    // 1,5 s und 57 MB Plattensortierung je Aufruf der Chatliste; so 2 ms.
     let last_message_rows = sqlx::query_as::<_, MessageRow>(
-        "select distinct on (m.conversation_id) m.*
-         from messages m
-         join conversation_members cm
-           on cm.conversation_id = m.conversation_id and cm.user_id = $2
-         where m.conversation_id = any($1) and m.deleted_at is null
-           and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
-         order by m.conversation_id, m.id desc",
+        "select m.*
+           from conversation_members cm
+           cross join lateral (
+             select * from messages m
+              where m.conversation_id = cm.conversation_id
+                and m.deleted_at is null
+                and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
+              order by m.id desc
+              limit 1
+           ) m
+          where cm.conversation_id = any($1) and cm.user_id = $2",
     )
     .bind(&conversation_ids)
     .bind(viewer_id)
@@ -209,7 +219,12 @@ pub async fn load_conversation_dtos(
            on m.conversation_id = cm.conversation_id
           and m.deleted_at is null
           and (m.sender_id is null or m.sender_id <> cm.user_id)
-          and (cm.last_read_message_id is null or m.id > cm.last_read_message_id)
+          -- `coalesce` mit der kleinsten Kennung statt `is null or …`: Nur so
+          -- wird die Bedingung zur Indexgrenze auf (conversation_id, id), und
+          -- gezählt wird ab dem Lesezeichen statt über den ganzen Verlauf.
+          -- Gemessen bei 600 000 Nachrichten: 890 ms vorher, 7 ms so.
+          and m.id > coalesce(cm.last_read_message_id,
+                              '00000000-0000-0000-0000-000000000000'::uuid)
           -- Ungelesenes zählt nur, was man auch lesen darf. Sonst stünde an
           -- einem frisch beigetretenen Chat eine Zahl, die sich durch Lesen
           -- nicht abtragen lässt.
@@ -233,6 +248,12 @@ pub async fn load_conversation_dtos(
      *
      * Eine Abfrage für alle Gespräche, wie bei den Ungelesenen: Ein `exists`
      * je Gespräch wäre bei dreihundert Gesprächen dreihundert Rundreisen.
+     *
+     * Der Index `messages_conversation_created_idx` (Migration 0029) macht
+     * das `exists` zur Indexsuche. Ohne ihn las es im häufigsten Fall – der
+     * Gründer, vor dessen Grenze nichts liegt – den ganzen Verlauf jedes
+     * Gesprächs, um festzustellen, dass da nichts ist (900 ms bei 600 000
+     * Nachrichten, so 3 ms).
      */
     let verdeckte_rows: Vec<(Uuid,)> = sqlx::query_as(
         "select cm.conversation_id
