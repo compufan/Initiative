@@ -103,6 +103,40 @@ interface Teilzettel {
 }
 
 const teilzettel = new Map<string, Teilzettel>();
+let teilzettelSumme = 0;
+
+/**
+ * Höchstens so viele Bytes Teilfelder. WARUM eine Grenze: Der Zettel hängt am
+ * Modul, nicht am Editor, und `speicherLeeren` ruft im Betrieb niemand. Jeder
+ * Teil, der je gerastert wurde – in jedem Bild, das in dieser Sitzung offen
+ * war –, behielt sein Feld (bis 1024 × 768 = 0,75 MB). Nach zwanzig Fotos mit
+ * je fünf Teilen sind das 75 MB, die keiner mehr braucht. 48 MB fassen die
+ * Teile eines Bildes reichlich; was länger nicht gefragt war, geht zuerst.
+ */
+export const TEILZETTEL_MAX_BYTES = 48 * 1024 * 1024;
+
+function zettelAblegen(id: string, zettel: Teilzettel): void {
+  const alt = teilzettel.get(id);
+  if (alt) {
+    teilzettelSumme -= alt.feld.byteLength;
+    teilzettel.delete(id);
+  }
+  // Hinten einfügen: Die Map zählt in Einfügereihenfolge, vorne steht das
+  // am längsten nicht Gefragte.
+  teilzettel.set(id, zettel);
+  teilzettelSumme += zettel.feld.byteLength;
+  for (const [aelter, eintrag] of teilzettel) {
+    if (teilzettelSumme <= TEILZETTEL_MAX_BYTES || aelter === id) break;
+    teilzettel.delete(aelter);
+    teilzettelRumpf.delete(aelter);
+    teilzettelSumme -= eintrag.feld.byteLength;
+  }
+}
+
+/** Nur für Prüfungen: wieviele Teilfelder mit wieviel Bytes gemerkt sind. */
+export function teilzettelStand(): { anzahl: number; bytes: number } {
+  return { anzahl: teilzettel.size, bytes: teilzettelSumme };
+}
 
 /** Die Kennung eines Pinselteils ohne die Länge seines letzten Strichs. */
 const teilzettelRumpf = new Map<string, string>();
@@ -129,7 +163,12 @@ function pinselRumpf(teil: Maskenteil & PinselTeil): string {
 function feldFuerTeil(teil: Maskenteil, raster: Raster): Uint8Array {
   const schluessel = `${raster.breite}x${raster.hoehe}|${teilSchluessel(teil)}`;
   const alt = teilzettel.get(teil.id);
-  if (alt && alt.schluessel === schluessel) return alt.feld;
+  if (alt && alt.schluessel === schluessel) {
+    // Als zuletzt gefragt nach hinten.
+    teilzettel.delete(teil.id);
+    teilzettel.set(teil.id, alt);
+    return alt.feld;
+  }
 
   /*
    * Ein wachsender Pinselstrich wird fortgeschrieben statt neu gebaut.
@@ -157,7 +196,7 @@ function feldFuerTeil(teil: Maskenteil, raster: Raster): Uint8Array {
       // vorletzte bekannte – sonst fehlte genau ein Segment.
       strichStempeln(alt.feld, raster, letzter, Math.max(0, alt.punkte / 2 - 1));
       zaehler.teile += 1;
-      teilzettel.set(teil.id, {
+      zettelAblegen(teil.id, {
         schluessel,
         feld: alt.feld,
         striche: teil.striche.length,
@@ -170,7 +209,7 @@ function feldFuerTeil(teil: Maskenteil, raster: Raster): Uint8Array {
   const feld = teilBauen(teil, raster);
   zaehler.teile += 1;
   const letzter = teil.art === 'pinsel' ? teil.striche[teil.striche.length - 1] : undefined;
-  teilzettel.set(teil.id, {
+  zettelAblegen(teil.id, {
     schluessel,
     feld,
     striche: teil.art === 'pinsel' ? teil.striche.length : 0,
@@ -370,6 +409,7 @@ export function szeneNeutral(a: Anpassung, szene: Szene): boolean {
 export function speicherLeeren(): void {
   teilzettel.clear();
   teilzettelRumpf.clear();
+  teilzettelSumme = 0;
   zaehler.teile = 0;
   zaehler.falten = 0;
 }

@@ -7,6 +7,8 @@ import {
   szeneBauen,
   szeneNeutral,
   szeneSchluessel,
+  TEILZETTEL_MAX_BYTES,
+  teilzettelStand,
   zaehler,
 } from './maskenSpeicher.js';
 
@@ -392,5 +394,29 @@ describe('Reinheit und Kernfeld', () => {
       H,
     );
     expect(b.bereiche[0].maske.kern).toBe(a.bereiche[0].maske.kern);
+  });
+});
+
+describe('Teilzettel', () => {
+  beforeEach(speicherLeeren);
+
+  it('wächst nicht mit jedem Teil, der je gerastert wurde – und behält die zuletzt gefragten', () => {
+    // Zweihundert Bilder mit je einem Verlauf, wie über eine lange Sitzung: vorher
+    // 200 Felder zu 480 000 Byte = 96 MB, die niemand mehr freigab.
+    for (let i = 0; i < 200; i += 1) {
+      szeneBauen(doc([bereich({ teile: [verlauf(`v${i}`)] })]), B, H);
+    }
+    const stand = teilzettelStand();
+    expect(stand.bytes).toBeLessThanOrEqual(TEILZETTEL_MAX_BYTES);
+    expect(stand.anzahl).toBeLessThan(200);
+    expect(stand.anzahl).toBeGreaterThan(50);
+
+    // Das zuletzt gerasterte ist noch da: kein neues Rastern.
+    const vorher = zaehler.teile;
+    szeneBauen(doc([bereich({ teile: [verlauf('v199')] })]), B, H);
+    expect(zaehler.teile).toBe(vorher);
+    // Das älteste ist verdrängt und wird neu gebaut.
+    szeneBauen(doc([bereich({ teile: [verlauf('v0')] })]), B, H);
+    expect(zaehler.teile).toBe(vorher + 1);
   });
 });
