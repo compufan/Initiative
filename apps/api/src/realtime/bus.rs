@@ -130,6 +130,7 @@ impl RealtimeBus {
                  (nicht gepoolte) Verbindung."
             );
         }
+        let mut schon_einmal = false;
         loop {
             match PgListener::connect(&database_url).await {
                 Ok(mut listener) => {
@@ -140,6 +141,10 @@ impl RealtimeBus {
                     }
                     self.listening.store(true, Ordering::Relaxed);
                     tracing::info!("realtime bus listening on {CHANNEL}");
+                    if schon_einmal {
+                        self.wieder_verbunden();
+                    }
+                    schon_einmal = true;
                     loop {
                         match listener.recv().await {
                             Ok(notification) => {
@@ -171,6 +176,25 @@ impl RealtimeBus {
                 }
             }
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    }
+}
+
+impl RealtimeBus {
+    /**
+     * Der LISTEN-Kanal steht wieder – sagt jedem Gerät hier, es solle nachholen.
+     *
+     * Zwischen Abriss und Wiederverbinden gingen alle NOTIFY ins Leere: Der
+     * Kanal hört nur, solange er steht, und Postgres hebt nichts auf. Die
+     * Sockets dieser Instanz blieben dabei offen, ihre Clients merkten nichts
+     * und zeigten bis zum nächsten Neuladen einen alten Stand. Ein Hinweis
+     * ohne Chat und Termin heisst für den Client: Chatliste, geladene Chats
+     * und Termine neu holen.
+     */
+    pub(super) fn wieder_verbunden(&self) {
+        tracing::info!("realtime bus wieder verbunden – Geräte holen nach");
+        if let Some(hub) = self.hub.get() {
+            hub.an_alle_lokal(&Event::sync_hint("realtime", None).to_frame());
         }
     }
 }
@@ -280,6 +304,36 @@ mod tests {
 
     fn empfaenger(anzahl: usize) -> Vec<Uuid> {
         (0..anzahl).map(|_| Uuid::now_v7()).collect()
+    }
+
+    /// Nach dem Abriss des LISTEN-Kanals waren alle NOTIFY dazwischen
+    /// verloren, und kein Gerät erfuhr davon.
+    #[tokio::test]
+    async fn nach_dem_wiederverbinden_holen_alle_geraete_nach() {
+        use std::sync::Arc;
+
+        use super::RealtimeBus;
+        use crate::config::RealtimeBus as BusKind;
+        use crate::realtime::hub::Hub;
+
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://niemand@127.0.0.1:1/keine")
+            .expect("träger Vorrat");
+        let bus = Arc::new(RealtimeBus::new(BusKind::Postgres, pool));
+        let hub = Arc::new(Hub::new(bus.clone()));
+        bus.attach_hub(hub.clone());
+        let (_, mut anna, _) = hub.register(Uuid::now_v7());
+        let (_, mut bert, _) = hub.register(Uuid::now_v7());
+
+        bus.wieder_verbunden();
+
+        for ausgang in [&mut anna, &mut bert] {
+            let frame: serde_json::Value =
+                serde_json::from_str(&ausgang.empfang.try_recv().expect("ein Hinweis")).unwrap();
+            assert_eq!(frame["type"], "sync.hint");
+            assert!(frame["payload"]["conversationId"].is_null());
+            assert!(frame["payload"].get("eventId").is_none());
+        }
     }
 
     #[test]

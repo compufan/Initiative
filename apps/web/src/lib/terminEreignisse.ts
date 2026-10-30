@@ -344,8 +344,11 @@ export function connectTerminEreignisse(): void {
   realtime.on('event.deleted', ({ eventId, grund }) => {
     entfernt(eventId, grund);
   });
-  realtime.on('sync.hint', ({ eventId, stand }) => {
+  realtime.on('sync.hint', ({ eventId, stand, conversationId }) => {
     if (eventId) nachladen(eventId, stand);
+    // Ohne Chat und Termin: Der Server weiß nicht, was verloren ging (sein
+    // Rundruf-Bus war getrennt) – alle Termine nachholen.
+    else if (!conversationId) nachholen();
   });
 
   // Reißt die Leitung ab (Bildschirm aus, Tunnel, Funkloch), gehen die Rundrufe

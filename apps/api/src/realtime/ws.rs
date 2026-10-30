@@ -31,6 +31,32 @@ pub fn router() -> Router<AppState> {
 const SITZUNG_PRUEFEN: Duration = Duration::from_secs(60);
 
 /**
+ * Wie lange eine Leitung still sein darf, bevor sie als tot gilt: zwei
+ * Herzschläge.
+ *
+ * Der Server pingt alle `HEARTBEAT_INTERVAL_SECS`, der Browser antwortet von
+ * selbst mit Pong. Bisher bemerkte der Server eine tote Leitung nur, wenn das
+ * SENDEN scheiterte – bei einer halboffenen Verbindung (Handy im Funkloch,
+ * NAT-Eintrag verfallen) passiert das oft nie, und die Leitung belegte
+ * Speicher und galt als „online“. Kommt zwei Herzschläge lang gar nichts,
+ * nicht einmal ein Pong, ist sie zu.
+ */
+const LESEFRIST: Duration = Duration::from_secs(2 * HEARTBEAT_INTERVAL_SECS);
+
+/// Das nächste Paket vom Client – oder `None`, wenn die Leitung endet, kaputt
+/// ist oder länger als `frist` schweigt.
+async fn naechstes<S, E>(strom: &mut S, frist: Duration) -> Option<Message>
+where
+    S: futures_util::Stream<Item = Result<Message, E>> + Unpin,
+{
+    match tokio::time::timeout(frist, strom.next()).await {
+        Ok(Some(Ok(message))) => Some(message),
+        // Zu lange still, zu Ende oder kaputt: alles dasselbe Ende.
+        _ => None,
+    }
+}
+
+/**
  * Besteht für dieses Konto noch eine Sitzung?
  *
  * Das Zugriffstoken wird nur beim Aufbau der Leitung geprüft – danach lief sie
@@ -100,7 +126,11 @@ async fn upgrade(
 
 async fn handle(socket: WebSocket, state: AppState, user_id: Uuid) {
     let (mut sender, mut receiver) = socket.split();
-    let (connection_id, mut outbound, presence) = state.hub.register(user_id);
+    let (connection_id, ausgang, presence) = state.hub.register(user_id);
+    let crate::realtime::hub::Ausgang {
+        empfang: mut outbound,
+        schliessen: ueberlauf,
+    } = ausgang;
 
     if presence == PresenceChange::CameOnline {
         broadcast_presence(&state, user_id, true).await;
@@ -158,7 +188,7 @@ async fn handle(socket: WebSocket, state: AppState, user_id: Uuid) {
     });
 
     let leser = async {
-        while let Some(Ok(message)) = receiver.next().await {
+        while let Some(message) = naechstes(&mut receiver, LESEFRIST).await {
             match message {
                 Message::Text(text) => {
                     if let Err(error) = handle_client_event(&state, user_id, &text).await {
@@ -173,9 +203,17 @@ async fn handle(socket: WebSocket, state: AppState, user_id: Uuid) {
     // Endet der Schreiber (Sitzung widerrufen, Leitung tot), endet auch das
     // Lesen: Ein Gegenüber, das den Schluss nicht beantwortet, soll über die
     // Leitung weder tippen noch Gelesen-Marken setzen können.
+    //
+    // Läuft der Ausgangspuffer über (`hub::AUSGANG_PUFFER`), endet beides
+    // sofort: Der Schreiber hängt dann meist selbst in einem `send`, das nie
+    // fertig wird, und sähe ein Zeichen nicht. Der Abbruch unten trennt die
+    // Leitung; der Client verbindet neu und holt nach.
     tokio::select! {
         _ = leser => {}
         _ = &mut writer => {}
+        _ = ueberlauf.notified() => {
+            tracing::debug!(%user_id, "Ausgangspuffer voll – Verbindung wird geschlossen");
+        }
     }
 
     writer.abort();
@@ -286,4 +324,35 @@ fn uuid_field(payload: &Value, key: &str) -> Option<Uuid> {
         .get(key)
         .and_then(Value::as_str)
         .and_then(|value| Uuid::parse_str(value).ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Eine halboffene Leitung, von der nichts mehr kommt, galt ewig als offen.
+    /// (Mit kurzer Frist geprüft; im Betrieb sind es zwei Herzschläge.)
+    #[tokio::test]
+    async fn eine_stille_leitung_endet_nach_der_frist() {
+        let frist = Duration::from_millis(50);
+        let mut still = futures_util::stream::pending::<Result<Message, ()>>();
+        let anfang = tokio::time::Instant::now();
+        assert!(naechstes(&mut still, frist).await.is_none());
+        assert!(anfang.elapsed() >= frist);
+        assert_eq!(LESEFRIST, Duration::from_secs(2 * HEARTBEAT_INTERVAL_SECS));
+    }
+
+    #[tokio::test]
+    async fn ein_pong_haelt_sie_offen() {
+        let mut lebendig = futures_util::stream::iter(vec![
+            Ok::<_, ()>(Message::Pong(Vec::new().into())),
+            Err(()),
+        ]);
+        assert!(matches!(
+            naechstes(&mut lebendig, LESEFRIST).await,
+            Some(Message::Pong(_))
+        ));
+        // Ein Fehler beendet sie.
+        assert!(naechstes(&mut lebendig, LESEFRIST).await.is_none());
+    }
 }

@@ -738,6 +738,24 @@ export function kartenNachholen(): void {
 
 /** Wire realtime events into the store exactly once. */
 let wired = false;
+/**
+ * Chatliste und jeden schon geladenen Chat auf den Stand des Servers bringen.
+ *
+ * Für Hinweise ohne Chat und Termin (der Server hat den Rundruf-Bus neu
+ * verbunden und weiß nicht, was dazwischen verloren ging) und nach einer
+ * abgerissenen Leitung. Je geladenem Chat die neueste Seite – wie bei einem
+ * Hinweis mit Chat-Kennung –, damit auch Bearbeitungen und Löschungen
+ * ankommen, nicht nur neue Nachrichten. Nie geöffnete Chats laden ohnehin
+ * frisch, wenn man sie öffnet.
+ */
+export function chatsNachholen(): void {
+  const state = useChat.getState();
+  void state.loadConversations();
+  for (const [conversationId, geladen] of Object.entries(state.loaded)) {
+    if (geladen) void state.loadMessages(conversationId, { force: true });
+  }
+}
+
 export function connectChatRealtime(): void {
   if (wired) return;
   wired = true;
@@ -806,10 +824,20 @@ export function connectChatRealtime(): void {
     if (conversationId) void useChat.getState().loadMessages(conversationId, { force: true });
     // Ein Hinweis auf einen Termin gehört dem Trichter (`terminEreignisse`); die
     // Chats müssen dafür nicht neu geladen werden.
-    else if (!eventId) void useChat.getState().loadConversations();
+    else if (!eventId) chatsNachholen();
   });
+  // Reißt die Leitung ab – Funkloch, oder der Server schließt sie, weil sein
+  // Ausgangspuffer voll war –, gehen die Ereignisse dazwischen verloren. Beim
+  // Wiederverbinden wird nachgeholt, wie es `terminEreignisse` für Termine tut.
+  let warWeg = false;
   realtime.onStateChange((state) => {
-    if (state === 'online') void useChat.getState().flushOutbox();
+    if (state === 'offline') warWeg = true;
+    if (state !== 'online') return;
+    void useChat.getState().flushOutbox();
+    if (warWeg) {
+      warWeg = false;
+      chatsNachholen();
+    }
   });
 
   if (typeof window !== 'undefined') {

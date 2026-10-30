@@ -6,16 +6,52 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{self, error::TrySendError, Receiver, Sender};
+use tokio::sync::Notify;
 use uuid::Uuid;
 
 use super::bus::{BusMessage, RealtimeBus};
 use super::Event;
 
+/**
+ * Wie viele Frames je Verbindung auf dem Weg zum Socket warten dürfen.
+ *
+ * Vorher war der Kanal unbegrenzt. Ein Gerät, das nicht mehr liest (Funkloch
+ * mit halboffener Leitung, eingefrorener Tab), sammelte so jedes Ereignis
+ * aller seiner Chats im Speicher des Servers – bis der Herzschlag es nach
+ * Minuten bemerkte, oder nie, wenn die Leitung formal offen blieb.
+ *
+ * Läuft der Puffer voll, wird die Verbindung geschlossen statt still Frames
+ * zu verwerfen: Ein Client mit Lücke wüsste nichts davon. Beim Wiederverbinden
+ * holt er nach (Chatliste, geladene Chats, Termine) – derselbe Weg wie nach
+ * jedem Funkloch.
+ */
+pub const AUSGANG_PUFFER: usize = 512;
+
 #[derive(Debug, Clone)]
 struct Connection {
     id: Uuid,
-    sender: UnboundedSender<String>,
+    sender: Sender<String>,
+    schliessen: Arc<Notify>,
+}
+
+impl Connection {
+    fn senden(&self, frame: &str) {
+        match self.sender.try_send(frame.to_string()) {
+            Ok(()) => {}
+            // Liest nicht mehr mit: zumachen, siehe `AUSGANG_PUFFER`.
+            Err(TrySendError::Full(_)) => self.schliessen.notify_one(),
+            // Schon zu; aufgeräumt wird, wenn die Socket-Aufgabe endet.
+            Err(TrySendError::Closed(_)) => {}
+        }
+    }
+}
+
+/// Was die Socket-Aufgabe zu einer Verbindung bekommt: die Frames, und das
+/// Zeichen, sie zu schliessen, weil der Puffer übergelaufen ist.
+pub struct Ausgang {
+    pub empfang: Receiver<String>,
+    pub schliessen: Arc<Notify>,
 }
 
 pub struct Hub {
@@ -40,8 +76,9 @@ impl Hub {
         }
     }
 
-    pub fn register(&self, user_id: Uuid) -> (Uuid, UnboundedReceiver<String>, PresenceChange) {
-        let (sender, receiver) = unbounded_channel();
+    pub fn register(&self, user_id: Uuid) -> (Uuid, Ausgang, PresenceChange) {
+        let (sender, empfang) = mpsc::channel(AUSGANG_PUFFER);
+        let schliessen = Arc::new(Notify::new());
         let id = Uuid::now_v7();
         let mut entry = self.connections.entry(user_id).or_default();
         let change = if entry.is_empty() {
@@ -49,8 +86,19 @@ impl Hub {
         } else {
             PresenceChange::Unchanged
         };
-        entry.push(Connection { id, sender });
-        (id, receiver, change)
+        entry.push(Connection {
+            id,
+            sender,
+            schliessen: schliessen.clone(),
+        });
+        (
+            id,
+            Ausgang {
+                empfang,
+                schliessen,
+            },
+            change,
+        )
     }
 
     pub fn unregister(&self, user_id: Uuid, connection_id: Uuid) -> PresenceChange {
@@ -108,10 +156,18 @@ impl Hub {
         for user_id in user_ids {
             if let Some(entry) = self.connections.get(user_id) {
                 for connection in entry.value() {
-                    // A closed receiver simply drops the frame; cleanup happens
-                    // when the socket task ends.
-                    let _ = connection.sender.send(frame.to_string());
+                    connection.senden(frame);
                 }
+            }
+        }
+    }
+
+    /// An jede Verbindung dieser Instanz – etwa der Hinweis, nachzuholen,
+    /// nachdem der Bus eine Weile taub war (`RealtimeBus::wieder_verbunden`).
+    pub fn an_alle_lokal(&self, frame: &str) {
+        for entry in self.connections.iter() {
+            for connection in entry.value() {
+                connection.senden(frame);
             }
         }
     }
@@ -121,7 +177,7 @@ impl Hub {
         if let Some(entry) = self.connections.get(&user_id) {
             for connection in entry.value() {
                 if connection.id == connection_id {
-                    let _ = connection.sender.send(event.to_frame());
+                    connection.senden(&event.to_frame());
                 }
             }
         }
@@ -178,6 +234,45 @@ mod tests {
                 "Runde {runde}: das neue Gerät wurde mit dem alten entfernt"
             );
             assert_eq!(hub.unregister(person, neu), PresenceChange::WentOffline);
+        }
+    }
+
+    /// Wer nicht mehr liest, sammelte vorher unbegrenzt Frames im Speicher.
+    #[tokio::test]
+    async fn ein_voller_puffer_schliesst_die_verbindung() {
+        let hub = hub();
+        let person = Uuid::now_v7();
+        let (_, ausgang, _) = hub.register(person);
+        for _ in 0..AUSGANG_PUFFER {
+            hub.deliver_local(&[person], "x");
+        }
+        // Bis hierher passt alles hinein – kein Zeichen zum Schliessen.
+        let noch_nicht = tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            ausgang.schliessen.notified(),
+        )
+        .await;
+        assert!(noch_nicht.is_err(), "der Puffer war noch nicht voll");
+
+        hub.deliver_local(&[person], "einer zu viel");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            ausgang.schliessen.notified(),
+        )
+        .await
+        .expect("die Verbindung soll geschlossen werden");
+        assert_eq!(ausgang.empfang.len(), AUSGANG_PUFFER);
+    }
+
+    #[tokio::test]
+    async fn an_alle_lokal_erreicht_jedes_geraet() {
+        let hub = hub();
+        let (_, mut a, _) = hub.register(Uuid::now_v7());
+        let (_, mut b, _) = hub.register(Uuid::now_v7());
+        let (_, mut b2, _) = hub.register(Uuid::now_v7());
+        hub.an_alle_lokal("hinweis");
+        for ausgang in [&mut a, &mut b, &mut b2] {
+            assert_eq!(ausgang.empfang.try_recv().as_deref(), Ok("hinweis"));
         }
     }
 
