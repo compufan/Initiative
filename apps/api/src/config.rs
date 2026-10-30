@@ -204,6 +204,13 @@ pub struct Config {
      * (z. B. 80 GB) sind 8 GiB zu viel, bei grossen Videos zu wenig.
      */
     pub kalt_notfall_puffer_bytes: i64,
+    /**
+     * Rückholen häufig gelesener ferner Dateien: Zeitfenster in Tagen
+     * (`KALT_RUECKHOLEN_TAGE`, Vorgabe 14, 1 bis 365) und Zahl der Zugriffe
+     * darin (`KALT_RUECKHOLEN_ZUGRIFFE`, Vorgabe 5; 0 schaltet es ab).
+     */
+    pub kalt_rueckholen_tage: i64,
+    pub kalt_rueckholen_zugriffe: i64,
     /// Wie oft der Erinnerungsdienst nach Fälligem sieht, in Sekunden; 0
     /// schaltet ihn aus. Der Dienst klemmt den Wert auf 30 bis 3600 (siehe
     /// `services::erinnern::takt`).
@@ -589,6 +596,8 @@ impl Config {
                 .and_then(|g| g.parse().ok())
                 .unwrap_or(120),
             kalt_notfall_puffer_bytes: notfall_puffer_bytes(var("KALT_NOTFALL_PUFFER_GB"))?,
+            kalt_rueckholen_tage: number("KALT_RUECKHOLEN_TAGE", 14i64).clamp(1, 365),
+            kalt_rueckholen_zugriffe: number("KALT_RUECKHOLEN_ZUGRIFFE", 5i64).clamp(0, 10_000),
             erinnern_takt_s: number(
                 "ERINNERN_TAKT_S",
                 crate::services::erinnern::TAKT_VORGABE_S,

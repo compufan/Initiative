@@ -484,7 +484,7 @@ use crate::storage::Storage;
  * und der Dienst läuft dauernd. Fünf Gigabyte Abstand heissen: Er läuft selten
  * und richtet dann etwas aus.
  */
-const ABSTAND: i64 = 5 * 1024 * 1024 * 1024;
+pub(crate) const ABSTAND: i64 = 5 * 1024 * 1024 * 1024;
 
 /// Wie viele Dateien ein Durchgang höchstens bewegt.
 ///
@@ -573,6 +573,10 @@ async fn kandidaten(pool: &PgPool, erlaubt: Erlaubt) -> Vec<Kandidat> {
           where ablage = 'lokal' and status = 'ready' and size > 0
             and quelle_id is null
             and prioritaet = any($1)
+            -- Gegen das Hin und Her: Wer gerade von der Box zurückgeholt wurde,
+            -- bleibt mindestens 14 Tage warm (siehe `services::rueckholen`).
+            and (zurueckgeholt_at is null
+                 or zurueckgeholt_at < now() - make_interval(days => 14))
           order by created_at asc
           limit 5000",
     )
@@ -625,7 +629,7 @@ impl Fehlschlag {
 static KALT_GEHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 /// Weckruf an den Dienst: Platz wird gebraucht, nicht erst in einer Viertelstunde.
-static WECKEN: tokio::sync::Notify = tokio::sync::Notify::const_new();
+pub(crate) static WECKEN: tokio::sync::Notify = tokio::sync::Notify::const_new();
 
 /// Der Dienst soll sofort einen Durchgang machen (er rechnet den Bedarf selbst aus).
 pub fn wecken() {
@@ -668,6 +672,13 @@ pub async fn auslagerbar(pool: &PgPool) -> i64 {
  * Objektspeicher hat dieses Problem nicht.
  */
 pub async fn platzbedarf(pool: &PgPool, config: &Config) -> i64 {
+    platzbedarf_mit(pool, config, 0).await
+}
+
+/// Wie [`platzbedarf`], aber als läge `zusatz` Bytes mehr auf der Platte –
+/// die Frage der Rückholung: „Passt diese Datei noch dazu, ohne dass der
+/// Auslagerungsdienst gleich wieder Platz machen muss?"
+pub async fn platzbedarf_mit(pool: &PgPool, config: &Config, zusatz: i64) -> i64 {
     if config.storage_driver != crate::config::StorageDriver::Local {
         return 0;
     }
@@ -680,13 +691,11 @@ pub async fn platzbedarf(pool: &PgPool, config: &Config) -> i64 {
     let ziel = config
         .upload_platte_reserve_bytes
         .saturating_add(ausstehend)
+        .saturating_add(zusatz)
         .saturating_add(config.kalt_notfall_puffer_bytes);
     ziel.saturating_sub(frei as i64).max(0)
 }
 
-/// Mehr als das wird nicht in den Arbeitsspeicher geladen, wenn die warme
-/// Ablage keinen lokalen Pfad hat (Objektspeicher). Darüber lieber eine klare
-/// Absage im Protokoll als ein Prozess, den das Betriebssystem beendet.
 /**
  * Einstellungen eines Umzugs, die nicht am Füllstand hängen.
  *
@@ -717,6 +726,9 @@ pub struct Regeln {
 /// Vorgabe für [`Regeln::pruefsumme_bis`] ohne Tresor.
 pub const PRUEFSUMME_DRUEBEN_BIS: u64 = 256 * 1024 * 1024;
 
+/// Mehr als das wird nicht in den Arbeitsspeicher geladen, wenn die warme
+/// Ablage keinen lokalen Pfad hat (Objektspeicher). Darüber lieber eine klare
+/// Absage im Protokoll als ein Prozess, den das Betriebssystem beendet.
 const SPEICHER_WEG_MAX: i64 = 512 * 1024 * 1024;
 
 /**
@@ -1162,6 +1174,10 @@ pub fn starten(
          * ein Video über SFTP schiebt, macht den Start langsam.
          */
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        // Der Zähler für ferne Lesezugriffe schreibt einmal je Minute; nur sinnvoll,
+        // wenn es eine kalte Ablage gibt.
+        crate::services::lesen::starten(pool.clone());
+        let mut rueckholen = crate::services::rueckholen::Zustand::default();
         let mut ruhe_s = 0u64;
         let mut letzte_aufraeumung =
             std::time::Instant::now() - std::time::Duration::from_secs(86_400);
@@ -1195,6 +1211,28 @@ pub fn starten(
                 ruhe_s = 0;
                 TAKT_S
             };
+            // Nach dem Auslagern, nie davor: Ist die Platte knapp, hat das Auslagern
+            // Vorrang, und die Rückholung findet ohnehin keinen Platz.
+            if !bilanz.kalt_gestoert && bilanz.bewegt == 0 && bedarf == 0 {
+                let r = crate::services::rueckholen::durchgang(
+                    &pool,
+                    &speicher.warm,
+                    &kalt,
+                    &config,
+                    grenze,
+                    &mut rueckholen,
+                    std::time::Instant::now(),
+                )
+                .await;
+                if r.zurueckgeholt > 0 || r.gescheitert > 0 {
+                    tracing::info!(
+                        zurueckgeholt = r.zurueckgeholt,
+                        gigabyte = r.bytes as f64 / 1_073_741_824.0,
+                        gescheitert = r.gescheitert,
+                        "Rückholung"
+                    );
+                }
+            }
             if letzte_aufraeumung.elapsed() > std::time::Duration::from_secs(86_400)
                 && !bilanz.kalt_gestoert
             {

@@ -492,6 +492,9 @@ async fn serve(
             return Err(AppError::not_found("Datei nicht gefunden"));
         }
     }
+    // Ferne Dateien: den Zugriff zählen (gebündelt, nie in der Anfrage
+    // schreiben) – wer eine ferne Datei oft liest, wird zurückgeholt.
+    crate::services::lesen::melden(attachment.id, &attachment.ablage);
     let options = DownloadOptions {
         file_name: attachment.file_name.clone(),
         mime: Some(attachment.mime.clone()),

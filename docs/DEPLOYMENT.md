@@ -187,6 +187,8 @@ Für den Betrieb heisst das:
 | `KALT_GRENZE_GB`       | `100`             | Ab wie viel app-eigenen Daten auf dem Server ausgelagert wird.                                              |
 | `KALT_GRENZE_HOCH_GB`  | `120`             | Ab wann auch Dateien mit Priorität „hoch" wandern.                                                          |
 | `KALT_NOTFALL_PUFFER_GB` | `8`             | Notfallpuffer in GiB (1 bis 512, sonst Startfehler): so viel Luft über Reserve und offene Uploads soll die warme Platte haben, sonst lagert der Dienst auch unter der Schwelle aus. Kleine Platte: 2 bis 4. |
+| `KALT_RUECKHOLEN_TAGE` | `14`              | Zeitfenster (1 bis 365 Tage) für das Rückholen häufig gelesener ferner Dateien.                            |
+| `KALT_RUECKHOLEN_ZUGRIFFE` | `5`           | So viele Zugriffe im Fenster holen eine ferne Datei zurück auf die Platte (`hoch`: die Hälfte, mind. 2; `niedrig` nie). `0` = aus. |
 | `KALT_SFTP_WIRT`       | –                 | Pflicht bei `sftp`, z. B. `u670518.your-storagebox.de`.                                                     |
 | `KALT_SFTP_HAFEN`      | `23`              | Bei Hetzner **23**, nicht 22 – siehe unten.                                                                 |
 | `KALT_SFTP_BENUTZER`   | –                 | Pflicht bei `sftp`. Am besten ein Unterkonto.                                                               |
@@ -594,8 +596,29 @@ Datenbank können das ausfüllen, ohne dass die Anhänge je 100 GB erreichen.)
 **Lesen von der Box:** Ein Video-Spulen (`Range`) springt per SFTP-Seek an die
 Stelle – es wird nicht von vorn gelesen. Je Lesevorgang wird ein Platz von 16
 belegt (getrennt von 4 Plätzen für Schreiben/Löschen), solange der Strom offen
-ist; Miniaturen und Poster von Videos liegen warm bzw. in der Datenbank. Eine
-Rückholung häufig gelesener Dateien nach warm gibt es **nicht**.
+ist; Miniaturen und Poster von Videos liegen warm bzw. in der Datenbank.
+
+**Rückholung häufiger Dateien.** Wer eine ferne Datei oft liest, hat gezeigt,
+dass sie warm gehört. Der Auslagerungsdienst holt sie dann im Strom zurück
+(nachmessen, erst danach `ablage = 'lokal'`, erst danach die ferne Fassung
+löschen), wenn *alle* Bedingungen stimmen:
+
+- in den letzten `KALT_RUECKHOLEN_TAGE` Tagen (14) mindestens
+  `KALT_RUECKHOLEN_ZUGRIFFE` (5) **Zugriffe** – ein Zugriff ist ein Ansehen
+  (Anfragen innerhalb von 10 Minuten zählen als einer), nicht jede
+  Bereichsanfrage; geschrieben wird gebündelt einmal je Minute in
+  `anhang_lesen` (eine Zeile je Datei und Tag), nie in der Anfrage selbst;
+- Klassen: `niedrig` wird nie zurückgeholt, `hoch` schon bei der Hälfte der
+  Zugriffe (mind. 2) und zuerst;
+- frühestens 7 Tage nach dem Auslagern, und nach der Rückholung mindestens 14
+  Tage kein erneutes Auslagern (`attachments.zurueckgeholt_at`) – kein Ping-Pong,
+  auch nicht für `niedrig`;
+- Platz: warme Belegung danach mindestens 10 GiB unter `KALT_GRENZE_GB`, und die
+  Platte hat danach noch Reserve + offene Uploads + Notfallpuffer frei;
+- höchstens 3 Dateien / 4 GiB je Durchgang, nie bei knapper Platte (das
+  Auslagern hat Vorrang und bricht eine laufende Rückholung ab), mit Backoff
+  (5 Min, verdoppelnd, bis 1 Tag je Datei; 15 Min Ruhe, wenn die Box selbst
+  Ärger macht).
 
 **Probe auf der echten Box:** `GET /api/v1/admin/storage-check/kalt?mib=64`
 (als Admin) schreibt eine Datei von 64 MiB (höchstens 512) mehrteilig auf die
