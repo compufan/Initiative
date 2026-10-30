@@ -67,6 +67,19 @@ pub trait Storage: Send + Sync {
     /// the bytes itself.
     fn download_url(&self, key: &str, options: &DownloadOptions) -> AppResult<Option<String>>;
 
+    /**
+     * Wie [`Storage::download_url`], aber mit Blick in die Datenbank, wo die
+     * Datei liegt – der Weg, den die Auslieferung benutzt.
+     *
+     * Nur die Weiche überschreibt es: Bei S3 warm und SFTP kalt darf für
+     * eine kalt liegende Datei keine S3-Adresse herausgegeben werden (der
+     * Eimer kennt sie nicht, der Browser bekäme ein 404). Alle anderen
+     * Speicher antworten wie `download_url`.
+     */
+    async fn adresse(&self, key: &str, options: &DownloadOptions) -> AppResult<Option<String>> {
+        self.download_url(key, options)
+    }
+
     async fn put(&self, key: &str, body: Bytes, mime: &str) -> AppResult<()>;
 
     /**

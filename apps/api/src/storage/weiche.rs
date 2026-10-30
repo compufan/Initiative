@@ -75,6 +75,16 @@ impl Weiche {
      * kalte Fassung liegen – für immer.
      */
     async fn lage(&self, schluessel: &str) -> Lage {
+        /*
+         * Miniaturen liegen immer warm, egal wo ihr Original liegt – sie
+         * werden von `media.rs` über `put` geschrieben, und das geht
+         * ausschliesslich nach warm. Ohne diese Abkürzung kostet jedes
+         * Aufräumen einer Miniatur zwei Datenbankabfragen und einen
+         * SFTP-Umlauf ins Leere (Lage „unbekannt" löscht in beiden Ablagen).
+         */
+        if ist_miniatur(schluessel) {
+            return Lage::Warm;
+        }
         let aus_anhang: Option<(String,)> =
             sqlx::query_as("select ablage from attachments where storage_key = $1 limit 1")
                 .bind(schluessel)
@@ -132,6 +142,16 @@ impl Weiche {
     }
 }
 
+/// Ist das der Schlüssel einer abgeleiteten Miniatur (`….mini-<Kante>.jpg`)?
+fn ist_miniatur(schluessel: &str) -> bool {
+    schluessel
+        .rsplit_once(".mini-")
+        .is_some_and(|(_, rest)| {
+            rest.strip_suffix(".jpg")
+                .is_some_and(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit()))
+        })
+}
+
 /// Wo eine Datei liegt – oder dass es niemand weiss.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Lage {
@@ -162,17 +182,33 @@ impl Storage for Weiche {
     }
 
     /**
-     * Die Umleitung – und warum sie hier nicht fragt.
+     * Die Umleitung ohne Blick in die Datenbank: immer `None`.
      *
-     * `download_url` ist nicht asynchron, kann also nicht in die Datenbank
-     * sehen. Das ist kein Mangel: Umleiten kann ohnehin nur eine Ablage mit
-     * öffentlichen Adressen, und die kalte hat keine (SFTP ist kein HTTP).
-     * Die warme zu fragen ist damit immer richtig – liegt die Datei kalt,
-     * antwortet sie mit `None`, und die API streamt selbst. Genau das soll
-     * dann auch geschehen.
+     * `download_url` ist nicht asynchron und kann deshalb nicht fragen, wo
+     * die Datei liegt. Früher wurde einfach die warme Ablage gefragt – bei
+     * S3 warm und SFTP kalt gab das für eine ausgelagerte Datei eine
+     * S3-Adresse, hinter der nichts liegt (404 im Browser). Wer eine Adresse
+     * will, nimmt [`Storage::adresse`]; der sichere Rückfall ist „die API
+     * streamt selbst".
      */
-    fn download_url(&self, key: &str, options: &DownloadOptions) -> AppResult<Option<String>> {
-        self.warm.download_url(key, options)
+    fn download_url(&self, _key: &str, _options: &DownloadOptions) -> AppResult<Option<String>> {
+        Ok(None)
+    }
+
+    /**
+     * Die Umleitung – nur für Dateien, die nachweislich WARM liegen.
+     *
+     * Kalt (`fern`) und mitten im Umzug (`wandert`) gibt es keine Adresse:
+     * Bei `wandert` steht die warme Fassung zwar noch, wird aber im
+     * nächsten Augenblick gelöscht, und eine umgeleitete Anfrage fände dann
+     * nichts mehr. Der Umweg über die API kostet dort nur Bandbreite.
+     * Unbekanntes (kein Anhang, keine Müllzeile) gilt wie bisher als warm.
+     */
+    async fn adresse(&self, key: &str, options: &DownloadOptions) -> AppResult<Option<String>> {
+        match self.lage(key).await {
+            Lage::Warm | Lage::Unbekannt => self.warm.download_url(key, options),
+            Lage::Kalt | Lage::Wandert => Ok(None),
+        }
     }
 
     async fn put(&self, key: &str, body: Bytes, mime: &str) -> AppResult<()> {
@@ -249,5 +285,20 @@ impl Storage for Weiche {
 
     async fn kapazitaet(&self) -> Option<(u64, u64)> {
         self.warm.kapazitaet().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ist_miniatur;
+
+    #[test]
+    fn miniaturen_werden_am_namen_erkannt() {
+        assert!(ist_miniatur("image/2026/08/u/1-ab.webp.mini-320.jpg"));
+        assert!(ist_miniatur("a.mini-1280.jpg"));
+        assert!(!ist_miniatur("image/2026/08/u/1-ab.webp"));
+        assert!(!ist_miniatur("a.mini-.jpg"));
+        assert!(!ist_miniatur("a.mini-12x.jpg"));
+        assert!(!ist_miniatur("a.mini-320.jpg.teil"));
     }
 }

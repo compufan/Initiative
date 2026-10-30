@@ -265,6 +265,78 @@ async fn geloeschtes_verschwindet_auch_aus_dem_speicher() {
         "der Schlüssel muss stehen bleiben und der Versuch gezählt werden"
     );
 
+    // ---- 4. Miniaturen gehen mit – auch bei einer fernen Datei ----
+    //
+    // Die Miniatur hat keine eigene Zeile und liegt immer warm; nur ihr Name
+    // verrät das Original. Gelöscht wird beim Aufräumen, also gilt das für
+    // jeden Löschweg (hier: Gespräch, also die Kaskade). Geprüft mit einer
+    // echten Weiche über zwei Verzeichnisse: Das Original liegt „kalt".
+    use initiative_api::services::miniatur;
+    use initiative_api::storage::local::LocalStorage;
+    use initiative_api::storage::weiche::Weiche;
+    use initiative_api::storage::Storage;
+
+    let wurzel = std::env::temp_dir().join(format!("muell-mini-{}", Uuid::now_v7().simple()));
+    let warm: Arc<dyn Storage> = Arc::new(LocalStorage::new(wurzel.join("warm").to_str().unwrap()));
+    let kalt: Arc<dyn Storage> = Arc::new(LocalStorage::new(wurzel.join("kalt").to_str().unwrap()));
+    let weiche: Arc<dyn Storage> = Arc::new(Weiche::neu(warm.clone(), kalt.clone(), state.pool.clone()));
+
+    for ablage in ["fern", "wandert", "lokal"] {
+        let schluessel = format!("image/2026/10/{}/{}.webp", Uuid::now_v7(), Uuid::now_v7());
+        let (_n, chat) = anhang_anlegen(&state, &schluessel).await;
+        // anhang_anlegen hat über `state.storage` geschrieben; hier wird neu
+        // verteilt: Original dorthin, wo die Zeile jetzt behauptet, es läge.
+        let _ = state.storage.delete(&schluessel).await;
+        sqlx::query("update attachments set ablage = $2 where storage_key = $1")
+            .bind(&schluessel)
+            .bind(ablage)
+            .execute(&state.pool)
+            .await
+            .expect("ablage");
+        let original_ort = if ablage == "lokal" { &warm } else { &kalt };
+        original_ort
+            .put(&schluessel, Bytes::from_static(b"original"), "image/webp")
+            .await
+            .expect("original");
+        if ablage == "wandert" {
+            // Mitten im Umzug steht das Original an beiden Orten.
+            warm.put(&schluessel, Bytes::from_static(b"original"), "image/webp")
+                .await
+                .expect("warmes original");
+        }
+        for kante in miniatur::KANTEN {
+            warm.put(
+                &miniatur::schluessel(&schluessel, kante),
+                Bytes::from_static(b"mini"),
+                "image/jpeg",
+            )
+            .await
+            .expect("miniatur");
+        }
+        sqlx::query("delete from conversations where id = $1")
+            .bind(chat)
+            .execute(&state.pool)
+            .await
+            .expect("chat loeschen");
+        aufraeumen(&state.pool, &weiche).await;
+
+        let mut uebrig = Vec::new();
+        for ort in [&warm, &kalt] {
+            for k in std::iter::once(None).chain(miniatur::KANTEN.iter().map(|k| Some(*k))) {
+                let name = match k {
+                    None => schluessel.clone(),
+                    Some(k) => miniatur::schluessel(&schluessel, k),
+                };
+                if ort.read(&name, None).await.expect("lesen").is_some() {
+                    uebrig.push(name);
+                }
+            }
+        }
+        assert!(uebrig.is_empty(), "{ablage}: übrig geblieben: {uebrig:?}");
+        assert!(!steht_im_muell(&state, &schluessel).await, "{ablage}: Müllzeile steht noch");
+    }
+    let _ = std::fs::remove_dir_all(&wurzel);
+
     // Aufräumen nach uns selbst.
     sqlx::query("delete from storage_muell where storage_key = $1")
         .bind(&dritter)

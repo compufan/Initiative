@@ -524,7 +524,8 @@ async fn serve(
     let umleitung = if direkt && darf_angezeigt_werden(&attachment.mime) {
         state
             .storage
-            .download_url(&attachment.storage_key, &options)?
+            .adresse(&attachment.storage_key, &options)
+            .await?
     } else {
         None
     };

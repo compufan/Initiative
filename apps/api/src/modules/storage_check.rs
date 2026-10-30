@@ -105,7 +105,8 @@ async fn storage_check(
         // `/media/{id}/bytes`, nicht der für die Anzeige.)
         let url = state
             .storage
-            .download_url(&key, &crate::storage::DownloadOptions::default());
+            .adresse(&key, &crate::storage::DownloadOptions::default())
+            .await;
         steps.push(match url {
             Ok(Some(url)) => {
                 let fetched = reqwest::Client::builder()
