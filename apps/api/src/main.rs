@@ -170,6 +170,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .with_graceful_shutdown(shutdown_signal())
     .await?;
+    // Offene SSH-Verbindungen zur Storage Box schliessen, statt sie von der
+    // Gegenseite in den Zeitablauf laufen zu lassen (das Limit der Box ist
+    // knapp, und ein schneller Neustart soll keine Geisterverbindungen
+    // mitzählen).
+    state.storage.beenden().await;
+    if let Some(kalt) = &state.speicher.kalt {
+        kalt.beenden().await;
+    }
     Ok(())
 }
 

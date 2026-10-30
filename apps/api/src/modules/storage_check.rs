@@ -585,12 +585,20 @@ async fn kalt_check(
             verdict: "Keine kalte Ablage eingerichtet".into(),
         }));
     };
-    let steps = grossdatei_probe(
+    let mut steps = grossdatei_probe(
         &kalt,
         std::path::Path::new(&state.config.upload_teile_dir),
         frage.mib.unwrap_or(64),
     )
     .await;
+    if let Some(zustand) = kalt.zustand().await {
+        steps.push(schritt(
+            "Verbindungen",
+            !zustand.contains("antwortet nicht"),
+            zustand,
+            Some("Eine Verbindung antwortet nicht – sie wird beim nächsten Zugriff neu aufgebaut. Bleibt es dabei, sind die gleichzeitigen Verbindungen der Box (Limit 10) womöglich aufgebraucht."),
+        ));
+    }
     let alles = steps.iter().all(|s| s.ok);
     Ok(Json(CheckResult {
         driver: kalt.kind().to_string(),

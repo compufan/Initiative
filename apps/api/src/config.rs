@@ -69,6 +69,41 @@ pub struct SftpEinstellungen {
     pub fingerabdruck: Option<String>,
     /// Das Verzeichnis auf der Box, unterhalb dessen alles liegt.
     pub pfad: String,
+    /**
+     * Wie viele SSH-Verbindungen für Umzug, Löschen und Aufräumen
+     * (`KALT_SFTP_BULK_VERBINDUNGEN`, Vorgabe 1, höchstens 3).
+     */
+    pub bulk_verbindungen: usize,
+    /**
+     * Wie viele SSH-Verbindungen für Lesen/Videostrom
+     * (`KALT_SFTP_LESE_VERBINDUNGEN`, Vorgabe 2, höchstens 6). 0 heisst: Leser
+     * teilen sich die Bulk-Verbindung (die alte Betriebsart mit EINER
+     * Verbindung).
+     */
+    pub lese_verbindungen: usize,
+}
+
+/// Obergrenze aller SFTP-Verbindungen zusammen. Eine Hetzner Storage Box
+/// erlaubt 10 gleichzeitige; 8 lässt Luft für `sftp`/`rsync` von Hand und die
+/// Sicherung (`deploy/vps/backup.sh`).
+pub const SFTP_VERBINDUNGEN_MAX: usize = 8;
+
+/**
+ * `KALT_SFTP_BULK_VERBINDUNGEN` und `KALT_SFTP_LESE_VERBINDUNGEN` auswerten.
+ *
+ * Unbrauchbares fällt auf die Vorgabe (1 + 2) zurück, zu Grosses wird
+ * begrenzt (je Art, und zusammen auf [`SFTP_VERBINDUNGEN_MAX`]; Bulk behält
+ * seinen Anteil, die Leser verlieren).
+ */
+pub fn sftp_verbindungen(bulk: Option<&str>, lese: Option<&str>) -> (usize, usize) {
+    let lesen = |roh: Option<&str>, vorgabe: usize, max: usize, min: usize| {
+        roh.and_then(|w| w.trim().parse::<usize>().ok())
+            .unwrap_or(vorgabe)
+            .clamp(min, max)
+    };
+    let bulk = lesen(bulk, 1, 3, 1);
+    let lese = lesen(lese, 2, 6, 0).min(SFTP_VERBINDUNGEN_MAX - bulk);
+    (bulk, lese)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -519,7 +554,12 @@ impl Config {
                     )))
                 }
             },
-            kalt_sftp: var("KALT_SFTP_WIRT").map(|wirt| SftpEinstellungen {
+            kalt_sftp: var("KALT_SFTP_WIRT").map(|wirt| {
+                let verbindungen = sftp_verbindungen(
+                    var("KALT_SFTP_BULK_VERBINDUNGEN").as_deref(),
+                    var("KALT_SFTP_LESE_VERBINDUNGEN").as_deref(),
+                );
+                SftpEinstellungen {
                     wirt,
                     hafen: var("KALT_SFTP_HAFEN")
                         .and_then(|h| h.parse().ok())
@@ -530,7 +570,10 @@ impl Config {
                     benutzer: var_or("KALT_SFTP_BENUTZER", ""),
                     schluesseldatei: var_or("KALT_SFTP_SCHLUESSEL", "/root/.ssh/storagebox_key"),
                     fingerabdruck: var("KALT_SFTP_FINGERABDRUCK"),
-                pfad: trim_slash(var_or("KALT_SFTP_PFAD", "initiative")),
+                    pfad: trim_slash(var_or("KALT_SFTP_PFAD", "initiative")),
+                    bulk_verbindungen: verbindungen.0,
+                    lese_verbindungen: verbindungen.1,
+                }
             }),
             /*
              * Ab wie viel app-eigener Belegung ausgelagert wird.
@@ -708,6 +751,27 @@ mod media_key_tests {
         // Beim Kopieren aus dem Terminal hängt schnell ein Zeilenumbruch dran.
         let roh = format!("  {}\n", STANDARD.encode([1u8; 32]));
         assert_eq!(media_key_lesen(&roh).expect("gültig"), [1u8; 32]);
+    }
+}
+
+#[cfg(test)]
+mod sftp_verbindungen_tests {
+    use super::sftp_verbindungen;
+
+    #[test]
+    fn vorgabe_ist_ein_bulk_und_zwei_leser_zusammen_hoechstens_vier() {
+        let (b, l) = sftp_verbindungen(None, None);
+        assert_eq!((b, l), (1, 2));
+        assert!(b + l <= 4);
+    }
+
+    #[test]
+    fn zu_grosses_wird_begrenzt_und_unsinn_faellt_auf_die_vorgabe() {
+        assert_eq!(sftp_verbindungen(Some("99"), Some("99")), (3, 5));
+        assert_eq!(sftp_verbindungen(Some("0"), Some("x")), (1, 2));
+        assert_eq!(sftp_verbindungen(Some("2"), Some("0")), (2, 0));
+        let (b, l) = sftp_verbindungen(Some("3"), Some("6"));
+        assert!(b + l <= 8);
     }
 }
 

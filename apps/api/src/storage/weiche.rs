@@ -286,6 +286,11 @@ impl Storage for Weiche {
     async fn kapazitaet(&self) -> Option<(u64, u64)> {
         self.warm.kapazitaet().await
     }
+
+    async fn beenden(&self) {
+        self.warm.beenden().await;
+        self.kalt.beenden().await;
+    }
 }
 
 #[cfg(test)]

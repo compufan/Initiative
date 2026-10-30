@@ -45,6 +45,15 @@ struct Zustand {
     geschrieben: std::sync::atomic::AtomicU64,
     /// Wie viele Bytes die Gegenstelle insgesamt ausgeliefert hat.
     gelesen: Mutex<u64>,
+    /// Künstliche Pause je Schreibpaket in Millisekunden. Der Server arbeitet
+    /// je Verbindung seine Anfragen der Reihe nach ab (wie ein echter SFTP-
+    /// Server mit begrenzter Bandbreite): Ein langsamer Umzug hält damit
+    /// alles auf, was auf DERSELBEN Verbindung wartet – und nur das.
+    schreib_pause_ms: std::sync::atomic::AtomicU64,
+    /// Wie viele SFTP-Sitzungen (= SSH-Verbindungen des Treibers) je aufgebaut wurden.
+    verbindungen: std::sync::atomic::AtomicUsize,
+    /// Handles aller laufenden Sitzungen – zum gewaltsamen Trennen.
+    laufende: Mutex<Vec<russh::server::Handle>>,
 }
 
 #[derive(Clone)]
@@ -96,6 +105,8 @@ impl russh::server::Handler for Ssh {
         if name == "sftp" {
             let kanal = self.kanaele.lock().await.remove(&channel_id).unwrap();
             session.channel_success(channel_id)?;
+            self.z.verbindungen.fetch_add(1, Ordering::SeqCst);
+            self.z.laufende.lock().unwrap().push(session.handle());
             russh_sftp::server::run(
                 kanal.into_stream(),
                 Sftp {
@@ -236,6 +247,10 @@ impl russh_sftp::server::Handler for Sftp {
         offset: u64,
         data: Vec<u8>,
     ) -> Result<Status, Self::Error> {
+        let pause = self.z.schreib_pause_ms.load(Ordering::SeqCst);
+        if pause > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(pause)).await;
+        }
         let rest = self.z.schreib_budget.load(Ordering::SeqCst);
         if rest >= 0 {
             if rest < data.len() as i64 {
@@ -364,6 +379,10 @@ fn schluessel(startwert: u8) -> PrivateKey {
 }
 
 async fn probe() -> Probe {
+    probe_mit(1, 2).await
+}
+
+async fn probe_mit(bulk: usize, lese: usize) -> Probe {
     let wurzel = std::env::temp_dir().join(format!("sftp-gross-{}", uuid::Uuid::now_v7().simple()));
     let box_dir = wurzel.join("box");
     std::fs::create_dir_all(&box_dir).unwrap();
@@ -402,6 +421,8 @@ async fn probe() -> Probe {
         schluesseldatei: schluesseldatei.to_string_lossy().to_string(),
         fingerabdruck: None,
         pfad: "initiative".into(),
+        bulk_verbindungen: bulk,
+        lese_verbindungen: lese,
     });
     Probe { treiber, z, wurzel }
 }
@@ -716,4 +737,178 @@ async fn kleine_dateien_gehen_ueber_put_und_fehlende_lesen_sich_als_nichts() {
         .await
         .unwrap()
         .is_none());
+}
+
+/* ==========================================================================
+ * Der Verbindungsvorrat
+ * ========================================================================== */
+
+/// Misst die Wartezeit kleiner Lesezugriffe, während ein grosser Umzug läuft.
+/// Gibt die einzelnen Laufzeiten zurück.
+async fn lesezeiten_waehrend_umzug(p: &Probe, runden: usize) -> Vec<std::time::Duration> {
+    let klein = muster(64 * 1024);
+    let q = quelle(p, "klein.bin", &klein);
+    p.treiber.put_datei("file/x/klein.bin", &q, "x/y").await.unwrap();
+    // Aufwärmen: die Lese-Verbindung(en) stehen, bevor gemessen wird.
+    let o = p.treiber.read("file/x/klein.bin", None).await.unwrap().unwrap();
+    einsammeln(o).await;
+
+    // Jedes Schreibpaket (32 KiB) hält die Gegenstelle 150 ms auf: 1 MiB sind
+    // 32 Pakete, also fast fünf Sekunden – lang genug, um mitten hineinzulesen.
+    // Wer auf DERSELBEN Verbindung wartet, steht hinter dem laufenden Paket.
+    p.z.schreib_pause_ms.store(150, Ordering::SeqCst);
+    let gross = muster(MIB);
+    let qg = quelle(p, "gross.bin", &gross);
+    let treiber = &p.treiber;
+    let umzug = async {
+        let t = std::time::Instant::now();
+        treiber
+            .put_datei("file/x/gross.bin", &qg, "x/y")
+            .await
+            .unwrap();
+        eprintln!("Umzug dauerte {:?}", t.elapsed());
+    };
+    let messen = async {
+        // Dem Umzug einen Vorsprung lassen, damit die Schreibpakete wirklich in der Leitung sind.
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        let mut zeiten = Vec::new();
+        for i in 0..runden {
+            let t = std::time::Instant::now();
+            let o = treiber
+                .read(
+                    "file/x/klein.bin",
+                    Some(ByteRange {
+                        start: 100,
+                        end: Some(4195),
+                    }),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            let roh = einsammeln(o).await;
+            assert_eq!(roh, klein[100..4196]);
+            zeiten.push(t.elapsed());
+            // Ungleiche Abstände, damit die Messung nicht im Takt der
+            // 150-ms-Pakete des Umzugs läuft (sie träfe sonst immer dieselbe
+            // Stelle im Paket und sähe immer dieselbe Wartezeit).
+            tokio::time::sleep(std::time::Duration::from_millis(37 + 41 * (i as u64 % 5))).await;
+        }
+        zeiten
+    };
+    let (_, zeiten) = tokio::join!(umzug, messen);
+    p.z.schreib_pause_ms.store(0, Ordering::SeqCst);
+    zeiten
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn last_auf_der_bulk_verbindung_haelt_das_lesen_nicht_auf() {
+    // Mit Vorrat (1 Bulk + 2 Lesen): Lesen läuft auf eigenen Verbindungen.
+    let mit = probe_mit(1, 2).await;
+    let mut zeiten_mit = lesezeiten_waehrend_umzug(&mit, 9).await;
+    zeiten_mit.sort();
+    let schlimmste_mit = *zeiten_mit.last().unwrap();
+
+    // Alte Betriebsart (Lesen = 0): alles teilt sich EINE Verbindung.
+    let ohne = probe_mit(1, 0).await;
+    let mut zeiten_ohne = lesezeiten_waehrend_umzug(&ohne, 9).await;
+    zeiten_ohne.sort();
+    let schlimmste_ohne = *zeiten_ohne.last().unwrap();
+
+    // Der Median taugt hier nicht: Ein Leser auf der geteilten Verbindung
+    // wartet, bis der GANZE Umzug durch ist (die Schreibanfragen stehen in
+    // der Leitung davor), und alle späteren Messungen laufen danach ohne
+    // Last. Aussagekräftig ist der schlimmste Fall.
+    eprintln!(
+        "Lesen während eines Umzugs: schlimmster Lesezugriff mit Vorrat {schlimmste_mit:?}, \
+         mit einer geteilten Verbindung {schlimmste_ohne:?}"
+    );
+    assert!(
+        schlimmste_mit < std::time::Duration::from_millis(250),
+        "mit eigener Lese-Verbindung wartete ein Lesezugriff {schlimmste_mit:?}"
+    );
+    assert!(
+        schlimmste_ohne > std::time::Duration::from_secs(1) && schlimmste_ohne > schlimmste_mit * 10,
+        "die Messung unterscheidet die Betriebsarten nicht: mit {schlimmste_mit:?}, ohne {schlimmste_ohne:?}"
+    );
+    // Und es waren nie mehr als 1 + 2 Verbindungen.
+    assert!(mit.z.verbindungen.load(Ordering::SeqCst) <= 3);
+    assert_eq!(ohne.z.verbindungen.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn der_vorrat_bleibt_klein_verteilt_leser_und_baut_tote_verbindungen_neu_auf() {
+    let p = probe_mit(1, 2).await;
+    let inhalt = muster(3 * MIB);
+    let q = quelle(&p, "v.bin", &inhalt);
+    p.treiber.put_datei("file/x/v.bin", &q, "x/y").await.unwrap();
+    assert_eq!(p.z.verbindungen.load(Ordering::SeqCst), 1, "nur Bulk bisher");
+
+    // Fünf Leser gleichzeitig, Ströme offen gehalten: Sie verteilen sich auf
+    // die zwei Lese-Verbindungen – insgesamt 3, nicht 6.
+    let mut offene = Vec::new();
+    for _ in 0..5 {
+        offene.push(p.treiber.read("file/x/v.bin", None).await.unwrap().unwrap());
+    }
+    assert_eq!(
+        p.z.verbindungen.load(Ordering::SeqCst),
+        3,
+        "1 Bulk + 2 Lesen, nicht mehr"
+    );
+    for o in offene {
+        assert_eq!(einsammeln(o).await, inhalt);
+    }
+    let befunde = p.treiber.gesundheit().await;
+    assert_eq!(befunde.len(), 3);
+    assert!(befunde.iter().all(|b| b.verbunden && b.gesund), "{befunde:?}");
+    assert!(befunde.iter().all(|b| b.aktive_leser == 0), "Leser zählen sich nicht ab: {befunde:?}");
+
+    // Alle Verbindungen sterben (Box neu gestartet): Der nächste Zugriff
+    // baut neu auf – ohne Fehler, auch wenn die tote Verbindung noch als
+    // „frisch" galt.
+    let handles: Vec<_> = p.z.laufende.lock().unwrap().drain(..).collect();
+    for h in handles {
+        let _ = h
+            .disconnect(russh::Disconnect::ByApplication, "Neustart".into(), "de".into())
+            .await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let o = p
+        .treiber
+        .read("file/x/v.bin", Some(ByteRange { start: 10, end: Some(99) }))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(einsammeln(o).await, inhalt[10..100]);
+    p.treiber.delete("file/x/v.bin").await.unwrap();
+    assert!(p.z.verbindungen.load(Ordering::SeqCst) > 3, "es wurde neu verbunden");
+    assert!(p.z.verbindungen.load(Ordering::SeqCst) <= 6);
+
+    // Aufräumen beim Beenden: danach steht keine Verbindung mehr.
+    p.treiber.beenden().await;
+    let befunde = p.treiber.gesundheit().await;
+    assert!(befunde.iter().all(|b| !b.verbunden), "{befunde:?}");
+    // Und der Treiber bleibt benutzbar (baut bei Bedarf neu auf).
+    assert!(p.treiber.read("file/x/v.bin", None).await.unwrap().is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn eine_tote_lese_verbindung_trifft_die_andere_nicht() {
+    let p = probe_mit(1, 2).await;
+    let inhalt = muster(MIB);
+    let q = quelle(&p, "w.bin", &inhalt);
+    p.treiber.put_datei("file/x/w.bin", &q, "x/y").await.unwrap();
+    // Zwei Leser öffnen beide Lese-Verbindungen.
+    let a = p.treiber.read("file/x/w.bin", None).await.unwrap().unwrap();
+    let b = p.treiber.read("file/x/w.bin", None).await.unwrap().unwrap();
+    assert_eq!(p.z.verbindungen.load(Ordering::SeqCst), 3);
+    // Genau die ERSTE Sitzung (Bulk) wird getrennt: Die Leser merken nichts.
+    let erste = p.z.laufende.lock().unwrap().remove(0);
+    let _ = erste
+        .disconnect(russh::Disconnect::ByApplication, "x".into(), "de".into())
+        .await;
+    assert_eq!(einsammeln(a).await, inhalt);
+    assert_eq!(einsammeln(b).await, inhalt);
+    // Bulk baut sich beim nächsten Schreiben neu auf.
+    let q2 = quelle(&p, "w2.bin", &inhalt);
+    p.treiber.put_datei("file/x/w2.bin", &q2, "x/y").await.unwrap();
 }

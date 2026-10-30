@@ -146,6 +146,17 @@ pub trait Storage: Send + Sync {
     }
 
     /**
+     * Beim Beenden des Dienstes aufräumen (offene Verbindungen schliessen).
+     * Die meisten Speicher haben nichts zu tun.
+     */
+    async fn beenden(&self) {}
+
+    /// Ein Satz über den Zustand der Verbindungen – nur SFTP hat einen.
+    async fn zustand(&self) -> Option<String> {
+        None
+    }
+
+    /**
      * Liegengebliebene Teilobjekte wegräumen, die älter als `aelter_als` sind.
      * Gibt die Zahl der entfernten zurück. Nur Ablagen, die unter einem
      * Zwischennamen schreiben (SFTP), haben hier etwas zu tun.

@@ -521,6 +521,10 @@ impl Storage for Tresor {
     async fn kapazitaet(&self) -> Option<(u64, u64)> {
         self.innen.kapazitaet().await
     }
+
+    async fn beenden(&self) {
+        self.innen.beenden().await;
+    }
 }
 
 #[cfg(test)]

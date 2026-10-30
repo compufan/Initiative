@@ -29,18 +29,37 @@
 //! Schlüsselanmeldung, nachweislich funktionierend. WebDAV müsste in der
 //! Hetzner-Konsole erst freigeschaltet werden.
 //!
-//! # Eine Verbindung, viele Abrufe
+//! # Ein kleiner Verbindungsvorrat, viele Abrufe
 //!
-//! Eine Storage Box lässt nur eine Handvoll gleichzeitiger Verbindungen zu.
-//! Deshalb hält dieser Treiber **eine** SSH-Verbindung und schickt alle
-//! Anfragen darüber: SFTP nummeriert seine Anfragen selbst und kann viele
-//! gleichzeitig offen haben. Eine Verbindung je Abruf wäre nicht nur am
-//! Limit, sondern auch langsam – ein SSH-Handschlag kostet mehr als das
-//! Lesen eines Videoausschnitts.
+//! Eine Storage Box lässt nur eine Handvoll gleichzeitiger Verbindungen zu
+//! (Hetzner: 10). Deshalb hält dieser Treiber wenige SSH-Verbindungen und
+//! schickt alle Anfragen darüber: SFTP nummeriert seine Anfragen selbst und
+//! kann viele gleichzeitig offen haben. Eine Verbindung je Abruf wäre nicht
+//! nur am Limit, sondern auch langsam – ein SSH-Handschlag kostet mehr als
+//! das Lesen eines Videoausschnitts.
 //!
-//! Bricht sie ab, wird beim nächsten Zugriff neu verbunden. Das ist der
-//! Normalfall und kein Fehler: Eine Verbindung, die eine Nacht lang ungenutzt
-//! dasteht, wird von der Gegenseite geschlossen.
+//! **Warum nicht nur eine.** Auf einer einzigen Verbindung teilen sich der
+//! Umzug (Gigabytes, Schreibpakete in der Luft) und der Videostrom die
+//! SSH-Fenster und die Reihenfolge der Antworten: Ein Zuschauer, der
+//! vorspult, wartete hinter dem Hinüberschreiben eines 4-GiB-Videos. Darum
+//! zwei Rollen mit je eigenen Verbindungen:
+//!
+//!   * **Bulk** (Vorgabe 1): schreiben, umbenennen, löschen, aufräumen,
+//!   * **Lesen** (Vorgabe 2): Videostrom, Nachmessen, Gegenlesen, `statvfs`.
+//!
+//! Zusammen Vorgabe 3, nie über 8 – weit unter dem Limit der Box, mit Luft
+//! für die Sicherung (`deploy/vps/backup.sh`) und ein `sftp` von Hand. Die
+//! Zahlen stehen in `KALT_SFTP_BULK_VERBINDUNGEN`/`KALT_SFTP_LESE_VERBINDUNGEN`;
+//! Lesen = 0 ist die alte Betriebsart (alles auf der Bulk-Verbindung).
+//! Verbunden wird träge: Die zweite Lese-Verbindung entsteht erst, wenn die
+//! erste einen Leser hat und ein weiterer kommt.
+//!
+//! Bricht eine Verbindung ab, wird SIE beim nächsten Zugriff neu verbunden
+//! (die anderen laufen weiter). Das ist der Normalfall und kein Fehler: Eine
+//! Verbindung, die eine Nacht lang ungenutzt dasteht, wird von der Gegenseite
+//! geschlossen. Jede Verbindung hat ihre eigene Gesundheitsprobe
+//! ([`SftpSpeicher::gesundheit`]) und wird beim Beenden geschlossen
+//! ([`Storage::beenden`]).
 //!
 //! # Was hier bewusst NICHT steht
 //!
@@ -58,6 +77,7 @@ use russh::client::{self, Handle};
 use russh::keys::PrivateKeyWithHashAlg;
 use russh_sftp::client::SftpSession;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::{Mutex, Semaphore};
 use tokio_util::io::ReaderStream;
 
@@ -78,11 +98,14 @@ use crate::error::{AppError, AppResult};
  * EINEM gemeinsamen Vorrat genügten acht pausierte Videos, und weder ein
  * Umzug noch ein Löschen käme je wieder durch.
  */
-const PLAETZE: usize = 16;
+const LESE_PLAETZE_JE_VERBINDUNG: usize = 8;
 
-/// Plätze für Schreiben, Umbenennen und Löschen – getrennt von den Lesern, damit
-/// pausierte Abspieler den Auslagerungsdienst und das Aufräumen nicht aushungern.
-const SCHREIB_PLAETZE: usize = 4;
+/// Plätze für Schreiben, Umbenennen und Löschen je Bulk-Verbindung – getrennt
+/// von den Lesern, damit pausierte Abspieler den Auslagerungsdienst und das
+/// Aufräumen nicht aushungern. Zwei gleichzeitige Schreiber teilen sich eine
+/// Verbindung ohne sich gegenseitig auszubremsen; mehr bringt auf EINER
+/// Leitung nichts.
+const SCHREIB_PLAETZE_JE_VERBINDUNG: usize = 2;
 
 /// Wie lange auf die Gegenseite gewartet wird, bevor aufgegeben wird.
 const FRIST_S: u64 = 30;
@@ -114,10 +137,82 @@ const MIB: u64 = 1024 * 1024;
 
 pub struct SftpSpeicher {
     einstellungen: SftpEinstellungen,
-    /// Die eine Verbindung. `None` heisst: noch nicht oder nicht mehr.
-    verbindung: Mutex<Option<Arc<Verbindung>>>,
+    /// Verbindungen für Umzug, Löschen, Aufräumen. Mindestens eine.
+    bulk: Vec<Arc<Platz>>,
+    /// Verbindungen für Lesen. Leer = Leser teilen sich die Bulk-Verbindungen.
+    lese: Vec<Arc<Platz>>,
     plaetze: Arc<Semaphore>,
     schreib_plaetze: Arc<Semaphore>,
+}
+
+/// Was eine Verbindung tut – bestimmt, aus welchem Vorrat sie kommt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rolle {
+    Bulk,
+    Lesen,
+}
+
+/**
+ * Ein Platz im Vorrat: eine Verbindung (oder noch keine) und die Zahl der
+ * Leser, die gerade auf ihr hängen. Nach dieser Zahl wird gewählt, damit die
+ * zweite Lese-Verbindung wirklich Last bekommt.
+ */
+struct Platz {
+    /// `None` heisst: noch nicht oder nicht mehr verbunden.
+    verbindung: Mutex<Option<Arc<Verbindung>>>,
+    aktiv: AtomicUsize,
+}
+
+impl Platz {
+    fn neu() -> Arc<Self> {
+        Arc::new(Self {
+            verbindung: Mutex::new(None),
+            aktiv: AtomicUsize::new(0),
+        })
+    }
+}
+
+/// Zählt einen laufenden Zugriff auf einen Platz; beim Fallenlassen zurück.
+struct Beleg(Arc<Platz>);
+
+impl Beleg {
+    fn neu(platz: &Arc<Platz>) -> Self {
+        platz.aktiv.fetch_add(1, Ordering::SeqCst);
+        Beleg(platz.clone())
+    }
+}
+
+impl Drop for Beleg {
+    fn drop(&mut self) {
+        self.0.aktiv.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Eine ausgeliehene Verbindung samt Platz – für `verwerfen`.
+struct Leihe {
+    v: Arc<Verbindung>,
+    platz: Arc<Platz>,
+    beleg: Beleg,
+}
+
+impl std::ops::Deref for Leihe {
+    type Target = Verbindung;
+    fn deref(&self) -> &Verbindung {
+        &self.v
+    }
+}
+
+/// Befund einer Verbindung für [`SftpSpeicher::gesundheit`].
+#[derive(Debug, Clone)]
+pub struct VerbindungsBefund {
+    pub rolle: &'static str,
+    pub nr: usize,
+    /// Steht eine Verbindung (sonst: noch nie oder nach Ausfall nicht neu aufgebaut)?
+    pub verbunden: bool,
+    /// Antwortete sie auf die Probe?
+    pub gesund: bool,
+    pub antwort_ms: Option<u128>,
+    pub aktive_leser: usize,
 }
 
 struct Verbindung {
@@ -211,11 +306,16 @@ impl client::Handler for Wachmann {
 
 impl SftpSpeicher {
     pub fn neu(einstellungen: SftpEinstellungen) -> Self {
+        let bulk_n = einstellungen.bulk_verbindungen.max(1);
+        let lese_n = einstellungen.lese_verbindungen;
+        // Ohne eigene Lese-Verbindungen lesen die Bulk-Verbindungen mit.
+        let lese_kanaele = if lese_n == 0 { bulk_n } else { lese_n };
         Self {
+            bulk: (0..bulk_n).map(|_| Platz::neu()).collect(),
+            lese: (0..lese_n).map(|_| Platz::neu()).collect(),
+            plaetze: Arc::new(Semaphore::new(LESE_PLAETZE_JE_VERBINDUNG * lese_kanaele)),
+            schreib_plaetze: Arc::new(Semaphore::new(SCHREIB_PLAETZE_JE_VERBINDUNG * bulk_n)),
             einstellungen,
-            verbindung: Mutex::new(None),
-            plaetze: Arc::new(Semaphore::new(PLAETZE)),
-            schreib_plaetze: Arc::new(Semaphore::new(SCHREIB_PLAETZE)),
         }
     }
 
@@ -234,51 +334,121 @@ impl SftpSpeicher {
         Ok(pfad.to_string_lossy().replace('\\', "/"))
     }
 
+    /// Den am wenigsten belasteten Platz der Rolle.
+    fn waehlen(&self, rolle: Rolle) -> Arc<Platz> {
+        let vorrat = match rolle {
+            Rolle::Lesen if !self.lese.is_empty() => &self.lese,
+            _ => &self.bulk,
+        };
+        vorrat
+            .iter()
+            .min_by_key(|p| p.aktiv.load(Ordering::SeqCst))
+            .expect("mindestens ein Platz")
+            .clone()
+    }
+
     /// Die Verbindung – die vorhandene oder eine neue.
-    async fn sitzung(&self) -> AppResult<Arc<Verbindung>> {
-        {
-            let da = self.verbindung.lock().await;
-            if let Some(v) = da.as_ref() {
-                /*
-                 * Kurz nachfassen, ob sie noch steht. Eine tote Verbindung
-                 * merkt man sonst erst am halb ausgelieferten Video – und
-                 * dann hat der Abspieler schon abgebrochen.
-                 *
-                 * Aber nicht bei JEDEM Zugriff: Die Probe kostet einen
-                 * Umlauf unter dem Schloss, und eine Kachelansicht oder der
-                 * Tresor (zwei Lesevorgänge je Abruf) machte daraus eine
-                 * Warteschlange. Hat die Verbindung in den letzten zwanzig
-                 * Sekunden etwas beantwortet, gilt sie als lebendig.
-                 */
-                let frisch = v
-                    .zuletzt_ok
+    async fn sitzung(&self, rolle: Rolle) -> AppResult<Leihe> {
+        let platz = self.waehlen(rolle);
+        // Gezählt wird ab hier, auch während verbunden wird: Zwei gleichzeitige
+        // Leser sollen nicht beide denselben leeren Platz „am wenigsten
+        // belastet" finden.
+        let beleg = Beleg::neu(&platz);
+        let mut da = platz.verbindung.lock().await;
+        if let Some(v) = da.as_ref() {
+            /*
+             * Kurz nachfassen, ob sie noch steht. Eine tote Verbindung
+             * merkt man sonst erst am halb ausgelieferten Video – und
+             * dann hat der Abspieler schon abgebrochen.
+             *
+             * Aber nicht bei JEDEM Zugriff: Die Probe kostet einen
+             * Umlauf unter dem Schloss, und eine Kachelansicht oder der
+             * Tresor (zwei Lesevorgänge je Abruf) machte daraus eine
+             * Warteschlange. Hat die Verbindung in den letzten zwanzig
+             * Sekunden etwas beantwortet, gilt sie als lebendig.
+             */
+            let frisch = !v._griff.is_closed()
+                && v.zuletzt_ok
                     .lock()
                     .map(|t| t.elapsed() < std::time::Duration::from_secs(20))
                     .unwrap_or(false);
-                if frisch {
-                    return Ok(v.clone());
-                }
-                if v.sftp.canonicalize(".").await.is_ok() {
-                    if let Ok(mut t) = v.zuletzt_ok.lock() {
-                        *t = std::time::Instant::now();
-                    }
-                    return Ok(v.clone());
-                }
-                tracing::info!("Verbindung zur Storage Box war tot – es wird neu verbunden");
+            if frisch || probe(v).await {
+                return Ok(Leihe {
+                    v: v.clone(),
+                    platz: platz.clone(),
+                    beleg,
+                });
             }
+            tracing::info!(
+                rolle = ?rolle,
+                "Verbindung zur Storage Box war tot – es wird neu verbunden"
+            );
         }
+        // Unter dem Schloss verbinden: Zwei Zugriffe auf denselben leeren
+        // Platz bauen so EINE Verbindung auf, nicht zwei (das Limit der Box
+        // ist knapp).
         let neu = Arc::new(self.verbinden().await?);
-        let mut da = self.verbindung.lock().await;
         *da = Some(neu.clone());
-        Ok(neu)
+        Ok(Leihe {
+            v: neu,
+            platz: platz.clone(),
+            beleg,
+        })
     }
 
     /// Eine Verbindung, die mitten in einer Übertragung riss, wegwerfen –
     /// der nächste Zugriff baut eine neue, statt erst die Probe abzuwarten.
-    async fn verwerfen(&self, v: &Arc<Verbindung>) {
-        let mut da = self.verbindung.lock().await;
-        if da.as_ref().is_some_and(|aktuell| Arc::ptr_eq(aktuell, v)) {
+    /// Betrifft nur DIESEN Platz; die anderen Verbindungen laufen weiter.
+    async fn verwerfen(&self, l: &Leihe) {
+        let mut da = l.platz.verbindung.lock().await;
+        if da.as_ref().is_some_and(|aktuell| Arc::ptr_eq(aktuell, &l.v)) {
             *da = None;
+        }
+    }
+
+    /**
+     * Gesundheitsprobe je Verbindung: Welche stehen, welche antworten, wie
+     * schnell, wie viele Leser hängen darauf. Eine, die nicht antwortet,
+     * wird dabei verworfen und beim nächsten Zugriff neu aufgebaut. Baut
+     * KEINE neuen Verbindungen auf.
+     */
+    pub async fn gesundheit(&self) -> Vec<VerbindungsBefund> {
+        let mut aus = Vec::new();
+        for (rolle, vorrat) in [("bulk", &self.bulk), ("lesen", &self.lese)] {
+            for (nr, platz) in vorrat.iter().enumerate() {
+                let mut da = platz.verbindung.lock().await;
+                let mut befund = VerbindungsBefund {
+                    rolle,
+                    nr,
+                    verbunden: da.is_some(),
+                    gesund: false,
+                    antwort_ms: None,
+                    aktive_leser: platz.aktiv.load(Ordering::SeqCst),
+                };
+                if let Some(v) = da.as_ref() {
+                    let t = std::time::Instant::now();
+                    if probe(v).await {
+                        befund.gesund = true;
+                        befund.antwort_ms = Some(t.elapsed().as_millis());
+                    } else {
+                        *da = None;
+                    }
+                }
+                aus.push(befund);
+            }
+        }
+        aus
+    }
+
+    /// Alle Verbindungen sauber schliessen (Beenden des Dienstes).
+    pub async fn schliessen(&self) {
+        for platz in self.bulk.iter().chain(self.lese.iter()) {
+            if let Some(v) = platz.verbindung.lock().await.take() {
+                let _ = v
+                    ._griff
+                    .disconnect(russh::Disconnect::ByApplication, "Dienst wird beendet", "de")
+                    .await;
+            }
         }
     }
 
@@ -430,7 +600,7 @@ impl Storage for SftpSpeicher {
         let _platz = self.schreib_platz().await?;
         let pfad = self.pfad_fuer(key)?;
         let teil = format!("{pfad}{TEIL}");
-        let v = self.sitzung().await?;
+        let v = self.sitzung(Rolle::Bulk).await?;
         self.ordner_sichern(&v.sftp, &pfad).await?;
         let ergebnis =
             async {
@@ -457,7 +627,7 @@ impl Storage for SftpSpeicher {
             let _ = v.sftp.remove_file(teil).await;
             return Err(fehler);
         }
-        self.fertigstellen(&v, &pfad, &teil, body.len() as u64)
+        self.fertigstellen(&v.v, &pfad, &teil, body.len() as u64)
             .await
     }
 
@@ -482,7 +652,7 @@ impl Storage for SftpSpeicher {
         let laenge = ein.metadata().await?.len();
         let pfad = self.pfad_fuer(key)?;
         let teil = format!("{pfad}{TEIL}");
-        let v = self.sitzung().await?;
+        let v = self.sitzung(Rolle::Bulk).await?;
         self.ordner_sichern(&v.sftp, &pfad).await?;
 
         let start = fortsetzpunkt(&v.sftp, &mut ein, &teil, laenge).await;
@@ -544,7 +714,7 @@ impl Storage for SftpSpeicher {
             self.verwerfen(&v).await;
             return Err(fehler);
         }
-        self.fertigstellen(&v, &pfad, &teil, laenge).await
+        self.fertigstellen(&v.v, &pfad, &teil, laenge).await
     }
 
     async fn read(&self, key: &str, range: Option<ByteRange>) -> AppResult<Option<ObjectStream>> {
@@ -564,30 +734,44 @@ impl Storage for SftpSpeicher {
                 return Err(f);
             }
         };
-        let v = match self.sitzung().await {
-            Ok(v) => v,
-            Err(f) => {
-                self.plaetze.add_permits(1);
-                return Err(f);
-            }
-        };
-
-        let mut datei = match v.sftp.open(pfad.clone()).await {
-            Ok(datei) => datei,
-            Err(fehler) => {
-                self.plaetze.add_permits(1);
-                /*
-                 * Nur „gibt es nicht" ist ein Nichts. Eine Zeitüberschreitung
-                 * oder ein Verbindungsabriss ist KEIN 404: Der Abspieler
-                 * würde eine Datei, die da ist, für gelöscht halten – und die
-                 * Weiche suchte sie in der falschen Ablage weiter.
-                 */
-                if fehlt_wirklich(&v.sftp, &pfad, &fehler).await {
-                    return Ok(None);
+        /*
+         * Zwei Versuche: Ist die Verbindung seit der letzten Probe gestorben
+         * (Box neu gestartet, Netz weg), merkt man das erst am `open`. Der
+         * erste Fehler wirft SIE weg und versucht es auf einer frischen
+         * Verbindung noch einmal, statt den Zuschauer mit einem Fehler
+         * stehen zu lassen. Nur „gibt es nicht" ist ein Nichts.
+         */
+        let mut versuch = 0;
+        let (v, mut datei) = loop {
+            versuch += 1;
+            let v = match self.sitzung(Rolle::Lesen).await {
+                Ok(v) => v,
+                Err(f) => {
+                    self.plaetze.add_permits(1);
+                    return Err(f);
                 }
-                return Err(AppError::internal(format!(
-                    "Die kalte Ablage antwortet nicht: {fehler}"
-                )));
+            };
+            match v.sftp.open(pfad.clone()).await {
+                Ok(datei) => break (v, datei),
+                Err(fehler) => {
+                    /*
+                     * Nur „gibt es nicht" ist ein Nichts. Eine Zeitüberschreitung
+                     * oder ein Verbindungsabriss ist KEIN 404: Der Abspieler
+                     * würde eine Datei, die da ist, für gelöscht halten – und die
+                     * Weiche suchte sie in der falschen Ablage weiter.
+                     */
+                    if fehlt_wirklich(&v.sftp, &pfad, &fehler).await {
+                        self.plaetze.add_permits(1);
+                        return Ok(None);
+                    }
+                    self.verwerfen(&v).await;
+                    if versuch >= 2 {
+                        self.plaetze.add_permits(1);
+                        return Err(AppError::internal(format!(
+                            "Die kalte Ablage antwortet nicht: {fehler}"
+                        )));
+                    }
+                }
             }
         };
 
@@ -639,6 +823,11 @@ impl Storage for SftpSpeicher {
             Freigabe {
                 innen: datei.take(laenge),
                 plaetze: self.plaetze.clone(),
+                // Beide leben so lange wie der Strom: Der Beleg zählt den
+                // Leser für die Lastverteilung, die Verbindung bleibt offen,
+                // auch wenn ihr Platz inzwischen neu belegt wurde.
+                _beleg: v.beleg,
+                _halter: v.v,
             },
             256 * 1024,
         );
@@ -661,16 +850,49 @@ impl Storage for SftpSpeicher {
     async fn delete(&self, key: &str) -> AppResult<()> {
         let _platz = self.schreib_platz().await?;
         let pfad = self.pfad_fuer(key)?;
-        let v = self.sitzung().await?;
+        let v = self.sitzung(Rolle::Bulk).await?;
         let teil = format!("{pfad}{TEIL}");
         let a = entfernen(&v.sftp, &pfad).await;
         let b = entfernen(&v.sftp, &teil).await;
         a.and(b)
     }
 
+    /// Schliesst die SSH-Verbindungen sauber (Beenden des Dienstes).
+    async fn beenden(&self) {
+        self.schliessen().await;
+    }
+
+    /// Verbindungszustand als Satz, für die Admin-Probe.
+    async fn zustand(&self) -> Option<String> {
+        let befunde = self.gesundheit().await;
+        Some(
+            befunde
+                .iter()
+                .map(|b| {
+                    format!(
+                        "{} {}: {}{}",
+                        b.rolle,
+                        b.nr + 1,
+                        match (b.verbunden, b.gesund) {
+                            (false, _) => "nicht verbunden (wird bei Bedarf aufgebaut)".to_string(),
+                            (true, true) => format!("antwortet in {} ms", b.antwort_ms.unwrap_or(0)),
+                            (true, false) => "antwortet nicht".to_string(),
+                        },
+                        if b.aktive_leser > 0 {
+                            format!(", {} Leser", b.aktive_leser)
+                        } else {
+                            String::new()
+                        }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    }
+
     /// Wie viel Platz auf der Box ist – falls sie es sagt (`statvfs@openssh.com`).
     async fn kapazitaet(&self) -> Option<(u64, u64)> {
-        let v = self.sitzung().await.ok()?;
+        let v = self.sitzung(Rolle::Lesen).await.ok()?;
         let wurzel = self.pfad_fuer("").ok()?;
         let s = v.sftp.fs_info(wurzel).await.ok()??;
         let einheit = s.fragment_size.max(1);
@@ -691,7 +913,7 @@ impl Storage for SftpSpeicher {
      */
     async fn teilreste_raeumen(&self, aelter_als: std::time::Duration) -> AppResult<usize> {
         let _platz = self.schreib_platz().await?;
-        let v = self.sitzung().await?;
+        let v = self.sitzung(Rolle::Bulk).await?;
         let wurzel = self.pfad_fuer("")?;
         let grenze = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -773,6 +995,26 @@ async fn platz_holen(plaetze: &Arc<Semaphore>) -> AppResult<tokio::sync::OwnedSe
             "Die kalte Ablage ist gerade ausgelastet – bitte gleich noch einmal",
         )),
     }
+}
+
+/// Antwortet die Verbindung? Frischt bei Erfolg den Zeitstempel auf.
+async fn probe(v: &Arc<Verbindung>) -> bool {
+    // Eine vom Gegenüber geschlossene Verbindung braucht keinen Umlauf mehr.
+    if v._griff.is_closed() {
+        return false;
+    }
+    let antwortet = tokio::time::timeout(
+        std::time::Duration::from_secs(FRIST_S),
+        v.sftp.canonicalize("."),
+    )
+    .await
+    .is_ok_and(|r| r.is_ok());
+    if antwortet {
+        if let Ok(mut t) = v.zuletzt_ok.lock() {
+            *t = std::time::Instant::now();
+        }
+    }
+    antwortet
 }
 
 /// Ist der Fehler „die Datei gibt es nicht"? Auch Server, die dafür nur
@@ -873,6 +1115,8 @@ async fn remote_lesen(sftp: &SftpSession, pfad: &str, ab: u64, laenge: u64) -> O
 struct Freigabe<R> {
     innen: R,
     plaetze: Arc<Semaphore>,
+    _beleg: Beleg,
+    _halter: Arc<Verbindung>,
 }
 
 impl<R: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for Freigabe<R> {

@@ -193,6 +193,8 @@ Für den Betrieb heisst das:
 | `KALT_SFTP_SCHLUESSEL` | `/root/.ssh/storagebox_key` | Privater Schlüssel. Passwörter gibt es hier nicht.                                             |
 | `KALT_SFTP_FINGERABDRUCK` | leer           | SHA256-Fingerabdruck des Wirtsschlüssels, ohne `SHA256:`. Leer = jeder Schlüssel wird angenommen.            |
 | `KALT_SFTP_PFAD`       | `initiative`      | Unterverzeichnis auf der Box.                                                                               |
+| `KALT_SFTP_BULK_VERBINDUNGEN` | `1`        | SSH-Verbindungen für Umzug/Löschen/Aufräumen (1 bis 3).                                                      |
+| `KALT_SFTP_LESE_VERBINDUNGEN` | `2`        | SSH-Verbindungen für Videostrom und Lesen (0 bis 6; `0` = alte Betriebsart, Lesen teilt sich die Bulk-Verbindung). Zusammen höchstens 8; die Box erlaubt standardmässig 10, die Vorgabe nimmt 3. |
 | `KALT_LOKAL_DIR`       | `./.data/kalt`    | Nur bei `KALT_TREIBER=lokal`.                                                                               |
 
 > **`MEDIA_KEY` verschlüsselt nur, was danach hochgeladen wird.** Der Tresor
