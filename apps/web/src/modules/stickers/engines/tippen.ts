@@ -126,7 +126,10 @@ async function laden(melden?: Fortschritt): Promise<void> {
       ort.env.wasm.proxy = true;
 
       melden?.(0.2, 'Modell wird geladen …');
-      const [e, d] = await Promise.all([
+      // `allSettled` statt `all`: Scheitert nur eine der beiden, wäre die
+      // andere mit `all` geladen und unerreichbar – ein Encoder sind gut zehn
+      // Megabyte im WASM-Speicher, und jeder neue Versuch legte einen dazu.
+      const [e, d] = await Promise.allSettled([
         ort.InferenceSession.create(ENCODER_URL, {
           executionProviders: ['wasm'],
           graphOptimizationLevel: 'all',
@@ -136,8 +139,14 @@ async function laden(melden?: Fortschritt): Promise<void> {
           graphOptimizationLevel: 'all',
         }),
       ]);
-      encoder = e;
-      decoder = d;
+      if (e.status === 'rejected' || d.status === 'rejected') {
+        for (const r of [e, d]) {
+          if (r.status === 'fulfilled') await r.value.release().catch(() => undefined);
+        }
+        throw e.status === 'rejected' ? e.reason : (d as PromiseRejectedResult).reason;
+      }
+      encoder = e.value;
+      decoder = d.value;
     })().catch((fehler: unknown) => {
       ladend = null;
       throw fehler;
