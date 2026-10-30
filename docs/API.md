@@ -233,6 +233,13 @@ machen.
 Wer stummschaltet, stört damit niemanden sonst. `mutedUntil: null` hebt die
 Stummschaltung auf. Sich selbst zu entfernen bedeutet „Gruppe verlassen".
 
+**Rangordnung**: `owner` > `admin` > `member`. Niemand ändert oder entfernt ein
+gleich- oder höherrangiges Mitglied (sich selbst verlassen geht immer), und
+die eigene Rolle ändert man nicht selbst. Ernannt wird bis zum eigenen Rang;
+`role: "owner"` ist die **Übergabe** und geht nur vom Besitzer aus – er wird
+dabei `admin`. Titel, Bild, Spitznamen anderer und Entfernen gibt es nur in
+Gruppen; im Direktchat antworten sie mit `403`.
+
 **Conversation**
 
 ```json
@@ -288,9 +295,16 @@ zweiten.
 `game`, `system`. `system` kann nicht gesendet werden – das macht der Server bei
 Ereignissen wie „X ist der Gruppe beigetreten".
 
-Eine Nachricht braucht mindestens eines von: Text, Anhang oder einen Bezug in
-`metadata` (`stickerId`, `pollId`, `eventId`, `gameSessionId`). Grenzen:
-Text max. 8000 Zeichen, max. 10 Anhänge.
+Eine Nachricht braucht mindestens eines von: Text, Anhang oder einen Sticker
+(`metadata.stickerId`). Grenzen: Text max. 8000 Zeichen, max. 10 Anhänge,
+`clientId` max. 64 Zeichen ohne `:` (der gehört den Schlüsseln des Servers).
+
+`metadata` vom Client ist eine **Positivliste**: `stickerId`, `forwardedFrom`
+(`{ conversationId, messageId }`) und `module` (Objekt), zusammen höchstens
+4 KB. `system`, `eventId`, `erinnerung`, `pollId` und `gameSessionId` setzt nur
+der Server; jeder andere Schlüssel ergibt `400`. Ein Sticker geht nur in den
+Chat, wenn sein Paket öffentlich, eigen oder installiert ist oder er in diesem
+Chat schon sichtbar gesendet wurde.
 
 **Message**
 
@@ -824,6 +838,13 @@ Beteiligten), `conversation` (alle im Chat) oder `listed` (die in `viewerIds`).
 `hiddenFromIds` nimmt einzelne ausdrücklich heraus – das Geschenk vor dem
 Beschenkten.
 
+**Wen eine Ausgabe nennen darf** (`shares`, `paidBy`, `viewerIds`,
+`hiddenFromIds`): mit `conversationId` die Mitglieder des Chats, mit `eventId`
+die Eingeladenen des Termins (mit beidem: wer zu einem von beiden gehört), ohne
+beides nur Personen, die mit dem Anleger einen Chat teilen – sonst `400`. Jede
+Liste höchstens 100 Personen; doppelte Anteile ergeben `422`, doppelte
+Zuschauer und Ausgenommene werden entdoppelt.
+
 **Vier Stufen je Anteil**, und der Unterschied zwischen den mittleren beiden
 ist der Punkt: `open` (nichts passiert) → `reported` (der Schuldner sagt, er
 habe gezahlt) → `confirmed` (der Empfänger sagt, es sei angekommen) → `closed`
@@ -985,7 +1006,9 @@ aufgeräumt wurde), `runde`, `sitz`, `modus`, `startArt`, `gegner[]`, `team[]`
 Sind keine VAPID-Schlüssel gesetzt, meldet `/push/public-key` schlicht
 `enabled: false` – die PWA blendet den Schalter dann aus, statt zu scheitern.
 Ein `endpoint` ist eindeutig: Ein erneutes Abonnieren aktualisiert den
-bestehenden Eintrag.
+eigenen Eintrag. Gehört die Adresse einem **anderen** Konto, antwortet der
+Server `409` und lässt sie unangetastet – die PWA legt dann im Browser ein
+neues Abo mit neuer Adresse an.
 
 **PushPayload** (was im Service Worker ankommt, unter 4 KB):
 
@@ -1114,6 +1137,13 @@ per REST nach (bei Terminen trägt der Hinweis die `eventId`, bei Nachrichten
 die `conversationId`). Die Empfängerliste wird in Stücken zu höchstens 100
 Personen verschickt: Ein Termin mit vielen Eingeladenen sprengte sie sonst
 allein.
+
+Je Verbindung warten höchstens 512 Frames; läuft der Puffer voll (der Client
+liest nicht mehr), schließt der Server die Leitung. Kommt zwei Herzschläge lang
+nichts vom Client – nicht einmal ein Pong –, ebenso. Steht der LISTEN-Kanal nach
+einem Abriss wieder, bekommt jede Verbindung ein `sync.hint` ohne
+`conversationId` und `eventId`. In allen Fällen holt der Client Chatliste,
+geladene Chats und Termine nach.
 
 ---
 
