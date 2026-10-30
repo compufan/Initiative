@@ -2,6 +2,7 @@ import { defaultClientConditions, defineConfig, loadEnv, type Plugin } from 'vit
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fernsehblattFuerAlteGeraete } from './scripts/fernsehblatt.js';
 
@@ -73,8 +74,19 @@ function symbolAdressen(): { adressen: Record<SymbolRolle, string>; mitKarte: bo
  * einem Test: `vitest` läuft ohne Bau und schliesst `dist` ausdrücklich aus.
  */
 function markeAdressen(adressen: Record<SymbolRolle, string>, mitKarte: boolean): Plugin {
+  /*
+   * Das tatsächliche Ausgabeverzeichnis.
+   *
+   * Fest `./dist` stand hier vorher – ein `vite build --outDir anderswo` (etwa
+   * zum Messen der Bündelgrössen, ohne das echte `dist` anzufassen) brach dann
+   * am Ende mit „liegen nicht in dist" ab, obwohl alles richtig gebaut war.
+   */
+  let ausgabe = fileURLToPath(new URL('./dist', import.meta.url));
   return {
     name: 'initiative-marke-adressen',
+    configResolved(config) {
+      ausgabe = resolve(config.root, config.build.outDir);
+    },
     /*
      * Die Karte beobachten, damit ein neuer Bausatz im laufenden Betrieb
      * ankommt.
@@ -104,7 +116,7 @@ function markeAdressen(adressen: Record<SymbolRolle, string>, mitKarte: boolean)
       return raus;
     },
     closeBundle() {
-      const dist = fileURLToPath(new URL('./dist', import.meta.url));
+      const dist = ausgabe;
       const fehlend = SYMBOL_ROLLEN.filter((rolle) => !existsSync(`${dist}${adressen[rolle]}`)).map(
         (rolle) => adressen[rolle],
       );
@@ -212,7 +224,25 @@ export default defineConfig(({ mode }) => {
          */
         output: {
           manualChunks: {
-            react: ['react', 'react-dom', 'react-router-dom'],
+            /*
+             * Die Einstiege ausdrücklich nennen, nicht nur die Pakete.
+             *
+             * `react-dom` allein meint `react-dom/index.js` – den kleinen Teil.
+             * Der eigentliche Renderer steckt hinter `react-dom/client` (mit
+             * `scheduler` als Abhängigkeit), und den nennt nur `main.tsx`. Ohne
+             * diese Einträge lagen gut 175 kB React im Start-Stück der App statt
+             * im React-Stück, das sich zwischen zwei Fassungen fast nie ändert –
+             * jede neue Fassung lud sie also neu. `scheduler` kommt als
+             * Abhängigkeit von `react-dom/client` von selbst mit; es steht nicht
+             * hier, weil es unter pnpm von `apps/web` aus nicht auflösbar ist.
+             */
+            react: [
+              'react',
+              'react/jsx-runtime',
+              'react-dom',
+              'react-dom/client',
+              'react-router-dom',
+            ],
             // Alles rund ums Freistellen in eigene Stuecke. Der Name ist
             // nicht nur Kosmetik: `chunkFileNames` legt sie darueber in
             // einen eigenen Ordner, den der Service Worker auslaesst.
