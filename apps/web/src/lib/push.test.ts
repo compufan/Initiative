@@ -53,7 +53,9 @@ function browser(vorhanden: ReturnType<typeof abo> | null) {
 
 beforeEach(() => {
   subscribe.mockReset();
-  vi.stubGlobal('window', { atob: (text: string) => Buffer.from(text, 'base64').toString('binary') });
+  vi.stubGlobal('window', {
+    atob: (text: string) => Buffer.from(text, 'base64').toString('binary'),
+  });
 });
 
 describe('aboMelden', () => {

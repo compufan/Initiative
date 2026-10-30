@@ -14,7 +14,8 @@ use crate::realtime::Event;
 use crate::services::attachments::require_eigener_anhang;
 use crate::services::conversations::{
     assert_can_moderate, assert_membership, broadcast_conversation, einzelchats_sichern,
-    get_membership, load_conversation_dto, load_conversation_dtos, member_ids, require_conversation, ListOptions,
+    get_membership, load_conversation_dto, load_conversation_dtos, member_ids,
+    require_conversation, ListOptions,
 };
 use crate::services::messages::{create_message, NewMessage};
 use crate::state::AppState;
