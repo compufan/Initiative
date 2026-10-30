@@ -42,6 +42,8 @@ export function OrtFeld({
   const [aktiv, setAktiv] = useState(-1);
   /** Der Text, den eine Übernahme gesetzt hat – für den wird nicht wieder gesucht. */
   const uebernommen = useRef<string | null>(null);
+  /** Ob das Feld den Fokus hat – eine späte Antwort öffnet die Liste nur dann. */
+  const imFokus = useRef(false);
   const [gewaehlt, setGewaehlt] = useState<string | null>(null);
 
   useEffect(() => {
@@ -58,7 +60,7 @@ export function OrtFeld({
           setTreffer(antwort.items);
           setQuelle(antwort.quelle);
           setAktiv(-1);
-          setOffen(antwort.items.length > 0);
+          setOffen(antwort.items.length > 0 && imFokus.current);
         })
         .catch(() => {
           // Ohne Vorschläge ist es ein Textfeld; kein Fehler, der stört.
@@ -125,8 +127,14 @@ export function OrtFeld({
           onChange(e.target.value);
         }}
         onKeyDown={mitTaste}
-        onBlur={() => window.setTimeout(() => setOffen(false), 150)}
-        onFocus={() => treffer.length > 0 && setOffen(true)}
+        onBlur={() => {
+          imFokus.current = false;
+          window.setTimeout(() => setOffen(false), 150);
+        }}
+        onFocus={() => {
+          imFokus.current = true;
+          if (treffer.length > 0) setOffen(true);
+        }}
       />
       <ul id={listeId} role="listbox" aria-label="Ortsvorschläge" className="ort-liste" hidden={!offen}>
         {treffer.map((t, i) => (
