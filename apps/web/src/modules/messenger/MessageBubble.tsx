@@ -1,14 +1,15 @@
-import { useState, type ComponentType } from 'react';
-import { messagePreview, type ConversationDto } from '@initiative/shared';
+import { memo, useState, type ComponentType } from 'react';
+import { messagePreview } from '@initiative/shared';
 import { messageRenderers } from '../registry.js';
 import type { MessageRendererProps } from '../types.js';
 import { Avatar } from '../../components/Avatar.js';
-import { useChat, type ChatMessage } from '../../state/chat.js';
+import { useChat } from '../../state/chat.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 import { TextBubble } from './TextBubble.js';
 import { formatTime, senderName } from './helpers.js';
 import { useLongPress } from './useLongPress.js';
+import { blasenPropsGleich, type BlasenProps } from './praesenz.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 
 let rendererCache: Record<string, ComponentType<MessageRendererProps>> | null = null;
@@ -19,23 +20,24 @@ function rendererFor(type: string): ComponentType<MessageRendererProps> {
   return rendererCache[type] ?? TextBubble;
 }
 
-interface MessageBubbleProps {
-  message: ChatMessage;
-  conversation: ConversationDto | null;
-  showSender: boolean;
-  showAvatar: boolean;
-  onOpenActions: (message: ChatMessage) => void;
-  onJumpTo: (messageId: string) => void;
-}
+/*
+ * Eine Blase zeichnet nur neu, wenn sich IHRE Daten ändern.
+ *
+ * Ohne `memo` lief bei jeder neuen Nachricht, jedem Tippen-Hinweis und jedem
+ * Scrollen ans Ende (`showJump`) der ganze Verlauf durch React – bei einem
+ * Chat mit ein paar hundert geladenen Nachrichten spürbar auf einem älteren
+ * Telefon. Was „ihre Daten" heisst, steht in `blasenPropsGleich`.
+ */
+export const MessageBubble = memo(MessageBubbleInnen, blasenPropsGleich);
 
-export function MessageBubble({
+function MessageBubbleInnen({
   message,
   conversation,
   showSender,
   showAvatar,
   onOpenActions,
   onJumpTo,
-}: MessageBubbleProps) {
+}: BlasenProps) {
   const myId = useMyId();
   const isMine = message.senderId == null || message.senderId === myId;
   const Renderer = rendererFor(message.type);

@@ -5,10 +5,12 @@ import { Avatar } from '../../components/Avatar.js';
 import { EmptyState, Spinner } from '../../components/Feedback.js';
 import { Screen } from '../../components/Screen.js';
 import { api } from '../../lib/api.js';
+import { useShallow } from 'zustand/react/shallow';
 import { useChat } from '../../state/chat.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 import { NewChatSheet } from './NewChatSheet.js';
+import { gegenueberIds, onlineUnter } from './praesenz.js';
 import {
   conversationAvatar,
   conversationTitle,
@@ -28,7 +30,15 @@ export function ChatListScreen() {
   const navigate = useNavigate();
   const myId = useMyId();
   const conversations = useChat((state) => state.conversations);
-  const presence = useChat((state) => state.presence);
+  /*
+   * Nicht die ganze Präsenzkarte: nur, wer von den Gegenübern in der Liste
+   * gerade online ist. `useShallow` vergleicht das Feld nach Inhalt – eine
+   * Meldung über jemanden ausserhalb der Liste, oder ein verschobenes
+   * „zuletzt gesehen", zeichnet die Liste so nicht neu (siehe `praesenz.ts`).
+   */
+  const gegenueber = useMemo(() => gegenueberIds(conversations, myId), [conversations, myId]);
+  const onlineIds = useChat(useShallow((state) => onlineUnter(state.presence, gegenueber)));
+  const online = useMemo(() => new Set(onlineIds), [onlineIds]);
   const typing = useChat((state) => state.typing);
   const initialised = useChat((state) => state.initialised);
 
@@ -256,8 +266,7 @@ export function ChatListScreen() {
                     myId={myId}
                     online={
                       conversation.type === 'direct'
-                        ? (presence[counterpartOf(conversation, myId)?.userId ?? '']?.online ??
-                          false)
+                        ? online.has(counterpartOf(conversation, myId)?.userId ?? '')
                         : undefined
                     }
                     typing={(typing[conversation.id] ?? []).some((entry) => entry.userId !== myId)}

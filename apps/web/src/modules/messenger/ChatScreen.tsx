@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Avatar } from '../../components/Avatar.js';
 import { EmptyState, Spinner } from '../../components/Feedback.js';
@@ -10,6 +10,7 @@ import { Composer } from './Composer.js';
 import { MessageActionsSheet } from './MessageActionsSheet.js';
 import { MessageBubble } from './MessageBubble.js';
 import { VerlaufsAntraege, VerlaufsGrenze, useVerlaufsantraege } from './VerlaufBand.js';
+import { praesenzVon } from './praesenz.js';
 import {
   conversationAvatar,
   conversationTitle,
@@ -78,7 +79,13 @@ export function ChatScreen() {
   const loading = useChat((state) => state.loading[conversationId] ?? false);
   const hasMore = useChat((state) => state.hasMore[conversationId] ?? false);
   const typingEntries = useChat((state) => state.typing[conversationId] ?? NO_TYPING);
-  const presence = useChat((state) => state.presence);
+  /*
+   * Nur der Eintrag des Gegenübers, nicht die ganze Karte: Sonst zeichnete
+   * jede Online-Meldung irgendeines Kontakts diesen Chat neu (siehe
+   * `praesenz.ts`). In einer Gruppe gibt es kein Gegenüber – dann gar nichts.
+   */
+  const gegenueberId = conversation ? (counterpartOf(conversation, myId)?.userId ?? null) : null;
+  const gegenueberPraesenz = useChat((state) => praesenzVon(state.presence, gegenueberId));
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -236,11 +243,17 @@ export function ChatScreen() {
    * Server eine Nachricht nicht mehr liefert (gelöscht, kein Zugriff): Sonst
    * lädt die Schleife den ganzen Chat und findet trotzdem nichts.
    */
-  async function jumpTo(messageId: string) {
+  /*
+   * Mit `useCallback` und ohne Abhängigkeiten: Die Funktion geht an JEDE Blase
+   * (`onJumpTo`), und eine neue Funktion je Zeichnen hebelte deren `memo` aus.
+   * Sie liest alles Veränderliche über Refs und `getState()` – den Chat
+   * eingeschlossen, siehe `zielChat`.
+   */
+  const jumpTo = useCallback(async (messageId: string) => {
     // Der Chat, für den dieser Sprung gilt. Wechselt der Anwender währenddessen
     // den Chat, hört die Schleife auf – sonst lüde sie Seite um Seite eines
     // Verlaufs nach, den niemand mehr ansieht.
-    const zielChat = conversationId;
+    const zielChat = aktuellerChat.current;
     const selector =
       typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
         ? `[data-message-id="${CSS.escape(messageId)}"]`
@@ -332,14 +345,14 @@ export function ChatScreen() {
     target.scrollIntoView({ block: 'center', behavior: 'smooth' });
     target.classList.add('msg-row-flash');
     window.setTimeout(() => target.classList.remove('msg-row-flash'), 1400);
-  }
+  }, []);
 
   /** Ob hinter meiner Grenze wirklich etwas liegt – ändert zwei Texte. */
   const hatGrenze = conversation?.verdeckterVerlauf ?? false;
 
   const avatar = conversation ? conversationAvatar(conversation, myId) : null;
   const counterpart = conversation ? counterpartOf(conversation, myId) : null;
-  const online = counterpart ? (presence[counterpart.userId]?.online ?? false) : false;
+  const online = counterpart ? (gegenueberPraesenz?.online ?? false) : false;
   const typingNames = typingEntries
     .filter((entry) => entry.userId !== myId)
     .map((entry) => {
@@ -355,7 +368,7 @@ export function ChatScreen() {
   } else if (counterpart) {
     status = online
       ? 'online'
-      : formatLastSeen(presence[counterpart.userId]?.lastSeenAt ?? counterpart.user.lastSeenAt);
+      : formatLastSeen(gegenueberPraesenz?.lastSeenAt ?? counterpart.user.lastSeenAt);
   }
 
   return (
