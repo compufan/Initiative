@@ -2789,7 +2789,10 @@ export function freieFarbe(masken: readonly Maske[]): number {
 export function eindeutigerName(name: string, masken: readonly Maske[]): string {
   const belegt = new Set(masken.map((maske) => maske.name));
   if (!belegt.has(name)) return name;
-  const mitZahl = /^(.*\S)\s+(\d+)$/.exec(name);
+  const gefunden = /^(.*\S)\s+(\d+)$/.exec(name);
+  // Eine Endzahl jenseits von 2^53 lässt sich nicht mehr um eins erhöhen
+  // (`n + 1 === n`): Die Schleife käme nie voran. Solche Namen zählen als Text.
+  const mitZahl = gefunden && Number.isSafeInteger(Number(gefunden[2])) ? gefunden : null;
   const stamm = mitZahl ? mitZahl[1] : name;
   for (let n = mitZahl ? Number(mitZahl[2]) + 1 : 2; ; n += 1) {
     const versuch = `${stamm} ${n}`;

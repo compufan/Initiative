@@ -2015,3 +2015,11 @@ describe('maskenUmrastern', () => {
     expect(maskenUmrastern([m], 40, 40)[0]).toBe(m);
   });
 });
+
+describe('eindeutigerName bei riesigen Endzahlen', () => {
+  it('hängt bei einer Endzahl jenseits von 2^53 eine Zahl an, statt endlos zu zählen', () => {
+    const riesig = 'Bereich 99999999999999999999';
+    const belegt = [{ name: riesig } as unknown as Maske];
+    expect(eindeutigerName(riesig, belegt)).toBe(`${riesig} 2`);
+  });
+});

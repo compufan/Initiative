@@ -50,6 +50,7 @@ export function OrtZeile({ ort, variante }: OrtZeileProps) {
   const [blatt, setBlatt] = useState<Blatt | null>(null);
   // Wohin der Fokus zurückkehrt, wenn das Blatt zugeht.
   const ausloeser = useRef<HTMLElement | null>(null);
+  const huelle = useRef<HTMLDivElement | null>(null);
 
   if (analyse.text === '') return null;
 
@@ -99,7 +100,7 @@ export function OrtZeile({ ort, variante }: OrtZeileProps) {
     kartenZugang(zielVonFund(fund), false, fund.text, 'ort-link');
 
   return (
-    <div className={`ort ort-${variante}`}>
+    <div className={`ort ort-${variante}`} ref={huelle}>
       <span className="ort-symbol" aria-hidden="true">
         {analyse.nurWeb ? '🔗' : '📍'}
       </span>
@@ -142,6 +143,11 @@ export function OrtZeile({ ort, variante }: OrtZeileProps) {
           ziel={blatt.ziel}
           offen={blatt.offen}
           ausloeser={ausloeser}
+          ersatz={() =>
+            huelle.current?.querySelector<HTMLElement>('.ort-mehr') ??
+            huelle.current?.querySelector<HTMLElement>('.ort-link, .ort-suchen') ??
+            null
+          }
         />
       )}
     </div>

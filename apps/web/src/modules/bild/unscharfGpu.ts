@@ -301,6 +301,12 @@ export interface UnscharfWerk {
   readonly feld: WebGLVertexArrayObject;
   /** Freie Ziele, ältestes zuerst. */
   readonly vorrat: Ziel[];
+  /**
+   * Was gerade aus dem Vorrat entnommen ist. Wirft ein Durchgang mittendrin,
+   * wüsste sonst niemand mehr von diesen Zielen: Sie lägen weder im Vorrat
+   * noch würden sie gelöscht, bis der Kontext stirbt.
+   */
+  readonly ausgeliehen: Set<Ziel>;
   /** Das letzte Ergebnis samt Zettel – es bleibt, bis sich etwas ändert. */
   ergebnis: Ziel | null;
   zettel: string | null;
@@ -400,6 +406,7 @@ export function unscharfWerk(
       komposit: programmBauen(gl, KOMPOSIT),
       feld,
       vorrat: [],
+      ausgeliehen: new Set(),
       ergebnis: null,
       zettel: null,
       defekt: false,
@@ -467,11 +474,13 @@ function zielLoeschen(w: UnscharfWerk, z: Ziel): void {
 
 function nehmen(w: UnscharfWerk, art: 'f16' | 'u8', b: number, h: number): Ziel {
   const at = w.vorrat.findIndex((z) => z.art === art && z.b === b && z.h === h);
-  if (at >= 0) return w.vorrat.splice(at, 1)[0];
-  return zielAnlegen(w, art, b, h);
+  const ziel = at >= 0 ? w.vorrat.splice(at, 1)[0] : zielAnlegen(w, art, b, h);
+  w.ausgeliehen.add(ziel);
+  return ziel;
 }
 
 function zurueck(w: UnscharfWerk, z: Ziel): void {
+  w.ausgeliehen.delete(z);
   w.vorrat.push(z);
   let summe = w.vorrat.reduce((s, x) => s + bytesVon(x), 0);
   while (summe > VORRAT_MAX && w.vorrat.length > 0) {
@@ -479,6 +488,20 @@ function zurueck(w: UnscharfWerk, z: Ziel): void {
     summe -= bytesVon(alt);
     zielLoeschen(w, alt);
   }
+}
+
+/**
+ * Löscht alles, was ein gescheiterter Durchgang noch in der Hand hielt.
+ *
+ * Gelöscht und nicht in den Vorrat gelegt: Ihr Inhalt ist halbfertig, und ein
+ * Ziel, an dem es gescheitert ist, soll nicht ein zweites Mal gereicht werden.
+ * Das Ergebnis des Werks gehört nicht dazu, es wird gesondert verwaltet.
+ */
+export function ausgelieheneAufraeumen(w: UnscharfWerk): void {
+  for (const z of w.ausgeliehen) {
+    if (z !== w.ergebnis) zielLoeschen(w, z);
+  }
+  w.ausgeliehen.clear();
 }
 
 /* ---------- Durchgänge ---------- */
@@ -733,6 +756,7 @@ export function unscharfRechnen(
     // Grafikeinheit. Dann rechnet der Prozessor, und zwar jedes Mal.
     if (gl.isContextLost()) throw fehler;
     console.error('Unschärfe auf der Grafikeinheit gescheitert:', fehler);
+    ausgelieheneAufraeumen(w);
     w.defekt = true;
     w.zettel = null;
     return null;

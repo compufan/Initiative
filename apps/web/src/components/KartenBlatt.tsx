@@ -14,6 +14,11 @@ interface KartenBlattProps {
   offen: boolean;
   /** Der Knopf, der das Blatt geöffnet hat – dorthin kehrt der Fokus zurück. */
   ausloeser: RefObject<HTMLElement | null>;
+  /**
+   * Wohin der Fokus geht, wenn der Auslöser inzwischen weg ist: Wer im Blatt
+   * „Diese Wahl merken“ wählt, ersetzt den Knopf durch Link und „⋯“.
+   */
+  ersatz?: () => HTMLElement | null;
 }
 
 /**
@@ -34,7 +39,7 @@ interface KartenBlattProps {
  * Auftrag. Beim Öffnen landet der Fokus auf der ersten App (bei gemerkter
  * Wahl auf dieser), beim Schliessen kehrt er zum Auslöser zurück.
  */
-export function KartenBlatt({ open, onClose, ziel, offen, ausloeser }: KartenBlattProps) {
+export function KartenBlatt({ open, onClose, ziel, offen, ausloeser, ersatz }: KartenBlattProps) {
   const plattform = usePlattform();
   const gemerkt = useKartenApp();
   const standard = gemerkteApp(plattform, gemerkt);
@@ -63,7 +68,11 @@ export function KartenBlatt({ open, onClose, ziel, offen, ausloeser }: KartenBla
     return () => {
       const zurueck = ausloeser.current;
       if (zurueck && zurueck.isConnected) zurueck.focus();
+      else ersatz?.()?.focus();
     };
+    // `ersatz` ist bewusst keine Abhängigkeit: Eine neue Funktion je Aufbau
+    // liesse den Effekt neu laufen und risse den Fokus aus dem Blatt.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, ausloeser]);
 
   async function kopieren() {
