@@ -428,13 +428,25 @@ async fn admins_greifen_nicht_nach_oben() {
         ("sich zum Besitzer", "PATCH", &bert_id, rolle("owner")),
         ("Cleo zum Besitzer", "PATCH", &cleo_id, rolle("owner")),
         ("Anna herabstufen", "PATCH", &anna_id, rolle("member")),
-        ("Anna umbenennen", "PATCH", &anna_id, Some(json!({ "nickname": "x" }))),
+        (
+            "Anna umbenennen",
+            "PATCH",
+            &anna_id,
+            Some(json!({ "nickname": "x" })),
+        ),
         ("Anna entfernen", "DELETE", &anna_id, None),
         ("Cleo herabstufen", "PATCH", &cleo_id, rolle("member")),
         ("Cleo entfernen", "DELETE", &cleo_id, None),
-        ("sich selbst herabstufen", "PATCH", &bert_id, rolle("member")),
+        (
+            "sich selbst herabstufen",
+            "PATCH",
+            &bert_id,
+            rolle("member"),
+        ),
     ] {
-        let (status, body) = probe.call(methode, &mitglied(wer), Some(&bert), koerper).await;
+        let (status, body) = probe
+            .call(methode, &mitglied(wer), Some(&bert), koerper)
+            .await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{fall}: {body}");
     }
 
@@ -577,12 +589,22 @@ async fn ein_fremdes_push_abo_bleibt_wo_es_ist() {
     };
 
     let (status, body) = probe
-        .call("POST", "/api/v1/push/subscriptions", Some(&anna), Some(abo("annas")))
+        .call(
+            "POST",
+            "/api/v1/push/subscriptions",
+            Some(&anna),
+            Some(abo("annas")),
+        )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
 
     let (status, body) = probe
-        .call("POST", "/api/v1/push/subscriptions", Some(&bert), Some(abo("berts")))
+        .call(
+            "POST",
+            "/api/v1/push/subscriptions",
+            Some(&bert),
+            Some(abo("berts")),
+        )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
 
@@ -597,7 +619,171 @@ async fn ein_fremdes_push_abo_bleibt_wo_es_ist() {
 
     // Das eigene Abo zu erneuern (neue Schlüssel) geht weiter.
     let (status, body) = probe
-        .call("POST", "/api/v1/push/subscriptions", Some(&anna), Some(abo("neu")))
+        .call(
+            "POST",
+            "/api/v1/push/subscriptions",
+            Some(&anna),
+            Some(abo("neu")),
+        )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
+/* ---------- Nachrichten: Zusatzangaben, die der Server setzt ---------- */
+
+/// `metadata` nahm beliebiges JSON bis 2 MB an – auch `system`, womit sich
+/// eine Systemzeile im Namen eines anderen fälschen liess, und eine
+/// `erinnerung` ohne Termin. `clientId` hatte keine Längengrenze.
+#[tokio::test]
+async fn zusatzangaben_kommen_nur_aus_der_positivliste() {
+    let probe = probe!();
+    let (anna, anna_id) = probe.konto("anna").await;
+    let (_, bert_id) = probe.konto("bert").await;
+    let chat = probe.gruppe(&anna, &[&bert_id]).await;
+    let senden = |koerper: Value| {
+        let probe = &probe;
+        let anna = anna.clone();
+        let chat = chat.clone();
+        async move {
+            probe
+                .call(
+                    "POST",
+                    &format!("/api/v1/conversations/{chat}/messages"),
+                    Some(&anna),
+                    Some(koerper),
+                )
+                .await
+        }
+    };
+
+    for (fall, koerper) in [
+        (
+            "Systemzeile",
+            json!({ "body": "x", "metadata": { "system": {
+                "kind": "member.removed", "actorId": bert_id, "targetIds": [anna_id] } } }),
+        ),
+        (
+            "Erinnerung",
+            json!({ "body": "x", "metadata": { "erinnerung": { "nummer": 1 } } }),
+        ),
+        (
+            "Unbekannt",
+            json!({ "body": "x", "metadata": { "linkPreview": { "url": "https://x" } } }),
+        ),
+        ("kein Objekt", json!({ "body": "x", "metadata": [1, 2] })),
+        (
+            "zu gross",
+            json!({ "body": "x", "metadata": { "module": { "x": "y".repeat(5000) } } }),
+        ),
+        (
+            "Sticker ohne Kennung",
+            json!({ "type": "sticker", "metadata": { "stickerId": "kein-sticker" } }),
+        ),
+    ] {
+        let (status, body) = senden(koerper).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{fall}: {body}");
+    }
+
+    for (fall, schluessel) in [
+        ("zu lang", "x".repeat(65)),
+        ("Schlüssel des Servers", format!("karte:{}", Uuid::now_v7())),
+    ] {
+        let (status, body) = senden(json!({ "body": "x", "clientId": schluessel })).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{fall}: {body}");
+    }
+
+    // Was die Oberfläche schickt, geht weiter durch.
+    let schluessel = Uuid::now_v7().to_string();
+    let (status, body) = senden(json!({
+        "body": "Hallo", "metadata": {}, "clientId": schluessel,
+    }))
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (status, body) = senden(json!({
+        "body": "weiter",
+        "metadata": { "forwardedFrom": { "conversationId": chat, "messageId": body["id"] } },
+    }))
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
+/// Legt einen Sticker unmittelbar in der Datenbank an: (Kennung, Anhang).
+async fn sticker(probe: &Probe, besitzer: &str, oeffentlich: bool) -> (Uuid, Uuid) {
+    let besitzer = Uuid::parse_str(besitzer).unwrap();
+    let anhang = Uuid::now_v7();
+    let paket = Uuid::now_v7();
+    let sticker = Uuid::now_v7();
+    sqlx::query(
+        "insert into attachments (id, uploader_id, kind, mime, size, storage_key, status)
+         values ($1, $2, 'sticker', 'image/webp', 10, $3, 'ready')",
+    )
+    .bind(anhang)
+    .bind(besitzer)
+    .bind(format!("probe/{anhang}"))
+    .execute(&probe.state.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into sticker_packs (id, owner_id, name, is_public) values ($1, $2, 'P', $3)",
+    )
+    .bind(paket)
+    .bind(besitzer)
+    .bind(oeffentlich)
+    .execute(&probe.state.pool)
+    .await
+    .unwrap();
+    sqlx::query("insert into stickers (id, pack_id, attachment_id) values ($1, $2, $3)")
+        .bind(sticker)
+        .bind(paket)
+        .bind(anhang)
+        .execute(&probe.state.pool)
+        .await
+        .unwrap();
+    (sticker, anhang)
+}
+
+/// Eine bekannte Sticker-Kennung aus einem privaten Paket machte das Bild in
+/// jedem Chat sichtbar, in den man sie legte.
+#[tokio::test]
+async fn fremde_private_sticker_bleiben_privat() {
+    let probe = probe!();
+    let (anna, anna_id) = probe.konto("anna").await;
+    let (bert, bert_id) = probe.konto("bert").await;
+    let (cleo, _) = probe.konto("cleo").await;
+    let annas_chat = probe.gruppe(&anna, &[&bert_id]).await;
+    let cleos_chat = probe.gruppe(&cleo, &[&bert_id]).await;
+    let (privat, _) = sticker(&probe, &anna_id, false).await;
+    let (oeffentlich, _) = sticker(&probe, &anna_id, true).await;
+
+    let senden = |wer: &str, chat: &str, sticker: Uuid| {
+        let wer = wer.to_string();
+        let chat = chat.to_string();
+        let probe = &probe;
+        async move {
+            probe
+                .call(
+                    "POST",
+                    &format!("/api/v1/conversations/{chat}/messages"),
+                    Some(&wer),
+                    Some(json!({ "type": "sticker", "metadata": { "stickerId": sticker } })),
+                )
+                .await
+        }
+    };
+
+    // Cleo kennt die Kennung und legt sie in ihren eigenen Chat: abgelehnt.
+    let (status, body) = senden(&cleo, &cleos_chat, privat).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["sticker"].is_null(), "{body}");
+    // Öffentliche gehen, eigene auch.
+    let (status, body) = senden(&cleo, &cleos_chat, oeffentlich).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (status, body) = senden(&anna, &annas_chat, privat).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    // Bert hat ihn in Annas Chat gesehen und darf dort mit demselben antworten
+    // – aber nicht in Cleos Chat weitertragen.
+    let (status, body) = senden(&bert, &annas_chat, privat).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (status, body) = senden(&bert, &cleos_chat, privat).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }

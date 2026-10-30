@@ -3,6 +3,7 @@ import {
   TYPING_TTL_MS,
   uuidv7,
   type CalendarEventDto,
+  type ClientMessageMetadata,
   type ConversationDto,
   type MessageDto,
   type MessageMetadata,
@@ -54,7 +55,8 @@ export interface Draft {
   type?: MessageType;
   body?: string | null;
   replyToId?: string | null;
-  metadata?: MessageMetadata;
+  /** Nur, was ein Client senden darf – den Rest setzt der Server selbst. */
+  metadata?: ClientMessageMetadata;
   attachmentIds?: string[];
   /** Files that still have to be uploaded (works offline). */
   attachments?: OutboxAttachment[];

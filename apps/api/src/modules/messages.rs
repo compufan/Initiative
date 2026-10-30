@@ -155,28 +155,34 @@ async fn send_message(
 ) -> AppResult<(StatusCode, Json<MessageDto>)> {
     assert_membership(&state.pool, id, user.id()).await?;
 
-    let metadata = input.metadata.unwrap_or_else(|| json!({}));
-    // Termin-Karten legt nur die Termin-Funktion an. Über diesen Weg ließe sich
-    // die Kennung eines fremden Termins in einen Chat legen, und die Karte
-    // lieferte dann Titel, Ort und Teilnehmerliste – sie gehört ohnehin zu einer
-    // Einladung (`event_placements`), und eine Karte ohne sie wäre eine, die
-    // niemand nachführt.
-    if input.r#type == "event" || metadata.get("eventId").is_some() {
-        return Err(AppError::bad_request(
-            "Termin-Karten legt nur die Termin-Funktion an.",
-        ));
+    let metadata = match input.metadata {
+        None | Some(Value::Null) => json!({}),
+        Some(metadata) => metadata,
+    };
+    client_metadaten_pruefen(&input.r#type, &metadata)?;
+    if let Some(client_id) = input.client_id.as_deref() {
+        // Der Doppelpunkt gehört den Schlüsseln, die der Server selbst
+        // vergibt (`karte:…`, `erinnerung:…`, `vorab:…`). Ein Client, der so
+        // einen vorwegnähme, bekäme beim Zustellen der echten Karte seine
+        // eigene Nachricht als „schon gesendet“ zurück.
+        Validator::new()
+            .length(
+                "clientId",
+                client_id,
+                1,
+                crate::constants::MESSAGE_CLIENT_ID_MAX,
+            )
+            .require(
+                "clientId",
+                !client_id.contains(':'),
+                "ungültiger Wiederholungsschlüssel",
+            )
+            .finish()?;
     }
-    // Dasselbe für Umfragen und Partien. Ihre Expander laden, was die Kennung
-    // nennt, ohne zu fragen, in welchem Chat es zu Hause ist – eine Karte mit
-    // fremder `pollId` zeigte Frage, Stimmen und (offen) Namen jedem in diesem
-    // Chat, an `assert_poll_access` vorbei; eine fremde `gameSessionId` zeigte
-    // Partie und Mitspieler, auch eine Übung ohne Chat. Wer nach dem Austritt
-    // die Kennung behalten hat, sah so weiter zu. Beide Karten legt der Server
-    // selbst an (`create_poll`, `place_poll`, `create_session`).
-    if metadata.get("pollId").is_some() || metadata.get("gameSessionId").is_some() {
-        return Err(AppError::bad_request(
-            "Umfrage- und Spielkarten legt nur die jeweilige Funktion an.",
-        ));
+    if let Some(sticker_id) = metadata.get("stickerId").and_then(Value::as_str) {
+        let sticker_id = Uuid::parse_str(sticker_id)
+            .map_err(|_| AppError::bad_request("Sticker nicht verfügbar"))?;
+        sticker_pruefen(&state, sticker_id, id, user.id()).await?;
     }
     let has_entity = ["stickerId", "pollId", "eventId", "gameSessionId"]
         .iter()
@@ -231,6 +237,126 @@ async fn send_message(
     .await?;
 
     Ok((StatusCode::CREATED, Json(message)))
+}
+
+/// Welche Zusatzangaben ein Client einer Nachricht mitgeben darf.
+///
+/// Eine Positivliste statt einzelner Verbote. Vorher war jeder Schlüssel
+/// erlaubt, außer den ausdrücklich gesperrten – und damit auch die, die der
+/// Server selbst setzt: `system` (eine gefälschte „X wurde entfernt“-Zeile im
+/// Namen eines anderen), `erinnerung` und was künftig dazukommt. Die
+/// Oberfläche schickt `stickerId` (Sticker-Auswahl); `forwardedFrom` und
+/// `module` stehen im gemeinsamen Schema als Angaben des Clients.
+const CLIENT_METADATEN: &[&str] = &["stickerId", "forwardedFrom", "module"];
+
+fn client_metadaten_pruefen(typ: &str, metadata: &Value) -> AppResult<()> {
+    let Some(felder) = metadata.as_object() else {
+        return Err(AppError::bad_request(
+            "Zusatzangaben müssen ein Objekt sein",
+        ));
+    };
+    if metadata.to_string().len() > crate::constants::MESSAGE_METADATA_MAX {
+        return Err(AppError::bad_request("Zusatzangaben sind zu groß"));
+    }
+    // Termin-Karten legt nur die Termin-Funktion an. Über diesen Weg ließe
+    // sich die Kennung eines fremden Termins in einen Chat legen, und die
+    // Karte lieferte dann Titel, Ort und Teilnehmerliste – sie gehört ohnehin
+    // zu einer Einladung (`event_placements`), und eine Karte ohne sie wäre
+    // eine, die niemand nachführt.
+    if typ == "event" || felder.contains_key("eventId") || felder.contains_key("erinnerung") {
+        return Err(AppError::bad_request(
+            "Termin-Karten legt nur die Termin-Funktion an.",
+        ));
+    }
+    // Dasselbe für Umfragen und Partien. Ihre Expander laden, was die Kennung
+    // nennt, ohne zu fragen, in welchem Chat es zu Hause ist – eine Karte mit
+    // fremder `pollId` zeigte Frage, Stimmen und (offen) Namen jedem in diesem
+    // Chat, an `assert_poll_access` vorbei; eine fremde `gameSessionId` zeigte
+    // Partie und Mitspieler, auch eine Übung ohne Chat. Beide Karten legt der
+    // Server selbst an (`create_poll`, `place_poll`, `create_session`).
+    if felder.contains_key("pollId") || felder.contains_key("gameSessionId") {
+        return Err(AppError::bad_request(
+            "Umfrage- und Spielkarten legt nur die jeweilige Funktion an.",
+        ));
+    }
+    if let Some(fremd) = felder
+        .keys()
+        .find(|schluessel| !CLIENT_METADATEN.contains(&schluessel.as_str()))
+    {
+        return Err(AppError::bad_request(format!(
+            "Unbekannte Zusatzangabe „{fremd}“"
+        )));
+    }
+    let ist_kennung = |wert: Option<&Value>| {
+        wert.and_then(Value::as_str)
+            .is_some_and(|text| Uuid::parse_str(text).is_ok())
+    };
+    if felder.contains_key("stickerId") && !ist_kennung(felder.get("stickerId")) {
+        return Err(AppError::bad_request("Sticker nicht verfügbar"));
+    }
+    if let Some(bezug) = felder.get("forwardedFrom") {
+        let passt = bezug.as_object().is_some_and(|bezug| {
+            bezug.len() == 2
+                && ist_kennung(bezug.get("conversationId"))
+                && ist_kennung(bezug.get("messageId"))
+        });
+        if !passt {
+            return Err(AppError::bad_request("Ungültiger Weiterleitungsbezug"));
+        }
+    }
+    if felder.get("module").is_some_and(|modul| !modul.is_object()) {
+        return Err(AppError::bad_request("`module` muss ein Objekt sein"));
+    }
+    Ok(())
+}
+
+/// Darf diese Person diesen Sticker in diesen Chat legen?
+///
+/// Der Expander bettet jeden Sticker ein, dessen Kennung in der Nachricht
+/// steht, und die Medien-Prüfung gibt seine Datei dann jedem im Chat frei
+/// (`sticker_gespraech` in `services::zugriff`). Eine Kennung aus einem
+/// PRIVATEN Paket – etwa aus einem Chat, den man verlassen hat – machte so
+/// fremde Bilder sichtbar. Erlaubt ist, was man ohnehin sehen darf:
+/// öffentliche Pakete, eigene, installierte, und was in diesem Chat schon
+/// einmal gesendet wurde und für mich sichtbar ist (Antwort mit demselben
+/// Sticker).
+async fn sticker_pruefen(
+    state: &AppState,
+    sticker_id: Uuid,
+    conversation_id: Uuid,
+    user_id: Uuid,
+) -> AppResult<()> {
+    let erlaubt: bool = sqlx::query_scalar(
+        "select exists (
+           select 1 from stickers s
+             join sticker_packs p on p.id = s.pack_id
+            where s.id = $1
+              and (
+                p.is_public
+                or p.owner_id = $2
+                or exists (select 1 from sticker_pack_installs i
+                            where i.pack_id = p.id and i.user_id = $2)
+                or exists (
+                  select 1 from messages m
+                    join conversation_members cm
+                      on cm.conversation_id = m.conversation_id and cm.user_id = $2
+                   where m.conversation_id = $3
+                     and m.deleted_at is null
+                     and m.metadata ->> 'stickerId' = s.id::text
+                     and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
+                )
+              )
+         )",
+    )
+    .bind(sticker_id)
+    .bind(user_id)
+    .bind(conversation_id)
+    .fetch_one(&state.pool)
+    .await?;
+    if !erlaubt {
+        return Err(AppError::bad_request("Sticker nicht verfügbar"));
+    }
+    Ok(())
 }
 
 async fn by_id(

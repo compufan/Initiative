@@ -56,6 +56,11 @@ export const LIMITS = {
   displayNameMax: 64,
   bioMax: 280,
   messageBodyMax: 8000,
+  /**
+   * Wie groß die Zusatzangaben einer gesendeten Nachricht als JSON sein dürfen –
+   * `MESSAGE_METADATA_MAX` im Server.
+   */
+  messageMetadataMax: 4096,
   conversationTitleMax: 80,
   pollQuestionMax: 300,
   pollOptionMax: 120,

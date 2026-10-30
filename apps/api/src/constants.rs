@@ -28,6 +28,17 @@ pub const PASSWORD_MAX: usize = 200;
 pub const DISPLAY_NAME_MAX: usize = 64;
 pub const BIO_MAX: usize = 280;
 pub const MESSAGE_BODY_MAX: usize = 8000;
+/// Wie gross die Zusatzangaben (`metadata`) einer Nachricht vom Client sein
+/// dürfen, als JSON gezählt. Was der Client legitim schickt (eine
+/// Sticker-Kennung, ein Weiterleitungsbezug), sind ein paar Dutzend Byte;
+/// vorher nahm der Server bis zur Grenze des Anfragekörpers (2 MB) alles an
+/// und spielte es jedem Mitglied aus. Muss zu `messageMetadataMax` im
+/// gemeinsamen Paket passen.
+pub const MESSAGE_METADATA_MAX: usize = 4096;
+/// Der Wiederholungsschutz-Schlüssel einer Nachricht (`clientId`) – wie
+/// `eventClientIdMax`. Er steht in einem eindeutigen Index; ohne Grenze war
+/// er so lang wie der Anfragekörper.
+pub const MESSAGE_CLIENT_ID_MAX: usize = 64;
 pub const CONVERSATION_TITLE_MAX: usize = 80;
 pub const POLL_QUESTION_MAX: usize = 300;
 pub const POLL_OPTION_MAX: usize = 120;
