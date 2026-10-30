@@ -569,6 +569,24 @@ function postleitzahlenFinden(text: string, regel: Regeln): PostleitzahlOrt[] {
 }
 
 /**
+ * Ein Strassenname OHNE Hausnummer, wie ihn die Ortssuche liefert
+ * („Willy-Brandt-Platz, 64293 Darmstadt“; ein Platz hat oft keine Nummer).
+ *
+ * Streng gehalten: Nur ein Segment, das nach einer Strasse klingt (Endung oder
+ * Vorsilbe), wird vor die Postleitzahl gezogen. „Vereinsheim, 12345 Berlin“
+ * bleibt bei „12345 Berlin“ – ein beliebiger Name davor ist kein Ort für die
+ * Karte, und ein falscher Link kostet mehr als ein ungenauer.
+ */
+const STRASSE_OHNE_NUMMER = new RegExp(
+  String.raw`^(?:` +
+    String.raw`\p{Lu}[\p{L}'’.-]*(?:\s+[\p{L}'’.-]*){0,3}?(?:stra(?:ß|ss)e|str\.|platz|weg|allee|gasse|ring|damm|ufer|chaussee|pfad|steig|promenade|markt|brücke|wall|anger|zeile|kai|passage|straat|laan|gracht)` +
+    String.raw`|(?:Am|An der|An den|Im|Auf der|Auf dem|Zum|Zur|Unter den|Hinter dem|Vor dem|Bei der|Alte[rn]?|Neue[rn]?|Obere[rn]?|Untere[rn]?|Grosse[rn]?|Große[rn]?|Kleine[rn]?)\s+\p{Lu}[\p{L}'’.-]*(?:\s+\p{Lu}[\p{L}'’.-]*)?` +
+    String.raw`|(?:Rue|Avenue|Boulevard|Quai|Place|Via|Viale|Piazza|Corso|Calle|Plaza|Paseo|Avenida)\s+\p{L}[\p{L}'’.\s-]*` +
+    String.raw`)$`,
+  'iu',
+);
+
+/**
  * Strassen und Postleitzahlen zu Adressen zusammenfassen.
  *
  * Eine Strasse nimmt die nächste Postleitzahl mit Ort dahinter mit, wenn
@@ -634,18 +652,34 @@ function adressenFinden(arbeit: string, text: string, regel: Regeln): AdressFund
     let bis = plz.bis;
     const land = landNach(bis);
     if (land) bis += land[0].length;
+    // Strasse ohne Nummer unmittelbar davor („Platz, 64293 Darmstadt“): Sie
+    // gehört zur Adresse, sonst ginge nur Postleitzahl und Ort an die Karte
+    // und man käme bloss in die Nähe.
+    let von = plz.von;
+    let strassenteil: string | null = null;
+    const davor = /(?:^|[,;:])\s*([^,;:]{3,60}?)\s*,\s*$/u.exec(arbeit.slice(0, plz.von));
+    if (
+      davor &&
+      STRASSE_OHNE_NUMMER.test(davor[1]) &&
+      !belegt(plz.von - davor[0].length, plz.von, roh)
+    ) {
+      strassenteil = davor[1];
+      von = plz.von - davor[0].length + davor[0].indexOf(davor[1]);
+    }
     // Mit Ländervorsatz („A-1010 Wien“) ist es sicher. Fünfstellig allein
     // ist es vermutlich; vierstellig ohne Vorsatz sähe zu sehr nach einer
     // Jahreszahl aus („2025 Berlin Marathon“) und bleibt aussen vor.
     const fuenf = plz.plz.replace(/\s?[A-Z]{2}$/, '').length === 5 || /[A-Z]{2}$/.test(plz.plz);
-    const sicherheit = plz.land ? 'sicher' : fuenf ? 'vermutlich' : 'offen';
+    const sicherheit = plz.land || strassenteil ? 'sicher' : fuenf ? 'vermutlich' : 'offen';
     // Der Vorsatz bleibt im Text stehen, geht aber nicht an die Suche: Strenge
     // Suchen (OpenStreetMap) kennen „A-1010“ nicht, und der Ortsname trennt
     // ohnehin.
     roh.push({
-      von: plz.von,
+      von,
       bis,
-      suche: [`${plz.plz} ${plz.ort}`, land ? land[1] : null].filter(Boolean).join(', '),
+      suche: [strassenteil, `${plz.plz} ${plz.ort}`, land ? land[1] : null]
+        .filter(Boolean)
+        .join(', '),
       sicherheit,
       luecke: 'strasse',
     });

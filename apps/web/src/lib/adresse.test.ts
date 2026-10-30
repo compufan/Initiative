@@ -942,3 +942,33 @@ describe('Ausfall des Regelwerks', () => {
     expect(frisch.ortAnalysieren('Zoom').ziel).toBeNull();
   });
 });
+
+describe('Strasse ohne Hausnummer vor der Postleitzahl (Vorschläge der Ortssuche)', () => {
+  const suche = (text: string) => {
+    const a = ortAnalysieren(text);
+    return { ziel: a.ziel, sicherheit: a.sicherheit, stuecke: a.stuecke.map((s) => s.text) };
+  };
+
+  it('nimmt den Platz mit an die Karte, nicht nur Postleitzahl und Ort', () => {
+    const r = suche('Willy-Brandt-Platz, 64293 Darmstadt');
+    expect(r.ziel).toEqual({ art: 'text', text: 'Willy-Brandt-Platz, 64293 Darmstadt' });
+    expect(r.sicherheit).toBe('sicher');
+    // Der ganze Eintrag ist ein Link, nicht nur sein Ende.
+    expect(r.stuecke).toEqual(['Willy-Brandt-Platz, 64293 Darmstadt']);
+  });
+
+  it('nimmt bei Name, Strasse, Ort die Strasse mit und lässt den Namen stehen', () => {
+    expect(suche('Tiefgarage Darmstadtium, Alexanderstraße, 64283 Darmstadt').ziel).toEqual({
+      art: 'text',
+      text: 'Alexanderstraße, 64283 Darmstadt',
+    });
+    expect(suche('Treffpunkt: Am Bahnhof, 12345 Berlin, Deutschland').ziel).toEqual({
+      art: 'text',
+      text: 'Am Bahnhof, 12345 Berlin, Deutschland',
+    });
+  });
+
+  it('zieht keinen beliebigen Namen vor die Postleitzahl', () => {
+    expect(suche('Vereinsheim, 12345 Berlin').ziel).toEqual({ art: 'text', text: '12345 Berlin' });
+  });
+});
