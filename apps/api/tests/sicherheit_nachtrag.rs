@@ -787,3 +787,92 @@ async fn fremde_private_sticker_bleiben_privat() {
     let (status, body) = senden(&bert, &cleos_chat, privat).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
+
+/* ---------- Kleinere Grenzen ---------- */
+
+/// `/media/teilen` legte eine Nachricht an, ohne die Textlänge zu prüfen –
+/// am Senden-Handler vorbei, der sie prüft.
+#[tokio::test]
+async fn weitergeben_haelt_die_textgrenze() {
+    let probe = probe!();
+    let (anna, anna_id) = probe.konto("anna").await;
+    let (_, bert_id) = probe.konto("bert").await;
+    let chat = probe.gruppe(&anna, &[&bert_id]).await;
+    let anhang = Uuid::now_v7();
+    sqlx::query(
+        "insert into attachments (id, uploader_id, kind, mime, size, storage_key, status)
+         values ($1, $2, 'file', 'application/pdf', 10, $3, 'ready')",
+    )
+    .bind(anhang)
+    .bind(Uuid::parse_str(&anna_id).unwrap())
+    .bind(format!("probe/{anhang}"))
+    .execute(&probe.state.pool)
+    .await
+    .unwrap();
+
+    let (status, body) = probe
+        .call(
+            "POST",
+            "/api/v1/media/teilen",
+            Some(&anna),
+            Some(json!({ "ids": [anhang], "conversationId": chat, "body": "x".repeat(8001) })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let neue: i64 = sqlx::query_scalar("select count(*) from attachments where quelle_id = $1")
+        .bind(anhang)
+        .fetch_one(&probe.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(neue, 0, "abgelehnt, bevor etwas angelegt wurde");
+
+    let (status, body) = probe
+        .call(
+            "POST",
+            "/api/v1/media/teilen",
+            Some(&anna),
+            Some(json!({ "ids": [anhang], "conversationId": chat, "body": "schau" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// Die Wellenform einer Sprachnachricht nahm beliebig viele Werte an.
+#[tokio::test]
+async fn die_wellenform_hat_eine_grenze() {
+    let probe = probe!();
+    let (anna, _) = probe.konto("anna").await;
+    let (status, upload) = probe
+        .call(
+            "POST",
+            "/api/v1/media/uploads",
+            Some(&anna),
+            Some(
+                json!({ "kind": "audio", "mime": "audio/webm", "size": 10, "fileName": "a.webm" }),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{upload}");
+    let anhang = upload["attachmentId"].as_str().unwrap();
+    let pfad = format!("/api/v1/media/uploads/{anhang}/complete");
+    let fertig = |wellenform: Value| {
+        probe.call(
+            "POST",
+            &pfad,
+            Some(&anna),
+            Some(json!({ "waveform": wellenform, "durationMs": 1000 })),
+        )
+    };
+
+    let (status, body) = fertig(json!(vec![0.5; 600])).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, body) = fertig(json!([0.1, 7.0, 0.3])).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, body) = fertig(json!(vec![0.25; 64])).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["waveform"].as_array().map(Vec::len),
+        Some(64),
+        "{body}"
+    );
+}

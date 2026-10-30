@@ -229,6 +229,28 @@ async fn register_start(
     }))
 }
 
+/// Die Bezeichnung eines neuen Schlüssels, wie sie gespeichert wird.
+///
+/// Gekürzt statt abgelehnt: Die Bezeichnung kommt erst NACH der Prüfung des
+/// Schlüssels, und eine Absage an dieser Stelle verwürfe einen schon
+/// bestätigten Fingerabdruck. Ohne Grenze stand hier beliebig viel Text in
+/// jeder Liste der Schlüssel. Nach Zeichen, nicht nach Bytes – ein Schnitt
+/// mitten im Umlaut bräche ab.
+fn bezeichnung(eingabe: Option<String>) -> String {
+    eingabe
+        .map(|value| {
+            value
+                .trim()
+                .chars()
+                .take(crate::constants::DISPLAY_NAME_MAX)
+                .collect::<String>()
+                .trim()
+                .to_string()
+        })
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "Dieses Gerät".to_string())
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RegisterFinishInput {
@@ -255,11 +277,7 @@ async fn register_finish(
         .finish_passkey_registration(&input.credential, &registration)
         .map_err(|error| AppError::bad_request(format!("Schlüssel abgelehnt: {error}")))?;
 
-    let label = input
-        .label
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "Dieses Gerät".to_string());
+    let label = bezeichnung(input.label);
 
     let row = sqlx::query_as::<_, PasskeyDto>(
         "insert into passkeys (id, user_id, credential_id, passkey, label)
@@ -415,4 +433,22 @@ async fn login_finish(
     Ok(Json(
         crate::modules::auth::issue_session(&state, &user).await?,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::bezeichnung;
+
+    #[test]
+    fn die_bezeichnung_hat_eine_grenze() {
+        let lang = "ä".repeat(5_000);
+        let gespeichert = bezeichnung(Some(lang));
+        assert_eq!(
+            gespeichert.chars().count(),
+            crate::constants::DISPLAY_NAME_MAX
+        );
+        assert_eq!(bezeichnung(Some("  iPhone  ".into())), "iPhone");
+        assert_eq!(bezeichnung(Some("   ".into())), "Dieses Gerät");
+        assert_eq!(bezeichnung(None), "Dieses Gerät");
+    }
 }

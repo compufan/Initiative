@@ -283,6 +283,10 @@ async fn upload_data(
     Ok(Json(to_attachment_dto(&row, &state.config)))
 }
 
+/// Wie viele Werte eine Wellenform höchstens hat – `waveform` in
+/// `completeUploadSchema` (gemeinsames Paket).
+const WELLENFORM_MAX: usize = 512;
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CompleteUploadInput {
@@ -300,6 +304,18 @@ async fn complete_upload(
     Json(input): Json<CompleteUploadInput>,
 ) -> AppResult<Json<AttachmentDto>> {
     require_own(&state, id, user.id()).await?;
+
+    // Die Wellenform steht bei jeder Sprachnachricht im Anhang und geht an
+    // jedes Mitglied. Die Oberfläche schickt 64 Werte zwischen 0 und 1; ohne
+    // Grenze nahm der Server hier Megabytes an (und `NaN`, das als JSON nicht
+    // einmal darstellbar ist). Die Grenze ist die des gemeinsamen Schemas.
+    if let Some(werte) = &input.waveform {
+        if werte.len() > WELLENFORM_MAX || werte.iter().any(|wert| !(0.0..=1.0).contains(wert)) {
+            return Err(AppError::bad_request(format!(
+                "Wellenform: höchstens {WELLENFORM_MAX} Werte zwischen 0 und 1"
+            )));
+        }
+    }
 
     if let Some(preview) = &input.preview_data_url {
         if preview.len() > PREVIEW_DATA_URL_MAX {
@@ -1135,6 +1151,19 @@ async fn in_chat_teilen(
             "ids",
             input.ids.len() <= crate::constants::ATTACHMENTS_PER_MESSAGE,
             "zu viele Dateien für eine Nachricht",
+        )
+        // Dieselbe Grenze wie beim gewöhnlichen Senden. `create_message`
+        // prüft sie nicht selbst – sie stand nur im Handler fürs Senden, und
+        // dieser Weg ging daran vorbei.
+        .require(
+            "body",
+            input
+                .body
+                .as_deref()
+                .map(|text| text.trim().chars().count())
+                .unwrap_or(0)
+                <= crate::constants::MESSAGE_BODY_MAX,
+            "Nachricht ist zu lang",
         )
         .finish()?;
     crate::services::conversations::assert_membership(
