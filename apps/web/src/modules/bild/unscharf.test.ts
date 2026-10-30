@@ -684,3 +684,143 @@ describe('Bokeh folgt der Tiefe', () => {
     expect(f[3]).toBeGreaterThanOrEqual(f[2]);
   });
 });
+
+describe('Rechnung in Streifen', () => {
+  /** Ein kleiner, fest gesäter Zufall – derselbe Lauf, dieselben Bilder. */
+  function zufall(saat: number) {
+    let z = saat >>> 0;
+    return () => {
+      z = (z + 0x6d2b79f5) >>> 0;
+      let t = z;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  /** Zufälliges Bild mit Lichtern, dazu eine fleckige Maske mit Saum und Staub. */
+  function fall(saat: number, breite: number, hoehe: number) {
+    const r = zufall(saat);
+    const daten = bild(breite, hoehe, () => {
+      const licht = r() < 0.02;
+      return licht
+        ? [255, 250, 240]
+        : [Math.floor(r() * 256), Math.floor(r() * 256), Math.floor(r() * 256)];
+    });
+    const flecken = Array.from({ length: 4 }, () => [r() * breite, r() * hoehe, 8 + r() * 40]);
+    const maskeVon = () =>
+      maskeAus(breite, hoehe, (x, y) => {
+        let m = 0;
+        for (const [fx, fy, fr] of flecken) {
+          const d = Math.hypot(x - fx, y - fy);
+          m = Math.max(m, d < fr ? 255 : d < fr + 10 ? 255 * (1 - (d - fr) / 10) : 0);
+        }
+        // Staub: einzelne niedrige Werte, wie sie Netzmasken liefern.
+        return Math.min(255, m + (r() < 0.1 ? r() * 12 : 0));
+      });
+    return { daten, maskeVon, r };
+  }
+
+  it('liefert Byte für Byte dasselbe Bild wie die Fassung mit Feldern in Bildgrösse', async () => {
+    const { unscharfAufBytesAlt } = await import('./unscharf.alt.testhilfe.js');
+    const groessen: [number, number][] = [
+      [97, 83],
+      [130, 151],
+      [64, 64],
+      [33, 200],
+      [210, 70],
+    ];
+    let geaendert = 0;
+    for (let fallNr = 0; fallNr < 15; fallNr += 1) {
+      const [b, h] = groessen[fallNr % groessen.length];
+      const { daten, maskeVon, r } = fall(1000 + fallNr, b, h);
+      const guete = (['hoch', 'mittel', 'niedrig'] as const)[fallNr % 3];
+      const quellen: UnscharfQuelle[] = [];
+      const anzahl = 1 + (fallNr % 3);
+      for (let platz = 0; platz < anzahl; platz += 1) {
+        const reinheit = ((fallNr + platz) % 3) as Reinheit;
+        const maske = maskeVon();
+        const kern = reinheit === 2 ? maskeVon() : null;
+        // Mal nur Bokeh, mal nur Weichzeichnen, mal beides; Radien bis über die Grenze des
+        // Arbeitsmassstabs, damit auch f = 2 … 8 vorkommen.
+        const art = (fallNr + platz) % 3;
+        const bokehPx = art === 1 ? 0 : 1 + r() * 40;
+        const weichPx = art === 0 ? 0 : 0.5 + r() * 12;
+        quellen.push({ ebene: { platz, bokehPx, weichPx, reinheit }, maske, kern });
+      }
+      const alt = new Uint8ClampedArray(daten);
+      const neu = new Uint8ClampedArray(daten);
+      const einflussAlt = unscharfAufBytesAlt(alt, b, h, quellen, guete);
+      const einflussNeu = unscharfAufBytes(neu, b, h, quellen, guete);
+      let unterschiede = 0;
+      for (let i = 0; i < neu.length; i += 1) if (neu[i] !== alt[i]) unterschiede += 1;
+      expect(unterschiede, `Fall ${fallNr} (${b}×${h}, ${guete})`).toBe(0);
+      expect(Array.from(einflussNeu)).toEqual(Array.from(einflussAlt));
+      for (let i = 0; i < neu.length; i += 1) if (neu[i] !== daten[i]) geaendert += 1;
+    }
+    // Der Vergleich taugt nur, wenn überhaupt etwas gerechnet wurde.
+    expect(geaendert).toBeGreaterThan(10000);
+  });
+
+  /**
+   * Zählt die Bytes aller typisierten Felder, die `rechnen` anlegt und die
+   * mindestens `ab` Elemente haben. WARUM so und nicht über
+   * `process.memoryUsage`: Die Speicherbereinigung räumt, wann sie will; eine
+   * Momentaufnahme davor und danach sagt über die Spitze nichts. Die Felder in
+   * Bildgrösse leben in der alten Fassung alle zugleich (Licht, Einfluss,
+   * dann je Stufe Stärke, Gewicht, Stufe) – ihre Summe IST dort die Spitze.
+   */
+  function grosseFelder(ab: number, rechnen: () => void): number {
+    const g = globalThis as unknown as Record<string, unknown>;
+    const namen = [
+      'Float32Array',
+      'Float64Array',
+      'Uint8Array',
+      'Uint16Array',
+      'Uint8ClampedArray',
+    ];
+    const vorher = namen.map((name) => g[name]);
+    let summe = 0;
+    namen.forEach((name, i) => {
+      g[name] = new Proxy(vorher[i] as new (...a: unknown[]) => ArrayBufferView, {
+        construct(ziel, args) {
+          const feld = Reflect.construct(ziel, args) as ArrayBufferView & { length: number };
+          if (feld.length >= ab) summe += feld.byteLength;
+          return feld;
+        },
+      });
+    });
+    try {
+      rechnen();
+    } finally {
+      namen.forEach((name, i) => {
+        g[name] = vorher[i];
+      });
+    }
+    return summe;
+  }
+
+  it('legt in Bildgrösse nur noch den Einfluss an (1 statt 26 Byte je Bildpunkt)', async () => {
+    const { unscharfAufBytesAlt } = await import('./unscharf.alt.testhilfe.js');
+    const B = 800;
+    const H = 600;
+    const n = B * H;
+    const { daten, maskeVon } = fall(7, B, H);
+    const quellen: UnscharfQuelle[] = [
+      // Radien wie bei grossen Fotos: Arbeitsmassstab 4 bzw. 8, die Arbeitsfelder liegen
+      // dann unter der Zählschwelle, gezählt wird nur, was Bildgrösse hat.
+      { ebene: { platz: 0, bokehPx: 12, weichPx: 20, reinheit: 1 }, maske: maskeVon(), kern: null },
+    ];
+    const alt = grosseFelder(n, () =>
+      unscharfAufBytesAlt(new Uint8ClampedArray(daten), B, H, quellen, 'niedrig'),
+    );
+    const neu = grosseFelder(n, () =>
+      unscharfAufBytes(new Uint8ClampedArray(daten), B, H, quellen, 'niedrig'),
+    );
+    // Gemessen (zusätzlich zur Kopie des Bildes, 4 Byte je Punkt, die hier mitzählt):
+    // alt 4 + 12 Licht + 4 Einfluss + 1 Einfluss-Byte + 9 Bokeh-Stufe = 30 Byte je Punkt,
+    // neu 4 + 1 Einfluss-Byte = 5 Byte je Punkt.
+    expect(alt / n).toBeGreaterThanOrEqual(26);
+    expect(neu / n).toBeLessThanOrEqual(5);
+  });
+});

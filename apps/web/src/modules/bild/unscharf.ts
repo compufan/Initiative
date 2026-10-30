@@ -483,16 +483,6 @@ function rauten(
   }
 }
 
-/** Der Zustand der Rechnung: Licht (linear), Einfluss, und die Masse. */
-interface Zustand {
-  readonly breite: number;
-  readonly hoehe: number;
-  /** Lineares Licht, drei Zahlen je Bildpunkt. */
-  readonly licht: Float32Array;
-  /** Wie stark die Unschärfe an diesem Bildpunkt gewirkt hat, 0 … 1. */
-  readonly einfluss: Float32Array;
-}
-
 /** Was ein Bereich für die Rechnung auf dem Prozessor mitbringt, auf Bildgrösse gebracht. */
 export interface UnscharfQuelle {
   readonly ebene: UnscharfEbene;
@@ -502,53 +492,153 @@ export interface UnscharfQuelle {
   readonly kern: Uint8Array | null;
 }
 
-function bokehStufe(z: Zustand, q: UnscharfQuelle, guete: StufenGuete): void {
-  const { breite: W, hoehe: H, licht, einfluss } = z;
-  const n = W * H;
-  const g = GUETEN[guete];
-  const { bokehPx: R, reinheit } = q.ebene;
-  const K = stufenAnzahl(reinheit, guete);
-  const f = arbeitsFaktor(R, g.arbeitsradius, W, H);
-  const wb = Math.ceil(W / f);
-  const wh = Math.ceil(H / f);
+/**
+ * Zeilen je Streifen. Ein Vielfaches von `FAKTOR_MAX`: Streifen beginnen auf
+ * Vielfachen davon, jeder Arbeitsblock (`f × f`, `f` teilt 8) liegt dann ganz
+ * in einem Streifen – auch der unterste, dessen Zeilen auf `H − 1` geklemmt
+ * werden.
+ */
+export const STREIFEN_ZEILEN = 64;
 
-  /*
-   * Je Quellpunkt einmal: seine Stufe (0 = streut nicht), sein Gewicht, seine
-   * Stärke. Die Stufe `k = ⌊s·K + ½⌋` ordnet jede Quelle genau einem Radius
-   * zu; wer keine Stufe hat oder kein Kerngewicht, wird nie eingesammelt.
-   */
-  const stufe = new Uint8Array(n);
-  const gewicht = new Float32Array(n);
-  const staerken = new Float32Array(n);
-  for (let i = 0; i < n; i += 1) {
-    const m = q.maske[i] / 255;
-    const rein = reinWert(m, q.kern ? q.kern[i] / 255 : 0, reinheit);
-    const s = staerke(m, rein, reinheit);
-    staerken[i] = s;
-    const band = Math.floor(s * K + 0.5);
-    const kg = kernGewicht(rein, reinheit);
-    if (band === 0 || kg === 0) continue;
-    const hell = Math.max(licht[i * 3], licht[i * 3 + 1], licht[i * 3 + 2]);
-    stufe[i] = band;
-    gewicht[i] = lichtGewicht(hell) * kg;
+/**
+ * Ein Rechenschritt: Bokeh oder Weichzeichnen eines Bereichs. `feld` ist sein
+ * Ergebnis im Arbeitsmassstab, sobald es gerechnet ist.
+ */
+interface Schritt {
+  readonly art: 'bokeh' | 'weich';
+  readonly q: UnscharfQuelle;
+  /** Stufen des Radius (nur Bokeh). */
+  readonly stufen: number;
+  readonly f: number;
+  readonly wb: number;
+  readonly wh: number;
+  feld: Float32Array | null;
+}
+
+/**
+ * Lineares Licht eines Streifens, mit allen Schritten vor `bis` darauf.
+ *
+ * WARUM neu gerechnet statt aufbewahrt: Ein Feld lineares Licht in Bildgrösse
+ * kostet 12 Byte je Bildpunkt (12 MP: 144 MB), dazu kamen Stärke, Gewicht,
+ * Stufe und Einfluss – zusammen gut 25 Byte je Bildpunkt neben dem RGBA-Feld.
+ * Alles in Bildgrösse ist aber punktweise: Ein Schritt braucht am Bildpunkt
+ * nur dessen Licht, Maske und sein Feld im Arbeitsmassstab. Also wird der
+ * Streifen aus den Bytes und den fertigen Feldern frisch gerechnet. Die Werte
+ * gehen dabei wie früher durch ein `Float32Array` – darum Byte für Byte
+ * dasselbe Ergebnis.
+ */
+function streifenLicht(
+  daten: Uint8ClampedArray,
+  breite: number,
+  hoehe: number,
+  y0: number,
+  y1: number,
+  licht: Float32Array,
+  schritte: readonly Schritt[],
+  bis: number,
+  einfluss: Uint8Array | null,
+  t: Float32Array,
+): void {
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = 0; x < breite; x += 1) {
+      const i = y * breite + x;
+      const l = ((y - y0) * breite + x) * 3;
+      licht[l] = ZU_LINEAR[daten[i * 4]];
+      licht[l + 1] = ZU_LINEAR[daten[i * 4 + 1]];
+      licht[l + 2] = ZU_LINEAR[daten[i * 4 + 2]];
+    }
   }
+  for (let s = 0; s < bis; s += 1) {
+    auftragen(schritte[s], breite, hoehe, y0, y1, licht, einfluss, t);
+  }
+}
 
-  const p = new Float32Array(wb * wh * 4);
-  const t0 = new Float32Array(wb * wh * 4);
-  const t1 = new Float32Array(wb * wh * 4);
-  const akku = new Float32Array(wb * wh * 4);
-  const teilerVorbereitung = 1 / (f * f);
+/**
+ * Zusammensetzen eines Schritts auf einen Streifen.
+ *
+ * Bokeh: Summe über alle Stufen, Rückfall aufs Original nach Deckung,
+ * Einblendung nach Stärke. Ein Empfänger ohne Stufe (`k = 0`) bleibt
+ * unberührt, wie dicht auch immer Quellen um ihn liegen. Weichzeichnen:
+ * Überblendung nach Stärke, Rückfall nach Deckung.
+ *
+ * Der Einfluss wird gleich als Byte geführt: `round(max(a) · 255)` ist
+ * `max(round(a · 255))`, weil Runden monoton ist.
+ */
+function auftragen(
+  schritt: Schritt,
+  W: number,
+  H: number,
+  y0: number,
+  y1: number,
+  licht: Float32Array,
+  einfluss: Uint8Array | null,
+  t: Float32Array,
+): void {
+  const { q, stufen: K, wb, wh } = schritt;
+  const feld = schritt.feld as Float32Array;
+  const bokeh = schritt.art === 'bokeh';
+  const { reinheit } = q.ebene;
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = 0; x < W; x += 1) {
+      const i = y * W + x;
+      const m = q.maske[i] / 255;
+      const rein = reinWert(m, q.kern ? q.kern[i] / 255 : 0, reinheit);
+      // Früher in einem Float32Array abgelegt – dieselbe Rundung hier.
+      const s = Math.fround(staerke(m, rein, reinheit));
+      let ein = s;
+      if (bokeh) {
+        ein = rampe(s, 0, EINBLENDUNG_BIS);
+        if (!(ein > 0) || !(s > 0)) continue;
+        if (Math.floor(s * K + 0.5) < 1) continue;
+      } else if (!(s > 0)) continue;
+      bilinear(feld, wb, wh, ((x + 0.5) / W) * wb, ((y + 0.5) / H) * wh, t);
+      const deck = glatt(DECKUNG_VON, DECKUNG_BIS, t[3]);
+      const a = deck * ein;
+      const l = ((y - y0) * W + x) * 3;
+      for (let c = 0; c < 3; c += 1) {
+        const roh = licht[l + c];
+        const bl = t[3] > 1e-6 ? t[c] / t[3] : roh;
+        licht[l + c] = roh + (bl - roh) * a;
+      }
+      if (einfluss) {
+        const a8 = Math.round(Math.fround(a) * 255);
+        if (a8 > einfluss[i]) einfluss[i] = a8;
+      }
+    }
+  }
+}
 
-  for (let k = 1; k <= K; k += 1) {
-    const rk = (R / f) * (k / K);
-    const nn = linienAnzahl(rk, g.dichte);
-    /*
-     * Vorbereitung: Licht mal Gewicht und Gewicht, gemittelt über den Block.
-     * Am Bildrand wird auf den Randpunkt geklemmt, nicht mit fehlenden
-     * Punkten gemittelt – sonst hätte der Randblock weniger Gewicht, und die
-     * Grafikeinheit rechnet es anders.
-     */
-    for (let wy = 0; wy < wh; wy += 1) {
+/**
+ * Die Vorbereitung eines Schritts: Licht mal Gewicht und Gewicht, gemittelt
+ * über den Block. Bei Bokeh nur die Quellen der Stufe `k`.
+ *
+ * Am Bildrand wird auf den Randpunkt geklemmt, nicht mit fehlenden Punkten
+ * gemittelt – sonst hätte der Randblock weniger Gewicht, und die
+ * Grafikeinheit rechnet es anders.
+ *
+ * Die Stufe einer Quelle ist `⌊s·K + ½⌋` mit der ungerundeten Stärke, das
+ * Gewicht ging früher durch ein `Float32Array` – beides wie gehabt.
+ */
+function vorbereiten(
+  daten: Uint8ClampedArray,
+  W: number,
+  H: number,
+  schritte: readonly Schritt[],
+  index: number,
+  k: number,
+  licht: Float32Array,
+  p: Float32Array,
+  t: Float32Array,
+): void {
+  const schritt = schritte[index];
+  const { q, stufen: K, f, wb, wh } = schritt;
+  const bokeh = schritt.art === 'bokeh';
+  const { reinheit } = q.ebene;
+  const teiler = 1 / (f * f);
+  for (let y0 = 0; y0 < H; y0 += STREIFEN_ZEILEN) {
+    const y1 = Math.min(H, y0 + STREIFEN_ZEILEN);
+    streifenLicht(daten, W, H, y0, y1, licht, schritte, index, null, t);
+    for (let wy = y0 / f; wy < wh && wy * f < y1; wy += 1) {
       for (let wx = 0; wx < wb; wx += 1) {
         let s0 = 0;
         let s1 = 0;
@@ -556,23 +646,58 @@ function bokehStufe(z: Zustand, q: UnscharfQuelle, guete: StufenGuete): void {
         let sw = 0;
         for (let j = 0; j < f; j += 1) {
           const y = Math.min(wy * f + j, H - 1);
-          for (let i = 0; i < f; i += 1) {
-            const at = y * W + Math.min(wx * f + i, W - 1);
-            if (stufe[at] !== k) continue;
-            const w = gewicht[at];
-            s0 += licht[at * 3] * w;
-            s1 += licht[at * 3 + 1] * w;
-            s2 += licht[at * 3 + 2] * w;
+          for (let ii = 0; ii < f; ii += 1) {
+            const at = y * W + Math.min(wx * f + ii, W - 1);
+            const m = q.maske[at] / 255;
+            const rein = reinWert(m, q.kern ? q.kern[at] / 255 : 0, reinheit);
+            const kg = kernGewicht(rein, reinheit);
+            if (kg === 0) continue;
+            const l = (at - y0 * W) * 3;
+            let w: number;
+            if (bokeh) {
+              if (Math.floor(staerke(m, rein, reinheit) * K + 0.5) !== k) continue;
+              const hell = Math.max(licht[l], licht[l + 1], licht[l + 2]);
+              w = Math.fround(lichtGewicht(hell) * kg);
+            } else {
+              w = Math.fround(kg);
+            }
+            s0 += licht[l] * w;
+            s1 += licht[l + 1] * w;
+            s2 += licht[l + 2] * w;
             sw += w;
           }
         }
         const o = (wy * wb + wx) * 4;
-        p[o] = s0 * teilerVorbereitung;
-        p[o + 1] = s1 * teilerVorbereitung;
-        p[o + 2] = s2 * teilerVorbereitung;
-        p[o + 3] = sw * teilerVorbereitung;
+        p[o] = s0 * teiler;
+        p[o + 1] = s1 * teiler;
+        p[o + 2] = s2 * teiler;
+        p[o + 3] = sw * teiler;
       }
     }
+  }
+}
+
+function bokehFeld(
+  daten: Uint8ClampedArray,
+  W: number,
+  H: number,
+  schritte: readonly Schritt[],
+  index: number,
+  guete: StufenGuete,
+  licht: Float32Array,
+  t: Float32Array,
+): Float32Array {
+  const { q, stufen: K, f, wb, wh } = schritte[index];
+  const g = GUETEN[guete];
+  const R = q.ebene.bokehPx;
+  const p = new Float32Array(wb * wh * 4);
+  const t0 = new Float32Array(wb * wh * 4);
+  const t1 = new Float32Array(wb * wh * 4);
+  const akku = new Float32Array(wb * wh * 4);
+  for (let k = 1; k <= K; k += 1) {
+    const rk = (R / f) * (k / K);
+    const nn = linienAnzahl(rk, g.dichte);
+    vorbereiten(daten, W, H, schritte, index, k, licht, p, t);
     strecke(p, wb, wh, ECKE_0[0] * rk, ECKE_0[1] * rk, nn, t0);
     strecke(p, wb, wh, ECKE_1[0] * rk, ECKE_1[1] * rk, nn, t1);
     rauten(
@@ -586,78 +711,22 @@ function bokehStufe(z: Zustand, q: UnscharfQuelle, guete: StufenGuete): void {
       akku,
     );
   }
-
-  /*
-   * Zusammensetzen: Summe über alle Stufen, Rückfall aufs Original nach
-   * Deckung, Einblendung nach Stärke. Ein Empfänger ohne Stufe (`k = 0`) bleibt
-   * unberührt, wie dicht auch immer Quellen um ihn liegen.
-   */
-  const t = new Float32Array(4);
-  for (let y = 0; y < H; y += 1) {
-    for (let x = 0; x < W; x += 1) {
-      const i = y * W + x;
-      const s = staerken[i];
-      const ein = rampe(s, 0, EINBLENDUNG_BIS);
-      if (!(ein > 0) || !(s > 0)) continue;
-      if (Math.floor(s * K + 0.5) < 1) continue;
-      bilinear(akku, wb, wh, ((x + 0.5) / W) * wb, ((y + 0.5) / H) * wh, t);
-      const deck = glatt(DECKUNG_VON, DECKUNG_BIS, t[3]);
-      const a = deck * ein;
-      for (let c = 0; c < 3; c += 1) {
-        const roh = licht[i * 3 + c];
-        const bl = t[3] > 1e-6 ? t[c] / t[3] : roh;
-        licht[i * 3 + c] = roh + (bl - roh) * a;
-      }
-      if (a > einfluss[i]) einfluss[i] = a;
-    }
-  }
+  return akku;
 }
 
-function weichStufe(z: Zustand, q: UnscharfQuelle): void {
-  const { breite: W, hoehe: H, licht, einfluss } = z;
-  const n = W * H;
-  const { weichPx: sigma, reinheit } = q.ebene;
-  const f = arbeitsFaktor(sigma * 3, GAUSS_GRENZE, W, H);
-  const wb = Math.ceil(W / f);
-  const wh = Math.ceil(H / f);
-
-  const staerken = new Float32Array(n);
-  const kern = new Float32Array(n);
-  for (let i = 0; i < n; i += 1) {
-    const m = q.maske[i] / 255;
-    const rein = reinWert(m, q.kern ? q.kern[i] / 255 : 0, reinheit);
-    staerken[i] = staerke(m, rein, reinheit);
-    kern[i] = kernGewicht(rein, reinheit);
-  }
-
-  // Vorbereitung: Licht mal Kerngewicht und Kerngewicht, gemittelt über den Block.
+function weichFeld(
+  daten: Uint8ClampedArray,
+  W: number,
+  H: number,
+  schritte: readonly Schritt[],
+  index: number,
+  licht: Float32Array,
+  t: Float32Array,
+): Float32Array {
+  const { q, f, wb, wh } = schritte[index];
+  const sigma = q.ebene.weichPx;
   const p = new Float32Array(wb * wh * 4);
-  const teilerVorbereitung = 1 / (f * f);
-  for (let wy = 0; wy < wh; wy += 1) {
-    for (let wx = 0; wx < wb; wx += 1) {
-      let s0 = 0;
-      let s1 = 0;
-      let s2 = 0;
-      let sw = 0;
-      for (let j = 0; j < f; j += 1) {
-        const y = Math.min(wy * f + j, H - 1);
-        for (let i = 0; i < f; i += 1) {
-          const at = y * W + Math.min(wx * f + i, W - 1);
-          const w = kern[at];
-          if (w === 0) continue;
-          s0 += licht[at * 3] * w;
-          s1 += licht[at * 3 + 1] * w;
-          s2 += licht[at * 3 + 2] * w;
-          sw += w;
-        }
-      }
-      const o = (wy * wb + wx) * 4;
-      p[o] = s0 * teilerVorbereitung;
-      p[o + 1] = s1 * teilerVorbereitung;
-      p[o + 2] = s2 * teilerVorbereitung;
-      p[o + 3] = sw * teilerVorbereitung;
-    }
-  }
+  vorbereiten(daten, W, H, schritte, index, 0, licht, p, t);
 
   // Gauss, getrennt: erst waagerecht, dann senkrecht, am Rand geklemmt.
   const sig = Math.max(0.3, sigma / f);
@@ -668,8 +737,9 @@ function weichStufe(z: Zustand, q: UnscharfQuelle): void {
     gew[j + r] = Math.exp(-(j * j) / (2 * sig * sig));
     gewSumme += gew[j + r];
   }
+  // Das Vorbereitungsfeld wird nach dem Querschritt nicht mehr gebraucht –
+  // es nimmt das Ergebnis auf, statt ein viertes Feld anzulegen.
   const quer = new Float32Array(wb * wh * 4);
-  const fertig = new Float32Array(wb * wh * 4);
   for (let y = 0; y < wh; y += 1) {
     for (let x = 0; x < wb; x += 1) {
       let a0 = 0;
@@ -692,6 +762,7 @@ function weichStufe(z: Zustand, q: UnscharfQuelle): void {
       quer[o + 3] = a3 / gewSumme;
     }
   }
+  const fertig = p;
   for (let y = 0; y < wh; y += 1) {
     for (let x = 0; x < wb; x += 1) {
       let a0 = 0;
@@ -714,25 +785,7 @@ function weichStufe(z: Zustand, q: UnscharfQuelle): void {
       fertig[o + 3] = a3 / gewSumme;
     }
   }
-
-  // Zusammensetzen: Überblendung nach Stärke, Rückfall nach Deckung.
-  const t = new Float32Array(4);
-  for (let y = 0; y < H; y += 1) {
-    for (let x = 0; x < W; x += 1) {
-      const i = y * W + x;
-      const s = staerken[i];
-      if (!(s > 0)) continue;
-      bilinear(fertig, wb, wh, ((x + 0.5) / W) * wb, ((y + 0.5) / H) * wh, t);
-      const deck = glatt(DECKUNG_VON, DECKUNG_BIS, t[3]);
-      const a = deck * s;
-      for (let c = 0; c < 3; c += 1) {
-        const roh = licht[i * 3 + c];
-        const bl = t[3] > 1e-6 ? t[c] / t[3] : roh;
-        licht[i * 3 + c] = roh + (bl - roh) * a;
-      }
-      if (a > einfluss[i]) einfluss[i] = a;
-    }
-  }
+  return fertig;
 }
 
 /**
@@ -749,6 +802,12 @@ function weichStufe(z: Zustand, q: UnscharfQuelle): void {
  * Zurück kommt der Einfluss je Bildpunkt (0 … 255). Wer danach noch schärft,
  * dämpft damit: Sonst holte die Schärfe die Hochfrequenz zurück, die gerade
  * entfernt wurde.
+ *
+ * Speicher: In Bildgrösse liegt nur der Einfluss (1 Byte je Bildpunkt), dazu
+ * ein Streifen lineares Licht (`STREIFEN_ZEILEN` Zeilen) und die Felder im
+ * Arbeitsmassstab – je fertigem Schritt eines, für den laufenden bis zu vier.
+ * Der Preis: Jeder Schritt rechnet die vorigen punktweise nach (bei Bokeh je
+ * Stufe), statt ihr Licht in Bildgrösse aufzuheben.
  */
 export function unscharfAufBytes(
   daten: Uint8ClampedArray,
@@ -758,31 +817,61 @@ export function unscharfAufBytes(
   guete: StufenGuete,
 ): Uint8Array {
   const n = breite * hoehe;
-  const einfluss8 = new Uint8Array(Math.max(0, n));
-  if (n <= 0 || daten.length < n * 4 || quellen.length === 0) return einfluss8;
+  const einfluss = new Uint8Array(Math.max(0, n));
+  if (n <= 0 || daten.length < n * 4 || quellen.length === 0) return einfluss;
 
-  const licht = new Float32Array(n * 3);
-  for (let i = 0; i < n; i += 1) {
-    licht[i * 3] = ZU_LINEAR[daten[i * 4]];
-    licht[i * 3 + 1] = ZU_LINEAR[daten[i * 4 + 1]];
-    licht[i * 3 + 2] = ZU_LINEAR[daten[i * 4 + 2]];
-  }
-  const z: Zustand = { breite, hoehe, licht, einfluss: new Float32Array(n) };
+  const g = GUETEN[guete];
+  const schritte: Schritt[] = [];
   for (const q of quellen) {
-    if (q.ebene.bokehPx > 0) bokehStufe(z, q, guete);
-    if (q.ebene.weichPx > 0) weichStufe(z, q);
+    if (q.ebene.bokehPx > 0) {
+      const f = arbeitsFaktor(q.ebene.bokehPx, g.arbeitsradius, breite, hoehe);
+      schritte.push({
+        art: 'bokeh',
+        q,
+        stufen: stufenAnzahl(q.ebene.reinheit, guete),
+        f,
+        wb: Math.ceil(breite / f),
+        wh: Math.ceil(hoehe / f),
+        feld: null,
+      });
+    }
+    if (q.ebene.weichPx > 0) {
+      const f = arbeitsFaktor(q.ebene.weichPx * 3, GAUSS_GRENZE, breite, hoehe);
+      schritte.push({
+        art: 'weich',
+        q,
+        stufen: 0,
+        f,
+        wb: Math.ceil(breite / f),
+        wh: Math.ceil(hoehe / f),
+        feld: null,
+      });
+    }
   }
+  if (schritte.length === 0) return einfluss;
+
+  const licht = new Float32Array(Math.min(hoehe, STREIFEN_ZEILEN) * breite * 3);
+  const t = new Float32Array(4);
+  schritte.forEach((s, index) => {
+    s.feld =
+      s.art === 'bokeh'
+        ? bokehFeld(daten, breite, hoehe, schritte, index, guete, licht, t)
+        : weichFeld(daten, breite, hoehe, schritte, index, licht, t);
+  });
 
   const byte = (v: number) => Math.round(Math.min(1, Math.max(0, zuSrgb(Math.max(0, v)))) * 255);
-  for (let i = 0; i < n; i += 1) {
-    const a = Math.round(z.einfluss[i] * 255);
-    einfluss8[i] = a;
-    // Unter einem halben Byte Einfluss gilt der Bildpunkt als unberührt –
-    // dieselbe Regel wie im Schattierer, dessen Alphakanal nur 8 Bit hat.
-    if (a === 0) continue;
-    daten[i * 4] = byte(licht[i * 3]);
-    daten[i * 4 + 1] = byte(licht[i * 3 + 1]);
-    daten[i * 4 + 2] = byte(licht[i * 3 + 2]);
+  for (let y0 = 0; y0 < hoehe; y0 += STREIFEN_ZEILEN) {
+    const y1 = Math.min(hoehe, y0 + STREIFEN_ZEILEN);
+    streifenLicht(daten, breite, hoehe, y0, y1, licht, schritte, schritte.length, einfluss, t);
+    for (let i = y0 * breite; i < y1 * breite; i += 1) {
+      // Unter einem halben Byte Einfluss gilt der Bildpunkt als unberührt –
+      // dieselbe Regel wie im Schattierer, dessen Alphakanal nur 8 Bit hat.
+      if (einfluss[i] === 0) continue;
+      const l = (i - y0 * breite) * 3;
+      daten[i * 4] = byte(licht[l]);
+      daten[i * 4 + 1] = byte(licht[l + 1]);
+      daten[i * 4 + 2] = byte(licht[l + 2]);
+    }
   }
-  return einfluss8;
+  return einfluss;
 }
