@@ -398,3 +398,160 @@ async fn salden_bleiben_dieselben_nur_schneller() {
     );
     let _ = &probe.state;
 }
+
+/* ---------- Chat-Rollen: die Rangordnung ---------- */
+
+/// Ein Admin konnte sich selbst zum Besitzer machen und den bisherigen danach
+/// herabstufen oder entfernen.
+#[tokio::test]
+async fn admins_greifen_nicht_nach_oben() {
+    let probe = probe!();
+    let (anna, anna_id) = probe.konto("anna").await;
+    let (bert, bert_id) = probe.konto("bert").await;
+    let (cleo, cleo_id) = probe.konto("cleo").await;
+    let (_, dora_id) = probe.konto("dora").await;
+    let chat = probe.gruppe(&anna, &[&bert_id, &cleo_id, &dora_id]).await;
+    let mitglied = |wer: &str| format!("/api/v1/conversations/{chat}/members/{wer}");
+    let rolle = |rolle: &str| Some(json!({ "role": rolle }));
+
+    // Anna (Besitzerin) ernennt Bert und Cleo zu Admins.
+    for wer in [&bert_id, &cleo_id] {
+        let (status, body) = probe
+            .call("PATCH", &mitglied(wer), Some(&anna), rolle("admin"))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    // Bert greift nach oben: sich selbst zum Besitzer, Anna herabstufen,
+    // Anna entfernen, Cleo (gleichrangig) herabstufen oder entfernen.
+    for (fall, methode, wer, koerper) in [
+        ("sich zum Besitzer", "PATCH", &bert_id, rolle("owner")),
+        ("Cleo zum Besitzer", "PATCH", &cleo_id, rolle("owner")),
+        ("Anna herabstufen", "PATCH", &anna_id, rolle("member")),
+        ("Anna umbenennen", "PATCH", &anna_id, Some(json!({ "nickname": "x" }))),
+        ("Anna entfernen", "DELETE", &anna_id, None),
+        ("Cleo herabstufen", "PATCH", &cleo_id, rolle("member")),
+        ("Cleo entfernen", "DELETE", &cleo_id, None),
+        ("sich selbst herabstufen", "PATCH", &bert_id, rolle("member")),
+    ] {
+        let (status, body) = probe.call(methode, &mitglied(wer), Some(&bert), koerper).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{fall}: {body}");
+    }
+
+    // Was unter ihm liegt, darf er: Dora zur Admin machen. Danach ist sie
+    // gleichrangig – zurückstufen kann sie nur noch Anna.
+    let (status, body) = probe
+        .call("PATCH", &mitglied(&dora_id), Some(&bert), rolle("admin"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = probe
+        .call("PATCH", &mitglied(&dora_id), Some(&bert), rolle("member"))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, body) = probe
+        .call("PATCH", &mitglied(&dora_id), Some(&anna), rolle("member"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Die Übergabe durch die Besitzerin: Cleo wird Besitzerin, Anna Admin.
+    let (status, body) = probe
+        .call("PATCH", &mitglied(&cleo_id), Some(&anna), rolle("owner"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rollen: std::collections::HashMap<String, String> = body["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| {
+            (
+                m["userId"].as_str().unwrap().to_string(),
+                m["role"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(rollen[&cleo_id], "owner", "{body}");
+    assert_eq!(rollen[&anna_id], "admin", "{body}");
+
+    // Danach kann Anna Cleo nichts mehr – Cleo aber Anna.
+    let (status, _) = probe
+        .call("DELETE", &mitglied(&cleo_id), Some(&anna), None)
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, body) = probe
+        .call("PATCH", &mitglied(&anna_id), Some(&cleo), rolle("member"))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // Gehen darf jeder, auch ein Admin.
+    let (status, body) = probe
+        .call("DELETE", &mitglied(&bert_id), Some(&bert), None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+}
+
+/// Im Direktchat ist, wer ihn anlegt, „owner“ – und konnte das Gegenüber
+/// entfernen und den Chat für beide umbenennen.
+#[tokio::test]
+async fn im_direktchat_moderiert_niemand() {
+    let probe = probe!();
+    let (anna, _) = probe.konto("anna").await;
+    let (bert, bert_id) = probe.konto("bert").await;
+    let (status, chat) = probe
+        .call(
+            "POST",
+            "/api/v1/conversations",
+            Some(&anna),
+            Some(json!({ "type": "direct", "memberIds": [bert_id] })),
+        )
+        .await;
+    assert!(status.is_success(), "{chat}");
+    let chat = chat["id"].as_str().unwrap().to_string();
+
+    let (status, body) = probe
+        .call(
+            "PATCH",
+            &format!("/api/v1/conversations/{chat}"),
+            Some(&anna),
+            Some(json!({ "title": "Meins" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, body) = probe
+        .call(
+            "PATCH",
+            &format!("/api/v1/conversations/{chat}/members/{bert_id}"),
+            Some(&anna),
+            Some(json!({ "nickname": "Spitz" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, body) = probe
+        .call(
+            "DELETE",
+            &format!("/api/v1/conversations/{chat}/members/{bert_id}"),
+            Some(&anna),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    // Eigenes bleibt erlaubt: stummschalten, archivieren, der eigene Spitzname.
+    let (status, body) = probe
+        .call(
+            "PATCH",
+            &format!("/api/v1/conversations/{chat}"),
+            Some(&bert),
+            Some(json!({ "archived": true })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = probe
+        .call(
+            "PATCH",
+            &format!("/api/v1/conversations/{chat}/members/{bert_id}"),
+            Some(&bert),
+            Some(json!({ "nickname": "Ich" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}

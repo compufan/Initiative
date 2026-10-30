@@ -14,7 +14,7 @@ use crate::realtime::Event;
 use crate::services::attachments::require_eigener_anhang;
 use crate::services::conversations::{
     assert_can_moderate, assert_membership, broadcast_conversation, einzelchats_sichern,
-    load_conversation_dto, load_conversation_dtos, member_ids, require_conversation, ListOptions,
+    get_membership, load_conversation_dto, load_conversation_dtos, member_ids, require_conversation, ListOptions,
 };
 use crate::services::messages::{create_message, NewMessage};
 use crate::state::AppState;
@@ -251,6 +251,14 @@ async fn update(
     let membership = assert_membership(&state.pool, id, user.id()).await?;
 
     if input.title.is_some() || input.avatar_attachment_id.is_some() {
+        // Ein Direktchat hat keinen Titel und kein Bild: Die Oberfläche zeigt
+        // dort Namen und Bild des Gegenübers. Wer ihn angelegt hat, ist
+        // „owner“ – und konnte ihn bisher für beide umbenennen.
+        if !ist_gruppe(&state, id).await? {
+            return Err(AppError::forbidden(
+                "Einen Direktchat kann man nicht umbenennen",
+            ));
+        }
         if membership.role == "member" {
             return Err(AppError::forbidden("Nur Admins dürfen den Chat ändern"));
         }
@@ -379,10 +387,10 @@ async fn update_member(
     Path((id, target_id)): Path<(Uuid, Uuid)>,
     Json(input): Json<UpdateMemberInput>,
 ) -> AppResult<Json<ConversationDto>> {
-    if input.role.is_some() || target_id != user.id() {
-        assert_can_moderate(&state.pool, id, user.id()).await?;
-    } else {
-        assert_membership(&state.pool, id, user.id()).await?;
+    let ich = assert_membership(&state.pool, id, user.id()).await?;
+    let fremd = target_id != user.id();
+    if input.role.is_some() || fremd {
+        darf_moderieren(&state, id, &ich).await?;
     }
     if let Some(role) = &input.role {
         Validator::new()
@@ -397,6 +405,41 @@ async fn update_member(
             .finish()?;
     }
 
+    let ziel = get_membership(&state.pool, id, target_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Mitglied nicht gefunden"))?;
+    if fremd {
+        nur_unter_mir(&ich, &ziel)?;
+    }
+
+    // Die Rangordnung: Ernennen geht bis zum eigenen Rang, „owner“ nur als
+    // Übergabe durch den Besitzer. Vorher konnte ein Admin sich selbst zum
+    // Besitzer machen und den bisherigen danach herabstufen oder entfernen.
+    let mut uebergabe = false;
+    if let Some(role) = input.role.as_deref() {
+        if !fremd {
+            return Err(AppError::forbidden(
+                "Die eigene Rolle kann man nicht selbst ändern",
+            ));
+        }
+        if role == "owner" {
+            if ich.role != "owner" {
+                return Err(AppError::forbidden(
+                    "Den Chat übergeben kann nur, wer ihn besitzt",
+                ));
+            }
+            uebergabe = true;
+        } else if rang(role) > rang(&ich.role) {
+            return Err(AppError::forbidden(
+                "Ernennen geht nur bis zum eigenen Rang",
+            ));
+        }
+    }
+
+    // Eine Übergabe sind zwei Zeilen: Der Neue wird Besitzer, der Bisherige
+    // Admin. Zusammen oder gar nicht – sonst gäbe es kurz zwei Besitzer oder
+    // keinen.
+    let mut tx = state.pool.begin().await?;
     sqlx::query(
         "update conversation_members set
            role = coalesce($3, role),
@@ -408,8 +451,19 @@ async fn update_member(
     .bind(&input.role)
     .bind(input.nickname.is_some())
     .bind(input.nickname.flatten())
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
+    if uebergabe {
+        sqlx::query(
+            "update conversation_members set role = 'admin'
+              where conversation_id = $1 and user_id = $2",
+        )
+        .bind(id)
+        .bind(user.id())
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
 
     broadcast_conversation(&state, id, None).await?;
     Ok(Json(load_conversation_dto(&state, user.id(), id).await?))
@@ -420,10 +474,15 @@ async fn remove_member(
     user: AuthUser,
     Path((id, target_id)): Path<(Uuid, Uuid)>,
 ) -> AppResult<StatusCode> {
+    let ich = assert_membership(&state.pool, id, user.id()).await?;
+    // Gehen darf jeder. Andere entfernen ist Moderation – nur in Gruppen und
+    // nur bei Mitgliedern unter dem eigenen Rang.
     if target_id != user.id() {
-        assert_can_moderate(&state.pool, id, user.id()).await?;
-    } else {
-        assert_membership(&state.pool, id, user.id()).await?;
+        darf_moderieren(&state, id, &ich).await?;
+        let ziel = get_membership(&state.pool, id, target_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("Mitglied nicht gefunden"))?;
+        nur_unter_mir(&ich, &ziel)?;
     }
 
     let before = member_ids(&state.pool, id).await?;
@@ -455,6 +514,58 @@ async fn remove_member(
     broadcast_conversation(&state, id, Some(remaining)).await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/* ---------- Rangordnung ---------- */
+
+/// Owner über Admin über Mitglied. Unbekanntes zählt wie ein Mitglied – ein
+/// Datenfehler darf keine Rechte geben.
+fn rang(rolle: &str) -> u8 {
+    match rolle {
+        "owner" => 3,
+        "admin" => 2,
+        _ => 1,
+    }
+}
+
+async fn ist_gruppe(state: &AppState, id: Uuid) -> AppResult<bool> {
+    Ok(require_conversation(&state.pool, id).await?.r#type == "group")
+}
+
+/// Moderieren gibt es nur in Gruppen und nur ab Admin.
+///
+/// Im Direktchat ist, wer ihn angelegt hat, „owner“ – zufällig, weil er als
+/// Erster getippt hat. Damit konnte er das Gegenüber entfernen und ihm einen
+/// Spitznamen geben. In einem Gespräch unter zweien gibt es keinen Aufseher
+/// (dieselbe Regel wie beim Löschen für alle in `modules::messages`).
+async fn darf_moderieren(
+    state: &AppState,
+    id: Uuid,
+    ich: &crate::db::ConversationMemberRow,
+) -> AppResult<()> {
+    if !ist_gruppe(state, id).await? {
+        return Err(AppError::forbidden(
+            "Im Direktchat gibt es nichts zu moderieren",
+        ));
+    }
+    if ich.role == "member" {
+        return Err(AppError::forbidden("Nur Admins dürfen das ändern"));
+    }
+    Ok(())
+}
+
+/// Niemand ändert oder entfernt einen Gleich- oder Höherrangigen – sich
+/// selbst ausgenommen, und das prüfen die Aufrufer vorher.
+fn nur_unter_mir(
+    ich: &crate::db::ConversationMemberRow,
+    ziel: &crate::db::ConversationMemberRow,
+) -> AppResult<()> {
+    if rang(&ziel.role) >= rang(&ich.role) {
+        return Err(AppError::forbidden(
+            "Gleich- oder höherrangige Mitglieder kann man nicht ändern",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
