@@ -69,14 +69,18 @@ async fn list_sessions(
         // Die Grenze gehört in die Abfrage: Wer erst danach filtert, zählt
         // Zeilen mit, die er gleich wieder wegwirft – und eine halbe Seite
         // sieht dann aus wie das Ende der Liste.
+        // Die eigenen Übungen ohne Chat (`besitzer_id`) stehen neben den Partien
+        // aus Chats; ein Chat-Filter blendet sie aus.
         "select g.*
          from game_sessions g
-         join conversation_members cm
+         left join conversation_members cm
            on cm.conversation_id = g.conversation_id and cm.user_id = $1
          left join messages gm on gm.id = g.message_id
          where ($2::uuid is null or g.conversation_id = $2)
-           and (cm.sieht_ab is null
-                or coalesce(gm.created_at, g.created_at) >= cm.sieht_ab)
+           and ((g.conversation_id is null and g.besitzer_id = $1)
+                or (cm.user_id is not null
+                    and (cm.sieht_ab is null
+                         or coalesce(gm.created_at, g.created_at) >= cm.sieht_ab)))
            and (($3::text is null and g.status in ('open', 'active')) or g.status = $3)
          order by g.updated_at desc
          limit 50",
@@ -95,7 +99,9 @@ async fn list_sessions(
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateSessionInput {
-    conversation_id: Uuid,
+    /// Fehlt er, ist es eine Übung allein ohne Chat (nur Pressen gegen den Spiegel).
+    #[serde(default)]
+    conversation_id: Option<Uuid>,
     game_key: String,
     #[serde(default)]
     opponent_ids: Vec<Uuid>,
@@ -106,14 +112,25 @@ async fn create(
     user: AuthUser,
     Json(input): Json<CreateSessionInput>,
 ) -> AppResult<(StatusCode, Json<GameSessionDto>)> {
-    assert_membership(&state.pool, input.conversation_id, user.id()).await?;
-    for opponent in &input.opponent_ids {
-        assert_membership(&state.pool, input.conversation_id, *opponent).await?;
+    let mitspielend = input.opponent_ids.iter().any(|id| *id != user.id());
+    let spiel = get_game(&input.game_key);
+    // Allein gegen den Spiegel braucht keinen Chat – und gehört in keinen: Auch
+    // ein älterer Client, der noch einen Chat mitschickt, bekommt eine Übung
+    // ohne Karte. (Seine Antwort trägt `conversationId: null`.)
+    let uebung = !mitspielend && spiel.is_some_and(|spiel| spiel.min_players() <= 1);
+    let conversation_id = if uebung { None } else { input.conversation_id };
+    if let Some(conversation_id) = conversation_id {
+        assert_membership(&state.pool, conversation_id, user.id()).await?;
+        for opponent in &input.opponent_ids {
+            assert_membership(&state.pool, conversation_id, *opponent).await?;
+        }
+    } else if !uebung {
+        return Err(AppError::bad_request("Dazu gehört ein Chat"));
     }
 
     let session = create_session(
         &state,
-        input.conversation_id,
+        conversation_id,
         &input.game_key,
         user.id(),
         &input.opponent_ids,
@@ -278,7 +295,7 @@ async fn make_move(
                     body: "Du bist am Zug".to_string(),
                     tag: Some(format!("game:{}", session.id)),
                     url: format!("/spiele/{}", session.id),
-                    conversation_id: Some(session.conversation_id),
+                    conversation_id: session.conversation_id,
                     message_id: None,
                     kind: "game".to_string(),
                 },
@@ -329,7 +346,8 @@ async fn abort(
     ))
 }
 
-/// Rematch: same game, same chat, same players.
+/// Rematch: same game, same chat, same players. Eine Übung ohne Chat beginnt
+/// wieder eine Übung ohne Chat.
 async fn rematch(
     State(state): State<AppState>,
     user: AuthUser,

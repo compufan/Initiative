@@ -145,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )
     .await?;
 
-    create_session(&state, direct, "tic-tac-toe", anna, &[ben]).await?;
+    create_session(&state, Some(direct), "tic-tac-toe", anna, &[ben]).await?;
 
     println!("Demo-Daten angelegt.");
     println!("Anmelden mit anna, ben oder clara – Passwort: {PASSWORD}");

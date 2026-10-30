@@ -414,7 +414,8 @@ pub struct GamePlayerDto {
 #[serde(rename_all = "camelCase")]
 pub struct GameSessionDto {
     pub id: Uuid,
-    pub conversation_id: Uuid,
+    /// Leer bei einer Übung ohne Chat (Pressen gegen den Spiegel).
+    pub conversation_id: Option<Uuid>,
     pub message_id: Option<Uuid>,
     pub game_key: String,
     pub status: String,

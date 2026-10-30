@@ -342,7 +342,7 @@ async fn antworten(state: &AppState, nachricht: &MessageDto, antwortender: Uuid)
         // 3. Die Partie anlegen: Ausrufer gegen Antwortenden.
         match super::games::create_session(
             state,
-            nachricht.conversation_id,
+            Some(nachricht.conversation_id),
             "pressen",
             kandidat.ausrufer_id,
             &[antwortender],

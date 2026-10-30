@@ -165,15 +165,31 @@ pub async fn require_session(state: &AppState, session_id: Uuid) -> AppResult<Ga
         .ok_or_else(|| AppError::not_found("Spiel nicht gefunden"))
 }
 
+/// Wie lange eine fertige oder abgebrochene Übung ohne Chat noch herumliegen darf.
+const UEBUNG_BEHALTEN_TAGE: i32 = 1;
+
+/// Legt eine Partie an.
+///
+/// Mit `conversation_id` als Karte im Chat. Ohne Chat (`None`) ist es eine
+/// Übung allein: Sie braucht niemanden, gehört nur `created_by`, steht in
+/// keinem Chat und löst keine Mitteilung aus. Das geht nur für Spiele, die
+/// auch mit einer einzigen Person laufen (Pressen gegen den Spiegel).
 pub async fn create_session(
     state: &AppState,
-    conversation_id: Uuid,
+    conversation_id: Option<Uuid>,
     game_key: &str,
     created_by: Uuid,
     opponent_ids: &[Uuid],
 ) -> AppResult<GameSessionDto> {
     let definition =
         get_game(game_key).ok_or_else(|| AppError::bad_request("Unbekanntes Spiel"))?;
+    if conversation_id.is_none()
+        && (definition.min_players() > 1 || opponent_ids.iter().any(|id| *id != created_by))
+    {
+        return Err(AppError::bad_request(
+            "Ohne Chat gibt es nur eine Übung allein",
+        ));
+    }
 
     let mut user_ids = vec![created_by];
     for id in opponent_ids {
@@ -212,11 +228,28 @@ pub async fn create_session(
     };
     let session_id = Uuid::now_v7();
 
+    if conversation_id.is_none() {
+        // Eine Übung zur Zeit: Die vorige (meist ein nie beendeter Spiegel) räumt
+        // der Start der nächsten ab. Fertige Reste älterer Spiele gehen mit.
+        sqlx::query(
+            "delete from game_sessions
+              where besitzer_id = $1 and conversation_id is null
+                and (game_key = $2
+                     or (status in ('finished', 'aborted')
+                         and updated_at < now() - make_interval(days => $3)))",
+        )
+        .bind(created_by)
+        .bind(game_key)
+        .bind(UEBUNG_BEHALTEN_TAGE)
+        .execute(&state.pool)
+        .await?;
+    }
+
     sqlx::query(
         "insert into game_sessions
            (id, conversation_id, game_key, status, state, players, turn_user_id,
-            winner_user_ids, created_by, version)
-         values ($1, $2, $3, $4, $5, $6, $7, '[]'::jsonb, $8, 0)",
+            winner_user_ids, created_by, besitzer_id, version)
+         values ($1, $2, $3, $4, $5, $6, $7, '[]'::jsonb, $8, $9, 0)",
     )
     .bind(session_id)
     .bind(conversation_id)
@@ -226,25 +259,34 @@ pub async fn create_session(
     .bind(serde_json::to_value(&players).unwrap_or(Value::Array(vec![])))
     .bind(turn_user_id)
     .bind(created_by)
+    .bind(if conversation_id.is_none() {
+        Some(created_by)
+    } else {
+        None
+    })
     .execute(&state.pool)
     .await?;
 
-    let message = super::messages::create_message(
-        state,
-        super::messages::NewMessage::entity(
-            conversation_id,
-            created_by,
-            "game",
-            "gameSessionId",
-            session_id,
-        ),
-    )
-    .await?;
-    sqlx::query("update game_sessions set message_id = $1 where id = $2")
-        .bind(message.id)
-        .bind(session_id)
-        .execute(&state.pool)
+    // Nur eine Partie im Chat bekommt eine Karte. Die Übung allein bleibt dem
+    // Besitzer vorbehalten: keine Nachricht, keine Vorschau in der Chatliste.
+    if let Some(conversation_id) = conversation_id {
+        let message = super::messages::create_message(
+            state,
+            super::messages::NewMessage::entity(
+                conversation_id,
+                created_by,
+                "game",
+                "gameSessionId",
+                session_id,
+            ),
+        )
         .await?;
+        sqlx::query("update game_sessions set message_id = $1 where id = $2")
+            .bind(message.id)
+            .bind(session_id)
+            .execute(&state.pool)
+            .await?;
+    }
 
     let row = require_session(state, session_id).await?;
     broadcast_session(state, &row).await?;
@@ -301,6 +343,10 @@ pub async fn persist_session(
 /// Fehlt die Karte (gelöscht), entscheidet das Alter der Partie gegen die
 /// eigene Grenze.
 pub async fn sichtbar_fuer(pool: &sqlx::PgPool, row: &GameSessionRow) -> AppResult<Vec<Uuid>> {
+    // Eine Übung ohne Chat sieht nur ihr Besitzer – kein Chat, keine Mitglieder.
+    let Some(conversation_id) = row.conversation_id else {
+        return Ok(row.besitzer_id.into_iter().collect());
+    };
     let mut ids: Vec<Uuid> = match row.message_id {
         Some(message_id) => {
             crate::services::verlauf::empfaenger_fuer_nachricht(pool, message_id).await?
@@ -311,7 +357,7 @@ pub async fn sichtbar_fuer(pool: &sqlx::PgPool, row: &GameSessionRow) -> AppResu
                   where cm.conversation_id = $1
                     and (cm.sieht_ab is null or $2 >= cm.sieht_ab)",
             )
-            .bind(row.conversation_id)
+            .bind(conversation_id)
             .bind(row.created_at)
             .fetch_all(pool)
             .await?
@@ -330,6 +376,10 @@ pub async fn assert_session_access(
 ) -> AppResult<()> {
     if sichtbar_fuer(pool, row).await?.contains(&user_id) {
         return Ok(());
+    }
+    // Eine fremde Übung gibt es für dich nicht – nicht einmal ihr Dasein verrät sich.
+    if row.conversation_id.is_none() {
+        return Err(AppError::not_found("Spiel nicht gefunden"));
     }
     Err(AppError::forbidden("Diese Partie gehört nicht zu dir"))
 }

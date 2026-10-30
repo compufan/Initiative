@@ -249,7 +249,8 @@ pub struct EventPlacementRow {
 #[derive(Debug, Clone, FromRow)]
 pub struct GameSessionRow {
     pub id: Uuid,
-    pub conversation_id: Uuid,
+    /// Leer bei einer Übung ohne Chat (Pressen gegen den Spiegel).
+    pub conversation_id: Option<Uuid>,
     pub message_id: Option<Uuid>,
     pub game_key: String,
     pub status: String,
@@ -259,6 +260,8 @@ pub struct GameSessionRow {
     pub winner_user_ids: Value,
     pub version: i32,
     pub created_by: Option<Uuid>,
+    /// Nur bei einer Übung ohne Chat: wem sie gehört (sonst darf sie niemand sehen).
+    pub besitzer_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

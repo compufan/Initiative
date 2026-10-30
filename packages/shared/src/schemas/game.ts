@@ -10,7 +10,8 @@ export interface GamePlayerDto {
 
 export interface GameSessionDto {
   id: string;
-  conversationId: string;
+  /** Leer bei einer Übung ohne Chat (Pressen gegen den Spiegel): Sie gehört nur ihrem Besitzer. */
+  conversationId: string | null;
   messageId: string | null;
   gameKey: string;
   status: GameStatus;
@@ -39,7 +40,8 @@ export interface GameInfoDto {
 }
 
 export const createGameSessionSchema = z.object({
-  conversationId: z.string().uuid(),
+  /** Ohne Chat: eine Übung allein (nur für Spiele, die mit einer Person laufen). */
+  conversationId: z.string().uuid().optional(),
   gameKey: z.string().min(1).max(64),
   /** Optional opponents to seat immediately; otherwise the match stays open. */
   opponentIds: z.array(z.string().uuid()).max(8).optional(),
