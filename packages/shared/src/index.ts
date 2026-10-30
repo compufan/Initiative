@@ -21,6 +21,7 @@ export * from './schemas/calendar.js';
 export * from './schemas/expense.js';
 export * from './schemas/poll.js';
 export * from './schemas/game.js';
+export * from './schemas/pressen-statistik.js';
 export * from './schemas/push.js';
 
 export * from './realtime/events.js';

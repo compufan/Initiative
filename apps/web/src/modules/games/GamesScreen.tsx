@@ -125,6 +125,25 @@ export function GamesScreen() {
                 {uebtGerade ? 'Wird gestartet …' : 'Üben'}
               </button>
             </article>
+            <article className="card game-card" data-testid="statistik-karte">
+              <span className="game-card-emoji" aria-hidden="true">
+                📊
+              </span>
+              <div className="game-card-facts">
+                <h3 className="game-card-title">Meine Statistik</h3>
+                <p className="game-card-text">
+                  Alle deine Läufe, auch die längst beendeten: Bestzeiten, Verlauf, Bilanz gegen
+                  jeden Gegner.
+                </p>
+              </div>
+              <Link
+                className="btn btn-primary"
+                to="/spiele/pressen/statistik"
+                data-testid="pressen-statistik-link"
+              >
+                Ansehen
+              </Link>
+            </article>
             <MeinMaennchen />
           </div>
         </section>

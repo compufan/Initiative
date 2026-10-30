@@ -20,6 +20,11 @@ import type {
   GameInfoDto,
   GameSessionDto,
   GrantCollectionInput,
+  PressenFilter,
+  PressenLaeufeAbfrage,
+  PressenLaeufeSeite,
+  PressenLaufDto,
+  PressenStatistikDto,
   MessageDto,
   ExpenseDto,
   PaymentProfileDto,
@@ -37,7 +42,12 @@ import type {
   ErinnernStandDto,
 } from '@initiative/shared';
 import type { OrtTreffer } from './ortSuche.js';
-import { API_PREFIX } from '@initiative/shared';
+import {
+  API_PREFIX,
+  pressenLaeufeSeiteSchema,
+  pressenLaufSchema,
+  pressenStatistikSchema,
+} from '@initiative/shared';
 
 export class ApiError extends Error {
   readonly status: number;
@@ -843,6 +853,27 @@ export const api = {
       post<GameSessionDto>(`/games/sessions/${id}/moves`, { move, version }),
     abort: (id: string) => post<GameSessionDto>(`/games/sessions/${id}/abort`),
     rematch: (id: string) => post<GameSessionDto>(`/games/sessions/${id}/rematch`),
+    /**
+     * Pressen-Statistik: nur die eigenen Läufe. Die Antworten werden gegen das
+     * gemeinsame Schema geprüft – eine abweichende Form ist ein Fehler, den man
+     * sieht, nicht eine Seite voller `NaN`.
+     */
+    pressenStatistik: async (
+      filter: PressenFilter = {},
+      signal?: AbortSignal,
+    ): Promise<PressenStatistikDto> =>
+      pressenStatistikSchema.parse(
+        await get<unknown>('/games/pressen/statistik', { query: filter, signal }),
+      ),
+    pressenLaeufe: async (
+      abfrage: PressenLaeufeAbfrage = {},
+      signal?: AbortSignal,
+    ): Promise<PressenLaeufeSeite> =>
+      pressenLaeufeSeiteSchema.parse(
+        await get<unknown>('/games/pressen/laeufe', { query: abfrage, signal }),
+      ),
+    pressenLauf: async (id: string, signal?: AbortSignal): Promise<PressenLaufDto> =>
+      pressenLaufSchema.parse(await get<unknown>(`/games/pressen/laeufe/${id}`, { signal })),
   },
   push: {
     publicKey: () =>

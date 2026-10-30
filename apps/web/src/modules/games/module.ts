@@ -4,6 +4,8 @@ import { GameBubble } from './GameBubble.js';
 import { GameScreen } from './GameScreen.js';
 import { GameStartSheet } from './GameStartSheet.js';
 import { GamesScreen } from './GamesScreen.js';
+import { PressenLaufScreen } from './statistik/PressenLaeufeListe.js';
+import { PressenStatistikScreen } from './statistik/PressenStatistikScreen.js';
 import './styles.css';
 
 /**
@@ -21,6 +23,8 @@ export default defineWebModule({
   nav: [{ path: '/spiele', label: 'Spiele', icon: '🎮', order: 30 }],
   routes: [
     { path: '/spiele', element: createElement(GamesScreen) },
+    { path: '/spiele/pressen/statistik', element: createElement(PressenStatistikScreen) },
+    { path: '/spiele/pressen/statistik/:laufId', element: createElement(PressenLaufScreen) },
     { path: '/spiele/:sessionId', element: createElement(GameScreen) },
   ],
   messageRenderers: {

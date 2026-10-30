@@ -1275,3 +1275,372 @@
   background: var(--surface-2);
   overflow: hidden;
 }
+
+/* ---------- Pressen: Statistik ----------
+   Kopfzahlen als Kacheln, eigene SVG-Diagramme mit Tabellenalternative, Listen
+   für Läufe. Alles läuft einspaltig und ohne Querscrollen ab 320 px; breite
+   Tabellen scrollen in ihrem Rahmen, nicht die Seite. */
+
+.stat-seite {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.stat-inhalt {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.stat-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.stat-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.stat-chips .btn {
+  min-height: 44px;
+}
+
+.stat-auswahl {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.stat-auswahl .select {
+  min-height: 44px;
+  max-width: 100%;
+}
+
+.stat-kacheln {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin: 0;
+}
+
+@media (min-width: 560px) {
+  .stat-kacheln {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.stat-kachel {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.stat-kachel dt {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.stat-kachel dd {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.stat-kachel strong {
+  font-size: 1.35rem;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.stat-hinweis {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.stat-bild {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.stat-svg {
+  display: block;
+  width: 100%;
+  max-width: 560px;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.stat-gitter {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.stat-achse {
+  fill: var(--text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-roh {
+  stroke: var(--text-faint);
+  stroke-width: 1;
+  opacity: 0.7;
+}
+
+.stat-punkt {
+  fill: var(--text-muted);
+}
+
+.stat-mittel {
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.stat-saeule {
+  fill: var(--accent);
+}
+
+.stat-legende {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.stat-legende-punkt,
+.stat-legende-linie {
+  display: inline-block;
+  vertical-align: middle;
+  margin: 0 4px 0 8px;
+}
+
+.stat-legende-punkt {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.stat-legende-linie {
+  width: 18px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.stat-tabelle summary {
+  cursor: pointer;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: var(--accent);
+}
+
+.stat-tabelle-rahmen {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.stat-tabelle-rahmen table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-tabelle-rahmen th,
+.stat-tabelle-rahmen td {
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.stat-tabelle-rahmen thead th {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.78rem;
+}
+
+.stat-tabelle-rahmen tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.stat-balken {
+  display: inline-block;
+  vertical-align: middle;
+  width: 64px;
+  height: 8px;
+  margin-right: var(--space-2);
+  border-radius: 4px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.stat-balken > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.stat-rekorde {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stat-rekorde li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  min-height: 44px;
+  align-items: center;
+  border-bottom: 1px solid var(--border);
+}
+
+.stat-rekorde li:last-child {
+  border-bottom: 0;
+}
+
+.stat-laeufe {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stat-laeufe li {
+  border-bottom: 1px solid var(--border);
+}
+
+.stat-laeufe li:last-child {
+  border-bottom: 0;
+}
+
+.stat-lauf {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  min-height: 44px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.stat-lauf:hover,
+.stat-lauf:focus-visible {
+  background: var(--surface-2);
+}
+
+.stat-lauf-kopf {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.stat-lauf-fakten {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Farbe trägt nie allein die Aussage: Der Text der Marke sagt es auch. */
+.stat-marke {
+  display: inline-block;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.stat-marke.is-sieg {
+  border-color: var(--success);
+}
+
+.stat-marke.is-niederlage {
+  border-color: var(--danger);
+}
+
+.stat-marke.is-atempo {
+  border-color: var(--warning);
+}
+
+.stat-fehler {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.stat-detail {
+  padding: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.stat-detail-titel {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.stat-detail-kopf {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.stat-detail-liste {
+  margin: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.stat-detail-liste > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-1) var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.stat-detail-liste dt {
+  color: var(--text-muted);
+}
+
+.stat-detail-liste dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}

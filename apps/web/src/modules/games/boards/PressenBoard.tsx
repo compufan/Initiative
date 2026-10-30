@@ -655,6 +655,15 @@ export function PressenBoard({ session, mySeat, onMove, busy, onRematch }: GameB
               </ol>
             </div>
           )}
+          {mySeat != null && (
+            <Link
+              className="btn btn-block"
+              to="/spiele/pressen/statistik"
+              data-testid="pressen-ergebnis-statistik"
+            >
+              📊 Statistik
+            </Link>
+          )}
           {state.fertig && mySeat != null && onRematch && (
             <button
               type="button"
