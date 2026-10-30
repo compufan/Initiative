@@ -65,6 +65,12 @@ Der Client in `apps/web/src/lib/api.ts` erneuert automatisch, sobald weniger als
 30 Sekunden Restlaufzeit bleiben, und wiederholt eine `401` genau einmal nach
 einem Refresh.
 
+Ein gerade rotierter Refresh-Token gilt **30 Sekunden** lang noch einmal und
+liefert dann dieselbe neue Sitzung (denselben neuen Refresh-Token, ein frisches
+Zugriffstoken) – für eine Antwort, die unterwegs verloren ging, oder zwei Tabs,
+die gleichzeitig erneuern. Wird ein verbrannter Token **danach** vorgelegt, gilt
+das als Wiederverwendung: Alle Sitzungen des Kontos enden.
+
 ---
 
 ## Fehlerstruktur

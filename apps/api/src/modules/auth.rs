@@ -89,32 +89,121 @@ struct ChangePasswordInput {
 }
 
 pub(crate) async fn issue_session(state: &AppState, user: &UserRow) -> AppResult<AuthSession> {
+    let refresh_token = random_token(48);
+    refresh_speichern(&state.pool, &state.config, user.id, &refresh_token).await?;
+    Ok(sitzung_mit(state, user, refresh_token))
+}
+
+/// Ein Erneuerungs-Token ablegen – nur als Hash. `false`, wenn es ihn schon
+/// gibt (zwei gleichzeitige Rotationen desselben Vorgängers).
+async fn refresh_speichern<'e, E>(
+    executor: E,
+    config: &Config,
+    user_id: Uuid,
+    token: &str,
+) -> AppResult<bool>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let expires_at =
+        chrono::Utc::now() + chrono::Duration::seconds(config.refresh_token_ttl.as_secs() as i64);
+    let neu = sqlx::query(
+        "insert into refresh_tokens (id, user_id, token_hash, expires_at) values ($1, $2, $3, $4)
+         on conflict (token_hash) do nothing",
+    )
+    .bind(Uuid::now_v7())
+    .bind(user_id)
+    .bind(sha256_hex(token))
+    .bind(expires_at)
+    .execute(executor)
+    .await?;
+    Ok(neu.rows_affected() > 0)
+}
+
+/// Die Antwort einer Sitzung: frisches Zugriffstoken zum gegebenen
+/// Erneuerungs-Token.
+fn sitzung_mit(state: &AppState, user: &UserRow, refresh_token: String) -> AuthSession {
     let access_token = jwt::encode(
         &user.id.to_string(),
         "access",
         &state.config.jwt_secret,
         state.config.access_token_ttl.as_secs() as i64,
     );
-    let refresh_token = random_token(48);
-    let expires_at = chrono::Utc::now()
-        + chrono::Duration::seconds(state.config.refresh_token_ttl.as_secs() as i64);
-
-    sqlx::query(
-        "insert into refresh_tokens (id, user_id, token_hash, expires_at) values ($1, $2, $3, $4)",
-    )
-    .bind(Uuid::now_v7())
-    .bind(user.id)
-    .bind(sha256_hex(&refresh_token))
-    .bind(expires_at)
-    .execute(&state.pool)
-    .await?;
-
-    Ok(AuthSession {
+    AuthSession {
         access_token,
         expires_in: state.config.access_token_ttl.as_secs() as i64,
         refresh_token,
         user: to_self_user_dto(user, &state.config),
-    })
+    }
+}
+
+/**
+ * Wie lange ein gerade rotierter Erneuerungs-Token noch einmal gilt.
+ *
+ * Ohne Frist war jede zweite Vorlage eines verbrannten Tokens „Diebstahl“ und
+ * beendete alle Sitzungen des Kontos – auch wenn nur die Antwort der ersten
+ * Erneuerung unterwegs verloren ging (Funkloch, Tab geschlossen, App im
+ * Hintergrund eingefroren). Das Gerät hatte dann den alten Token und nichts
+ * sonst, und der Mensch war überall abgemeldet.
+ */
+const NACHFRIST_SEKUNDEN: i64 = 30;
+
+/**
+ * Der Nachfolger eines Erneuerungs-Tokens: aus ihm und dem Server-Geheimnis
+ * abgeleitet statt zufällig.
+ *
+ * Dadurch lässt sich in der Nachfrist **dieselbe** neue Sitzung noch einmal
+ * ausliefern, ohne den Klartext irgendwo aufzuheben – gespeichert bleibt nur
+ * der Hash. Und es entsteht keine zweite, unabhängige Kette: Wer den alten
+ * Token in der Frist vorlegt, bekommt denselben Nachfolger wie das Gerät. Legt
+ * später einer der beiden ein verbranntes Stück vor, greift die
+ * Wiederverwendungserkennung wie zuvor. Vorhersagen kann den Nachfolger nur,
+ * wer den Vorgänger UND das Geheimnis kennt.
+ */
+fn nachfolger(geheimnis: &str, token: &str) -> String {
+    use hmac::{Hmac, Mac};
+    let mut mac =
+        Hmac::<sha2::Sha256>::new_from_slice(geheimnis.as_bytes()).expect("HMAC nimmt jede Länge");
+    mac.update(b"refresh-nachfolger:");
+    mac.update(token.as_bytes());
+    use base64::Engine as _;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+}
+
+/// In der Nachfrist: der lebende Nachfolger dieses Tokens, falls es einen
+/// gibt. Folgt der Kette, solange jedes Glied selbst erst in der Frist
+/// rotiert wurde – zwei Tabs, die kurz nacheinander erneuern, sind keine
+/// Ausnahme. Ein Glied, das durch Abmelden oder Passwortwechsel widerrufen
+/// wurde, hat keinen lebenden Nachfolger; dann gibt es auch hier keinen.
+async fn nachfolger_in_frist(
+    state: &AppState,
+    token: &str,
+    user_id: Uuid,
+) -> AppResult<Option<String>> {
+    let mut aktuell = token.to_string();
+    // Mehr Glieder in dreissig Sekunden erzeugt kein Gerät; die Grenze hält
+    // die Schleife endlich.
+    for _ in 0..8 {
+        let naechster = nachfolger(&state.config.jwt_secret, &aktuell);
+        let zeile = sqlx::query_as::<_, (Uuid, bool, Option<bool>, bool)>(
+            "select user_id,
+                    revoked_at is null,
+                    revoked_at > now() - make_interval(secs => $2),
+                    expires_at > now()
+               from refresh_tokens where token_hash = $1",
+        )
+        .bind(sha256_hex(&naechster))
+        .bind(NACHFRIST_SEKUNDEN as f64)
+        .fetch_optional(&state.pool)
+        .await?;
+        match zeile {
+            Some((besitzer, _, _, _)) if besitzer != user_id => return Ok(None),
+            Some((_, true, _, true)) => return Ok(Some(naechster)),
+            Some((_, false, Some(true), true)) => aktuell = naechster,
+            _ => return Ok(None),
+        }
+    }
+    Ok(None)
 }
 
 /**
@@ -350,15 +439,68 @@ async fn refresh(
             "Sitzung abgelaufen, bitte neu anmelden",
         ));
     };
-    // Ein schon eingeloester, aber noch nicht abgelaufener Token, der erneut
-    // vorgelegt wird, ist der Beweis, dass zwei Parteien dieselbe Kette
-    // benutzen: Wer ihn abgegriffen hat, hat ihn eingeloest, und das echte
-    // Geraet kommt mit dem alten Stueck hinterher (oder umgekehrt).
+    if row.expires_at <= chrono::Utc::now() {
+        return Err(AppError::unauthorized(
+            "Sitzung abgelaufen, bitte neu anmelden",
+        ));
+    }
+
+    // Rotation: Der vorgelegte Token wird verbrannt, bevor es einen neuen
+    // gibt. Nur wer ihn hier wirklich verbrennt, rotiert – ein zweiter,
+    // gleichzeitiger Aufruf mit demselben Token geht in die Nachfrist unten.
     //
-    // Bisher gab es dafuer nur ein 401. Das Geraet meldete sich neu an, merkte
-    // nichts - und der Dieb behielt seine rotierende Kette sechzig Tage lang.
-    // Jetzt endet die ganze Sitzung, fuer beide.
-    if row.revoked_at.is_some() && row.expires_at > chrono::Utc::now() {
+    // Verbrennen und Nachfolger anlegen in EINER Transaktion: Ein
+    // gleichzeitiger Aufruf wartet an der Zeilensperre, bis beides steht, und
+    // findet danach den Nachfolger. Getrennt sah er den Token verbrannt, aber
+    // noch keinen Nachfolger – und hielt das für Diebstahl.
+    let naechster = nachfolger(&state.config.jwt_secret, &token);
+    let verbrannt = if row.revoked_at.is_none() {
+        let mut tx = state.pool.begin().await?;
+        let verbrannt = sqlx::query(
+            "update refresh_tokens set revoked_at = now() where id = $1 and revoked_at is null",
+        )
+        .bind(row.id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+            > 0;
+        if verbrannt {
+            refresh_speichern(&mut *tx, &state.config, row.user_id, &naechster).await?;
+        }
+        tx.commit().await?;
+        verbrannt
+    } else {
+        false
+    };
+
+    if !verbrannt {
+        // In der Nachfrist: dieselbe neue Sitzung noch einmal – siehe
+        // `NACHFRIST_SEKUNDEN` und `nachfolger`. War der Token beim Lesen
+        // noch nicht verbrannt, hat ihn gerade eben ein gleichzeitiger Aufruf
+        // rotiert – das liegt sicher in der Frist.
+        let in_frist = row.revoked_at.is_none_or(|wann| {
+            wann > chrono::Utc::now() - chrono::Duration::seconds(NACHFRIST_SEKUNDEN)
+        });
+        let naechster = if in_frist {
+            nachfolger_in_frist(&state, &token, row.user_id).await?
+        } else {
+            None
+        };
+        if let Some(naechster) = naechster {
+            let user = load_user(&state.pool, row.user_id).await?;
+            let sitzung = sitzung_mit(&state, &user, naechster);
+            return Ok(mit_keks(&state.config, user.id, sitzung));
+        }
+
+        // Ein schon eingeloester, aber noch nicht abgelaufener Token, der
+        // erneut vorgelegt wird – ausserhalb der Nachfrist –, ist der Beweis,
+        // dass zwei Parteien dieselbe Kette benutzen: Wer ihn abgegriffen hat,
+        // hat ihn eingeloest, und das echte Geraet kommt mit dem alten Stueck
+        // hinterher (oder umgekehrt).
+        //
+        // Bisher gab es dafuer nur ein 401. Das Geraet meldete sich neu an,
+        // merkte nichts - und der Dieb behielt seine rotierende Kette sechzig
+        // Tage lang. Jetzt endet die ganze Sitzung, fuer beide.
         tracing::warn!(
             user_id = %row.user_id,
             "wiederverwendeter Refresh-Token - alle Sitzungen dieses Kontos werden beendet"
@@ -374,17 +516,6 @@ async fn refresh(
             "Sitzung abgelaufen, bitte neu anmelden",
         ));
     }
-    if row.revoked_at.is_some() || row.expires_at <= chrono::Utc::now() {
-        return Err(AppError::unauthorized(
-            "Sitzung abgelaufen, bitte neu anmelden",
-        ));
-    }
-
-    // Rotation: the presented token is burned before a new pair is issued.
-    sqlx::query("update refresh_tokens set revoked_at = now() where id = $1")
-        .bind(row.id)
-        .execute(&state.pool)
-        .await?;
 
     // Aufraeumen auch hier, nicht nur beim Anmelden: Bei sechzig Tagen
     // Laufzeit und Erneuerung alle Viertelstunde sammelt jedes aktive Geraet
@@ -400,7 +531,7 @@ async fn refresh(
     .await;
 
     let user = load_user(&state.pool, row.user_id).await?;
-    let sitzung = issue_session(&state, &user).await?;
+    let sitzung = sitzung_mit(&state, &user, naechster);
     Ok(mit_keks(&state.config, user.id, sitzung))
 }
 

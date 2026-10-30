@@ -219,7 +219,29 @@ async fn full_api_scenario() {
         .await;
     assert_eq!(status, StatusCode::OK);
     assert!(refreshed["accessToken"].is_string());
-    // A rotated refresh token cannot be replayed.
+    // In der Nachfrist (die Antwort ging etwa unterwegs verloren) liefert
+    // dasselbe alte Stück dieselbe neue Sitzung.
+    let (status, nochmal) = app
+        .call(
+            "POST",
+            "/api/v1/auth/refresh",
+            None,
+            Some(json!({ "refreshToken": alice_refresh })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{nochmal}");
+    assert_eq!(nochmal["refreshToken"], refreshed["refreshToken"]);
+    // A rotated refresh token cannot be replayed – after the grace period.
+    sqlx::query(
+        "update refresh_tokens set revoked_at = now() - interval '1 minute'
+          where token_hash = $1",
+    )
+    .bind(initiative_api::auth::password::sha256_hex(
+        alice_refresh.as_str(),
+    ))
+    .execute(&app.state.pool)
+    .await
+    .unwrap();
     let (status, _) = app
         .call(
             "POST",

@@ -1067,3 +1067,142 @@ async fn fuer_alle_loeschen_raeumt_vollstaendig() {
         .unwrap();
     assert_eq!(anhaenge, 0);
 }
+
+/* ---------- Erneuerung: Nachfrist nach der Rotation ---------- */
+
+impl Probe {
+    async fn erneuern(&self, token: &str) -> (StatusCode, Value) {
+        self.call(
+            "POST",
+            "/api/v1/auth/refresh",
+            None,
+            Some(json!({ "refreshToken": token })),
+        )
+        .await
+    }
+
+    async fn frist_vorbei(&self, token: &str) {
+        sqlx::query(
+            "update refresh_tokens set revoked_at = now() - interval '1 minute'
+              where token_hash = $1",
+        )
+        .bind(initiative_api::auth::password::sha256_hex(token))
+        .execute(&self.state.pool)
+        .await
+        .unwrap();
+    }
+
+    /// Eine zweite Sitzung desselben Kontos, wie von einem anderen Gerät.
+    async fn zweites_geraet(&self, name: &str) -> String {
+        let (status, body) = self
+            .call(
+                "POST",
+                "/api/v1/auth/login",
+                None,
+                Some(json!({ "username": name, "password": "richtigespasswort" })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body["refreshToken"].as_str().unwrap().to_string()
+    }
+}
+
+/// Ging die Antwort einer Erneuerung verloren, legte das Gerät den alten
+/// Token noch einmal vor – und das beendete als „Diebstahl“ alle Sitzungen
+/// des Kontos. In den ersten Sekunden nach der Rotation bekommt es jetzt
+/// dieselbe neue Sitzung.
+#[tokio::test]
+async fn ein_gerade_rotierter_token_gilt_kurz_noch_einmal() {
+    let probe = probe!();
+    let (token, _, r1) = probe.konto_voll("frist").await;
+    let (_, ich) = probe
+        .call("GET", "/api/v1/auth/me", Some(&token), None)
+        .await;
+    let anderes = probe
+        .zweites_geraet(ich["username"].as_str().unwrap())
+        .await;
+
+    let (status, erste) = probe.erneuern(&r1).await;
+    assert_eq!(status, StatusCode::OK, "{erste}");
+    let r2 = erste["refreshToken"].as_str().unwrap().to_string();
+
+    // Dasselbe alte Stück noch einmal: dieselbe neue Sitzung, kein Abbruch.
+    let (status, zweite) = probe.erneuern(&r1).await;
+    assert_eq!(status, StatusCode::OK, "{zweite}");
+    assert_eq!(zweite["refreshToken"], json!(r2));
+    assert!(zweite["accessToken"].is_string());
+
+    // Zwei Tabs kurz nacheinander: r2 rotiert weiter zu r3 – wer noch r1
+    // vorlegt, landet beim lebenden Ende der Kette.
+    let (status, dritte) = probe.erneuern(&r2).await;
+    assert_eq!(status, StatusCode::OK, "{dritte}");
+    let r3 = dritte["refreshToken"].as_str().unwrap().to_string();
+    let (status, vierte) = probe.erneuern(&r1).await;
+    assert_eq!(status, StatusCode::OK, "{vierte}");
+    assert_eq!(vierte["refreshToken"], json!(r3));
+
+    // Gleichzeitig vorgelegt: beide bekommen dasselbe.
+    let (a, b) = tokio::join!(probe.erneuern(&r3), probe.erneuern(&r3));
+    assert_eq!(a.0, StatusCode::OK, "{}", a.1);
+    assert_eq!(b.0, StatusCode::OK, "{}", b.1);
+    assert_eq!(a.1["refreshToken"], b.1["refreshToken"]);
+
+    // Das andere Gerät hat von alledem nichts gemerkt.
+    let (status, body) = probe.erneuern(&anderes).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+/// Außerhalb der Frist bleibt die Wiederverwendung, was sie war: der Beweis,
+/// dass zwei dieselbe Kette benutzen – alle Sitzungen enden.
+#[tokio::test]
+async fn nach_der_frist_beendet_die_wiederverwendung_alles() {
+    let probe = probe!();
+    let (token, _, r1) = probe.konto_voll("dieb").await;
+    let (_, ich) = probe
+        .call("GET", "/api/v1/auth/me", Some(&token), None)
+        .await;
+    let anderes = probe
+        .zweites_geraet(ich["username"].as_str().unwrap())
+        .await;
+
+    let (status, erste) = probe.erneuern(&r1).await;
+    assert_eq!(status, StatusCode::OK, "{erste}");
+    let r2 = erste["refreshToken"].as_str().unwrap().to_string();
+    probe.frist_vorbei(&r1).await;
+
+    let (status, body) = probe.erneuern(&r1).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    for stueck in [&r2, &anderes] {
+        let (status, body) = probe.erneuern(stueck).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "alles beendet: {body}");
+    }
+}
+
+/// Die Frist hebelt kein Abmelden aus: Ein Token, dessen Nachfolger durch
+/// einen Passwortwechsel widerrufen wurde, bekommt auch in der Frist nichts.
+#[tokio::test]
+async fn die_frist_hilft_nicht_ueber_einen_passwortwechsel() {
+    let probe = probe!();
+    let (token, _, r1) = probe.konto_voll("wechsel").await;
+    let (status, erste) = probe.erneuern(&r1).await;
+    assert_eq!(status, StatusCode::OK, "{erste}");
+    let (status, body) = probe
+        .call(
+            "POST",
+            "/api/v1/auth/password",
+            Some(&token),
+            Some(json!({
+                "currentPassword": "richtigespasswort",
+                "newPassword": "ganzneuespasswort",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+
+    let (status, body) = probe.erneuern(&r1).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    let (status, body) = probe
+        .erneuern(erste["refreshToken"].as_str().unwrap())
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+}
