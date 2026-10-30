@@ -569,7 +569,7 @@ export function EventEditor(props: EventEditorProps) {
         <p className="cal-hint">
           {form.reminders.length === 0
             ? 'Ohne Erinnerung.'
-            : 'Deine Kalender-App erinnert dich rechtzeitig.'}
+            : 'Die App erinnert dich und die Eingeladenen (Mitteilung und Chat), ebenso dein Kalenderabo.'}
         </p>
       </div>
 

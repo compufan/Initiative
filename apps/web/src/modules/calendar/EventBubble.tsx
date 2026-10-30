@@ -122,6 +122,8 @@ export function EventBubble({ message, isMine }: MessageRendererProps) {
             status: myRsvp(event, myId) ?? null,
             titel: event.title,
             nummer: erinnerung.nummer,
+            art: erinnerung.art,
+            minuten: erinnerung.minuten,
           });
           return (
             <p className="cal-bubble-erinnerung" role="note">

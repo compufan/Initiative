@@ -571,6 +571,120 @@ pub async fn benachrichtige_erinnerungen(state: &AppState, erinnert: &[Erinnert]
     angesprochen
 }
 
+/// Eine „Erinnerung vor dem Termin“, die gesendet wurde – und an wen die
+/// Mitteilung gehen soll.
+#[derive(Debug, Clone)]
+pub struct VorabErinnert {
+    pub termin_id: Uuid,
+    pub titel: String,
+    pub minuten: i32,
+    pub person: Uuid,
+    /// Der Einzelchat mit der Karte; leer, wenn es keinen gibt (dann nur Push).
+    pub chat: Option<Uuid>,
+    pub nachricht: Option<Uuid>,
+}
+
+/// Was an eine Person vor dem Termin geht – oder nichts.
+///
+/// Rein, wie [`erinnerung_mitteilung`]: Push aus oder der Chat der Karte
+/// stummgeschaltet heisst keine Mitteilung; ohne Vorschau steht weder Titel noch
+/// Zeitangabe darin. Der Titel wird vor dem Zusammensetzen gekürzt, damit bei
+/// einem langen Titel nicht das „beginnt in …“ abgeschnitten wird. Ohne Karte
+/// führt der Link zum Termin, mit Karte in den Chat; das `tag` ist je Termin.
+pub fn vorab_mitteilung(
+    erinnert: &VorabErinnert,
+    push_an: bool,
+    vorschau: bool,
+    stumm: bool,
+) -> Option<PushPayload> {
+    if !push_an || stumm {
+        return None;
+    }
+    let text = if vorschau {
+        format!(
+            "{} beginnt in {}",
+            truncate(&erinnert.titel, 100),
+            super::vorab::vorlauf_text(erinnert.minuten)
+        )
+    } else {
+        "Erinnerung an einen Termin".to_string()
+    };
+    Some(PushPayload {
+        title: "Initiative".to_string(),
+        body: text,
+        tag: Some(format!("termin:{}", erinnert.termin_id)),
+        url: match erinnert.chat {
+            Some(chat) => format!("/chats/{chat}"),
+            None => format!("/kalender/termin/{}", erinnert.termin_id),
+        },
+        conversation_id: erinnert.chat,
+        message_id: erinnert.nachricht,
+        kind: "event".to_string(),
+    })
+}
+
+/// Schickt die Mitteilungen zu den Erinnerungen vor dem Termin: **eine** je
+/// Person und Erinnerung, mit **einer** Abfrage für alle Personen.
+///
+/// Die Karte ist stumm angelegt (`NewMessage::vorab_erinnerung`). Liefert, wie
+/// vielen Erinnerungen eine Mitteilung folgt; gesendet wird im Hintergrund.
+pub async fn benachrichtige_vorab(state: &AppState, erinnert: &[VorabErinnert]) -> usize {
+    if !state.push.enabled() || erinnert.is_empty() {
+        return 0;
+    }
+    let personen: Vec<Uuid> = erinnert.iter().map(|eintrag| eintrag.person).collect();
+    let chats: Vec<Uuid> = erinnert.iter().filter_map(|eintrag| eintrag.chat).collect();
+    let zeilen = match sqlx::query_as::<_, PersonEinstellung>(
+        "select u.id, u.settings, cm.conversation_id, cm.muted_until
+           from users u
+           left join conversation_members cm
+             on cm.user_id = u.id and cm.conversation_id = any($2)
+          where u.id = any($1)",
+    )
+    .bind(&personen)
+    .bind(&chats)
+    .fetch_all(&state.pool)
+    .await
+    {
+        Ok(zeilen) => zeilen,
+        Err(fehler) => {
+            tracing::warn!(%fehler, "Empfänger der Erinnerungen vor dem Termin nicht geladen");
+            return 0;
+        }
+    };
+
+    let jetzt = chrono::Utc::now();
+    let mut einstellung: HashMap<Uuid, (bool, bool)> = HashMap::new();
+    let mut stumm: HashSet<(Uuid, Uuid)> = HashSet::new();
+    for zeile in &zeilen {
+        einstellung
+            .entry(zeile.id)
+            .or_insert_with(|| benachrichtigungen(&zeile.settings));
+        if let (Some(chat), Some(bis)) = (zeile.conversation_id, zeile.muted_until) {
+            if bis > jetzt {
+                stumm.insert((zeile.id, chat));
+            }
+        }
+    }
+
+    let ziele: Vec<(Vec<Uuid>, PushPayload)> = erinnert
+        .iter()
+        .filter_map(|eintrag| {
+            let (push_an, vorschau) = einstellung.get(&eintrag.person).copied()?;
+            let ist_stumm = eintrag
+                .chat
+                .is_some_and(|chat| stumm.contains(&(eintrag.person, chat)));
+            vorab_mitteilung(eintrag, push_an, vorschau, ist_stumm)
+                .map(|payload| (vec![eintrag.person], payload))
+        })
+        .collect();
+    let angesprochen = ziele.len();
+    if !ziele.is_empty() {
+        state.push.im_hintergrund(state.pool.clone(), ziele);
+    }
+    angesprochen
+}
+
 async fn anzeigename(state: &AppState, person: Uuid) -> String {
     sqlx::query_as::<_, (String,)>("select display_name from users where id = $1")
         .bind(person)
@@ -680,6 +794,60 @@ mod tests {
         let payload = erinnerung_mitteilung(&lang, true, true, false).expect("Mitteilung");
         assert_eq!(payload.body.chars().count(), 140);
         assert!(payload.body.ends_with('…'));
+    }
+
+    fn vorab() -> VorabErinnert {
+        VorabErinnert {
+            termin_id: chat(7),
+            titel: "Grillen".to_string(),
+            minuten: 60,
+            person: chat(2),
+            chat: Some(chat(3)),
+            nachricht: Some(chat(4)),
+        }
+    }
+
+    #[test]
+    fn die_vorab_erinnerung_nennt_titel_und_vorlauf_und_fuehrt_in_den_chat() {
+        let payload = vorab_mitteilung(&vorab(), true, true, false).expect("Mitteilung");
+        assert_eq!(payload.title, "Initiative");
+        assert_eq!(payload.body, "Grillen beginnt in 1 Stunde");
+        assert_eq!(payload.tag, Some(format!("termin:{}", chat(7))));
+        assert_eq!(payload.url, format!("/chats/{}", chat(3)));
+        assert_eq!(payload.conversation_id, Some(chat(3)));
+        assert_eq!(payload.message_id, Some(chat(4)));
+    }
+
+    #[test]
+    fn ohne_karte_fuehrt_die_vorab_erinnerung_zum_termin() {
+        let mut ohne = vorab();
+        ohne.chat = None;
+        ohne.nachricht = None;
+        let payload = vorab_mitteilung(&ohne, true, true, false).expect("Mitteilung");
+        assert_eq!(payload.url, format!("/kalender/termin/{}", chat(7)));
+        assert_eq!(payload.conversation_id, None);
+        assert_eq!(payload.message_id, None);
+    }
+
+    #[test]
+    fn die_vorab_erinnerung_achtet_auf_vorschau_push_und_stummschaltung() {
+        let ohne_vorschau = vorab_mitteilung(&vorab(), true, false, false).expect("Mitteilung");
+        assert_eq!(ohne_vorschau.body, "Erinnerung an einen Termin");
+        assert!(vorab_mitteilung(&vorab(), false, true, false).is_none());
+        assert!(vorab_mitteilung(&vorab(), true, true, true).is_none());
+    }
+
+    #[test]
+    fn bei_langem_titel_bleibt_der_vorlauf_lesbar() {
+        let mut lang = vorab();
+        lang.titel = "x".repeat(300);
+        let payload = vorab_mitteilung(&lang, true, true, false).expect("Mitteilung");
+        assert!(
+            payload.body.ends_with("beginnt in 1 Stunde"),
+            "{}",
+            payload.body
+        );
+        assert!(payload.body.chars().count() <= 140);
     }
 
     #[test]

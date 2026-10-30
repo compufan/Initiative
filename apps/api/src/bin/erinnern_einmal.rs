@@ -4,6 +4,8 @@
 //! `erinnern_einmal --plus-stunden 49` rechnet mit der Uhr der Datenbank plus 49
 //! Stunden, `erinnern_einmal --jetzt 2026-10-05T10:00:00Z` mit einem festen
 //! Zeitpunkt. Auf der Standardausgabe steht die Bilanz als eine Zeile JSON.
+//! `--vorab` löst statt dessen einen Durchgang der „Erinnerung vor dem Termin“
+//! aus (`services::vorab`); dafür ist `--jetzt` meist genauer als `--plus-stunden`.
 //!
 //! # Warum ein eigenes Programm
 //!
@@ -20,6 +22,7 @@
 use chrono::{DateTime, Duration, Utc};
 use initiative_api::config::Config;
 use initiative_api::services::erinnern::{datenbankzeit, durchgang};
+use initiative_api::services::vorab;
 use initiative_api::state::AppState;
 
 const HILFE: &str = "\
@@ -28,6 +31,7 @@ NUR FÜR ENTWICKLUNG UND TESTS. Kein Teil des Produktionsabbilds.
 
   erinnern_einmal --plus-stunden <Zahl>   Uhr der Datenbank plus Stunden (auch gebrochen)
   erinnern_einmal --jetzt <Zeitpunkt>     fester Zeitpunkt, z. B. 2026-10-05T10:00:00Z
+  erinnern_einmal --vorab                 Durchgang der Erinnerung vor dem Termin statt der Antworten
   erinnern_einmal --help
 
 Ohne Angabe gilt die Uhr der Datenbank. Die Bilanz steht als JSON auf stdout.";
@@ -38,9 +42,10 @@ enum Zeit {
     Fest(DateTime<Utc>),
 }
 
-fn argumente() -> Result<Zeit, String> {
+fn argumente() -> Result<(Zeit, bool), String> {
     let mut args = std::env::args().skip(1);
     let mut zeit = Zeit::Datenbank;
+    let mut nur_vorab = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--plus-stunden" => {
@@ -59,10 +64,11 @@ fn argumente() -> Result<Zeit, String> {
                     .map_err(|_| format!("„{wert}“ ist kein Zeitpunkt (RFC 3339)"))?;
                 zeit = Zeit::Fest(punkt.with_timezone(&Utc));
             }
+            "--vorab" => nur_vorab = true,
             anderes => return Err(format!("Unbekannte Angabe: {anderes}")),
         }
     }
-    Ok(zeit)
+    Ok((zeit, nur_vorab))
 }
 
 #[tokio::main]
@@ -71,8 +77,8 @@ async fn main() {
         println!("{HILFE}");
         return;
     }
-    let zeit = match argumente() {
-        Ok(zeit) => zeit,
+    let (zeit, nur_vorab) = match argumente() {
+        Ok(angaben) => angaben,
         Err(fehler) => {
             eprintln!("{fehler}\n\n{HILFE}");
             std::process::exit(2);
@@ -115,8 +121,12 @@ async fn main() {
         }
         Zeit::Fest(punkt) => punkt,
     };
-    let bilanz = durchgang(&state, jetzt).await;
-    match serde_json::to_string(&bilanz) {
+    let ausgabe = if nur_vorab {
+        serde_json::to_string(&vorab::durchgang(&state, jetzt).await)
+    } else {
+        serde_json::to_string(&durchgang(&state, jetzt).await)
+    };
+    match ausgabe {
         Ok(zeile) => println!("{zeile}"),
         Err(fehler) => {
             eprintln!("{fehler}");

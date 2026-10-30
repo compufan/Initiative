@@ -7,6 +7,7 @@ import {
   erinnerungsZeile,
   fristKurz,
   fristText,
+  vorlaufText,
   wirkungsHinweis,
 } from './erinnern.js';
 
@@ -106,6 +107,37 @@ describe('Wirkungshinweis', () => {
     expect(
       wirkungsHinweis({ ...basis, erinnern: { nachStunden: 24, anzahl: 3 }, beginn: null }),
     ).toEqual([]);
+  });
+});
+
+describe('Erinnerung vor dem Termin', () => {
+  const basis = { partner: 'Ben', titel: 'Grillen', nummer: 1, art: 'vorab' as const };
+  it('sagt den Vorlauf im Dativ', () => {
+    expect(vorlaufText(1)).toBe('1 Minute');
+    expect(vorlaufText(10)).toBe('10 Minuten');
+    expect(vorlaufText(60)).toBe('1 Stunde');
+    expect(vorlaufText(120)).toBe('2 Stunden');
+    expect(vorlaufText(90)).toBe('90 Minuten');
+    expect(vorlaufText(1440)).toBe('1 Tag');
+    expect(vorlaufText(2880)).toBe('2 Tagen');
+  });
+  it('sagt „Beginnt in …“ statt „Antwort ausstehend“ – auch nach der Antwort', () => {
+    expect(
+      erinnerungsZeile({ ...basis, minuten: 60, ichBinErsteller: false, status: 'pending' }),
+    ).toEqual({ kopf: 'Erinnerung: Beginnt in 1 Stunde', text: null });
+    expect(
+      erinnerungsZeile({ ...basis, minuten: 1440, ichBinErsteller: false, status: 'yes' }),
+    ).toEqual({ kopf: 'Erinnerung: Beginnt in 1 Tag', text: null });
+  });
+  it('sagt dem Ersteller, an wen sie ging', () => {
+    expect(
+      erinnerungsZeile({ ...basis, minuten: 10, ichBinErsteller: true, status: null }).kopf,
+    ).toBe('Automatische Erinnerung an Ben: Beginnt in 10 Minuten');
+  });
+  it('fällt ohne Minuten auf die Erinnerung an Antworten zurück', () => {
+    expect(erinnerungsZeile({ ...basis, ichBinErsteller: false, status: 'pending' }).text).toMatch(
+      /noch nicht/,
+    );
   });
 });
 
