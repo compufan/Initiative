@@ -1464,18 +1464,10 @@ test('Ressourcen: Texturen wachsen im Film nicht, ohne Float-Ziele rechnet der P
     } as typeof echt;
 
     const m = (await import(/* @vite-ignore */ pfad)) as Messgeraet;
-    const ladeGpu = '/src/modules/bild/tonGpu.ts';
-    const ladeUnscharf = '/src/modules/bild/unscharfGpu.ts';
-    const ladeTon = '/src/modules/bild/ton.ts';
-    const gpu = (await import(
-      /* @vite-ignore */ ladeGpu
-    )) as typeof import('../src/modules/bild/tonGpu.js');
-    const unscharfGpu = (await import(
-      /* @vite-ignore */ ladeUnscharf
-    )) as typeof import('../src/modules/bild/unscharfGpu.js');
-    const ton = (await import(
-      /* @vite-ignore */ ladeTon
-    )) as typeof import('../src/modules/bild/ton.js');
+    // Aus dem Messgerät, nicht per eigenem Import: siehe `tonGpuModul` dort.
+    const gpu = m.tonGpuModul;
+    const unscharfGpu = m.unscharfGpuModul;
+    const ton = m.tonModul;
 
     const W = 240;
     const sz = m.szeneHolen('A', W);

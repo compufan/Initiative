@@ -9,6 +9,16 @@ import { maskeUmrastern } from '../../src/modules/bild/maske.js';
 import { szeneBauen, type Szene as RenderSzene } from '../../src/modules/bild/maskenSpeicher.js';
 import { NEUTRAL } from '../../src/modules/bild/ton.js';
 import { bildRechnen, gpuAbschalten, letzterWeg } from '../../src/modules/bild/tonGpu.js';
+/*
+ * Dieselben Exemplare, die `rendern` benutzt, für Tests, die Zähler lesen oder
+ * Schalter setzen. Ein eigenes `import('/src/…/tonGpu.ts')` im Test bekommt
+ * nach einer Dateiänderung ein ANDERES Exemplar: Vite hängt dem Import dieses
+ * Helfers dann `?t=…` an, dem Pfad im Test aber nicht – und die Zähler, die der
+ * Test liest, zählen nicht, was `rendern` rechnet.
+ */
+export * as tonGpuModul from '../../src/modules/bild/tonGpu.js';
+export * as unscharfGpuModul from '../../src/modules/bild/unscharfGpu.js';
+export * as tonModul from '../../src/modules/bild/ton.js';
 import {
   staerke,
   unscharfAufBytes,
