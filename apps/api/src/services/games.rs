@@ -299,6 +299,9 @@ pub struct SessionUpdate {
     pub turn_user_id: Option<Uuid>,
     pub winner_user_ids: Vec<Uuid>,
     pub players: Option<Vec<GamePlayerDto>>,
+    /// Pressen: die Läufe, die dieser Zug abschließt (Statistik). Sie werden in
+    /// derselben Transaktion eingetragen wie der Spielstand – beides oder nichts.
+    pub laeufe: Vec<super::pressen_statistik::NeuerLauf>,
 }
 
 /// Optimistic concurrency: the update only lands when the version still matches.
@@ -313,6 +316,9 @@ pub async fn persist_session(
         None => row.players.clone(),
     };
 
+    // Spielstand und abgeschlossene Läufe gehören zusammen: Scheitert eines,
+    // gilt der Zug nicht (die Transaktion rollt beim Verlassen zurück).
+    let mut tx = state.pool.begin().await?;
     let updated = sqlx::query_as::<_, GameSessionRow>(
         "update game_sessions
          set state = $1, status = $2, turn_user_id = $3, winner_user_ids = $4,
@@ -327,9 +333,11 @@ pub async fn persist_session(
     .bind(players)
     .bind(row.id)
     .bind(row.version)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| AppError::bad_request("Der Spielstand hat sich geändert – bitte neu laden."))?;
+    super::pressen_statistik::eintragen(&mut tx, &update.laeufe).await?;
+    tx.commit().await?;
 
     broadcast_session(state, &updated).await?;
     dto_fuer(state, &updated, betrachter).await

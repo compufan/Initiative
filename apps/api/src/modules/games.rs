@@ -4,7 +4,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -19,6 +19,7 @@ use crate::services::games::{
     SessionUpdate,
 };
 use crate::services::notify::notify_users;
+use crate::services::pressen_statistik::{self, laeufe_aus_zug, Filter, Sortierung, Statistik};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -30,6 +31,9 @@ pub fn router() -> Router<AppState> {
         .route("/games/sessions/{id}/moves", post(make_move))
         .route("/games/sessions/{id}/abort", post(abort))
         .route("/games/sessions/{id}/rematch", post(rematch))
+        .route("/games/pressen/statistik", get(pressen_statistik))
+        .route("/games/pressen/laeufe", get(pressen_laeufe))
+        .route("/games/pressen/laeufe/{id}", get(pressen_lauf))
 }
 
 /// Catalog of everything registered in `src/games`.
@@ -205,6 +209,7 @@ async fn join(
                 },
                 winner_user_ids: Vec::new(),
                 players: Some(players),
+                laeufe: Vec::new(),
             },
             user.id(),
         )
@@ -258,6 +263,18 @@ async fn make_move(
 
     let outcome = definition.outcome(&next_state);
     let next_seat = definition.current_seat(&next_state);
+    // Schließt dieser Zug eine Runde ab, gehören ihre Läufe in die Statistik.
+    let laeufe = if row.game_key == "pressen" {
+        match (
+            serde_json::from_value::<crate::games::pressen::State>(row.state.clone()),
+            serde_json::from_value::<crate::games::pressen::State>(next_state.clone()),
+        ) {
+            (Ok(vorher), Ok(nachher)) => laeufe_aus_zug(row.id, &seats, &vorher, &nachher),
+            _ => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
     let session = persist_session(
         &state,
         &row,
@@ -279,6 +296,7 @@ async fn make_move(
                 .collect(),
             state: next_state,
             players: None,
+            laeufe,
         },
         user.id(),
     )
@@ -339,6 +357,7 @@ async fn abort(
                     .map(|seat| seat.user_id)
                     .collect(),
                 players: None,
+                laeufe: Vec::new(),
             },
             user.id(),
         )
@@ -371,4 +390,190 @@ async fn rematch(
     )
     .await?;
     Ok((StatusCode::CREATED, Json(session)))
+}
+
+/* ---------- Pressen: Statistik (nur die eigenen Läufe) ---------- */
+
+/// Filter, die Statistik und Laufliste teilen. Zeiten als RFC 3339.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LaufFilterQuery {
+    von: Option<chrono::DateTime<chrono::Utc>>,
+    bis: Option<chrono::DateTime<chrono::Utc>>,
+    modus: Option<String>,
+    art: Option<String>,
+    ausgang: Option<String>,
+}
+
+impl LaufFilterQuery {
+    fn filter(self) -> AppResult<Filter> {
+        let filter = Filter {
+            von: self.von,
+            bis: self.bis,
+            modus: self.modus,
+            art: self.art,
+            ausgang: self.ausgang,
+        };
+        filter.pruefen().map_err(AppError::bad_request)?;
+        Ok(filter)
+    }
+}
+
+/// Aggregate über die eigenen Läufe: Kopfzahlen, Rekorde, Aufschlüsselung nach
+/// Modus, Gegner und Malus, dazu der Verlauf (die jüngsten Läufe).
+///
+/// Es gibt keinen Weg, die Läufe eines anderen Kontos abzufragen: Die Abfrage
+/// ist immer auf `user.id()` begrenzt.
+async fn pressen_statistik(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Query(query): Query<LaufFilterQuery>,
+) -> AppResult<Json<Statistik>> {
+    let filter = query.filter()?;
+    let laeufe = pressen_statistik::laden(&state.pool, user.id(), &filter).await?;
+    let mut gegner: Vec<Uuid> = laeufe
+        .iter()
+        .flat_map(|l| l.gegner_ids.iter().copied())
+        .collect();
+    gegner.sort();
+    gegner.dedup();
+    let namen = pressen_statistik::namen(&state.pool, &gegner).await?;
+    Ok(Json(pressen_statistik::berechne(&laeufe, &namen)))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LaufListeQuery {
+    #[serde(flatten)]
+    filter: LaufFilterQuery,
+    cursor: Option<String>,
+    limit: Option<i64>,
+    sortierung: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PersonDto {
+    user_id: Uuid,
+    /// Leer, wenn das Konto nicht mehr besteht.
+    name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LaufDto {
+    id: Uuid,
+    /// Leer, wenn die Übung inzwischen aufgeräumt wurde.
+    session_id: Option<Uuid>,
+    runde: i32,
+    sitz: i32,
+    modus: String,
+    start_art: String,
+    gegner: Vec<PersonDto>,
+    team: Vec<PersonDto>,
+    dauer_ms: i32,
+    verschuettet_dezi: i32,
+    wertung_ms: i32,
+    reaktion_ms: Option<i32>,
+    vorzeitig: bool,
+    getruemmert: bool,
+    malus_ms: i32,
+    versatz_ms: i32,
+    ausgang: String,
+    team_wertung_ms: Option<i64>,
+    gegner_wertung_ms: Option<i64>,
+    gespielt_am: chrono::DateTime<chrono::Utc>,
+}
+
+async fn lauf_dtos(
+    pool: &sqlx::PgPool,
+    zeilen: Vec<pressen_statistik::LaufZeile>,
+) -> AppResult<Vec<LaufDto>> {
+    let mut ids: Vec<Uuid> = zeilen
+        .iter()
+        .flat_map(|l| l.gegner_ids.iter().chain(l.team_ids.iter()).copied())
+        .collect();
+    ids.sort();
+    ids.dedup();
+    let namen = pressen_statistik::namen(pool, &ids).await?;
+    let personen = |ids: &[Uuid]| -> Vec<PersonDto> {
+        ids.iter()
+            .map(|id| PersonDto {
+                user_id: *id,
+                name: namen.get(id).cloned(),
+            })
+            .collect()
+    };
+    Ok(zeilen
+        .into_iter()
+        .map(|l| LaufDto {
+            gegner: personen(&l.gegner_ids),
+            team: personen(&l.team_ids),
+            id: l.id,
+            session_id: l.session_id,
+            runde: l.runde,
+            sitz: l.sitz,
+            modus: l.modus,
+            start_art: l.start_art,
+            dauer_ms: l.dauer_ms,
+            verschuettet_dezi: l.verschuettet_dezi,
+            wertung_ms: l.wertung_ms,
+            reaktion_ms: l.reaktion_ms,
+            vorzeitig: l.vorzeitig,
+            getruemmert: l.getruemmert,
+            malus_ms: l.malus_ms,
+            versatz_ms: l.versatz_ms,
+            ausgang: l.ausgang,
+            team_wertung_ms: l.team_wertung_ms,
+            gegner_wertung_ms: l.gegner_wertung_ms,
+            gespielt_am: l.gespielt_am,
+        })
+        .collect())
+}
+
+/// Eine Seite der Laufliste; `nextCursor` fehlt (null) auf der letzten.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LaufSeite {
+    items: Vec<LaufDto>,
+    next_cursor: Option<String>,
+}
+
+/// Die eigenen Läufe, seitenweise (Cursor) und sortierbar.
+async fn pressen_laeufe(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Query(query): Query<LaufListeQuery>,
+) -> AppResult<Json<LaufSeite>> {
+    let sortierung = Sortierung::lesen(query.sortierung.as_deref())
+        .ok_or_else(|| AppError::bad_request("Unbekannte Sortierung"))?;
+    let cursor = match query.cursor.as_deref() {
+        None | Some("") => None,
+        Some(roh) => Some(
+            pressen_statistik::cursor_lesen(roh)
+                .ok_or_else(|| AppError::bad_request("Ungültiger Cursor"))?,
+        ),
+    };
+    let limit = query.limit.unwrap_or(25).clamp(1, 100);
+    let filter = query.filter.filter()?;
+    let (zeilen, weiter) =
+        pressen_statistik::seite(&state.pool, user.id(), &filter, sortierung, cursor, limit)
+            .await?;
+    Ok(Json(LaufSeite {
+        items: lauf_dtos(&state.pool, zeilen).await?,
+        next_cursor: weiter,
+    }))
+}
+
+/// Ein Lauf im Einzelnen. Fremde (und unbekannte) Läufe gibt es nicht: 404.
+async fn pressen_lauf(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<LaufDto>> {
+    let zeile = pressen_statistik::einzeln(&state.pool, user.id(), id)
+        .await?
+        .ok_or_else(|| AppError::not_found("Lauf nicht gefunden"))?;
+    let mut dtos = lauf_dtos(&state.pool, vec![zeile]).await?;
+    Ok(Json(dtos.remove(0)))
 }

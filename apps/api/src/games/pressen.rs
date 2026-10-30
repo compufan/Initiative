@@ -42,6 +42,8 @@ pub const MELDE_SPIELRAUM_MS: i64 = 5000;
 pub const MAX_VERSATZ_MS: i64 = 600_000;
 
 const GLAS_ML: f64 = 300.0;
+/// Das volle Glas in Zehntelmilliliter (so rechnen die Läufe).
+pub const GLAS_DEZI: i64 = 3000;
 const MUND_KAPAZITAET_ML: f64 = 25.0;
 const SCHLUCK_RATE_ML_S: f64 = 30.0;
 
