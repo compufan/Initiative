@@ -629,8 +629,11 @@
 }
 
 /* ---------- Pressen ----------
-   Eine Bühne je Lauf: das Männchen steht in der Mitte (dort sitzt der Mund der
-   Simulation), das Glas fährt darüber. Fremde Bahnen sind klein. */
+   Eine Bühne je Lauf, von oben und leicht geneigt gesehen: der Tisch, das
+   Männchen mit dem offenen Mund (das Ziel), das Glas mit seinem Strahl.
+   Fremde Bahnen sind klein. Die Bewegung ist nur Zugabe: Atmen, Blinzeln,
+   Schlucken – bei reduzierter Bewegung steht alles still, die Physik des
+   Spiels selbst bleibt (sie IST das Spiel). */
 
 .pressen {
   --pressen-bier: #e8a317;
@@ -639,7 +642,7 @@
 .pressen-feld {
   position: relative;
   width: 100%;
-  max-width: 560px;
+  max-width: 600px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg, 16px);
   background: var(--surface);
@@ -648,16 +651,18 @@
 }
 
 .pressen-buehne {
-  display: grid;
-  grid-template-columns: 1fr;
+  position: relative;
 }
 
-/* Im Spiegelmodus steht das Spiegelbild klein darunter, nicht daneben. */
+/* Im Spiegelmodus hängt das Spiegelbild klein in der Ecke der Bühne. */
 .pressen-buehne .pressen-figur.is-klein {
-  width: 40%;
-  justify-self: end;
-  margin-top: -56px;
-  opacity: 0.85;
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 34%;
+  opacity: 0.92;
+  border-radius: var(--radius, 12px);
+  border: 2px solid var(--seat, var(--warning));
 }
 
 .pressen-figur {
@@ -666,17 +671,15 @@
   height: auto;
 }
 
-.pf-boden {
-  stroke: var(--border);
-  stroke-width: 4;
-}
-
 .pressen-hud {
   position: absolute;
   inset: 6px 8px auto 8px;
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
+  padding: 4px 8px;
+  border-radius: var(--radius, 12px);
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
   font-size: 0.78rem;
   color: var(--text-muted);
   pointer-events: none;
@@ -696,9 +699,10 @@
   inset: 0;
   display: grid;
   place-items: center;
-  font-size: 5rem;
+  font-size: 6rem;
   font-weight: 800;
   color: var(--accent);
+  text-shadow: 0 2px 0 var(--surface);
   pointer-events: none;
 }
 
@@ -714,24 +718,43 @@
 .pressen-steuerung {
   display: flex;
   justify-content: space-between;
-  align-items: stretch;
+  align-items: center;
   gap: var(--space-3);
   width: 100%;
-  max-width: 560px;
+  max-width: 600px;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
 }
 
-.pressen-pfeile {
-  display: flex;
-  gap: var(--space-3);
+/* Steuerkreuz: vier Knöpfe, damit man auch mit dem Daumen vor und zurück kann. */
+.pressen-kreuz {
+  display: grid;
+  grid-template-columns: repeat(3, 64px);
+  grid-template-rows: repeat(3, 64px);
+  gap: 4px;
+}
+.pressen-kreuz .pressen-hoch {
+  grid-column: 2;
+  grid-row: 1;
+}
+.pressen-kreuz .pressen-links {
+  grid-column: 1;
+  grid-row: 2;
+}
+.pressen-kreuz .pressen-rechts {
+  grid-column: 3;
+  grid-row: 2;
+}
+.pressen-kreuz .pressen-runter {
+  grid-column: 2;
+  grid-row: 3;
 }
 
 .pressen-taste {
-  min-width: 72px;
-  min-height: 72px;
-  padding: 0 var(--space-4);
+  min-width: 64px;
+  min-height: 64px;
+  padding: 0 var(--space-3);
   border: 2px solid var(--border);
   border-radius: var(--radius-lg, 16px);
   background: var(--surface-2, var(--surface));
@@ -752,6 +775,7 @@
 
 .pressen-neigen {
   min-width: 140px;
+  min-height: 96px;
   font-size: 1.1rem;
 }
 
@@ -761,7 +785,27 @@
 
 .pressen-start {
   width: 100%;
-  max-width: 560px;
+  max-width: 600px;
+}
+
+.pressen-wahl-knoepfe {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.pressen-wahl-knoepfe .btn {
+  flex: 1 1 200px;
+  min-height: 52px;
+}
+
+.pressen-anstossen {
+  min-height: 60px;
+  font-size: 1.15rem;
+}
+
+.pressen-figur-zeile {
+  width: 100%;
+  max-width: 600px;
 }
 
 .pressen-atempo {
@@ -778,7 +822,7 @@
   grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: var(--space-2);
   width: 100%;
-  max-width: 560px;
+  max-width: 600px;
   margin: 0;
   padding: 0;
   list-style: none;
@@ -796,7 +840,8 @@
 }
 
 .pressen-bahn .pressen-figur {
-  max-height: 90px;
+  max-height: 100px;
+  border-radius: 8px;
 }
 
 .pressen-bahn-name {
@@ -812,15 +857,15 @@
   align-items: center;
   gap: var(--space-2);
   width: 100%;
-  max-width: 560px;
+  max-width: 600px;
   font-size: 0.8rem;
   color: var(--text-muted);
 }
 
 .pressen-malus-balken {
   flex: 1;
-  height: 8px;
-  border-radius: 4px;
+  height: 10px;
+  border-radius: 5px;
   background: var(--border);
   overflow: hidden;
 }
@@ -838,9 +883,14 @@
   font-variant-numeric: tabular-nums;
 }
 
+.pressen-malus-text {
+  max-width: 600px;
+  margin: 0;
+}
+
 .pressen-wertung {
   width: 100%;
-  max-width: 560px;
+  max-width: 600px;
 }
 
 .pressen-wertung h3 {
@@ -868,23 +918,155 @@
   font-weight: 700;
 }
 
-/* Bewegung nur als Zugabe: Wackeln des Glases und Schlucken. Die Physik des
-   Spiels selbst bleibt – sie IST das Spiel. */
+/* Bearbeitungsblatt für das Strichmännchen */
+.pressen-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.pressen-editor-vorschau {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  max-height: 170px;
+  display: flex;
+  justify-content: center;
+  border-radius: var(--radius, 12px);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: #d8c19c;
+}
+.pressen-editor-vorschau .pressen-figur {
+  width: auto;
+  max-height: 170px;
+}
+.pressen-editor-gruppe {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.pressen-editor-gruppe legend {
+  padding: 0;
+  margin-bottom: 4px;
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+.pressen-editor-wahl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pressen-editor-knopf {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 var(--space-3);
+  border: 2px solid var(--border);
+  border-radius: var(--radius, 12px);
+  background: var(--surface-2, var(--surface));
+  color: var(--text);
+  font-size: 0.85rem;
+}
+.pressen-editor-knopf.ist-farbe {
+  padding: 0;
+  border-radius: 50%;
+}
+.pressen-editor-knopf.is-gewaehlt {
+  border-color: var(--accent);
+  outline: 3px solid var(--accent);
+  outline-offset: 1px;
+}
+.pressen-editor-aktionen {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+/* Bewegung nur als Zugabe: Atmen, Blinzeln, Schlucken, ruhiges Wackeln des Glases. */
+.pressen-figur.is-bewegt .pf-atmen {
+  animation: pf-atmen 3.6s ease-in-out infinite;
+}
+.pressen-figur.is-bewegt .pf-blinzeln {
+  animation: pf-blinzeln 5.2s ease-in-out infinite;
+  transform-origin: 500px 130px;
+}
 .pressen-figur.is-bewegt .pf-schluck {
   animation: pf-schluck 0.5s ease-in-out infinite;
   transform-box: fill-box;
   transform-origin: center;
 }
+.pressen-figur.is-bewegt .pf-kehle {
+  animation: pf-kehle 0.55s ease-in-out infinite;
+}
+.pressen-figur.is-bewegt .pf-wange {
+  animation: pf-wange 0.5s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.pressen-figur.is-bewegt .pf-glas.is-gehalten {
+  animation: pf-wackeln 2.4s ease-in-out infinite;
+  transform-origin: 0 0;
+}
+.pressen-figur.is-bewegt.is-freude .pf-atmen {
+  animation: pf-hopsen 0.7s ease-in-out infinite;
+}
+.pressen-figur.is-bewegt.is-schreck .pf-atmen {
+  animation: pf-zittern 0.12s linear infinite;
+}
 
+@keyframes pf-atmen {
+  50% {
+    transform: translateY(5px);
+  }
+}
+@keyframes pf-blinzeln {
+  0%,
+  94%,
+  100% {
+    transform: scaleY(1);
+  }
+  97% {
+    transform: scaleY(0.08);
+  }
+}
 @keyframes pf-schluck {
   50% {
     transform: scale(1.25, 0.8);
   }
 }
+@keyframes pf-kehle {
+  50% {
+    transform: translateY(14px);
+  }
+}
+@keyframes pf-wange {
+  50% {
+    transform: scale(1.18);
+  }
+}
+@keyframes pf-wackeln {
+  25% {
+    transform: rotate(1.2deg);
+  }
+  75% {
+    transform: rotate(-1.2deg);
+  }
+}
+@keyframes pf-hopsen {
+  50% {
+    transform: translateY(-12px);
+  }
+}
+@keyframes pf-zittern {
+  50% {
+    transform: translateX(3px);
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
-  .pressen-figur .pf-schluck {
-    animation: none;
+  .pressen-figur *,
+  .pressen-figur.is-bewegt * {
+    animation: none !important;
   }
   .pressen-malus-balken span {
     transition: none;

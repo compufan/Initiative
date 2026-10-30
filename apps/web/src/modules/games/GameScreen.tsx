@@ -319,7 +319,7 @@ export function GameScreen() {
         {finished
           ? status.text
           : echtzeit
-            ? 'Ergebnisse prüft der Server – alle sehen sie sofort.'
+            ? 'Ergebnisse prüft der Server – du siehst dein eigenes sofort, die der anderen am Rundenende.'
             : 'Züge prüft der Server – dein Gegenüber sieht sie sofort.'}
       </p>
 

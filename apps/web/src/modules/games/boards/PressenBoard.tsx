@@ -2,18 +2,29 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } 
 import {
   GLAS_ML,
   MALUS_MAX_MS,
+  MALUS_HALBWERTSZEIT_MS,
   MUND_KAPAZITAET_ML,
+  START_FRIST_MS,
   dranSitze,
+  driftSeedFuer,
+  figurLesen,
+  istVerborgen,
   pressen,
+  PRESSEN_FIGUR_SCHLUESSEL,
+  standardFigur,
+  startPhase,
   verzoegerungBei,
   wartetAuf,
   type GameSessionDto,
   type LaufErgebnis,
+  type PressenAnsicht,
   type PressenErgebnis,
+  type PressenFigurDaten,
   type PressenState,
+  type StartPhase,
   type Taste,
 } from '@initiative/shared';
-import { useMyId } from '../../../state/session.js';
+import { useMyId, useSession } from '../../../state/session.js';
 import { toast } from '../../../state/ui.js';
 import { nameFrom, seatClass, useUserLookup } from '../helpers.js';
 import type { GameBoardProps } from './registry.js';
@@ -25,27 +36,36 @@ import {
   ansichtAus,
   fertigAnsicht,
   type FigurAnsicht,
+  type Stimmung,
 } from './PressenFigur.js';
+import { PressenFigurEditor } from './PressenFigurEditor.js';
 import { getruemmertMerken, getruemmertZaehler, usePressenLauf } from './pressenLauf.js';
 
 /** Liest den Spielstand vorsichtig – ein unbekannter Stand wird zu einer leeren Runde. */
-function lesen(session: GameSessionDto): PressenState {
-  const roh = session.state as Partial<PressenState> | null;
+function lesen(session: GameSessionDto): PressenAnsicht {
+  const roh = session.state as Partial<PressenAnsicht> | null;
   if (
     roh &&
     Array.isArray(roh.ergebnisse) &&
     Array.isArray(roh.teams) &&
     Array.isArray(roh.malus)
   ) {
-    return roh as PressenState;
+    return roh as PressenAnsicht;
   }
   return pressen.createInitialState(
     session.players.map((player) => ({ seat: player.seat, userId: player.userId })),
-  );
+  ) as PressenAnsicht;
 }
 
 const sek = (ms: number) => `${(ms / 1000).toFixed(1).replace('.', ',')} s`;
 const ml = (dezi: number) => `${(dezi / 10).toFixed(1).replace('.', ',')} ml`;
+
+/** Zeigt ein Ergebnis nur, wenn es offen vorliegt (nicht „verborgen“). */
+function offen(
+  e: PressenErgebnis | { verborgen: true } | null | undefined,
+): PressenErgebnis | null {
+  return e && !istVerborgen(e) ? e : null;
+}
 
 function useReduzierteBewegung(): boolean {
   const [reduziert, setReduziert] = useState(() =>
@@ -66,10 +86,10 @@ function useReduzierteBewegung(): boolean {
 /** Wo der Abstellen-Knopf diesmal erscheint: wechselt je Runde und Sitz, ist aber nachvollziehbar. */
 function knopfOrt(runde: number, sitz: number): { links: number; oben: number } {
   const h = (runde * 7919 + sitz * 104729 + 13) % 997;
-  return { links: 8 + (h % 70), oben: 6 + ((h * 31) % 42) };
+  return { links: 8 + (h % 70), oben: 22 + ((h * 31) % 40) };
 }
 
-function rolle(state: PressenState, sitz: number): string | null {
+function rolle(state: PressenAnsicht, sitz: number): string | null {
   if (state.ampel === sitz) return 'Ampel';
   if (state.modus === 'staffette') {
     const team = state.teams.findIndex((t) => t.includes(sitz));
@@ -78,12 +98,23 @@ function rolle(state: PressenState, sitz: number): string | null {
   return null;
 }
 
+const ALLE_AUS: Record<Taste, boolean> = {
+  links: false,
+  rechts: false,
+  hoch: false,
+  runter: false,
+  neigen: false,
+};
+
+/** Wie lange (ms), bevor im Spiegelmodus die nächste Runde von selbst beginnt. */
+const SPIEGEL_AUTOSTART_MS = 2600;
+
 /**
  * Pressen: das Bier so schnell wie möglich trinken, ohne etwas zu verschütten.
  *
  * Der eigene Lauf rechnet dieser Client (Physik im gemeinsamen Paket) und
- * meldet nur das Ergebnis als Zug; der Server wertet. Die Bahnen der anderen
- * zeigen, ob sie dran sind, und ihr Ergebnis, sobald es gemeldet ist.
+ * meldet nur das Ergebnis als Zug; der Server wertet. Fremde Läufe sind bis
+ * zum Rundenende nur als „fertig“ zu sehen (der Server schickt nicht mehr).
  */
 export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) {
   const myId = useMyId();
@@ -97,25 +128,45 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
     return userId === myId ? 'Du' : nameFrom(users, userId);
   };
 
+  /* ---- Figuren: eigene aus dem Konto, fremde aus der Partie ---- */
+  const eigeneGespeichert = useSession(
+    (s) => s.user?.settings?.modules?.[PRESSEN_FIGUR_SCHLUESSEL],
+  );
+  const figurVon = (sitz: number): PressenFigurDaten => {
+    const userId = session.players.find((p) => p.seat === sitz)?.userId ?? `sitz${sitz}`;
+    const roh =
+      userId === myId
+        ? (eigeneGespeichert ?? session.figuren?.[userId])
+        : session.figuren?.[userId];
+    return figurLesen(roh) ?? standardFigur(userId);
+  };
+  const [editorOffen, setEditorOffen] = useState(false);
+
   const aktiv = session.status === 'active' && !state.fertig;
   const dran = dranSitze(state);
+  const meinErgebnis: PressenErgebnis | null =
+    mySeat != null ? offen(state.ergebnisse[mySeat]) : null;
   const ichDran = aktiv && mySeat != null && dran.includes(mySeat);
   const spiegel = state.modus === 'spiegel';
 
   const laufRunde = useRef(state.runde);
   const laufVerz = useRef(0);
+  const laufVersatz = useRef<number | null>(null);
   /** Runden, in denen DIESES Gerät gelaufen ist – nur dafür gibt es eine Auszeichnung. */
   const eigeneRunden = useRef(new Set<number>());
   const senden = useCallback(
     (erg: LaufErgebnis) => {
+      const versatz = laufVersatz.current;
       onMove({
         typ: 'ergebnis',
         runde: laufRunde.current,
-        dauerMs: erg.dauerMs,
+        // Wer später „Anstoßen“ drückt, ist langsamer: Das Warten steckt in der Dauer.
+        dauerMs: erg.dauerMs + (versatz ?? 0),
         verschuettetDezi: erg.verschuettetDezi,
         reaktionMs: erg.reaktionMs,
         vorzeitig: erg.vorzeitig,
         verzoegerungMs: laufVerz.current,
+        versatzMs: versatz,
       });
     },
     [onMove],
@@ -127,24 +178,37 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
   const laufRef = useRef(lauf);
   laufRef.current = lauf;
 
-  /* ---- Serveruhr: aus dem Zeitstempel des Stands + eigener Laufzeit ---- */
-  const empfangen = useRef({ stempel: Date.parse(session.updatedAt), perf: performance.now() });
+  /* ---- Serveruhr: `serverTime` der Partie + eigene Laufzeit seither ---- */
+  const empfangen = useRef({
+    stempel: Date.parse(session.serverTime ?? session.updatedAt),
+    perf: performance.now(),
+  });
   useEffect(() => {
-    empfangen.current = { stempel: Date.parse(session.updatedAt), perf: performance.now() };
-  }, [session.updatedAt]);
+    empfangen.current = {
+      stempel: Date.parse(session.serverTime ?? session.updatedAt),
+      perf: performance.now(),
+    };
+  }, [session]);
   const serverJetzt = useCallback(() => {
     const { stempel, perf } = empfangen.current;
     return (Number.isFinite(stempel) ? stempel : Date.now()) + (performance.now() - perf);
   }, []);
 
-  /* ---- Malus-Anzeige (klingt sichtbar ab) ---- */
-  const meinMalus = mySeat != null ? state.malus[mySeat] : undefined;
+  /* ---- Uhr für Malus-Anzeige und Countdown (schneller, solange einer läuft) ---- */
   const [, uhr] = useState(0);
+  const jetzt = serverJetzt();
+  const startP: StartPhase | null =
+    mySeat != null && ichDran ? startPhase(state, mySeat, jetzt) : null;
+  const schnell =
+    startP != null &&
+    (startP.phase === 'wartet' || startP.phase === 'zaehlt' || startP.phase === 'gestartet');
   useEffect(() => {
-    const id = window.setInterval(() => uhr((n) => n + 1), 1000);
+    const id = window.setInterval(() => uhr((n) => n + 1), schnell ? 100 : 1000);
     return () => window.clearInterval(id);
-  }, []);
-  const malusJetzt = meinMalus && !spiegel ? verzoegerungBei(meinMalus, serverJetzt()) : 0;
+  }, [schnell]);
+
+  const meinMalus = mySeat != null ? state.malus[mySeat] : undefined;
+  const malusJetzt = meinMalus && !spiegel ? verzoegerungBei(meinMalus, jetzt) : 0;
 
   /* ---- neue Runde (Atempo) oder fremder Stand: lokalen Lauf zurücksetzen ---- */
   useEffect(() => {
@@ -153,15 +217,8 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
     }
   }, [state.runde]);
 
-  const meinErgebnis: PressenErgebnis | null =
-    mySeat != null ? (state.ergebnisse[mySeat] ?? null) : null;
-
-  /* ---- Tastatur ---- */
-  const [gedrueckt, setGedrueckt] = useState<Record<Taste, boolean>>({
-    links: false,
-    rechts: false,
-    neigen: false,
-  });
+  /* ---- Tastatur und Knöpfe ---- */
+  const [gedrueckt, setGedrueckt] = useState<Record<Taste, boolean>>(ALLE_AUS);
   const druecke = useCallback((taste: Taste, runter: boolean) => {
     setGedrueckt((alt) => (alt[taste] === runter ? alt : { ...alt, [taste]: runter }));
     if (runter) laufRef.current.druecken(taste);
@@ -171,12 +228,14 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
   const laeuft = lauf.phase === 'laeuft';
   useEffect(() => {
     if (!laeuft) {
-      setGedrueckt({ links: false, rechts: false, neigen: false });
+      setGedrueckt(ALLE_AUS);
       return undefined;
     }
     const taste = (e: KeyboardEvent): Taste | 'esc' | null => {
       if (e.key === 'ArrowLeft') return 'links';
       if (e.key === 'ArrowRight') return 'rechts';
+      if (e.key === 'ArrowUp') return 'hoch';
+      if (e.key === 'ArrowDown') return 'runter';
       if (e.key === ' ' || e.key === 'Spacebar') return 'neigen';
       if (e.key === 'Escape') return 'esc';
       return null;
@@ -233,8 +292,8 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
     // Der Stand liefert den Lauf entweder noch in der Runde oder schon als
     // Vorrunde (nach Atempo). Beide Wege führen zur selben Auszeichnung.
     const kandidaten: [number, PressenErgebnis | null | undefined][] = [
-      [state.runde, state.ergebnisse[mySeat]],
-      [state.runde - 1, state.vorrunde?.[mySeat]],
+      [state.runde, offen(state.ergebnisse[mySeat])],
+      [state.runde - 1, offen(state.vorrunde?.[mySeat])],
     ];
     for (const [runde, ergebnis] of kandidaten) {
       if (
@@ -250,14 +309,68 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
     }
   }, [state, mySeat]);
 
+  /* ---- Anstoßen ---- */
+  const anstossen = useCallback(() => {
+    if (!ichDran || mySeat == null || laufRef.current.phase !== 'bereit') return;
+    const sicht = lesen(session);
+    const wann = serverJetzt();
+    const phase = startPhase(sicht, mySeat, wann);
+    // Vor dem gemeinsamen Beginn gibt es kein „Anstoßen“; danach zählt der
+    // Abstand zum Beginn in die eigene Zeit.
+    if (phase.phase === 'zaehlt' || phase.phase === 'wahl' || phase.phase === 'wartet') return;
+    laufRunde.current = sicht.runde;
+    laufVersatz.current =
+      phase.phase === 'gestartet' ? Math.max(0, Math.round(wann - phase.beginn)) : null;
+    const verz = sicht.modus === 'spiegel' ? 0 : verzoegerungBei(sicht.malus[mySeat]!, wann);
+    laufVerz.current = verz;
+    laufRef.current.anstossen(verz, driftSeedFuer(sicht.runde));
+  }, [ichDran, mySeat, session, serverJetzt]);
+
+  const waehle = (art: 'echtzeit' | 'asynchron') => {
+    if (busy) return;
+    onMove({ typ: 'start', art });
+  };
+
+  /* ---- Spiegelmodus: die nächste Runde beginnt von selbst ---- */
+  const [spiegelPause, setSpiegelPause] = useState(false);
+  const spiegelAuto =
+    spiegel && ichDran && lauf.phase === 'bereit' && !meinErgebnis && state.atempo > 0;
+  useEffect(() => {
+    if (!spiegelAuto || spiegelPause || busy) return undefined;
+    const id = window.setTimeout(() => anstossen(), SPIEGEL_AUTOSTART_MS);
+    return () => window.clearTimeout(id);
+  }, [spiegelAuto, spiegelPause, busy, anstossen, state.runde]);
+
+  /* ---- Stimmung: Schreck beim Verschütten, Freude am Ende ---- */
+  const [schreckBis, setSchreckBis] = useState(0);
+  const letzteMenge = useRef(0);
+  const verschuettetMl = lauf.zustand.verschuettet;
+  useEffect(() => {
+    if (lauf.phase !== 'laeuft') {
+      letzteMenge.current = 0;
+      return;
+    }
+    if (verschuettetMl > letzteMenge.current + 1.5) {
+      letzteMenge.current = verschuettetMl;
+      setSchreckBis(performance.now() + 900);
+    }
+  }, [lauf.phase, verschuettetMl]);
+  const schreckt = laeuft && performance.now() < schreckBis;
+  useEffect(() => {
+    if (!schreckt) return undefined;
+    const id = window.setTimeout(() => uhr((n) => n + 1), 950);
+    return () => window.clearTimeout(id);
+  }, [schreckt, schreckBis]);
+
   /* ---- Ansagen für Vorlesehilfen ---- */
   const [ansage, setAnsage] = useState('');
   const leerGemeldet = useRef(false);
   useEffect(() => {
-    if (lauf.phase === 'zaehlt' && lauf.zaehler > 0) setAnsage(`Los in ${lauf.zaehler}`);
     if (lauf.phase === 'laeuft') {
       if (!leerGemeldet.current && lauf.zustand.tick < 3) {
-        setAnsage('Los! Pfeiltasten links und rechts bewegen das Glas, die Leertaste neigt es.');
+        setAnsage(
+          'Los! Pfeiltasten bewegen das Glas links, rechts, vor und zurück, die Leertaste neigt es.',
+        );
       }
       if (lauf.zustand.leerTick != null && !leerGemeldet.current) {
         leerGemeldet.current = true;
@@ -267,37 +380,46 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
     if (lauf.phase === 'bereit') leerGemeldet.current = false;
     if (lauf.phase === 'fertig' && lauf.ergebnis) {
       setAnsage(
-        `Abgestellt nach ${sek(lauf.ergebnis.dauerMs)}, ${ml(lauf.ergebnis.verschuettetDezi)} verschüttet.`,
+        `Abgestellt nach ${sek(lauf.ergebnis.dauerMs + (laufVersatz.current ?? 0))}, ${ml(lauf.ergebnis.verschuettetDezi)} verschüttet.`,
       );
     }
-  }, [lauf.phase, lauf.zaehler, lauf.zustand.tick, lauf.zustand.leerTick, lauf.ergebnis]);
+  }, [lauf.phase, lauf.zustand.tick, lauf.zustand.leerTick, lauf.ergebnis]);
   const angesagt = useRef('');
   useEffect(() => {
     const schluessel = `${state.runde}-${state.fertig}`;
     if (angesagt.current === schluessel) return;
     if (state.fertig) {
-      setAnsage(`Entschieden. ${pressen.describe(state, [])}.`);
+      setAnsage(`Entschieden. ${pressen.describe(state as unknown as PressenState, [])}.`);
     } else if (state.atempo > 0 && state.letzterAbstandMs != null) {
       setAnsage(`Atempo! Nur ${state.letzterAbstandMs} Millisekunden Unterschied – nochmal.`);
     }
     angesagt.current = schluessel;
   }, [state]);
+  const startKey = startP?.phase ?? '';
+  const startAngesagt = useRef('');
+  useEffect(() => {
+    if (startAngesagt.current === startKey) return;
+    startAngesagt.current = startKey;
+    if (startKey === 'wahl') setAnsage('Zusammen in Echtzeit oder jeder, wann er will?');
+    if (startKey === 'wartet') setAnsage('Bereit. Warte auf die anderen, höchstens zehn Sekunden.');
+    if (startKey === 'zaehlt') setAnsage('Alle bereit. Gleich geht es los.');
+    if (startKey === 'gestartet') setAnsage('Los! Drücke Anstoßen – die Zeit läuft schon.');
+    if (startKey === 'asynchron')
+      setAnsage('Ihr spielt unabhängig. Drücke Anstoßen, wenn du bereit bist.');
+  }, [startKey]);
 
   /* ---- Anzeige ---- */
-  const start = () => {
-    if (!ichDran || mySeat == null) return;
-    laufRunde.current = state.runde;
-    const verz = spiegel ? 0 : verzoegerungBei(state.malus[mySeat]!, serverJetzt());
-    laufVerz.current = verz;
-    lauf.starten(verz);
-  };
-
   const wartet = mySeat != null ? wartetAuf(state, mySeat) : null;
   const meinSitzFertig = meinErgebnis != null || lauf.phase === 'fertig';
   const ansichtFuer = (sitz: number): FigurAnsicht => {
-    const e = state.ergebnisse[sitz];
-    if (e) return fertigAnsicht(e.verschuettetDezi);
+    if (state.ergebnisse[sitz])
+      return fertigAnsicht(offen(state.ergebnisse[sitz])?.verschuettetDezi ?? null);
     return aktiv && dran.includes(sitz) ? TRINKT : BEREIT;
+  };
+  const stimmungFuer = (sitz: number): Stimmung => {
+    if (state.fertig) return state.sieger.includes(sitz) ? 'sieg' : 'verloren';
+    if (state.ergebnisse[sitz]) return 'freude';
+    return 'normal';
   };
 
   const meineAnsicht: FigurAnsicht =
@@ -306,6 +428,16 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
       : meinErgebnis
         ? fertigAnsicht(meinErgebnis.verschuettetDezi)
         : BEREIT;
+  const meineStimmung: Stimmung =
+    mySeat != null && state.fertig
+      ? stimmungFuer(mySeat)
+      : schreckt
+        ? 'schreck'
+        : meinErgebnis
+          ? meinErgebnis.verschuettetDezi < 50
+            ? 'freude'
+            : 'normal'
+          : 'normal';
 
   const andere = session.players
     .map((p) => p.seat)
@@ -313,9 +445,26 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
     .sort((a, b) => a - b);
 
   const z = lauf.zustand;
-  const verschuettetMl = z.verschuettet.toFixed(1).replace('.', ',');
+  const verschuettetText = z.verschuettet.toFixed(1).replace('.', ',');
+  const versatz = laufVersatz.current ?? 0;
   const ergebnisListe = (state.fertig ? state.ergebnisse : state.vorrunde) ?? [];
   const zeigeListe = state.fertig || (state.atempo > 0 && state.ergebnisse.every((e) => e == null));
+  const runde1Sek = Math.max(
+    0,
+    Math.ceil((startP?.phase === 'zaehlt' ? startP.beginn - jetzt : 0) / 1000),
+  );
+  const gestartetSek =
+    startP?.phase === 'gestartet' ? Math.max(0, (jetzt - startP.beginn) / 1000) : 0;
+  const fristSek =
+    startP?.phase === 'wartet' ? Math.max(0, Math.ceil((startP.frist - jetzt) / 1000)) : 0;
+  const zeigeAnstossen =
+    ichDran &&
+    lauf.phase === 'bereit' &&
+    !meinErgebnis &&
+    startP != null &&
+    ['frei', 'asynchron', 'gestartet', 'zaehlt'].includes(startP.phase);
+  const kannAnstossen = zeigeAnstossen && startP?.phase !== 'zaehlt' && !busy;
+  const wirdZurueckgefallen = startP?.phase === 'asynchron' && startP.grund === 'frist';
 
   return (
     <div className="game-board-wrap pressen">
@@ -328,35 +477,45 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
           className="pressen-feld"
           data-testid="pressen-feld"
           data-phase={lauf.phase}
+          data-runde={state.runde}
+          data-start-phase={startP?.phase ?? ''}
           data-glas-x={Math.round(z.x)}
+          data-glas-y={Math.round(z.y)}
+          data-vx={Math.round(z.vx)}
+          data-vy={Math.round(z.vy)}
+          data-neigung-v={Math.round(z.neigungV)}
           data-neigung={Math.round(z.neigung)}
           data-fuellung={Math.round(z.fuellung)}
           data-mund={Math.round(z.mund)}
+          data-verschuettet={Math.round(z.verschuettet)}
           data-leer={z.leerTick != null ? '1' : '0'}
           data-verzoegerung={lauf.verzoegerungMs}
         >
           <div className="pressen-buehne">
             <PressenFigur
               ansicht={meineAnsicht}
+              figur={figurVon(mySeat)}
               bewegt={!reduziert}
-              farbe="var(--accent)"
+              stimmung={meineStimmung}
               titel={`Dein Strichmännchen, ${Math.round(meineAnsicht.fuellung)} Milliliter im Glas`}
             />
             {spiegel && (
               <PressenFigur
                 ansicht={meineAnsicht}
+                figur={figurVon(mySeat)}
                 gespiegelt
                 klein
                 bewegt={!reduziert}
+                stimmung={meineStimmung}
                 farbe="var(--warning)"
                 titel="Spiegelbild: trinkt synchron zu dir"
               />
             )}
           </div>
 
-          {lauf.phase === 'zaehlt' && lauf.zaehler > 0 && (
-            <div className="pressen-zaehler" aria-hidden="true">
-              {lauf.zaehler}
+          {startP?.phase === 'zaehlt' && runde1Sek > 0 && (
+            <div className="pressen-zaehler" aria-hidden="true" data-testid="pressen-zaehler">
+              {runde1Sek}
             </div>
           )}
 
@@ -387,7 +546,8 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
             </button>
           )}
 
-          {(lauf.phase === 'laeuft' || lauf.phase === 'zaehlt') && (
+          {(lauf.phase === 'laeuft' ||
+            (startP?.phase === 'gestartet' && lauf.phase === 'bereit')) && (
             <div className="pressen-hud" aria-hidden="true">
               <span>
                 Glas <strong>{Math.round(z.fuellung)}</strong>/{GLAS_ML} ml
@@ -396,22 +556,38 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
                 Mund <strong>{Math.round((z.mund / MUND_KAPAZITAET_ML) * 100)}</strong> %
               </span>
               <span>
-                Verschüttet <strong>{verschuettetMl}</strong> ml
+                Verschüttet <strong>{verschuettetText}</strong> ml
               </span>
               <span>
-                Zeit <strong>{sek(z.tick * 20)}</strong>
+                Zeit{' '}
+                <strong>
+                  {lauf.phase === 'laeuft' ? sek(z.tick * 20 + versatz) : sek(gestartetSek * 1000)}
+                </strong>
+              </span>
+              <span className={malusJetzt > MALUS_MAX_MS * 0.5 ? 'is-warn' : undefined}>
+                Malus{' '}
+                <strong>{lauf.phase === 'laeuft' ? lauf.verzoegerungMs : malusJetzt} ms</strong>
               </span>
             </div>
           )}
         </div>
       )}
 
-      {mySeat != null && (lauf.phase === 'laeuft' || lauf.phase === 'zaehlt') && (
+      {mySeat != null && lauf.phase === 'laeuft' && (
         <div className="pressen-steuerung">
-          <div className="pressen-pfeile" role="group" aria-label="Glas bewegen">
+          <div className="pressen-kreuz" role="group" aria-label="Glas bewegen">
             <button
               type="button"
-              className={`pressen-taste${gedrueckt.links ? ' is-gedrueckt' : ''}`}
+              className={`pressen-taste pressen-hoch${gedrueckt.hoch ? ' is-gedrueckt' : ''}`}
+              aria-label="Glas nach hinten, im Bild nach oben (Pfeiltaste hoch)"
+              aria-pressed={gedrueckt.hoch}
+              {...halten('hoch')}
+            >
+              ▲
+            </button>
+            <button
+              type="button"
+              className={`pressen-taste pressen-links${gedrueckt.links ? ' is-gedrueckt' : ''}`}
               aria-label="Glas nach links (Pfeiltaste links)"
               aria-pressed={gedrueckt.links}
               {...halten('links')}
@@ -420,12 +596,21 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
             </button>
             <button
               type="button"
-              className={`pressen-taste${gedrueckt.rechts ? ' is-gedrueckt' : ''}`}
+              className={`pressen-taste pressen-rechts${gedrueckt.rechts ? ' is-gedrueckt' : ''}`}
               aria-label="Glas nach rechts (Pfeiltaste rechts)"
               aria-pressed={gedrueckt.rechts}
               {...halten('rechts')}
             >
               ▶
+            </button>
+            <button
+              type="button"
+              className={`pressen-taste pressen-runter${gedrueckt.runter ? ' is-gedrueckt' : ''}`}
+              aria-label="Glas nach vorn, im Bild nach unten (Pfeiltaste runter)"
+              aria-pressed={gedrueckt.runter}
+              {...halten('runter')}
+            >
+              ▼
             </button>
           </div>
           <button
@@ -451,19 +636,89 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
         </button>
       )}
 
-      {ichDran && lauf.phase === 'bereit' && !meinErgebnis && (
+      {ichDran && lauf.phase === 'bereit' && !meinErgebnis && startP?.phase === 'wahl' && (
+        <div className="stack pressen-start" data-testid="pressen-wahl">
+          <p className="game-hint">
+            Wie wollt ihr antreten? <strong>Zusammen</strong>: alle bestätigen innerhalb von{' '}
+            {START_FRIST_MS / 1000} Sekunden, dann zählt ein gemeinsamer Countdown, und die Zeit
+            läuft für alle ab dem Beginn – wer später anstößt, ist langsamer.{' '}
+            <strong>Wann ich will</strong>: jeder spielt, wann er mag; die Zeit zählt ab deinem
+            Anstoßen.
+          </p>
+          <div className="pressen-wahl-knoepfe">
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={busy}
+              onClick={() => waehle('echtzeit')}
+            >
+              Zusammen (Echtzeit)
+            </button>
+            <button
+              type="button"
+              className="btn"
+              disabled={busy}
+              onClick={() => waehle('asynchron')}
+            >
+              Wann ich will (asynchron)
+            </button>
+          </div>
+        </div>
+      )}
+
+      {ichDran && lauf.phase === 'bereit' && !meinErgebnis && startP?.phase === 'wartet' && (
+        <div className="stack pressen-start" data-testid="pressen-wartet">
+          <p className="game-hint" role="status">
+            Bereit! Warte auf die anderen ({startP.bereit} von {startP.von}) – noch{' '}
+            <strong>{fristSek} s</strong>, dann spielt ihr unabhängig.
+          </p>
+          <button type="button" className="btn" disabled={busy} onClick={() => waehle('asynchron')}>
+            Doch lieber: Wann ich will
+          </button>
+        </div>
+      )}
+
+      {zeigeAnstossen && (
         <div className="stack pressen-start">
+          {startP?.phase === 'zaehlt' && (
+            <p className="game-hint" role="status">
+              Gleich geht es los – alle sind bereit.
+            </p>
+          )}
+          {startP?.phase === 'gestartet' && (
+            <p className="game-hint" role="status">
+              Die Zeit läuft:{' '}
+              <strong data-testid="pressen-versatz">{sek(gestartetSek * 1000)}</strong>. Jede
+              Sekunde bis zum Anstoßen kostet dich Zeit.
+            </p>
+          )}
+          {startP?.phase === 'asynchron' && (
+            <p className="game-hint" role="status" data-testid="pressen-async-hinweis">
+              {wirdZurueckgefallen
+                ? 'Nicht alle waren rechtzeitig bereit – ihr spielt unabhängig. Deine Zeit zählt ab deinem Anstoßen.'
+                : 'Ihr spielt unabhängig, jeder wann er will. Deine Zeit zählt ab deinem Anstoßen.'}
+            </p>
+          )}
           <button
             type="button"
-            className="btn btn-primary btn-block"
-            onClick={start}
-            disabled={busy}
+            className="btn btn-primary btn-block pressen-anstossen"
+            onClick={anstossen}
+            disabled={!kannAnstossen}
+            data-testid="pressen-anstossen"
           >
-            🍺 Los! Lauf starten
+            🍻 Anstoßen
           </button>
+          {spiegelAuto && !spiegelPause && (
+            <p className="game-hint" role="status">
+              Atempo – die nächste Runde beginnt gleich von selbst.{' '}
+              <button type="button" className="btn" onClick={() => setSpiegelPause(true)}>
+                Anhalten
+              </button>
+            </p>
+          )}
           <p className="game-hint">
-            Pfeiltasten links/rechts: Glas bewegen · Leertaste (oder Knopf rechts) halten: neigen ·
-            Esc: vorzeitig abstellen.
+            Pfeiltasten: Glas bewegen (links, rechts, vor, zurück) · Leertaste (oder Knopf) halten:
+            neigen · Esc: vorzeitig abstellen. Je länger du hältst, desto schneller wird es.
           </p>
         </div>
       )}
@@ -488,16 +743,20 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
       {aktiv && mySeat != null && !ichDran && !meinSitzFertig && wartet && (
         <p className="game-hint" role="status">
           {wartet === 'ampel'
-            ? `${nameVon(state.ampel ?? 0)} macht die Ampel – du startest, sobald das Glas abgestellt ist.`
-            : 'Dein Teamkollege ist noch dran – du startest, sobald er abgestellt hat.'}
+            ? `${nameVon(state.ampel ?? 0)} macht die Ampel – du startest, sobald das Glas abgestellt ist. Deine Zeit zählt ab deinem Anstoßen.`
+            : 'Dein Teamkollege ist noch dran – du startest, sobald er abgestellt hat. Deine Zeit zählt ab deinem Anstoßen.'}
         </p>
       )}
 
       {aktiv && meinErgebnis && (
-        <p className="game-hint" role="status">
+        <p className="game-hint" role="status" data-testid="pressen-eigenes-ergebnis">
           Dein Lauf: {sek(meinErgebnis.dauerMs)}, {ml(meinErgebnis.verschuettetDezi)} verschüttet →
           Wertung {sek(meinErgebnis.wertungMs)}
-          {meinErgebnis.getruemmert ? ' · 🏅 getrümmert!' : ''}. Warten auf die anderen …
+          {meinErgebnis.versatzMs > 0
+            ? ` (davon ${sek(meinErgebnis.versatzMs)} bis zum Anstoßen)`
+            : ''}
+          {meinErgebnis.getruemmert ? ' · 🏅 getrümmert!' : ''}. Die Ergebnisse der anderen siehst
+          du, sobald alle fertig sind.
         </p>
       )}
 
@@ -516,13 +775,16 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
           {andere.map((sitz) => {
             const e = state.ergebnisse[sitz];
             const r = rolle(state, sitz);
+            const offenesE = offen(e);
             return (
               <li key={sitz} className={`pressen-bahn ${seatClass(sitz)}`}>
                 <PressenFigur
                   klein
                   gespiegelt
                   ansicht={ansichtFuer(sitz)}
+                  figur={figurVon(sitz)}
                   bewegt={!reduziert}
+                  stimmung={stimmungFuer(sitz)}
                   farbe="var(--seat)"
                   titel={`${nameVon(sitz)}: ${e ? 'fertig' : aktiv && dran.includes(sitz) ? 'trinkt gerade' : 'wartet'}`}
                 />
@@ -530,12 +792,14 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
                   {nameVon(sitz)}
                   {r ? ` · ${r}` : ''}
                 </span>
-                <span className="pressen-bahn-stand">
-                  {e
-                    ? `${sek(e.dauerMs)} · ${ml(e.verschuettetDezi)}`
-                    : aktiv && dran.includes(sitz)
-                      ? 'trinkt …'
-                      : 'wartet'}
+                <span className="pressen-bahn-stand" data-testid="pressen-bahn-stand">
+                  {offenesE
+                    ? `${sek(offenesE.dauerMs)} · ${ml(offenesE.verschuettetDezi)}`
+                    : e
+                      ? 'fertig'
+                      : aktiv && dran.includes(sitz)
+                        ? 'trinkt …'
+                        : 'wartet'}
                 </span>
               </li>
             );
@@ -545,11 +809,12 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
 
       {mySeat != null && (
         <div className="pressen-malus" data-testid="pressen-malus">
-          <span id="pressen-malus-label">Reaktions-Malus</span>
+          <span id="pressen-malus-label">Malus (Ermüdung)</span>
           <div
             className="pressen-malus-balken"
             role="meter"
             aria-labelledby="pressen-malus-label"
+            aria-describedby="pressen-malus-erklaerung"
             aria-valuemin={0}
             aria-valuemax={MALUS_MAX_MS}
             aria-valuenow={malusJetzt}
@@ -564,15 +829,28 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
           <span className="pressen-malus-wert">
             {spiegel ? 'aus (Spiegel)' : `${malusJetzt} ms`}
           </span>
+          <span id="pressen-malus-erklaerung" className="visually-hidden">
+            Je mehr du in kurzer Zeit spielst, desto später reagieren die Tasten, desto weiter
+            gleitet das Glas nach dem Loslassen und desto stärker driftet es. Der Malus klingt in{' '}
+            {Math.round(MALUS_HALBWERTSZEIT_MS / 60000)} Minuten zur Hälfte ab.
+          </span>
         </div>
+      )}
+      {mySeat != null && !spiegel && (
+        <p className="game-hint pressen-malus-text">
+          Der Malus wächst mit jedem Lauf: Tasten reagieren später, das Glas gleitet weiter, die
+          Bewegung wird träger. In {Math.round(MALUS_HALBWERTSZEIT_MS / 60000)} Minuten ist er zur
+          Hälfte weg.
+        </p>
       )}
 
       {zeigeListe && ergebnisListe.some((e) => e != null) && (
         <section className="pressen-wertung" aria-label="Wertung">
           <h3>{state.fertig ? 'Endwertung' : `Runde ${state.runde - 1}`}</h3>
           <ol>
-            {ergebnisListe.map((e, sitz) =>
-              e ? (
+            {ergebnisListe.map((roh, sitz) => {
+              const e = offen(roh);
+              return e ? (
                 <li key={sitz} className={state.sieger.includes(sitz) ? 'ist-sieger' : undefined}>
                   <span className="truncate">
                     {state.sieger.includes(sitz) ? '👑 ' : ''}
@@ -586,8 +864,8 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
                     {e.getruemmert ? ' 🏅' : ''}
                   </span>
                 </li>
-              ) : null,
-            )}
+              ) : null;
+            })}
           </ol>
           {state.fertig && state.teamWertung && state.modus === 'staffette' && (
             <p className="game-hint">
@@ -595,6 +873,27 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
             </p>
           )}
         </section>
+      )}
+
+      {mySeat != null && lauf.phase === 'bereit' && !meinErgebnis && (
+        <div className="pressen-figur-zeile">
+          <button
+            type="button"
+            className="btn"
+            onClick={() => setEditorOffen(true)}
+            data-testid="pressen-figur-aendern"
+          >
+            🎨 Strichmännchen anpassen
+          </button>
+        </div>
+      )}
+      {mySeat != null && (
+        <PressenFigurEditor
+          open={editorOffen}
+          onClose={() => setEditorOffen(false)}
+          start={figurVon(mySeat)}
+          kennung={myId}
+        />
       )}
 
       {zaehlerAuszeichnung > 0 && (
@@ -605,8 +904,9 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
 
       {mySeat != null && spiegel && (
         <p className="game-hint">
-          Gegen den Spiegel trinkt das zweite Männchen genau wie du – es bleibt bei Atempo, bis du
-          oben „Aufgeben“ wählst.
+          Gegen den Spiegel trinkt das zweite Männchen genau wie du – es gibt immer Atempo, und die
+          nächste Runde beginnt von selbst, bis du oben „Aufgeben“ wählst. Der Malus wächst dabei
+          nicht.
         </p>
       )}
 

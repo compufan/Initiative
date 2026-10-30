@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   DT_MS,
+  TASTEN,
   ergebnisVon,
   neuerZustand,
   simBis,
@@ -10,21 +11,16 @@ import {
   type Taste,
 } from '@initiative/shared';
 
-export type LaufPhase = 'bereit' | 'zaehlt' | 'laeuft' | 'fertig';
-
-/** Sekunden Anlauf, bevor es losgeht – so lange sind die Tasten noch tot. */
-export const ANLAUF_SEKUNDEN = 3;
-const ANLAUF_SCHRITT_MS = 700;
+export type LaufPhase = 'bereit' | 'laeuft' | 'fertig';
 
 export interface PressenLauf {
   phase: LaufPhase;
-  /** Verbleibende Anlauf-Sekunden (3, 2, 1) oder 0. */
-  zaehler: number;
   zustand: SimZustand;
   ergebnis: LaufErgebnis | null;
   /** Verzögerung (ms), mit der dieser Lauf gestartet wurde. */
   verzoegerungMs: number;
-  starten: (verzoegerungMs: number) => void;
+  /** „Anstoßen“: der Lauf beginnt SOFORT – kein Anlauf, kein Zwischenschritt. */
+  anstossen: (verzoegerungMs: number, driftSeed: number) => void;
   zuruecksetzen: () => void;
   druecken: (taste: Taste) => void;
   loslassen: (taste: Taste) => void;
@@ -36,17 +32,20 @@ export interface PressenLauf {
  * Der eigene Lauf, live.
  *
  * Die Physik steckt komplett in `simBis` (gemeinsames Paket). Dieser Haken
- * stempelt nur Tasten mit der Zeit seit „Los“ und lässt die Simulation je
+ * stempelt nur Tasten mit der Zeit seit „Anstoßen“ und lässt die Simulation je
  * Bild bis zur jetzigen Zeit nachrechnen – dieselben Ereignisse ergäben auf
  * jedem anderen Gerät dasselbe Ergebnis.
  *
  * WARUM der Stempel hinter dem letzten gerechneten Schritt liegt: Die
  * Simulation wendet ein Ereignis erst an, wenn ihre Zeit es erreicht; ein
  * Stempel in einem schon gerechneten Schritt ginge verloren.
+ *
+ * Das Warten VOR „Anstoßen“ (bei gemeinsamem Start) misst nicht dieser Haken,
+ * sondern das Brett: Es rechnet die Differenz zum gemeinsamen Beginn in die
+ * Dauer ein.
  */
 export function usePressenLauf(onFertig: (ergebnis: LaufErgebnis) => void): PressenLauf {
   const [phase, setPhase] = useState<LaufPhase>('bereit');
-  const [zaehler, setZaehler] = useState(0);
   const [zustand, setZustand] = useState<SimZustand>(neuerZustand);
   const [ergebnis, setErgebnis] = useState<LaufErgebnis | null>(null);
   const [verzoegerungMs, setVerzoegerungMs] = useState(0);
@@ -55,18 +54,16 @@ export function usePressenLauf(onFertig: (ergebnis: LaufErgebnis) => void): Pres
   const z = useRef<SimZustand>(zustand);
   const start = useRef(0);
   const verz = useRef(0);
-  const unten = useRef<Record<Taste, boolean>>({ links: false, rechts: false, neigen: false });
+  const drift = useRef(0);
+  const unten = useRef<Record<Taste, boolean>>(keineTasten());
   const laeuft = useRef(false);
   const melden = useRef(onFertig);
   melden.current = onFertig;
-  const timer = useRef<number | null>(null);
   const bild = useRef<number | null>(null);
 
   const stoppen = useCallback(() => {
     laeuft.current = false;
-    if (timer.current != null) window.clearTimeout(timer.current);
     if (bild.current != null) cancelAnimationFrame(bild.current);
-    timer.current = null;
     bild.current = null;
   }, []);
 
@@ -83,7 +80,7 @@ export function usePressenLauf(onFertig: (ergebnis: LaufErgebnis) => void): Pres
   const bildSchritt = useCallback(() => {
     if (!laeuft.current) return;
     const ziel = Math.floor((performance.now() - start.current) / DT_MS);
-    const neu = simBis(z.current, eingaben.current, verz.current, ziel);
+    const neu = simBis(z.current, eingaben.current, verz.current, ziel, drift.current);
     if (neu.tick !== z.current.tick) {
       z.current = neu;
       setZustand(neu);
@@ -101,49 +98,35 @@ export function usePressenLauf(onFertig: (ergebnis: LaufErgebnis) => void): Pres
     bild.current = requestAnimationFrame(bildSchritt);
   }, [stoppen]);
 
-  const losGehts = useCallback(() => {
-    start.current = performance.now();
-    laeuft.current = true;
-    setZaehler(0);
-    setPhase('laeuft');
-    bild.current = requestAnimationFrame(bildSchritt);
-  }, [bildSchritt]);
-
   const zuruecksetzen = useCallback(() => {
     stoppen();
     eingaben.current = [];
-    unten.current = { links: false, rechts: false, neigen: false };
+    unten.current = keineTasten();
     z.current = neuerZustand();
     setZustand(z.current);
     setErgebnis(null);
-    setZaehler(0);
     setPhase('bereit');
   }, [stoppen]);
 
-  const starten = useCallback(
-    (verzoegerungMs: number) => {
+  const anstossen = useCallback(
+    (verzoegerungMs: number, driftSeed: number) => {
       zuruecksetzen();
       verz.current = verzoegerungMs;
+      drift.current = driftSeed;
       setVerzoegerungMs(verzoegerungMs);
-      setPhase('zaehlt');
-      const runter = (rest: number) => {
-        setZaehler(rest);
-        if (rest === 0) {
-          losGehts();
-          return;
-        }
-        timer.current = window.setTimeout(() => runter(rest - 1), ANLAUF_SCHRITT_MS);
-      };
-      runter(ANLAUF_SEKUNDEN);
+      start.current = performance.now();
+      laeuft.current = true;
+      setPhase('laeuft');
+      bild.current = requestAnimationFrame(bildSchritt);
     },
-    [losGehts, zuruecksetzen],
+    [bildSchritt, zuruecksetzen],
   );
 
   // Verliert die Seite den Blick (anderer Tab, Anruf), lassen alle Tasten los –
   // sonst liefe das Glas mit einer Taste weiter, deren Loslassen nie ankommt.
   useEffect(() => {
     const alleLos = () => {
-      for (const t of ['links', 'rechts', 'neigen'] as Taste[]) setzeTaste(t, false);
+      for (const t of TASTEN) setzeTaste(t, false);
     };
     window.addEventListener('blur', alleLos);
     document.addEventListener('visibilitychange', alleLos);
@@ -155,11 +138,10 @@ export function usePressenLauf(onFertig: (ergebnis: LaufErgebnis) => void): Pres
 
   return {
     phase,
-    zaehler,
     zustand,
     ergebnis,
     verzoegerungMs,
-    starten,
+    anstossen,
     zuruecksetzen,
     druecken: (t) => setzeTaste(t, true),
     loslassen: (t) => setzeTaste(t, false),
@@ -172,6 +154,10 @@ export function usePressenLauf(onFertig: (ergebnis: LaufErgebnis) => void): Pres
       if (laeuft.current) eingaben.current.push({ t: stempel(), was: 'vorzeitig' });
     },
   };
+}
+
+function keineTasten(): Record<Taste, boolean> {
+  return { links: false, rechts: false, hoch: false, runter: false, neigen: false };
 }
 
 /* ---------- Auszeichnung "getrümmert" ---------- */
