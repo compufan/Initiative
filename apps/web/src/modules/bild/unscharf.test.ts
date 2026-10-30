@@ -20,6 +20,7 @@ import {
   type UnscharfQuelle,
 } from './unscharf.js';
 import type { Reinheit } from './maskenSpeicher.js';
+import { tiefenFeld } from './tiefe.js';
 
 /** Ein Bild aus einer Funktion, drei Kanäle gleich oder je Kanal. */
 function bild(
@@ -626,5 +627,60 @@ describe('Sonderfälle', () => {
     expect(werte.mittel / werte.hoch).toBeLessThan(1.1);
     expect(werte.niedrig / werte.hoch).toBeGreaterThan(0.85);
     expect(werte.niedrig / werte.hoch).toBeLessThan(1.15);
+  });
+});
+
+describe('Bokeh folgt der Tiefe', () => {
+  const B = 240;
+  const H = 120;
+  const SPALTEN = [20, 80, 140, 200];
+
+  /** Einzelne helle Punkte in einer Reihe, links nah am Fokus, rechts weit davon. */
+  const reihe = () =>
+    bild(B, H, (x, y) => (y === 60 && SPALTEN.includes(x) ? [255, 255, 255] : [10, 10, 10]));
+
+  /** Wie gross wird die Scheibe um jeden Punkt (Bildpunkte über der Hälfte)? */
+  const flaechen = (daten: Uint8ClampedArray) =>
+    SPALTEN.map((mitte) => {
+      let n = 0;
+      for (let y = 0; y < H; y += 1)
+        for (let x = mitte - 30; x <= mitte + 30; x += 1) if (lies(daten, B, x, y) > 60) n += 1;
+      return n;
+    });
+
+  it('macht die Scheiben grösser, je weiter ein Motiv vom Fokus entfernt liegt', () => {
+    // Eine Tiefenkarte, die von links (nah) nach rechts (fern) wächst; der Fokus
+    // liegt ganz links, der Tiefenbereich reicht über das ganze Bild.
+    const karte = new Uint8Array(B * H);
+    for (let y = 0; y < H; y += 1)
+      for (let x = 0; x < B; x += 1) karte[y * B + x] = Math.round((x / (B - 1)) * 255);
+    const feld = tiefenFeld({ breite: B, hoehe: H, feld: karte }, 0.02, 0.9, B, H);
+    const daten = reihe();
+    unscharfAufBytes(daten, B, H, [quelle(feld, 12, 0)], 'hoch');
+    const f = flaechen(daten);
+    // Im Fokus bleibt der Punkt ein Punkt, danach wächst die Scheibe mit der Entfernung.
+    expect(f[0]).toBeLessThan(25);
+    expect(f[1]).toBeGreaterThan(f[0] * 5);
+    expect(f[2]).toBeGreaterThan(f[1] * 1.3);
+    // Ab dem Tiefenbereich ist die volle Scheibe erreicht und wächst nicht weiter.
+    expect(f[3]).toBeGreaterThanOrEqual(f[2]);
+  });
+
+  it('lässt dasselbe Motiv bei Motiv und Tiefe nur dort unscharf, wo beides zutrifft', () => {
+    const karte = new Uint8Array(B * H);
+    for (let y = 0; y < H; y += 1)
+      for (let x = 0; x < B; x += 1) karte[y * B + x] = Math.round((x / (B - 1)) * 255);
+    const tiefe = tiefenFeld({ breite: B, hoehe: H, feld: karte }, 0.02, 0.9, B, H);
+    // „Motiv“ hier: nur die rechte Hälfte; `nur` schneidet mit dem Minimum.
+    const motiv = maskeAus(B, H, (x) => (x >= 120 ? 255 : 0));
+    const geschnitten = new Uint8Array(B * H);
+    for (let i = 0; i < geschnitten.length; i += 1) geschnitten[i] = Math.min(tiefe[i], motiv[i]);
+    const daten = reihe();
+    unscharfAufBytes(daten, B, H, [quelle(geschnitten, 12, 0)], 'hoch');
+    const f = flaechen(daten);
+    expect(f[0]).toBeLessThan(10);
+    expect(f[1]).toBeLessThan(10);
+    expect(f[2]).toBeGreaterThan(100);
+    expect(f[3]).toBeGreaterThanOrEqual(f[2]);
   });
 });

@@ -4104,7 +4104,9 @@ export function BildEditor({
                     <p className="bild-hinweis">
                       „Fokus“ ist die Entfernung, die scharf bleibt – 100 ist ganz vorne, 0 ganz
                       hinten. „Tiefenbereich“ sagt, wie schnell es davor und dahinter unscharf wird.
-                      Die Unschärfe selbst stellst du unten am Regler „Bokeh“ ein.
+                      Wie stark, stellst du unten ein: „Bokeh“ macht die Scheiben mit der
+                      Entfernung zum Fokus größer (bis zum Wert am Regler), „Weichzeichnen“
+                      verwischt gleichmäßig weich. Beide lassen sich mischen.
                     </p>
                   </>
                 )}
