@@ -52,6 +52,15 @@ pub fn router() -> Router<AppState> {
 
 const TITLE_MAX: usize = 160;
 const NOTE_MAX: usize = 2000;
+/**
+ * Der grösste Betrag in Cent: zehn Milliarden Euro.
+ *
+ * Kein echter Betrag kommt dem nahe, aber ohne Grenze stand hier `i64` offen.
+ * Feste Anteile wie `i64::MAX` liefen beim Zusammenzählen über und gingen als
+ * „passend“ durch; danach rechnete jede Saldo-Übersicht der Betroffenen mit
+ * übergelaufenen Zahlen. Und JavaScript zählt nur bis 2^53 genau.
+ */
+const BETRAG_MAX: i64 = 1_000_000_000_000;
 
 /* ---------- Auflisten ---------- */
 
@@ -165,6 +174,11 @@ async fn create(
         .length("title", &title, 1, TITLE_MAX)
         .one_of("visibility", &input.visibility, VISIBILITIES)
         .require("amountCents", input.amount_cents > 0, "Betrag fehlt")
+        .require(
+            "amountCents",
+            input.amount_cents <= BETRAG_MAX,
+            "Betrag ist zu gross",
+        )
         .require("shares", !input.shares.is_empty(), "mindestens eine Person")
         .require(
             "currency",
@@ -259,7 +273,25 @@ async fn create(
 /// Wer einen festen Betrag angibt, bekommt genau den. Der Rest wird unter den
 /// Übrigen gleichmäßig aufgeteilt – restlos, bis auf den letzten Cent.
 fn verteile(amount_cents: i64, shares: &[ShareInput]) -> AppResult<Vec<i64>> {
-    let feste: i64 = shares.iter().filter_map(|share| share.amount_cents).sum();
+    // Jeder feste Anteil einzeln in Grenzen, dann geprüft summiert: Mit
+    // `sum()` ergaben zwei Anteile von `i64::MAX` und einer von 3 nach dem
+    // Überlauf genau 1 – und passten damit zu einem Betrag von einem Cent.
+    if shares
+        .iter()
+        .filter_map(|share| share.amount_cents)
+        .any(|betrag| !(0..=amount_cents).contains(&betrag))
+    {
+        return Err(AppError::bad_request(
+            "Ein Anteil muss zwischen null und dem Betrag liegen",
+        ));
+    }
+    let feste: i64 = shares
+        .iter()
+        .filter_map(|share| share.amount_cents)
+        .try_fold(0i64, i64::checked_add)
+        .ok_or_else(|| {
+            AppError::bad_request("Die festen Anteile sind zusammen größer als der Betrag")
+        })?;
     if feste > amount_cents {
         return Err(AppError::bad_request(
             "Die festen Anteile sind zusammen größer als der Betrag",

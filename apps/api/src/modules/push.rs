@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::dto::PushPayload;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -46,6 +46,20 @@ async fn subscribe(
     user: AuthUser,
     Json(input): Json<SubscribeInput>,
 ) -> AppResult<(StatusCode, Json<serde_json::Value>)> {
+    // Die Adresse bekommt später POST-Anfragen vom Server – siehe
+    // `push::endpunkt_pruefen`, warum dort nicht jede stehen darf.
+    crate::push::endpunkt_pruefen(&input.endpoint).map_err(AppError::bad_request)?;
+    // Ein P-256-Schlüssel sind 87 Zeichen base64url, das Geheimnis 22. Die
+    // Grenzen lassen Luft und halten trotzdem Megabytes aus der Tabelle.
+    if input.keys.p256dh.len() > 200 || input.keys.auth.len() > 100 {
+        return Err(AppError::bad_request("Push-Schlüssel ist zu lang"));
+    }
+    // Nach Zeichen kürzen, nicht nach Bytes: Ein Schnitt mitten in einem
+    // Umlaut liess die Anfrage abstürzen.
+    let user_agent: Option<String> = input
+        .user_agent
+        .as_deref()
+        .map(|value| value.chars().take(300).collect());
     sqlx::query(
         "insert into push_subscriptions (id, user_id, endpoint, p256dh, auth, user_agent)
          values ($1, $2, $3, $4, $5, $6)
@@ -60,12 +74,7 @@ async fn subscribe(
     .bind(&input.endpoint)
     .bind(&input.keys.p256dh)
     .bind(&input.keys.auth)
-    .bind(
-        input
-            .user_agent
-            .as_deref()
-            .map(|value| &value[..value.len().min(300)]),
-    )
+    .bind(user_agent)
     .execute(&state.pool)
     .await?;
 

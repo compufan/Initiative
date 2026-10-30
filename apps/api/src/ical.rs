@@ -52,7 +52,8 @@ fn escape(value: &str) -> String {
         .replace(';', "\\;")
         .replace(',', "\\,")
         .replace("\r\n", "\\n")
-        .replace('\n', "\\n")
+        // Auch ein einzelnes CR werten manche Leser als Zeilenende.
+        .replace(['\n', '\r'], "\\n")
 }
 
 /// RFC 5545 requires lines to be folded at 75 octets.
@@ -113,7 +114,15 @@ fn event_lines(event: &IcsEvent, domain: &str, out: &mut Vec<String>) {
     if let Some(url) = &event.url {
         out.push(format!("URL:{}", escape(url)));
     }
-    if let Some(rrule) = &event.rrule {
+    // Nur eine saubere Regel: Sie wird nicht maskiert (`;` und `,` tragen in
+    // ihr Bedeutung), und ein Zeilenumbruch darin schöbe jedem Abonnenten
+    // fremde Einträge unter. Die Eingabe prüft das schon; hier steht es noch
+    // einmal für Zeilen, die vor dieser Prüfung gespeichert wurden.
+    if let Some(rrule) = event
+        .rrule
+        .as_deref()
+        .filter(|regel| crate::recurrence::regel_ist_sauber(regel))
+    {
         out.push(format!("RRULE:{}", rrule.trim_start_matches("RRULE:")));
     }
     for minutes in &event.reminder_minutes {
@@ -192,6 +201,27 @@ mod tests {
         assert!(ics.contains("RRULE:FREQ=WEEKLY;COUNT=4"));
         assert!(ics.contains("BEGIN:VALARM"));
         assert!(ics.contains("TRIGGER:-PT60M"));
+    }
+
+    #[test]
+    fn eine_regel_mit_zeilenumbruch_schiebt_nichts_unter() {
+        let mut termin = sample();
+        termin.rrule =
+            Some("FREQ=DAILY\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nSUMMARY:Untergeschoben".to_string());
+        termin.title = "Titel\rURL:https://fremd.example".to_string();
+        let ics = build_calendar(
+            &[termin],
+            &IcsCalendar {
+                name: "Initiative".to_string(),
+                description: None,
+                refresh_interval: None,
+                domain: "example.com".to_string(),
+            },
+        );
+        assert!(!ics.contains("Untergeschoben"), "{ics}");
+        assert!(!ics.contains("RRULE:"), "{ics}");
+        assert_eq!(ics.matches("BEGIN:VEVENT").count(), 1);
+        assert!(!ics.contains("\rURL:"), "{ics}");
     }
 
     #[test]

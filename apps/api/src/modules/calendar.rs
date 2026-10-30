@@ -227,6 +227,57 @@ fn validate_event(
     validator.finish()
 }
 
+/// Wie viele Erinnerungen ein Termin höchstens trägt und wie weit sie vorher
+/// liegen dürfen – gespiegelt aus `reminderMinutes` im gemeinsamen Paket.
+const WECKER_MAX: usize = 5;
+const WECKER_MINUTEN_MAX: i32 = 60 * 24 * 14;
+/// Wie lang eine Farbangabe sein darf (`color` im gemeinsamen Paket).
+const FARBE_MAX: usize = 16;
+
+/**
+ * Regel, Farbe und Erinnerungen prüfen – die Felder, die `validate_event` nicht
+ * kennt.
+ *
+ * Sie waren bisher ungeprüft. Die Regel wandert unmaskiert in die
+ * Kalender-Abos aller Eingeladenen (`ical.rs`), und ein Zeichen wie `€` darin
+ * brach jede Anfrage ab, die die Reihe ausrechnet – beim Ersteller wie bei
+ * jedem Eingeladenen. Die Erinnerungen werden je Abo zu einem Wecker; ohne
+ * Grenze trüge ein Termin beliebig viele davon in fremde Kalender.
+ */
+fn validate_zusatz(
+    rrule: Option<&str>,
+    color: Option<&str>,
+    wecker: Option<&[i32]>,
+) -> AppResult<()> {
+    let mut validator = Validator::new();
+    if let Some(regel) = rrule {
+        validator.require(
+            "rrule",
+            crate::recurrence::regel_ist_sauber(regel),
+            "Wiederholung ist keine gültige Regel",
+        );
+    }
+    if let Some(farbe) = color {
+        validator.length("color", farbe, 0, FARBE_MAX);
+    }
+    if let Some(wecker) = wecker {
+        validator
+            .require(
+                "reminderMinutes",
+                wecker.len() <= WECKER_MAX,
+                "zu viele Erinnerungen",
+            )
+            .require(
+                "reminderMinutes",
+                wecker
+                    .iter()
+                    .all(|minuten| (0..=WECKER_MINUTEN_MAX).contains(minuten)),
+                "Erinnerung liegt ausserhalb von zwei Wochen",
+            );
+    }
+    validator.finish()
+}
+
 const NUR_ERSTELLER_LADET_EIN: &str = "Nur wer den Termin angelegt hat, kann Einladungen ändern";
 const NUR_ERSTELLER_ERINNERT: &str =
     "Nur wer den Termin angelegt hat, kann Erinnerungen einstellen";
@@ -285,6 +336,11 @@ async fn create(
         input.location.as_deref(),
         input.starts_at,
         input.ends_at,
+    )?;
+    validate_zusatz(
+        input.rrule.as_deref(),
+        input.color.as_deref(),
+        Some(&input.reminder_minutes),
     )?;
     if let Some(client_id) = input.client_id.as_deref() {
         Validator::new()
@@ -532,6 +588,11 @@ async fn update(
         input.location.as_ref().and_then(|text| text.as_deref()),
         starts_at,
         ends_at,
+    )?;
+    validate_zusatz(
+        input.rrule.as_ref().and_then(|regel| regel.as_deref()),
+        input.color.as_ref().and_then(|farbe| farbe.as_deref()),
+        input.reminder_minutes.as_deref(),
     )?;
 
     // Absagen und Wiederaufnehmen. Ein Termin in Abstimmung hat noch keinen

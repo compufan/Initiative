@@ -61,6 +61,26 @@ fn parse_ics_date(value: &str) -> Option<DateTime<Utc>> {
         .map(|value| value.with_timezone(&Utc))
 }
 
+/// Wie lang eine Regel höchstens sein darf – wie `rrule` im gemeinsamen Paket.
+pub const RRULE_MAX: usize = 300;
+
+/**
+ * Besteht die Regel nur aus dem, was eine Regel enthalten kann?
+ *
+ * Sie wandert unverändert in die Zeile `RRULE:` jedes Kalender-Abos aller
+ * Eingeladenen (`ical.rs`) – Text wie Titel und Ort wird dort maskiert, eine
+ * Regel nicht, weil `;` und `,` in ihr Bedeutung tragen. Ein Zeilenumbruch
+ * darin hätte dem Ersteller erlaubt, fremden Kalendern eigene Einträge, Wecker
+ * und Verweise unterzuschieben. Erlaubt ist deshalb nur der Zeichenvorrat
+ * einer Regel: Buchstaben, Ziffern und `=;,:+-`.
+ */
+pub fn regel_ist_sauber(rrule: &str) -> bool {
+    rrule.len() <= RRULE_MAX
+        && rrule
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '=' | ';' | ',' | ':' | '+' | '-'))
+}
+
 pub fn parse_rrule(rrule: Option<&str>) -> Option<ParsedRule> {
     let rrule = rrule?.trim();
     if rrule.is_empty() {
@@ -94,7 +114,11 @@ pub fn parse_rrule(rrule: Option<&str>) -> Option<ParsedRule> {
                     .split(',')
                     .filter_map(|code| {
                         let code = code.trim().to_ascii_uppercase();
-                        weekday_index(&code[code.len().saturating_sub(2)..])
+                        // `get` statt Indexieren: Die Regel schreibt der
+                        // Ersteller, und `BYDAY=€` liegt mitten in einem
+                        // Zeichen. Ein Schnitt dort brach die Anfrage ab – bei
+                        // jedem Eingeladenen, bei jedem Laden des Kalenders.
+                        weekday_index(code.get(code.len().saturating_sub(2)..)?)
                     })
                     .collect();
                 if !days.is_empty() {
@@ -124,12 +148,15 @@ pub struct Occurrence {
 const MAX_STEPS: u32 = 500;
 
 fn advance(base: DateTime<Utc>, rule: &ParsedRule, steps: u32) -> Option<DateTime<Utc>> {
-    let factor = rule.interval * steps;
+    // Geprüft multipliziert: `INTERVAL` kommt ungefiltert aus der Regel, und
+    // `INTERVAL=4294967295` lief beim zweiten Schritt über. `None` beendet die
+    // Reihe, so wie ein Datum jenseits des Kalenders.
+    let factor = rule.interval.checked_mul(steps)?;
     match rule.frequency {
-        Frequency::Daily => base.checked_add_signed(Duration::days(factor as i64)),
-        Frequency::Weekly => base.checked_add_signed(Duration::weeks(factor as i64)),
+        Frequency::Daily => base.checked_add_signed(Duration::try_days(i64::from(factor))?),
+        Frequency::Weekly => base.checked_add_signed(Duration::try_weeks(i64::from(factor))?),
         Frequency::Monthly => base.checked_add_months(Months::new(factor)),
-        Frequency::Yearly => base.checked_add_months(Months::new(factor * 12)),
+        Frequency::Yearly => base.checked_add_months(Months::new(factor.checked_mul(12)?)),
     }
 }
 
@@ -347,5 +374,37 @@ mod tests {
             "alle 3 Tage"
         );
         assert!(describe_rrule(None).is_none());
+    }
+
+    #[test]
+    fn kaputte_regeln_bringen_nichts_zum_absturz() {
+        let start = at(2026, 1, 1, 10);
+        let ende = start + Duration::hours(1);
+        // Ein Schnitt mitten in einem Zeichen und ein Überlauf beim Zählen –
+        // beides brach früher die ganze Anfrage ab.
+        for regel in [
+            "FREQ=WEEKLY;BYDAY=€",
+            "FREQ=WEEKLY;BYDAY=a€",
+            "FREQ=DAILY;INTERVAL=4294967295",
+            "FREQ=YEARLY;INTERVAL=4294967295",
+            "FREQ=MONTHLY;INTERVAL=400000000",
+        ] {
+            let _ = expand_occurrences(start, ende, Some(regel), start, at(2030, 1, 1, 0));
+            let _ = describe_rrule(Some(regel));
+        }
+    }
+
+    #[test]
+    fn nur_der_zeichenvorrat_einer_regel_ist_sauber() {
+        assert!(regel_ist_sauber(
+            "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE;COUNT=10"
+        ));
+        assert!(regel_ist_sauber("RRULE:FREQ=DAILY;UNTIL=20261231T225900Z"));
+        assert!(!regel_ist_sauber(
+            "FREQ=DAILY\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nSUMMARY:Fremd"
+        ));
+        assert!(!regel_ist_sauber("FREQ=DAILY\nURL:https://example.com"));
+        assert!(!regel_ist_sauber("FREQ=WEEKLY;BYDAY=€"));
+        assert!(!regel_ist_sauber(&"FREQ=DAILY;".repeat(40)));
     }
 }

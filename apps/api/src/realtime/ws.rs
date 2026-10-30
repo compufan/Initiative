@@ -27,6 +27,43 @@ pub fn router() -> Router<AppState> {
     Router::new().route(REALTIME_PATH, get(upgrade))
 }
 
+/// Wie oft eine offene Leitung nachsieht, ob ihre Sitzung noch besteht.
+const SITZUNG_PRUEFEN: Duration = Duration::from_secs(60);
+
+/**
+ * Besteht für dieses Konto noch eine Sitzung?
+ *
+ * Das Zugriffstoken wird nur beim Aufbau der Leitung geprüft – danach lief sie
+ * unbegrenzt weiter. Wer ein Token abgegriffen und damit einmal verbunden
+ * hatte, las so jede neue Nachricht mit, auch nachdem das Passwort geändert,
+ * die Wiederverwendung erkannt oder das Konto gelöscht war: Alle drei
+ * widerrufen die Erneuerungs-Token, und an genau denen hängt diese Frage.
+ *
+ * Ein Fehler der Datenbank zählt als „besteht": Ein kurzer Aussetzer soll
+ * nicht jede offene Leitung auf einmal trennen.
+ */
+pub async fn sitzung_lebt(pool: &sqlx::PgPool, user_id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "select exists (
+           select 1 from refresh_tokens
+            where user_id = $1 and revoked_at is null and expires_at > now()
+         )",
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(true)
+}
+
+/// 4401 heisst für den Client: Token erneuern und neu verbinden. Scheitert
+/// die Erneuerung, weil die Sitzung fort ist, meldet er sich ab.
+fn abgelaufen() -> Message {
+    Message::Close(Some(axum::extract::ws::CloseFrame {
+        code: 4401,
+        reason: Utf8Bytes::from_static("unauthorized"),
+    }))
+}
+
 #[derive(Debug, Deserialize)]
 struct TokenQuery {
     token: Option<String>,
@@ -45,16 +82,18 @@ async fn upgrade(
         .filter(|claims| claims.typ == "access")
         .and_then(|claims| Uuid::parse_str(&claims.sub).ok());
 
+    // Ein noch nicht abgelaufenes Token einer widerrufenen Sitzung verbindet
+    // nicht mehr – siehe `sitzung_lebt`.
+    let user_id = match user_id {
+        Some(user_id) if sitzung_lebt(&state.pool, user_id).await => Some(user_id),
+        _ => None,
+    };
+
     match user_id {
         Some(user_id) => ws.on_upgrade(move |socket| handle(socket, state, user_id)),
         // Closing with 4401 tells the client to refresh its token and retry.
         None => ws.on_upgrade(|mut socket| async move {
-            let _ = socket
-                .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-                    code: 4401,
-                    reason: Utf8Bytes::from_static("unauthorized"),
-                })))
-                .await;
+            let _ = socket.send(abgelaufen()).await;
         }),
     }
 }
@@ -81,10 +120,17 @@ async fn handle(socket: WebSocket, state: AppState, user_id: Uuid) {
         ),
     );
 
-    // Outbound pump: hub frames plus a heartbeat that detects dead sockets.
-    let writer = tokio::spawn(async move {
+    // Outbound pump: hub frames plus a heartbeat that detects dead sockets,
+    // plus the periodic check that the session behind the socket still exists.
+    let pool = state.pool.clone();
+    let mut writer = tokio::spawn(async move {
         let mut heartbeat = tokio::time::interval(Duration::from_secs(HEARTBEAT_INTERVAL_SECS));
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut pruefung = tokio::time::interval_at(
+            tokio::time::Instant::now() + SITZUNG_PRUEFEN,
+            SITZUNG_PRUEFEN,
+        );
+        pruefung.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 frame = outbound.recv() => match frame {
@@ -100,21 +146,36 @@ async fn handle(socket: WebSocket, state: AppState, user_id: Uuid) {
                         break;
                     }
                 }
+                _ = pruefung.tick() => {
+                    if !sitzung_lebt(&pool, user_id).await {
+                        let _ = sender.send(abgelaufen()).await;
+                        break;
+                    }
+                }
             }
         }
         let _ = sender.close().await;
     });
 
-    while let Some(Ok(message)) = receiver.next().await {
-        match message {
-            Message::Text(text) => {
-                if let Err(error) = handle_client_event(&state, user_id, &text).await {
-                    tracing::debug!(%error, "realtime event failed");
+    let leser = async {
+        while let Some(Ok(message)) = receiver.next().await {
+            match message {
+                Message::Text(text) => {
+                    if let Err(error) = handle_client_event(&state, user_id, &text).await {
+                        tracing::debug!(%error, "realtime event failed");
+                    }
                 }
+                Message::Close(_) => break,
+                _ => {}
             }
-            Message::Close(_) => break,
-            _ => {}
         }
+    };
+    // Endet der Schreiber (Sitzung widerrufen, Leitung tot), endet auch das
+    // Lesen: Ein Gegenüber, das den Schluss nicht beantwortet, soll über die
+    // Leitung weder tippen noch Gelesen-Marken setzen können.
+    tokio::select! {
+        _ = leser => {}
+        _ = &mut writer => {}
     }
 
     writer.abort();

@@ -36,10 +36,15 @@ impl PushService {
     pub fn new(config: std::sync::Arc<Config>) -> Self {
         Self {
             config,
+            // Kein `unwrap_or_default`: Ein Standard-Client hätte weder die
+            // Namensauflösung mit Filter noch das Umleitungsverbot – und beides
+            // ist hier der Schutz, nicht Beiwerk.
             http: reqwest::Client::builder()
                 .timeout(Duration::from_secs(15))
+                .redirect(reqwest::redirect::Policy::none())
+                .dns_resolver(NurOeffentlich)
                 .build()
-                .unwrap_or_default(),
+                .expect("HTTP-Client für Push lässt sich bauen"),
             mitschnitt: OnceLock::new(),
         }
     }
@@ -153,12 +158,18 @@ impl PushService {
     }
 
     /// `Ok(false)` means the subscription is gone and should be deleted.
+    ///
+    /// Eine Adresse, die die Prüfung nicht (mehr) besteht, gilt als fort –
+    /// so verschwinden auch Zeilen, die vor der Prüfung angelegt wurden.
     async fn send_one(
         &self,
         vapid: &crate::config::VapidConfig,
         subscription: &PushSubscriptionRow,
         payload: &[u8],
     ) -> Result<bool, String> {
+        if endpunkt_pruefen(&subscription.endpoint).is_err() {
+            return Ok(false);
+        }
         let encrypted = ece::encrypt(&subscription.p256dh, &subscription.auth, payload)
             .map_err(|error| error.to_string())?;
         let authorization = vapid::authorization_header(
@@ -187,6 +198,183 @@ impl PushService {
             200..=299 => Ok(true),
             404 | 410 => Ok(false),
             _ => Err(format!("push service antwortete mit {status}")),
+        }
+    }
+}
+
+/* ---------- Wohin eine Mitteilung gehen darf ---------- */
+
+/// Wie lang die Adresse eines Push-Dienstes höchstens ist. Echte Adressen
+/// (FCM, Mozilla, Apple, Microsoft) liegen weit darunter.
+pub const ENDPUNKT_MAX: usize = 2048;
+
+/**
+ * Darf an diese Adresse eine Mitteilung gehen?
+ *
+ * Die Adresse schreibt der Client, und der Server schickt danach von sich aus
+ * POST-Anfragen dorthin – bei jeder Nachricht, und auf Knopfdruck über
+ * `/push/test`, dessen Antwort (`delivered`) verrät, ob das Ziel mit 2xx
+ * geantwortet hat. Ohne Prüfung war das ein Fenster ins interne Netz: die
+ * Datenbank, der Metadatendienst des Anbieters, jede Verwaltungsoberfläche
+ * hinter der Firewall liessen sich ansprechen und abtasten.
+ *
+ * Echte Push-Dienste sind öffentliche Namen über HTTPS auf dem Standardport.
+ * Genau das wird verlangt. Dass der NAME nicht auf etwas Internes zeigt,
+ * prüft danach [`NurOeffentlich`] bei jeder Verbindung – ein Name lässt sich
+ * jederzeit umbiegen, eine Prüfung beim Anlegen allein reichte nicht.
+ */
+pub fn endpunkt_pruefen(endpoint: &str) -> Result<(), &'static str> {
+    if endpoint.len() > ENDPUNKT_MAX {
+        return Err("Push-Endpunkt ist zu lang");
+    }
+    let url = url::Url::parse(endpoint).map_err(|_| "Push-Endpunkt ist keine gültige URL")?;
+    if url.scheme() != "https" {
+        return Err("Push-Endpunkt muss HTTPS sein");
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("Push-Endpunkt darf keine Zugangsdaten enthalten");
+    }
+    if url.port().is_some_and(|port| port != 443) {
+        return Err("Push-Endpunkt muss den Standardport benutzen");
+    }
+    // Eine IP-Adresse wird nie aufgelöst und liefe am Filter vorbei.
+    let Some(url::Host::Domain(name)) = url.host() else {
+        return Err("Push-Endpunkt braucht einen Namen, keine IP-Adresse");
+    };
+    let name = name.trim_end_matches('.').to_ascii_lowercase();
+    let intern = !name.contains('.')
+        || name == "localhost"
+        || [".localhost", ".local", ".internal", ".lan", ".home.arpa"]
+            .iter()
+            .any(|endung| name.ends_with(endung));
+    if intern {
+        return Err("Push-Endpunkt muss ein öffentlicher Name sein");
+    }
+    Ok(())
+}
+
+/// Liegt diese Adresse im öffentlichen Netz?
+pub fn ist_oeffentlich(ip: std::net::IpAddr) -> bool {
+    use std::net::IpAddr;
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, c, _] = v4.octets();
+            !(v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+                || a == 0
+                || a >= 240
+                // Carrier-grade NAT, IETF-Protokolle, Lasttests.
+                || (a == 100 && (64..128).contains(&b))
+                || (a == 192 && b == 0 && c == 0)
+                || (a == 198 && (b == 18 || b == 19)))
+        }
+        IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return ist_oeffentlich(IpAddr::V4(v4));
+            }
+            let erstes = v6.segments()[0];
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                // Eindeutig lokal (fc00::/7) und verbindungslokal (fe80::/10).
+                || (erstes & 0xfe00) == 0xfc00
+                || (erstes & 0xffc0) == 0xfe80
+                // Dokumentation (2001:db8::/32) und NAT64 (64:ff9b::/96).
+                || (erstes == 0x2001 && v6.segments()[1] == 0x0db8)
+                || (erstes == 0x0064 && v6.segments()[1] == 0xff9b))
+        }
+    }
+}
+
+/**
+ * Namensauflösung, die nur öffentliche Adressen herausgibt.
+ *
+ * Die Prüfung beim Anlegen sieht nur den Namen. Zeigt der später (oder von
+ * Anfang an) auf `127.0.0.1` oder `10.0.0.5`, ginge die Anfrage trotzdem
+ * dorthin. Hier fällt die Entscheidung bei jeder Verbindung, an der Stelle,
+ * an der aus dem Namen eine Adresse wird.
+ */
+struct NurOeffentlich;
+
+impl reqwest::dns::Resolve for NurOeffentlich {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let name = name.as_str().to_string();
+        Box::pin(async move {
+            let adressen: Vec<std::net::SocketAddr> = tokio::net::lookup_host((name.as_str(), 0))
+                .await?
+                .filter(|adresse| ist_oeffentlich(adresse.ip()))
+                .collect();
+            if adressen.is_empty() {
+                return Err("Push-Endpunkt zeigt auf keine öffentliche Adresse".into());
+            }
+            Ok(Box::new(adressen.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
+#[cfg(test)]
+mod endpunkt_tests {
+    use super::*;
+
+    #[test]
+    fn echte_push_dienste_gehen_durch() {
+        for adresse in [
+            "https://fcm.googleapis.com/fcm/send/abc:def",
+            "https://updates.push.services.mozilla.com/wpush/v2/gAAAA",
+            "https://web.push.apple.com/QGx1",
+            "https://wns2-par02p.notify.windows.com/w/?token=AwYAAA",
+        ] {
+            assert_eq!(endpunkt_pruefen(adresse), Ok(()), "{adresse}");
+        }
+    }
+
+    #[test]
+    fn interne_ziele_werden_abgelehnt() {
+        for adresse in [
+            "http://fcm.googleapis.com/fcm/send/abc",
+            "https://127.0.0.1/x",
+            "https://[::1]/x",
+            "https://169.254.169.254/latest/meta-data/",
+            "https://localhost/x",
+            "https://postgres/x",
+            "https://api.internal/x",
+            "https://fcm.googleapis.com:8443/x",
+            "https://nutzer:geheim@fcm.googleapis.com/x",
+            "file:///etc/passwd",
+            "kein url",
+        ] {
+            assert!(endpunkt_pruefen(adresse).is_err(), "{adresse}");
+        }
+        assert!(endpunkt_pruefen(&format!("https://a.de/{}", "x".repeat(ENDPUNKT_MAX))).is_err());
+    }
+
+    #[test]
+    fn nur_oeffentliche_adressen() {
+        for privat in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "172.16.0.1",
+            "192.168.1.1",
+            "169.254.169.254",
+            "100.64.0.1",
+            "0.0.0.0",
+            "::1",
+            "fd00::1",
+            "fe80::1",
+            "::ffff:10.0.0.1",
+        ] {
+            assert!(!ist_oeffentlich(privat.parse().unwrap()), "{privat}");
+        }
+        for oeffentlich in ["142.250.185.74", "2a00:1450:4001:82b::200a"] {
+            assert!(
+                ist_oeffentlich(oeffentlich.parse().unwrap()),
+                "{oeffentlich}"
+            );
         }
     }
 }

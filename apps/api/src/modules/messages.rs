@@ -166,6 +166,18 @@ async fn send_message(
             "Termin-Karten legt nur die Termin-Funktion an.",
         ));
     }
+    // Dasselbe für Umfragen und Partien. Ihre Expander laden, was die Kennung
+    // nennt, ohne zu fragen, in welchem Chat es zu Hause ist – eine Karte mit
+    // fremder `pollId` zeigte Frage, Stimmen und (offen) Namen jedem in diesem
+    // Chat, an `assert_poll_access` vorbei; eine fremde `gameSessionId` zeigte
+    // Partie und Mitspieler, auch eine Übung ohne Chat. Wer nach dem Austritt
+    // die Kennung behalten hat, sah so weiter zu. Beide Karten legt der Server
+    // selbst an (`create_poll`, `place_poll`, `create_session`).
+    if metadata.get("pollId").is_some() || metadata.get("gameSessionId").is_some() {
+        return Err(AppError::bad_request(
+            "Umfrage- und Spielkarten legt nur die jeweilige Funktion an.",
+        ));
+    }
     let has_entity = ["stickerId", "pollId", "eventId", "gameSessionId"]
         .iter()
         .any(|key| metadata.get(*key).is_some());
@@ -426,6 +438,12 @@ async fn add_reaction(
 ) -> AppResult<Json<Value>> {
     let row = require_message(&state.pool, id).await?;
     assert_membership(&state.pool, row.conversation_id, user.id()).await?;
+    // Die Grenze des eigenen Beitritts gilt auch hier: Die Antwort trägt alle
+    // Reaktionen samt Personen, und eine Reaktion wäre sonst der Beweis, dass
+    // es eine Nachricht von vor dem Beitritt mit dieser Kennung gibt.
+    if !crate::services::verlauf::darf_nachricht_sehen(&state.pool, id, user.id()).await? {
+        return Err(AppError::not_found("Nachricht nicht gefunden"));
+    }
     let emoji = input.emoji.trim().to_string();
     Validator::new().length("emoji", &emoji, 1, 16).finish()?;
 
@@ -450,6 +468,9 @@ async fn remove_reaction(
 ) -> AppResult<Json<Value>> {
     let row = require_message(&state.pool, id).await?;
     assert_membership(&state.pool, row.conversation_id, user.id()).await?;
+    if !crate::services::verlauf::darf_nachricht_sehen(&state.pool, id, user.id()).await? {
+        return Err(AppError::not_found("Nachricht nicht gefunden"));
+    }
 
     sqlx::query("delete from reactions where message_id = $1 and user_id = $2 and emoji = $3")
         .bind(id)

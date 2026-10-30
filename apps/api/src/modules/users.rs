@@ -237,6 +237,18 @@ async fn loeschen(
     user: AuthUser,
     Json(input): Json<LoeschInput>,
 ) -> AppResult<StatusCode> {
+    // Dieselbe Bremse wie beim Passwortwechsel und mit demselben Zähler: Ohne
+    // sie war das hier ein ungebremster Weg, das Passwort zu einem
+    // abgegriffenen Zugang zu erraten – und jeder Versuch kostet den Server
+    // eine volle Argon2-Rechnung.
+    if !state
+        .drossel
+        .erlaubt(&format!("pw:{}", user.id()), regeln::PASSWORT)
+    {
+        return Err(AppError::too_many(
+            "Zu viele Versuche. Warte einen Moment und versuch es dann noch einmal.",
+        ));
+    }
     let konto = sqlx::query_as::<_, UserRow>("select * from users where id = $1")
         .bind(user.id())
         .fetch_optional(&state.pool)

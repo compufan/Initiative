@@ -100,6 +100,14 @@ async fn create(
             input.r#type != "direct" || input.member_ids.len() == 1,
             "Direktchats brauchen genau ein Gegenüber",
         )
+        // Der Titel steht in der Chatliste und jeder Mitteilung aller
+        // Mitglieder; `CONVERSATION_TITLE_MAX` gab es, geprüft wurde er nie.
+        .length(
+            "title",
+            input.title.as_deref().map(str::trim).unwrap_or_default(),
+            0,
+            crate::constants::CONVERSATION_TITLE_MAX,
+        )
         .finish()?;
 
     let mut members = input.member_ids.clone();
@@ -246,6 +254,16 @@ async fn update(
         if membership.role == "member" {
             return Err(AppError::forbidden("Nur Admins dürfen den Chat ändern"));
         }
+        if let Some(Some(title)) = &input.title {
+            Validator::new()
+                .length(
+                    "title",
+                    title.trim(),
+                    0,
+                    crate::constants::CONVERSATION_TITLE_MAX,
+                )
+                .finish()?;
+        }
         if let Some(Some(anhang)) = input.avatar_attachment_id {
             require_eigener_anhang(&state.pool, anhang, user.id()).await?;
         }
@@ -369,6 +387,13 @@ async fn update_member(
     if let Some(role) = &input.role {
         Validator::new()
             .one_of("role", role, crate::constants::MEMBER_ROLES)
+            .finish()?;
+    }
+    // Der Spitzname steht bei jeder Nachricht dieser Person im Chat – so lang
+    // wie ein Anzeigename, nicht länger.
+    if let Some(Some(nickname)) = &input.nickname {
+        Validator::new()
+            .length("nickname", nickname, 0, crate::constants::DISPLAY_NAME_MAX)
             .finish()?;
     }
 
