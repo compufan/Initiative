@@ -72,6 +72,17 @@ pub fn router() -> Router<AppState> {
 /// haben ihren eigenen Weg mit eigenen Prüfungen (`services::stickers`).
 const ARTEN: &[&str] = &["image", "video", "audio", "file"];
 
+/**
+ * Kopfzeile mit der SHA-256 (Hex) EINES Stücks.
+ *
+ * Der Browser kann WebCrypto nicht stückweise über eine ganze Datei hashen,
+ * wohl aber über jedes 8-MiB-Stück. Der Server rechnet beim Empfang im Strom
+ * mit und bucht das Stück nur, wenn die Summe passt – das sichert die
+ * Übertragung Ende zu Ende (Proxys, Mobilfunk-Optimierer, Speicherfehler auf
+ * dem Telefon). Ohne Kopfzeile bleibt alles wie bisher (ältere Clients).
+ */
+pub const STUECK_SHA256_KOPF: &str = "x-stueck-sha256";
+
 /// Wie viele offene Sitzungen ein Konto höchstens hat. Neben der Bytegrenze,
 /// weil jede Sitzung eine Datei und eine Zeile kostet, auch eine kleine.
 const OFFEN_HOECHSTZAHL: i64 = 20;
@@ -587,6 +598,20 @@ async fn stueck_empfangen(
         }
     }
 
+    let erwartete_summe = match headers.get(STUECK_SHA256_KOPF) {
+        None => None,
+        Some(wert) => {
+            let wert = wert.to_str().unwrap_or("").trim();
+            if wert.len() == 64 && wert.chars().all(|c| c.is_ascii_hexdigit()) {
+                Some(wert.to_ascii_lowercase())
+            } else {
+                return Err(AppError::bad_request(
+                    "X-Stueck-Sha256 muss 64 Hex-Zeichen haben",
+                ));
+            }
+        }
+    };
+
     let schon: Option<(i32,)> =
         sqlx::query_as("select nr from upload_stuecke where sitzung_id = $1 and nr = $2")
             .bind(id)
@@ -626,6 +651,11 @@ async fn stueck_empfangen(
     datei.seek(std::io::SeekFrom::Start(start as u64)).await?;
 
     let mut geschrieben: i64 = 0;
+    // Nur mitrechnen, wenn der Client eine Summe geschickt hat.
+    let mut summe = erwartete_summe.as_ref().map(|_| {
+        use sha2::Digest;
+        sha2::Sha256::new()
+    });
     while let Some(paket) = tokio::time::timeout(STILLE_MAX, strom.next())
         .await
         .map_err(|_| AppError::bad_request("Stück kam zu langsam"))?
@@ -636,6 +666,9 @@ async fn stueck_empfangen(
             // Nicht weiterschreiben – sonst überschriebe es den Anfang des
             // nächsten Stückes.
             return Err(AppError::too_large("Stück ist länger als angesagt"));
+        }
+        if let Some(hasher) = summe.as_mut() {
+            sha2::Digest::update(hasher, &paket);
         }
         if let Err(fehler) = datei.write_all(&paket).await {
             if ist_platte_voll(&fehler) {
@@ -653,6 +686,22 @@ async fn stueck_empfangen(
         return Err(AppError::bad_request(format!(
             "Stück unvollständig: {geschrieben} von {laenge} Bytes"
         )));
+    }
+    if let (Some(hasher), Some(erwartet)) = (summe, erwartete_summe) {
+        let ist = hex::encode(sha2::Digest::finalize(hasher));
+        if ist != erwartet {
+            /*
+             * Nichts buchen: Das Stück bleibt „nicht empfangen", der Client
+             * schickt es noch einmal und überschreibt dabei die Stelle in
+             * der Teildatei. 422 und kein 400, weil die Anfrage formal in
+             * Ordnung war – nur ihr Inhalt kam verändert an.
+             */
+            tracing::warn!(sitzung = %id, stueck = nr, "Stück-Prüfsumme stimmt nicht – nicht gebucht");
+            return Err(AppError::validation(vec![(
+                "sha256",
+                format!("Stück {nr} kam beschädigt an (Prüfsumme stimmt nicht) – bitte noch einmal senden."),
+            )]));
+        }
     }
     datei.flush().await?;
     // Erst auf der Platte, dann gebucht. Andersherum stünde nach einem
@@ -743,14 +792,22 @@ async fn abschliessen(
     user: AuthUser,
     Path(id): Path<Uuid>,
     Json(input): Json<CompleteUploadInput>,
-) -> AppResult<Json<AttachmentDto>> {
+) -> AppResult<Json<Value>> {
     let sitzung = eigene_sitzung(&state, id, user.id()).await?;
     metadaten_pruefen(&input)?;
 
     // Schon fertig? Dann ist die Antwort nur unterwegs verloren gegangen.
     if sitzung.status == "fertig" {
         let row = load_attachment(&state.pool, sitzung.attachment_id).await?;
-        return Ok(Json(to_attachment_dto(&row, &state.config)));
+        let summe: Option<String> = sqlx::query_scalar("select sha256 from attachments where id = $1")
+            .bind(sitzung.attachment_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .flatten();
+        return Ok(Json(mit_pruefsumme(
+            &to_attachment_dto(&row, &state.config),
+            summe,
+        )));
     }
 
     /*
@@ -803,7 +860,7 @@ async fn abschluss_durchfuehren(
     state: &AppState,
     sitzung: &Sitzung,
     input: CompleteUploadInput,
-) -> Result<AttachmentDto, (AppError, bool)> {
+) -> Result<Value, (AppError, bool)> {
     let behalten = |fehler: AppError| (fehler, false);
 
     let (anzahl, summe): (i64, i64) = sqlx::query_as(
@@ -875,12 +932,19 @@ async fn abschluss_durchfuehren(
         ));
     }
 
+    /*
+     * Die Gesamt-Prüfsumme wird IMMER gerechnet, nicht nur auf Wunsch des
+     * Clients: Die Datei wird hier ohnehin einmal im Strom gelesen, und das
+     * Ergebnis ist später die Vergleichsgrösse für den Umzug auf die Box und
+     * den Konsistenzcheck (Migration 0035). Kosten: ein sequentielles Lesen,
+     * beim 4-GiB-Video einige Sekunden.
+     */
+    let pfad_faden = pfad.clone();
+    let ist = tokio::task::spawn_blocking(move || sha256_datei(&pfad_faden))
+        .await
+        .map_err(|_| behalten(AppError::internal("Prüfsumme ist abgestürzt")))?
+        .map_err(|e| behalten(e.into()))?;
     if let Some(erwartet) = &sitzung.sha256 {
-        let pfad_faden = pfad.clone();
-        let ist = tokio::task::spawn_blocking(move || sha256_datei(&pfad_faden))
-            .await
-            .map_err(|_| behalten(AppError::internal("Prüfsumme ist abgestürzt")))?
-            .map_err(|e| behalten(e.into()))?;
         if &ist != erwartet {
             return Err((
                 AppError::validation(vec![(
@@ -905,6 +969,16 @@ async fn abschluss_durchfuehren(
     let dto = fertig_melden(state, sitzung.attachment_id, input)
         .await
         .map_err(behalten)?;
+    // Scheitert das Festhalten, ist die Datei trotzdem in Ordnung – nur ohne
+    // Vergleichssumme. Darum kein Abbruch, aber eine laute Zeile im Protokoll.
+    if let Err(fehler) = sqlx::query("update attachments set sha256 = $2 where id = $1")
+        .bind(sitzung.attachment_id)
+        .bind(&ist)
+        .execute(&state.pool)
+        .await
+    {
+        tracing::warn!(%fehler, "Gesamt-Prüfsumme nicht gespeichert");
+    }
     let _ = sqlx::query(
         "update upload_sitzungen set status = 'fertig', aktualisiert_at = now() where id = $1",
     )
@@ -926,7 +1000,16 @@ async fn abschluss_durchfuehren(
     {
         crate::services::auslagern::wecken();
     }
-    Ok(dto)
+    Ok(mit_pruefsumme(&dto, Some(ist)))
+}
+
+/// Der Anhang wie sonst, plus die Gesamt-Prüfsumme (`sha256`) des Servers.
+fn mit_pruefsumme(dto: &AttachmentDto, sha256: Option<String>) -> Value {
+    let mut wert = serde_json::to_value(dto).unwrap_or(Value::Null);
+    if let (Some(objekt), Some(summe)) = (wert.as_object_mut(), sha256) {
+        objekt.insert("sha256".into(), Value::String(summe));
+    }
+    wert
 }
 
 /// Sitzung, Teildatei und den unfertigen Anhang wegräumen.

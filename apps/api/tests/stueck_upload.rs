@@ -110,6 +110,34 @@ impl Probe {
         )
     }
 
+    /// Ein Stück mit Prüfsumme im Kopf (`X-Stueck-Sha256`).
+    async fn stueck_mit_summe(
+        &self,
+        token: &str,
+        sitzung: &str,
+        start: usize,
+        daten: &[u8],
+        gesamt: usize,
+        summe: &str,
+    ) -> (StatusCode, Value) {
+        let anfrage = Request::builder()
+            .method("PUT")
+            .uri(format!("/api/v1/media/stuecke/{sitzung}"))
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/octet-stream")
+            .header(
+                "content-range",
+                format!("bytes {}-{}/{}", start, start + daten.len() - 1, gesamt),
+            )
+            .header("x-stueck-sha256", summe)
+            .body(Body::from(daten.to_vec()))
+            .unwrap();
+        let antwort = self.router.clone().oneshot(anfrage).await.unwrap();
+        let status = antwort.status();
+        let bytes = antwort.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
     async fn holen(
         &self,
         token: &str,
@@ -882,4 +910,71 @@ async fn die_wirksamen_grenzen_kommen_vom_server() {
         .await
         .unwrap();
     assert_eq!(antwort.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn eine_falsche_stueck_summe_wird_abgewiesen_und_nichts_gebucht() {
+    let probe = probe!(|_| {});
+    let token = probe.konto().await;
+    let daten = muster(STUECK + 777, 11);
+
+    let (status, stand) = probe
+        .anlegen(&token, "file", "application/octet-stream", daten.len(), None)
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{stand}");
+    let sitzung = stand["sitzungId"].as_str().unwrap().to_string();
+    let stand_url = format!("/api/v1/media/stuecke/{sitzung}");
+
+    // Falsche Summe (das Stück kam „verändert" an): 422, nichts gebucht.
+    let erstes = &daten[..STUECK];
+    let falsch = sha(b"etwas anderes");
+    let (status, antwort) = probe
+        .stueck_mit_summe(&token, &sitzung, 0, erstes, daten.len(), &falsch)
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{antwort}");
+    let (_, stand) = probe.call("GET", &stand_url, &token, None).await;
+    assert_eq!(stand["empfangen"], json!([]), "ein beschädigtes Stück wurde gebucht");
+    assert_eq!(stand["empfangenBytes"], 0);
+
+    // Kein Hex: 400, ebenfalls nichts gebucht.
+    let (status, _) = probe
+        .stueck_mit_summe(&token, &sitzung, 0, erstes, daten.len(), "zzz")
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Das Wiederholen mit der richtigen Summe geht durch (grosse Buchstaben
+    // sind erlaubt) und überschreibt, was der falsche Versuch hinterliess.
+    let (status, stand) = probe
+        .stueck_mit_summe(&token, &sitzung, 0, erstes, daten.len(), &sha(erstes).to_uppercase())
+        .await;
+    assert_eq!(status, StatusCode::OK, "{stand}");
+    assert_eq!(stand["empfangen"], json!([0]));
+
+    // Das letzte Stück OHNE Kopfzeile geht weiterhin (ältere Clients).
+    let (status, _) = probe
+        .stueck(&token, &sitzung, STUECK, &daten[STUECK..], daten.len())
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, anhang) = probe
+        .call("POST", &format!("{stand_url}/abschliessen"), &token, Some(json!({})))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{anhang}");
+    // Der Abschluss liefert die Gesamt-Prüfsumme des Servers, auch ohne dass
+    // der Client eine angesagt hätte – und sie steht in der Anhangszeile.
+    assert_eq!(anhang["sha256"], sha(&daten));
+    let id: Uuid = anhang["id"].as_str().unwrap().parse().unwrap();
+    let gespeichert: Option<String> = sqlx::query_scalar("select sha256 from attachments where id = $1")
+        .bind(id)
+        .fetch_one(&probe.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(gespeichert.as_deref(), Some(sha(&daten).as_str()));
+
+    // Ein wiederholter Abschluss (Antwort verloren) liefert sie ebenfalls.
+    let (status, nochmal) = probe
+        .call("POST", &format!("{stand_url}/abschliessen"), &token, Some(json!({})))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(nochmal["sha256"], sha(&daten));
 }

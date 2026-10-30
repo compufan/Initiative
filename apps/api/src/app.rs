@@ -55,6 +55,11 @@ fn cors_layer(state: &AppState) -> CorsLayer {
             header::AUTHORIZATION,
             header::CONTENT_TYPE,
             header::RANGE,
+            // Der Upload in Stücken sendet `Content-Range` und die Stück-
+            // Prüfsumme; beides ist kein „sicherer" Anfragekopf und braucht
+            // bei getrennten Herkünften die Erlaubnis im Vorabcheck.
+            header::CONTENT_RANGE,
+            header::HeaderName::from_static(crate::modules::stuecke::STUECK_SHA256_KOPF),
             header::HeaderName::from_static(crate::auth::erneuerungskeks::KOPF),
         ])
         .expose_headers([header::CONTENT_RANGE, header::CONTENT_LENGTH])

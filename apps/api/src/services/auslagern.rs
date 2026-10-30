@@ -687,6 +687,36 @@ pub async fn platzbedarf(pool: &PgPool, config: &Config) -> i64 {
 /// Mehr als das wird nicht in den Arbeitsspeicher geladen, wenn die warme
 /// Ablage keinen lokalen Pfad hat (Objektspeicher). Darüber lieber eine klare
 /// Absage im Protokoll als ein Prozess, den das Betriebssystem beendet.
+/**
+ * Einstellungen eines Umzugs, die nicht am Füllstand hängen.
+ *
+ * `pruefsumme_bis`: Bis zu dieser Dateigrösse wird nach dem Hinüberschreiben
+ * drüben im Strom gegengelesen und die SHA-256 mit der gespeicherten
+ * (`attachments.sha256`, Migration 0035) verglichen. 0 schaltet es ab.
+ *
+ * # Warum nur bis zu einer Grösse – und nicht mit Tresor
+ *
+ * Gegenlesen heisst, die Datei noch einmal von der Box zu holen: bei 4 GiB
+ * so viel Zeit und Verkehr wie das Hinüberschreiben selbst, über die einzige
+ * Bulk-Verbindung. Der Gewinn ist klein – SSH sichert die Übertragung schon
+ * mit einer Prüfsumme je Paket, und `fertigstellen` im SFTP-Treiber misst die
+ * Länge nach. Übrig bleibt, was die Box selbst falsch ablegt; das fängt der
+ * Gegenleser bei kleinen Dateien billig ab (Vorgabe: bis 256 MiB), bei
+ * grossen sind Grösse plus Stichprobe im Konsistenzcheck die Antwort.
+ *
+ * Mit eingeschaltetem Tresor (`MEDIA_KEY`) liegt drüben Geheimtext, die
+ * gespeicherte Summe gilt aber dem Klartext: Der Vergleich wäre immer falsch
+ * und bleibt deshalb aus (`starten` setzt 0). Der Tresor prüft ohnehin jeden
+ * Block beim Lesen selbst.
+ */
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Regeln {
+    pub pruefsumme_bis: u64,
+}
+
+/// Vorgabe für [`Regeln::pruefsumme_bis`] ohne Tresor.
+pub const PRUEFSUMME_DRUEBEN_BIS: u64 = 256 * 1024 * 1024;
+
 const SPEICHER_WEG_MAX: i64 = 512 * 1024 * 1024;
 
 /**
@@ -727,17 +757,18 @@ async fn umziehen(
     warm: &Arc<dyn Storage>,
     kalt: &Arc<dyn Storage>,
     id: uuid::Uuid,
+    regeln: Regeln,
 ) -> Result<i64, Fehlschlag> {
     let db = |f: sqlx::Error| Fehlschlag::lokal(f.to_string());
-    let zeile: Option<(String, i64, String)> = sqlx::query_as(
-        "select storage_key, size, mime from attachments
+    let zeile: Option<(String, i64, String, Option<String>)> = sqlx::query_as(
+        "select storage_key, size, mime, sha256 from attachments
           where id = $1 and ablage = 'lokal' and status = 'ready'",
     )
     .bind(id)
     .fetch_optional(pool)
     .await
     .map_err(db)?;
-    let Some((schluessel, groesse, mime)) = zeile else {
+    let Some((schluessel, groesse, mime, sha_soll)) = zeile else {
         // Zwischen Auswahl und Umzug gelöscht oder schon gewandert. Kein
         // Fehler, nur nichts zu tun.
         return Ok(0);
@@ -784,7 +815,10 @@ async fn umziehen(
             )));
         }
         let erwartet = tokio::fs::metadata(&pfad).await.map(|m| m.len()).ok();
-        return abschliessen(pool, warm, kalt, &schluessel, erwartet, groesse, zurueck).await;
+        return abschliessen(
+            pool, warm, kalt, &schluessel, erwartet, groesse, sha_soll, regeln, zurueck,
+        )
+        .await;
     }
 
     if groesse > SPEICHER_WEG_MAX {
@@ -827,7 +861,10 @@ async fn umziehen(
             "{schluessel}: Schreiben gescheitert – {fehler}"
         )));
     }
-    abschliessen(pool, warm, kalt, &schluessel, erwartet, groesse, zurueck).await
+    abschliessen(
+        pool, warm, kalt, &schluessel, erwartet, groesse, sha_soll, regeln, zurueck,
+    )
+    .await
 }
 
 /// Nachmessen, umschreiben, warm löschen – der gemeinsame Rest beider Wege.
@@ -838,6 +875,8 @@ async fn abschliessen<F, Fut>(
     schluessel: &str,
     erwartet: Option<u64>,
     groesse: i64,
+    sha_soll: Option<String>,
+    regeln: Regeln,
     zurueck: F,
 ) -> Result<i64, Fehlschlag>
 where
@@ -856,8 +895,8 @@ where
      * gingen – bei eingeschaltetem Tresor also dem GEHEIMTEXT (Kopf und
      * Prüfsummen je Block machen ihn grösser als `attachments.size`).
      */
-    let drueben = match kalt.read(schluessel, None).await {
-        Ok(objekt) => objekt.and_then(|o| o.total_size),
+    let objekt = match kalt.read(schluessel, None).await {
+        Ok(objekt) => objekt,
         Err(fehler) => {
             zurueck().await;
             return Err(Fehlschlag::kalt(format!(
@@ -865,11 +904,39 @@ where
             )));
         }
     };
+    let drueben = objekt.as_ref().and_then(|o| o.total_size);
     if erwartet.is_none() || drueben != erwartet {
         zurueck().await;
         return Err(Fehlschlag::kalt(format!(
             "{schluessel}: drüben liegen {drueben:?} statt {erwartet:?} Bytes"
         )));
+    }
+    /*
+     * Gegenlesen, wenn es billig ist (siehe [`Regeln`]): derselbe Strom, den
+     * das Nachmessen ohnehin geöffnet hat, wird durch SHA-256 gezogen. Stimmt
+     * die Summe nicht, wird die ferne Fassung ENTFERNT – ein erneuter Umzug
+     * soll von vorn schreiben und nicht am falschen Inhalt „fortsetzen" –
+     * und die Datei bleibt warm.
+     */
+    if let (Some(soll), Some(objekt)) = (&sha_soll, objekt) {
+        if regeln.pruefsumme_bis > 0 && (groesse as u64) <= regeln.pruefsumme_bis {
+            let ist = match strom_sha256(objekt.stream).await {
+                Ok(ist) => ist,
+                Err(fehler) => {
+                    zurueck().await;
+                    return Err(Fehlschlag::kalt(format!(
+                        "{schluessel}: Gegenlesen drüben gescheitert – {fehler}"
+                    )));
+                }
+            };
+            if &ist != soll {
+                let _ = kalt.delete(schluessel).await;
+                zurueck().await;
+                return Err(Fehlschlag::kalt(format!(
+                    "{schluessel}: Prüfsumme drüben stimmt nicht ({ist} statt {soll}) – ferne Fassung entfernt"
+                )));
+            }
+        }
     }
     let geschrieben = sqlx::query(
         "update attachments set ablage = 'fern', ausgelagert_at = now()
@@ -910,6 +977,16 @@ where
 const KALT_FEHLER_MAX: usize = 2;
 
 /// Ein Durchgang.
+/// SHA-256 (Hex) eines Stroms, ohne ihn ganz im Speicher zu halten.
+pub async fn strom_sha256(mut strom: crate::storage::ByteStream) -> std::io::Result<String> {
+    use sha2::Digest;
+    let mut hasher = sha2::Sha256::new();
+    while let Some(stueck) = strom.next().await {
+        hasher.update(&stueck?);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
 pub async fn durchgang(
     pool: &PgPool,
     warm: &Arc<dyn Storage>,
@@ -936,6 +1013,28 @@ pub async fn durchgang_mit_bedarf(
     grenze: i64,
     grenze_hoch: i64,
     bedarf: i64,
+) -> Bilanz {
+    durchgang_mit_regeln(
+        pool,
+        warm,
+        kalt,
+        grenze,
+        grenze_hoch,
+        bedarf,
+        Regeln::default(),
+    )
+    .await
+}
+
+/// Wie [`durchgang_mit_bedarf`], mit [`Regeln`] für den Umzug.
+pub async fn durchgang_mit_regeln(
+    pool: &PgPool,
+    warm: &Arc<dyn Storage>,
+    kalt: &Arc<dyn Storage>,
+    grenze: i64,
+    grenze_hoch: i64,
+    bedarf: i64,
+    regeln: Regeln,
 ) -> Bilanz {
     let belegt_jetzt = belegt(pool).await;
     let erlaubt = if bedarf > 0 {
@@ -975,7 +1074,7 @@ pub async fn durchgang_mit_bedarf(
     let mut bilanz = Bilanz::default();
     let mut kalt_fehler_in_folge = 0usize;
     for kandidat in gewaehlt.into_iter().take(STAPEL) {
-        match umziehen(pool, warm, kalt, kandidat.id).await {
+        match umziehen(pool, warm, kalt, kandidat.id, regeln).await {
             Ok(0) => {}
             Ok(bytes) => {
                 bilanz.bewegt += 1;
@@ -1029,6 +1128,14 @@ pub fn starten(
         };
         let grenze = config.kalt_grenze_gb * 1024 * 1024 * 1024;
         let grenze_hoch = config.kalt_grenze_hoch_gb * 1024 * 1024 * 1024;
+        // Gegenlesen drüben nur ohne Tresor (siehe [`Regeln`]).
+        let regeln = Regeln {
+            pruefsumme_bis: if config.media_key.is_none() {
+                PRUEFSUMME_DRUEBEN_BIS
+            } else {
+                0
+            },
+        };
         /*
          * Ein Augenblick Ruhe vor dem ersten Durchgang: Beim Start laufen
          * Migrationen und die ersten Anfragen, und ein Dienst, der genau dann
@@ -1040,9 +1147,16 @@ pub fn starten(
             std::time::Instant::now() - std::time::Duration::from_secs(86_400);
         loop {
             let bedarf = platzbedarf(&pool, &config).await;
-            let bilanz =
-                durchgang_mit_bedarf(&pool, &speicher.warm, &kalt, grenze, grenze_hoch, bedarf)
-                    .await;
+            let bilanz = durchgang_mit_regeln(
+                &pool,
+                &speicher.warm,
+                &kalt,
+                grenze,
+                grenze_hoch,
+                bedarf,
+                regeln,
+            )
+            .await;
             /*
              * Ruhe, wenn die Box nicht antwortet: 1, 2, 4 … bis 60 Minuten
              * statt alle fünfzehn Minuten neu gegen eine tote Gegenstelle zu

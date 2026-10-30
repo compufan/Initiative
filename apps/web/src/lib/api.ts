@@ -701,6 +701,7 @@ export const api = {
       stueck: Blob,
       gesamt: number,
       signal?: AbortSignal,
+      sha256?: string,
     ) =>
       request<StueckStand>('PUT', `/media/stuecke/${sitzungId}`, {
         body: stueck,
@@ -712,10 +713,12 @@ export const api = {
         kopfzeilen: {
           'content-type': 'application/octet-stream',
           'content-range': `bytes ${start}-${start + stueck.size - 1}/${gesamt}`,
+          // Der Server prüft das Stück streamend gegen diese Summe (422 bei Abweichung).
+          ...(sha256 ? { 'x-stueck-sha256': sha256 } : {}),
         },
       }),
     stueckeAbschliessen: (sitzungId: string, body: Record<string, unknown>) =>
-      post<AttachmentDto>(`/media/stuecke/${sitzungId}/abschliessen`, body, {
+      post<AttachmentDto & { sha256?: string }>(`/media/stuecke/${sitzungId}/abschliessen`, body, {
         // Der Server prüft, verschlüsselt und legt ab – bei Gigabytes dauert
         // das. Wer hier nach zwanzig Sekunden aufgibt, fragt nur nochmal.
         timeoutMs: 15 * 60_000,

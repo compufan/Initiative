@@ -59,14 +59,19 @@ export interface StueckTransport {
   }): Promise<StueckStand>;
   /** `null`, wenn es die Sitzung nicht (mehr) gibt. */
   stand(sitzungId: string): Promise<StueckStand | null>;
+  /** `sha256`: Hex-Prüfsumme dieses Stücks (Kopfzeile `X-Stueck-Sha256`), falls berechenbar. */
   senden(
     sitzungId: string,
     start: number,
     stueck: Blob,
     gesamt: number,
     signal?: AbortSignal,
+    sha256?: string,
   ): Promise<void>;
-  abschliessen(sitzungId: string, metadaten: StueckMetadaten): Promise<AttachmentDto>;
+  abschliessen(
+    sitzungId: string,
+    metadaten: StueckMetadaten,
+  ): Promise<AttachmentDto & { sha256?: string }>;
   abbrechen(sitzungId: string): Promise<void>;
 }
 
@@ -75,6 +80,27 @@ export interface Fortschritt {
   gesamt: number;
   /** Geschätzte Restzeit in Sekunden, `null` solange es keine Rate gibt. */
   restSek: number | null;
+}
+
+/**
+ * SHA-256 (Hex) eines Stücks per WebCrypto.
+ *
+ * Pro 8-MiB-Stück und nicht über die ganze Datei: `crypto.subtle.digest`
+ * kennt keinen Strom, eine 4-GiB-Datei müsste dafür ganz in den
+ * Arbeitsspeicher. Der Server prüft jedes Stück beim Empfang gegen diese
+ * Summe und bucht es erst dann – so ist die Übertragung Ende zu Ende
+ * gesichert. `undefined`, wo WebCrypto fehlt (unsicherer Kontext, uralter
+ * Browser): Dann geht das Stück ohne Summe, wie bei älteren Servern.
+ */
+export async function stueckSha256(stueck: Blob): Promise<string | undefined> {
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) return undefined;
+  try {
+    const summe = new Uint8Array(await subtle.digest('SHA-256', await stueck.arrayBuffer()));
+    return Array.from(summe, (b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return undefined;
+  }
 }
 
 /* ---------------- reine Rechnerei ---------------- */
@@ -209,6 +235,8 @@ export interface StueckUploadOptionen {
   parallel?: number;
   /** Versuche je Stück, bevor aufgegeben wird (Vorgabe 6, ≈ 1 min Warten). */
   maxVersuche?: number;
+  /** Prüfsumme je Stück (Vorgabe: WebCrypto); zum Prüfen austauschbar. */
+  stueckSumme?: (stueck: Blob) => Promise<string | undefined>;
   /** Zum Prüfen austauschbar. */
   schlafen?: (ms: number, signal?: AbortSignal) => Promise<void>;
   jetzt?: () => number;
@@ -263,7 +291,9 @@ async function mitWiederholung<T>(
  * der Aufrufer es später mit derselben `sitzungId` wieder versuchen – der
  * Server weiss, welche Stücke schon da sind.
  */
-export async function stueckweiseHochladen(opt: StueckUploadOptionen): Promise<AttachmentDto> {
+export async function stueckweiseHochladen(
+  opt: StueckUploadOptionen,
+): Promise<AttachmentDto & { sha256?: string }> {
   const {
     datei,
     transport,
@@ -272,6 +302,7 @@ export async function stueckweiseHochladen(opt: StueckUploadOptionen): Promise<A
     maxVersuche = 6,
     schlafen = schlafenMitAbbruch,
     jetzt = () => Date.now(),
+    stueckSumme = stueckSha256,
   } = opt;
   const gesamt = datei.size;
 
@@ -329,11 +360,17 @@ export async function stueckweiseHochladen(opt: StueckUploadOptionen): Promise<A
         const nr = warteschlange.shift() as number;
         const { start, ende } = stueckBereich(nr, gesamt, stueckGroesse);
         try {
+          const teil = datei.slice(start, ende);
+          // Einmal je Stück gerechnet; die Wiederholungen schicken dieselbe
+          // Summe mit. Stimmt sie am Server nicht (422: beim Übertragen
+          // verändert), geht dasselbe Stück noch einmal.
+          const summe = await stueckSumme(teil);
           await mitWiederholung(
-            () => transport.senden(sitzungId, start, datei.slice(start, ende), gesamt, signal),
+            () => transport.senden(sitzungId, start, teil, gesamt, signal, summe),
             maxVersuche,
             schlafen,
             signal,
+            (f) => wiederholbar(f) || (f as Partial<MitStatus>)?.status === 422,
           );
         } catch (ausfall) {
           fehler ??= ausfall;

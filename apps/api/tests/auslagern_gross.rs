@@ -219,6 +219,15 @@ fn multipart(boundary: &str, mime: &str, name: &str, daten: &[u8]) -> Vec<u8> {
 static AUFBAU: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn aufbauen(name: &str, kalt_treiber: &str, reserve: Option<i64>) -> Option<Probe> {
+    aufbauen_mit(name, kalt_treiber, reserve, true).await
+}
+
+async fn aufbauen_mit(
+    name: &str,
+    kalt_treiber: &str,
+    reserve: Option<i64>,
+    mit_schluessel: bool,
+) -> Option<Probe> {
     let url = std::env::var("TEST_DATABASE_URL")
         .or_else(|_| std::env::var("DATABASE_URL"))
         .ok()?;
@@ -243,7 +252,11 @@ async fn aufbauen(name: &str, kalt_treiber: &str, reserve: Option<i64>) -> Optio
         std::env::set_var("KALT_LOKAL_DIR", &kalt);
         std::env::set_var("PUBLIC_API_URL", "http://localhost:8080");
         std::env::set_var("PUBLIC_APP_URL", "http://localhost:5173");
-        std::env::set_var("MEDIA_KEY", STANDARD.encode([7u8; 32]));
+        if mit_schluessel {
+            std::env::set_var("MEDIA_KEY", STANDARD.encode([7u8; 32]));
+        } else {
+            std::env::remove_var("MEDIA_KEY");
+        }
         Arc::new(Config::from_env().expect("config"))
     };
 
@@ -304,6 +317,8 @@ enum Wie {
     ZuKurz,
     /// Die Nachricht wird gelöscht, während die Datei unterwegs ist.
     GeloeschtUnterwegs,
+    /// Gleich lang, aber ein Byte in der Mitte ist anders (Bitfehler auf der Box).
+    Verfaelscht,
 }
 
 struct Attrappe {
@@ -373,6 +388,14 @@ impl Storage for Attrappe {
                     .put(k, axum::body::Bytes::from(roh[..roh.len() / 2].to_vec()), m)
                     .await
             }
+            Wie::Verfaelscht => {
+                let mut kaputt = roh.clone();
+                let mitte = kaputt.len() / 2;
+                kaputt[mitte] ^= 0xff;
+                self.innen
+                    .put(k, axum::body::Bytes::from(kaputt), m)
+                    .await
+            }
             Wie::GeloeschtUnterwegs => {
                 self.innen.put_datei(k, pfad, m).await?;
                 sqlx::query("delete from attachments where storage_key = $1")
@@ -410,6 +433,23 @@ impl Probe {
         });
         let dyn_a: Arc<dyn Storage> = a.clone();
         (a, dyn_a)
+    }
+
+    async fn durchgang_regeln(
+        &self,
+        kalt: &Arc<dyn Storage>,
+        regeln: auslagern::Regeln,
+    ) -> auslagern::Bilanz {
+        auslagern::durchgang_mit_regeln(
+            &self.state.pool,
+            &self.state.speicher.warm,
+            kalt,
+            100 * GIB,
+            120 * GIB,
+            0,
+            regeln,
+        )
+        .await
     }
 
     async fn durchgang_mit(&self, kalt: &Arc<dyn Storage>, bedarf: i64) -> auslagern::Bilanz {
@@ -738,4 +778,103 @@ fn dateien_sammeln(wurzel: &str) -> Vec<String> {
     }
     gefunden.sort();
     gefunden
+}
+
+fn sha_hex(daten: &[u8]) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(daten))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn eine_falsche_pruefsumme_drueben_haelt_die_datei_warm_und_raeumt_die_ferne_weg() {
+    let _r = REIHE.lock().await;
+    // Ohne Tresor: Drüben liegt Klartext, die gespeicherte Summe gilt ihm.
+    let Some(probe) = aufbauen_mit("summe", "lokal", None, false).await else {
+        return;
+    };
+    let token = probe.konto("gsumme").await;
+    let daten = video(2 * MIB + 5);
+    let id = probe.hochladen(&token, &daten).await;
+    probe.prioritaet_setzen(id, "niedrig").await;
+    sqlx::query("update attachments set sha256 = $2 where id = $1")
+        .bind(id)
+        .bind(sha_hex(&daten))
+        .execute(&probe.state.pool)
+        .await
+        .unwrap();
+    let regeln = auslagern::Regeln {
+        pruefsumme_bis: 64 * MIB as u64,
+    };
+
+    // Bitfehler auf der Box, gleiche Länge: Die Grösse allein hätte es durchgelassen.
+    let (a, kalt) = probe.attrappe(Wie::Verfaelscht);
+    let bilanz = probe.durchgang_regeln(&kalt, regeln).await;
+    assert_eq!(bilanz.bewegt, 0, "{bilanz:?}");
+    assert_eq!(bilanz.gescheitert, 1, "{bilanz:?}");
+    assert_eq!(probe.ablage(id).await.0, "lokal");
+    assert_eq!(dateien_sammeln(&probe.warm).len(), 1, "die warme Fassung muss bleiben");
+    assert_eq!(
+        dateien_sammeln(&probe.kalt).len(),
+        0,
+        "die verfälschte ferne Fassung muss weg sein"
+    );
+
+    // Ohne Gegenlesen (0) ginge dieselbe Verfälschung durch – das ist die
+    // Grenze, die in `Regeln` begründet ist.
+    let bilanz = probe
+        .durchgang_regeln(&kalt, auslagern::Regeln::default())
+        .await;
+    assert_eq!(bilanz.bewegt, 1, "{bilanz:?}");
+    let _ = a;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn eine_richtige_pruefsumme_laesst_den_umzug_durch_und_grosse_dateien_werden_nicht_gegengelesen() {
+    let _r = REIHE.lock().await;
+    let Some(probe) = aufbauen_mit("summe2", "lokal", None, false).await else {
+        return;
+    };
+    let token = probe.konto("gsumme2").await;
+    let klein = video(MIB + 3);
+    let gross = video(3 * MIB);
+    let id_klein = probe.hochladen(&token, &klein).await;
+    let id_gross = probe.hochladen(&token, &gross).await;
+    for (id, daten) in [(id_klein, &klein), (id_gross, &gross)] {
+        probe.prioritaet_setzen(id, "niedrig").await;
+        sqlx::query("update attachments set sha256 = $2 where id = $1")
+            .bind(id)
+            .bind(sha_hex(daten))
+            .execute(&probe.state.pool)
+            .await
+            .unwrap();
+    }
+    // Schwelle zwischen klein (1 MiB) und gross (3 MiB), dazu eine
+    // verfälschende Box: Nur die kleine wird geprüft – und fällt durch; die
+    // grosse geht mangels Gegenlesen durch (Grösse stimmt ja).
+    let (_a, kalt) = probe.attrappe(Wie::Verfaelscht);
+    let bilanz = probe
+        .durchgang_regeln(
+            &kalt,
+            auslagern::Regeln {
+                pruefsumme_bis: 2 * MIB as u64,
+            },
+        )
+        .await;
+    assert_eq!(bilanz.bewegt, 1, "{bilanz:?}");
+    assert_eq!(bilanz.gescheitert, 1, "{bilanz:?}");
+    assert_eq!(probe.ablage(id_klein).await.0, "lokal");
+    assert_eq!(probe.ablage(id_gross).await.0, "fern");
+
+    // Mit gesunder Box und richtiger Summe geht die kleine durch.
+    let (_a, gesund) = probe.attrappe(Wie::Gesund);
+    let bilanz = probe
+        .durchgang_regeln(
+            &gesund,
+            auslagern::Regeln {
+                pruefsumme_bis: 2 * MIB as u64,
+            },
+        )
+        .await;
+    assert_eq!(bilanz.bewegt, 1, "{bilanz:?}");
+    assert_eq!(probe.ablage(id_klein).await.0, "fern");
 }

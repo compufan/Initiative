@@ -48,8 +48,8 @@ export const apiTransport: StueckTransport = {
       throw fehler;
     }
   },
-  async senden(sitzungId, start, stueck, gesamt, signal) {
-    await api.media.stueckSenden(sitzungId, start, stueck, gesamt, signal);
+  async senden(sitzungId, start, stueck, gesamt, signal, sha256) {
+    await api.media.stueckSenden(sitzungId, start, stueck, gesamt, signal, sha256);
   },
   abschliessen: (sitzungId, metadaten) =>
     api.media.stueckeAbschliessen(sitzungId, { ...metadaten }),

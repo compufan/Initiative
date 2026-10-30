@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AttachmentDto } from '@initiative/shared';
 import {
+  stueckSha256,
   Rate,
   empfangeneBytes,
   offeneStuecke,
@@ -272,5 +273,110 @@ describe('stueckweiseHochladen', () => {
       }),
     ).rejects.toMatchObject({ name: 'AbortError' });
     expect(ausfall.gesendet).toBe(1);
+  });
+});
+
+describe('Prüfsumme je Stück', () => {
+  it('berechnet SHA-256 über genau das Stück (bekannter Wert)', async () => {
+    // SHA-256("abc")
+    expect(await stueckSha256(new Blob(['abc']))).toBe(
+      'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+    );
+    expect(await stueckSha256(new Blob([]))).toBe(
+      'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+    );
+  });
+
+  it('schickt zu jedem Stück die Summe genau dieses Stücks mit', async () => {
+    const { transport } = attrappe();
+    const gesehen: { start: number; sha?: string; laenge: number }[] = [];
+    const senden = transport.senden;
+    transport.senden = async (id, start, stueck, gesamt, signal, sha) => {
+      gesehen.push({ start, sha, laenge: stueck.size });
+      await senden(id, start, stueck, gesamt, signal, sha);
+    };
+    const datei = inhalt(10);
+    await stueckweiseHochladen({
+      datei,
+      kind: 'file',
+      mime: 'x/y',
+      metadaten: {},
+      transport,
+      schlafen: sofort,
+      parallel: 1,
+    });
+    expect(gesehen.map((g) => g.start)).toEqual([0, 4, 8]);
+    for (const g of gesehen) {
+      const erwartet = await stueckSha256(datei.slice(g.start, g.start + g.laenge));
+      expect(g.sha).toBe(erwartet);
+    }
+  });
+
+  it('wiederholt ein Stück bei 422 (Summe stimmt am Server nicht) mit derselben Summe', async () => {
+    const { transport } = attrappe();
+    const senden = transport.senden;
+    const versuche: (string | undefined)[] = [];
+    let abgewiesen = false;
+    transport.senden = async (id, start, stueck, gesamt, signal, sha) => {
+      if (start === 4) {
+        versuche.push(sha);
+        if (!abgewiesen) {
+          abgewiesen = true;
+          throw { status: 422 };
+        }
+      }
+      await senden(id, start, stueck, gesamt, signal, sha);
+    };
+    const fertig = await stueckweiseHochladen({
+      datei: inhalt(10),
+      kind: 'file',
+      mime: 'x/y',
+      metadaten: {},
+      transport,
+      schlafen: sofort,
+      parallel: 1,
+    });
+    expect(fertig.size).toBe(10);
+    expect(versuche).toHaveLength(2);
+    expect(versuche[0]).toBe(versuche[1]);
+  });
+
+  it('gibt nach zu vielen 422 auf, statt endlos zu wiederholen', async () => {
+    const { transport } = attrappe();
+    transport.senden = async () => {
+      throw { status: 422 };
+    };
+    await expect(
+      stueckweiseHochladen({
+        datei: inhalt(10),
+        kind: 'file',
+        mime: 'x/y',
+        metadaten: {},
+        transport,
+        schlafen: sofort,
+        parallel: 1,
+        maxVersuche: 3,
+      }),
+    ).rejects.toMatchObject({ status: 422 });
+  });
+
+  it('lädt ohne Summe hoch, wo WebCrypto fehlt', async () => {
+    const { transport } = attrappe();
+    const gesehen: (string | undefined)[] = [];
+    const senden = transport.senden;
+    transport.senden = async (id, start, stueck, gesamt, signal, sha) => {
+      gesehen.push(sha);
+      await senden(id, start, stueck, gesamt, signal, sha);
+    };
+    await stueckweiseHochladen({
+      datei: inhalt(6),
+      kind: 'file',
+      mime: 'x/y',
+      metadaten: {},
+      transport,
+      schlafen: sofort,
+      stueckSumme: async () => undefined,
+    });
+    expect(gesehen).toEqual([undefined, undefined]);
   });
 });
