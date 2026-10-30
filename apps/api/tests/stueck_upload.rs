@@ -842,3 +842,44 @@ async fn mit_verschluesselung_liegt_geheimtext_und_bereiche_stimmen() {
     assert_eq!(status, StatusCode::PARTIAL_CONTENT);
     assert_eq!(teil, &daten[8_388_000..=8_400_000]);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn die_wirksamen_grenzen_kommen_vom_server() {
+    // UPLOAD_MAX_BYTES gesenkt: Die App muss DIESE Zahl erfahren, nicht die
+    // Vorgabe aus dem gemeinsamen Paket.
+    let probe = probe!(|c| c.upload_max_bytes = 1_500_000_000);
+    let token = probe.konto().await;
+
+    let (status, g) = probe.call("GET", "/api/v1/media/grenzen", &token, None).await;
+    assert_eq!(status, StatusCode::OK, "{g}");
+    assert_eq!(g["maxUploadBytes"]["video"], 1_500_000_000i64);
+    assert_eq!(g["maxUploadBytes"]["file"], 1_500_000_000i64);
+    // Bild und Ton behalten ihre festen Grenzen.
+    assert_eq!(g["maxUploadBytes"]["image"], 25 * 1024 * 1024);
+    assert_eq!(g["maxUploadBytes"]["audio"], 50 * 1024 * 1024);
+    assert_eq!(g["maxUploadBytes"]["sticker"], 4 * 1024 * 1024);
+    assert_eq!(g["direktUploadMax"]["video"], 200 * 1024 * 1024);
+    assert_eq!(g["direktUploadMax"]["file"], 100 * 1024 * 1024);
+    assert_eq!(g["stueckGroesse"], STUECK as i64);
+    assert_eq!(g["uploadMaxBytes"], 1_500_000_000i64);
+
+    // Und der Server hält sich daran: knapp darüber wird abgewiesen.
+    let (status, _) = probe
+        .anlegen(&token, "file", "application/octet-stream", 1_500_000_001, None)
+        .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+
+    // Ohne Anmeldung gibt es sie nicht.
+    let antwort = probe
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/media/grenzen")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(antwort.status(), StatusCode::UNAUTHORIZED);
+}

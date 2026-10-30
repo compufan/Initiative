@@ -7,6 +7,7 @@ import {
   type MessageType,
 } from '@initiative/shared';
 import { API_BASE } from '../../lib/api.js';
+import { maxUploadBytesFuer } from '../../lib/uploadGrenzen.js';
 import type { OutboxAttachment } from '../../lib/db.js';
 import { useChat } from '../../state/chat.js';
 import { toast } from '../../state/ui.js';
@@ -264,7 +265,7 @@ export function withinUploadLimit(
   size: number,
   name?: string | null,
 ): boolean {
-  const max = LIMITS.maxUploadBytes[kind];
+  const max = maxUploadBytesFuer(kind);
   if (size <= max) {
     /*
      * Ehrlich vorab: Ein grosser Upload braucht die App im Vordergrund. Der

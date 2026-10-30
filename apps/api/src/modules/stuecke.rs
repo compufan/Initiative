@@ -59,6 +59,7 @@ use crate::validate::Validator;
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route("/media/grenzen", get(grenzen))
         .route("/media/stuecke", post(anlegen))
         .route(
             "/media/stuecke/{id}",
@@ -155,6 +156,40 @@ async fn stand(state: &AppState, sitzung: &Sitzung) -> AppResult<Value> {
         "empfangenBytes": empfangen_bytes,
         "status": sitzung.status,
         "ablaufAt": ablauf,
+    }))
+}
+
+/**
+ * `GET /media/grenzen` – die Upload-Grenzen, die dieser Server WIRKLICH
+ * durchsetzt.
+ *
+ * # Warum der Client sie fragt
+ *
+ * `UPLOAD_MAX_BYTES` ist einstellbar. Der Client kannte bisher nur die
+ * Vorgabe (4 GiB) aus dem gemeinsamen Paket: Bei einem Server mit 1 GiB hätte
+ * die App eine 3-GiB-Datei zugelassen, eine Stunde hochgeladen und wäre dann
+ * erst beim Anlegen der Sitzung abgewiesen worden. Mit dieser Antwort
+ * stimmt die Vorabprüfung mit der Entscheidung des Servers überein.
+ *
+ * Angemeldet, weil der Client ohnehin nur dann hochlädt; nichts Geheimes,
+ * aber auch kein Grund, es Unbekannten zu zeigen.
+ */
+async fn grenzen(State(state): State<AppState>, _user: AuthUser) -> Json<Value> {
+    let gross = state.config.upload_max_bytes;
+    let arten = ["image", "video", "audio", "file", "sticker"];
+    let mut stuecke = serde_json::Map::new();
+    let mut direkt = serde_json::Map::new();
+    for art in arten {
+        stuecke.insert(art.into(), json!(max_stueck_upload_bytes(art, gross)));
+        // Der Weg in einer Anfrage hat feste, kleine Grenzen (`media.rs`
+        // kennt UPLOAD_MAX_BYTES nicht) – genau das wird gemeldet.
+        direkt.insert(art.into(), json!(crate::constants::max_upload_bytes(art)));
+    }
+    Json(json!({
+        "maxUploadBytes": stuecke,
+        "direktUploadMax": direkt,
+        "stueckGroesse": STUECK_GROESSE,
+        "uploadMaxBytes": gross,
     }))
 }
 

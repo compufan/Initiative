@@ -397,6 +397,7 @@ Gelöschte Nachrichten verschwinden nicht aus der Liste: `deletedAt` ist gesetzt
 | POST    | `/media/uploads`               | Bearer         | `{ kind, mime, size, fileName? }`                              | `201` `CreateUploadResult`                               |
 | POST    | `/media/uploads/{id}/data`     | Bearer         | `multipart/form-data`, Feld `file`                             | `200` `Attachment`                                       |
 | POST    | `/media/uploads/{id}/complete` | Bearer         | `{ width?, height?, durationMs?, waveform?, previewDataUrl? }` | `200` `Attachment`                                       |
+| GET     | `/media/grenzen`               | Bearer         | –                                                              | `200` `{ maxUploadBytes{art}, direktUploadMax{art}, stueckGroesse, uploadMaxBytes }` – die wirksamen Grenzen (`UPLOAD_MAX_BYTES`); die App lädt sie einmal je Sitzung |
 | POST    | `/media/stuecke`               | Bearer         | `{ kind, mime, size, fileName?, sha256? }`                     | `201` Stand (siehe unten)                                |
 | GET     | `/media/stuecke/{id}`          | Bearer         | –                                                              | `200` Stand – welche Stücke schon da sind                |
 | PUT     | `/media/stuecke/{id}`          | Bearer         | Rumpf roh, Header `Content-Range: bytes a-b/size`              | `200` Stand                                              |

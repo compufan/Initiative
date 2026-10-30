@@ -1,3 +1,4 @@
+import type { GrenzenAntwort } from './uploadGrenzen.js';
 import type {
   ApiErrorBody,
   AttachmentDto,
@@ -720,6 +721,8 @@ export const api = {
         timeoutMs: 15 * 60_000,
       }),
     stueckeAbbrechen: (sitzungId: string) => del<void>(`/media/stuecke/${sitzungId}`),
+    /** Die vom Server wirklich geltenden Upload-Grenzen (`UPLOAD_MAX_BYTES` & Co.). */
+    grenzen: () => get<GrenzenAntwort>('/media/grenzen'),
     url: (attachmentId: string) => `${API_BASE}${API_PREFIX}/media/${attachmentId}`,
     /**
      * Eine Adresse, die ein Fernseher selbst abrufen kann.

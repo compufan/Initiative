@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type { AuthSession, SelfUserDto } from '@initiative/shared';
 import { ApiError, api, getTokens, onTokenChange, setTokens } from '../lib/api.js';
 import { realtime, type ConnectionState } from '../lib/realtime.js';
+import { grenzenLaden, grenzenZuruecksetzen } from '../lib/uploadGrenzen.js';
 import { clearOfflineData, readMeta, writeMeta } from '../lib/db.js';
 
 export type SessionStatus = 'loading' | 'anonymous' | 'authenticated';
@@ -50,6 +51,7 @@ export const useSession = create<SessionState>((set, get) => ({
       set({ status: 'authenticated', user, error: null });
       void writeMeta(USER_CACHE_KEY, user);
       realtime.connect();
+      void grenzenLaden(api.media.grenzen);
     } catch (error) {
       // Nur eine echte Abweisung beendet die Sitzung. Ein Netzwerkfehler oder
       // ein Serverfehler ist voruebergehend – wer dabei ausgeloggt wird, muss
@@ -88,6 +90,7 @@ export const useSession = create<SessionState>((set, get) => ({
     set({ status: 'authenticated', user: session.user, error: null });
     void writeMeta(USER_CACHE_KEY, session.user);
     realtime.reconnect();
+    void grenzenLaden(api.media.grenzen);
   },
 
   async logout() {
@@ -104,6 +107,7 @@ export const useSession = create<SessionState>((set, get) => ({
       // der Token selbst ist für die Seite unsichtbar.
       if (tokens) await api.auth.logout().catch(() => {});
       setTokens(null);
+      grenzenZuruecksetzen();
       await clearOfflineData();
       await medienSpeicherLeeren();
       set({ status: 'anonymous', user: null });

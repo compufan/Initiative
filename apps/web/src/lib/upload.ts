@@ -3,6 +3,7 @@ import { flaeche2d } from '../modules/bild/farbraum.js';
 import { api, ApiError } from './api.js';
 import type { OutboxAttachment } from './db.js';
 import { stueckweiseHochladen, type Fortschritt, type StueckTransport } from './stueckUpload.js';
+import { direktMaxFuer, grenzenLaden } from './uploadGrenzen.js';
 import { videoBereinigen } from './videoMetadaten.js';
 
 /**
@@ -15,7 +16,7 @@ import { videoBereinigen } from './videoMetadaten.js';
 export function inStuecken(attachment: Pick<OutboxAttachment, 'kind'>, groesse: number): boolean {
   return (
     groesse > LIMITS.stueckUploadAb ||
-    groesse > (LIMITS.direktUploadMax[attachment.kind] ?? LIMITS.stueckUploadAb)
+    groesse > (direktMaxFuer(attachment.kind) ?? LIMITS.stueckUploadAb)
   );
 }
 
@@ -112,6 +113,9 @@ export async function uploadBlob(
   kontext: UploadKontext = {},
 ): Promise<AttachmentDto> {
   if (attachment.blobFehlt) throw new DateiFehltError(attachment.fileName);
+  // Die Grenzen des Servers einmal je Sitzung – schlägt das fehl, gelten die
+  // Konstanten; ein Upload darf daran nie scheitern.
+  await grenzenLaden(api.media.grenzen);
   /*
    * Der Vorposten für Video-Metadaten – hier und nirgends sonst.
    *

@@ -1,5 +1,6 @@
 import { useState, type ChangeEvent } from 'react';
-import { LIMITS, formatBytes } from '@initiative/shared';
+import { formatBytes } from '@initiative/shared';
+import { maxUploadBytesFuer } from '../../lib/uploadGrenzen.js';
 import { Sheet } from '../../components/Sheet.js';
 import { EmptyState } from '../../components/Feedback.js';
 import type { ComposerActionProps } from '../types.js';
@@ -80,7 +81,7 @@ export function FileSheet({ conversationId, onClose }: ComposerActionProps) {
         <EmptyState
           emoji="📎"
           title="Noch keine Datei gewählt"
-          description={`Dokumente, PDFs, Archive – bis zu ${formatBytes(LIMITS.maxUploadBytes.file)} pro Datei.`}
+          description={`Dokumente, PDFs, Archive – bis zu ${formatBytes(maxUploadBytesFuer('file'))} pro Datei.`}
         />
       )}
     </Sheet>
