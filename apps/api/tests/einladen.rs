@@ -163,6 +163,17 @@ impl Probe {
         chat["id"].as_str().unwrap().to_string()
     }
 
+    /// Macht die Konten zu Kontakten von `wer`: eine gemeinsame Gruppe
+    /// „Bekannte“, die nie als Ziel gewählt wird.
+    ///
+    /// Einladen lässt sich nur, wer mit dem Ersteller einen Chat teilt
+    /// (`einladen::personen_pruefen`). Diese Tests prüfen, was eine Einladung
+    /// an Karten und Einzelchats anlegt – nicht, woher die Bekanntschaft
+    /// kommt. Eine Gruppe stiftet sie, ohne einen Einzelchat vorwegzunehmen.
+    async fn bekannte(&self, wer: &Konto, andere: &[&Konto]) {
+        self.gruppe(wer, "Bekannte", andere).await;
+    }
+
     /// Der Einzelchat zwischen zwei Konten (angelegt oder vorhanden).
     async fn einzel(&self, von: &Konto, mit: &Konto) -> String {
         let (status, chat) = self
@@ -573,6 +584,7 @@ async fn einzelchats_werden_angelegt_oder_wiederverwendet() {
     let c = probe.konto(&format!("cleo{n}")).await;
     let d = probe.konto(&format!("dora{n}")).await;
     let e = probe.konto(&format!("emil{n}")).await;
+    probe.bekannte(&a, &[&b, &c, &d, &e]).await;
 
     // B: ein vorhandener Einzelchat, den B archiviert hat – er zählt trotzdem.
     let ab = probe.einzel(&a, &b).await;
@@ -901,6 +913,7 @@ async fn eingeladene_ausserhalb_des_chats_koennen_oeffnen_und_zusagen() {
     let a = probe.konto(&format!("anna{n}")).await;
     let b = probe.konto(&format!("bodo{n}")).await;
     let x = probe.konto(&format!("xaver{n}")).await;
+    probe.bekannte(&a, &[&b, &x]).await;
     let g = probe.gruppe(&a, "Zwei", &[&b]).await;
 
     // Xaver ist in keinem Chat mit Anna und Bodo – nur eingeladen.
@@ -1197,6 +1210,7 @@ async fn nachtraeglich_einladen_liefert_nur_an_die_neuen() {
     let b = probe.konto(&format!("bodo{n}")).await;
     let c = probe.konto(&format!("cleo{n}")).await;
     let d = probe.konto(&format!("dora{n}")).await;
+    probe.bekannte(&a, &[&b, &c, &d]).await;
 
     let termin = probe
         .termin_mit(&a, json!({ "attendeeIds": ids(&[&b]), "zustellung": {} }))
@@ -1395,6 +1409,7 @@ async fn das_einzelne_ausladen_laeuft_ueber_denselben_weg() {
     let a = probe.konto(&format!("anna{n}")).await;
     let b = probe.konto(&format!("bodo{n}")).await;
     let c = probe.konto(&format!("cleo{n}")).await;
+    probe.bekannte(&a, &[&b, &c]).await;
 
     let termin = probe
         .termin_mit(
@@ -1461,6 +1476,7 @@ async fn zeit_und_ort_aenderung_benachrichtigt_ohne_neue_karte() {
     let b = probe.konto(&format!("bodo{n}")).await;
     let c = probe.konto(&format!("cleo{n}")).await;
     let d = probe.konto(&format!("dora{n}")).await;
+    probe.bekannte(&a, &[&b, &c, &d]).await;
 
     let termin = probe
         .termin_mit(
@@ -1977,6 +1993,7 @@ async fn fremde_termin_karte_zeigt_nichts_und_nachrichtenweg_ist_zu() {
     let b = probe.konto(&format!("bodo{n}")).await;
     let d = probe.konto(&format!("dora{n}")).await;
     let e = probe.konto(&format!("emil{n}")).await;
+    probe.bekannte(&a, &[&b, &d]).await;
 
     // Ein Termin, den nur Anna und Bodo kennen.
     let termin = probe
@@ -2068,6 +2085,7 @@ async fn doppelsenden_und_nachliefern_sind_wiederholbar() {
     let a = probe.konto(&format!("anna{n}")).await;
     let b = probe.konto(&format!("bodo{n}")).await;
     let c = probe.konto(&format!("cleo{n}")).await;
+    probe.bekannte(&a, &[&b, &c]).await;
     probe.push_leeren();
 
     // Zweimal dieselbe Eingabe: ein Termin, nicht zwei.
@@ -2444,6 +2462,7 @@ async fn eine_zusage_waehrend_des_ausladens_holt_niemanden_zurueck() {
     let n = kurz();
     let a = probe.konto(&format!("anna{n}")).await;
     let b = probe.konto(&format!("bodo{n}")).await;
+    probe.bekannte(&a, &[&b]).await;
     let termin = probe
         .termin_mit(
             &a,
@@ -2554,6 +2573,7 @@ async fn eingeladene_tragen_sich_selbst_aus() {
     let b = probe.konto(&format!("bodo{n}")).await;
     let c = probe.konto(&format!("cleo{n}")).await;
     let d = probe.konto(&format!("dora{n}")).await;
+    probe.bekannte(&a, &[&b, &c, &d]).await;
     let termin = probe
         .termin_mit(
             &a,
@@ -2609,6 +2629,7 @@ async fn ein_grosser_altbestand_laesst_sich_verkleinern() {
     let n = kurz();
     let a = probe.konto(&format!("anna{n}")).await;
     let b = probe.konto(&format!("bodo{n}")).await;
+    probe.bekannte(&a, &[&b]).await;
     let termin = probe
         .termin_mit(
             &a,
@@ -2673,6 +2694,7 @@ async fn abgesagte_termine_stehen_im_abo_als_abgesagt() {
     let n = kurz();
     let a = probe.konto(&format!("anna{n}")).await;
     let b = probe.konto(&format!("bodo{n}")).await;
+    probe.bekannte(&a, &[&b]).await;
     let termin = probe
         .termin_mit(&a, json!({ "attendeeIds": ids(&[&b]), "zustellung": {} }))
         .await;
@@ -2712,6 +2734,7 @@ async fn absagen_im_wechsel_klingelt_nicht_beliebig_oft() {
     let n = kurz();
     let a = probe.konto(&format!("anna{n}")).await;
     let b = probe.konto(&format!("bodo{n}")).await;
+    probe.bekannte(&a, &[&b]).await;
     let termin = probe
         .termin_mit(&a, json!({ "attendeeIds": ids(&[&b]), "zustellung": {} }))
         .await;
@@ -2751,6 +2774,7 @@ async fn schreibende_wege_verraten_die_kennung_nicht() {
     let a = probe.konto(&format!("anna{n}")).await;
     let b = probe.konto(&format!("bodo{n}")).await;
     let c = probe.konto(&format!("cleo{n}")).await;
+    probe.bekannte(&a, &[&b, &c]).await;
     let termin = probe
         .termin_mit(&a, json!({ "attendeeIds": ids(&[&b]), "zustellung": {} }))
         .await;
@@ -3056,6 +3080,7 @@ async fn eine_terminfindung_nimmt_ausgeladene_nicht_wieder_auf() {
     let b = probe.konto(&format!("bodo{n}")).await;
     let c = probe.konto(&format!("cleo{n}")).await;
     let d = probe.konto(&format!("dora{n}")).await;
+    probe.bekannte(&a, &[&b, &c, &d]).await;
     let g = probe.gruppe(&a, "Drei", &[&b, &c]).await;
     let start = chrono::Utc::now() + chrono::Duration::days(2);
     let (status, geplant) = probe
@@ -3161,6 +3186,7 @@ async fn ohne_karte_im_einzelchat_gibt_es_nur_ueber_eine_gruppenkarte_eine_mitte
     let a = probe.konto(&format!("anna{n}")).await;
     let b = probe.konto(&format!("bodo{n}")).await;
     let c = probe.konto(&format!("cleo{n}")).await;
+    probe.bekannte(&a, &[&b, &c]).await;
     let g = probe.gruppe(&a, "Zwei", &[&b]).await;
     let termin = probe
         .termin_mit(&a, json!({ "zustellung": { "senden": false } }))

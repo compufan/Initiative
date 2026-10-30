@@ -108,6 +108,17 @@ async function terminAnlegen(
   ersteller: Sitzung,
   eingeladene: Sitzung[],
 ): Promise<{ id: string; titel: string }> {
+  // Einladen geht nur an Kontakte (`einladen::personen_pruefen` in der API):
+  // eine gemeinsame Gruppe, die nicht Chat des Termins wird.
+  const bekannte = await http.post(`${API}/conversations`, {
+    headers: als(ersteller),
+    data: {
+      type: 'group',
+      title: 'Bekannte',
+      memberIds: eingeladene.map((person) => person.user.id),
+    },
+  });
+  expect(bekannte.ok(), `Bekannte: ${bekannte.status()}`).toBeTruthy();
   const beginn = new Date();
   beginn.setDate(beginn.getDate() + 10);
   const titel = `Hüttenwochenende ${Math.random().toString(36).slice(2, 7)}`;

@@ -262,7 +262,7 @@ pub async fn anlegen(state: &AppState, input: NewEvent) -> AppResult<Angelegt> {
     // Die Prüfungen vor der Transaktion teilen sich eine Verbindung, die vor
     // dem Beginn der Transaktion wieder frei wird.
     let mut lesen = state.pool.acquire().await?;
-    einladen::personen_pruefen(&mut lesen, &personen).await?;
+    einladen::personen_pruefen(&mut lesen, ersteller, &personen).await?;
 
     // Der Plan: wohin die Karten gehen.
     let plan = match &input.zustellung {
@@ -564,6 +564,10 @@ pub struct EventExpander;
 impl MessageExpander for EventExpander {
     fn key(&self) -> &'static str {
         "calendar"
+    }
+
+    fn metadaten_schluessel(&self) -> &'static str {
+        "eventId"
     }
 
     async fn expand(

@@ -203,6 +203,18 @@ async fn anlegen_unter_einem_ordner_braucht_aendern_und_verknuepfen_auch() {
     let (status, _) = probe.sammlung(&b, "Wochenende", Some(&eltern)).await;
     assert_eq!(status, StatusCode::CREATED);
 
+    // Einladen geht nur an Kontakte (`einladen::personen_pruefen`): Anna und
+    // Bob teilen einen Chat.
+    let (status, _) = probe
+        .call(
+            "POST",
+            "/api/v1/conversations",
+            &a,
+            Some(json!({ "type": "group", "title": "Bekannte", "memberIds": [b.id] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
     // Verknüpfen: Bob ist eingeladen, aber nicht Ersteller → 403 am Termin.
     let beginn = chrono::Utc::now() + chrono::Duration::days(3);
     let (status, termin) = probe

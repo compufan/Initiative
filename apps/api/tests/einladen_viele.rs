@@ -210,11 +210,13 @@ async fn viele_eingeladene_bleiben_im_zeitrahmen_und_phase_eins_waechst_nicht() 
         .await;
     assert_eq!(status, StatusCode::CREATED, "{konto}");
     let token = konto["accessToken"].as_str().unwrap().to_string();
+    let anna_id = Uuid::parse_str(konto["user"]["id"].as_str().unwrap()).unwrap();
 
     let beginn = chrono::Utc::now() + chrono::Duration::days(3);
     let mut schreibend = Vec::new();
     for anzahl in [20usize, 150] {
         let leute = probe.konten(anzahl, &format!("g{n}a{anzahl}x")).await;
+        bekannt_machen(&probe.state.pool, anna_id, &leute).await;
         let ids: Vec<String> = leute.iter().map(|id| id.to_string()).collect();
         let hoerer = probe.state.hub.register(leute[0]);
         let mut empfaenger = hoerer.1.empfang;
@@ -291,4 +293,32 @@ async fn viele_eingeladene_bleiben_im_zeitrahmen_und_phase_eins_waechst_nicht() 
         );
     }
     assert_eq!(schreibend[0].1, schreibend[1].1, "{schreibend:?}");
+}
+
+/// Einladen geht nur an Kontakte (`einladen::personen_pruefen`). Eine
+/// gemeinsame Gruppe „Bekannte“ stiftet die Bekanntschaft, ohne einen
+/// Einzelchat vorwegzunehmen – die Tests hier prüfen Karten und Mitteilungen,
+/// nicht, woher man sich kennt.
+async fn bekannt_machen(pool: &sqlx::PgPool, von: Uuid, personen: &[Uuid]) {
+    let chat = Uuid::now_v7();
+    sqlx::query(
+        "insert into conversations (id, type, title, created_by) values ($1, 'group', 'Bekannte', $2)",
+    )
+    .bind(chat)
+    .bind(von)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into conversation_members (conversation_id, user_id, role, sieht_ab)
+         select $1, p, case when p = $2 then 'owner' else 'member' end, now()
+           from unnest(array_append($3::uuid[], $2)) as p
+         on conflict do nothing",
+    )
+    .bind(chat)
+    .bind(von)
+    .bind(personen)
+    .execute(pool)
+    .await
+    .unwrap();
 }

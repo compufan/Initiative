@@ -785,6 +785,22 @@ async fn hide(
             "Wer einen Anteil trägt, kann die Ausgabe nicht verborgen bekommen – sein Saldo stimmte sonst nicht",
         ));
     }
+    // Dieselbe Regel wie beim Anlegen (`unpassende_personen`): nur Personen
+    // aus dem Zusammenhang der Ausgabe. Hier stand jede Kennung offen – eine
+    // Zeile je fremdem Konto, und jeder davon bekam ein Ereignis zur Ausgabe.
+    let unpassend = crate::services::expenses::unpassende_personen(
+        &state.pool,
+        user.id(),
+        expense.conversation_id,
+        expense.event_id,
+        &[user_id],
+    )
+    .await?;
+    if !unpassend.is_empty() {
+        return Err(AppError::bad_request(
+            "Verbergen lässt sich eine Ausgabe nur vor Personen, die zum Chat oder Termin gehören – ohne beides nur vor Leuten, mit denen du einen Chat teilst",
+        ));
+    }
 
     sqlx::query(
         "insert into expense_hidden_from (expense_id, user_id) values ($1, $2)

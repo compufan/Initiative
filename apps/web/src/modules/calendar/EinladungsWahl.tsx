@@ -384,6 +384,51 @@ export function EinladungsWahl({
     setMeldung(null);
   }, []);
 
+  /*
+   * Jemand von „Weitere Personen“ – also ohne gemeinsamen Chat – wird gewählt.
+   *
+   * Der Server lädt nur Kontakte ein (`einladen::personen_pruefen`): Eine
+   * Einladung legte vorher mit jedem beliebigen Konto still einen Einzelchat
+   * an und stiftete so eine Beziehung, auf die sich etwa die Ausgaben
+   * verlassen. Hier wird der Chat deshalb VORHER ausdrücklich begonnen – mit
+   * demselben Aufruf wie „Neuer Chat“, sichtbar und für jede Person einzeln.
+   * Danach steht sie unter den Kontakten und ist gewählt.
+   *
+   * Abwählen und wer schon eingeladen ist (beim Bearbeiten), gehen wie sonst.
+   */
+  const verbindet = useRef<string | null>(null);
+  const fremdUmschalten = useCallback(
+    async (id: string) => {
+      const { auswahl: jetzt } = aktuell.current;
+      if (jetzt.personen.includes(id) || (bisher && id in bisher)) {
+        umschalten(id);
+        return;
+      }
+      if (verbindet.current) return;
+      verbindet.current = id;
+      setMeldung(null);
+      try {
+        const chat = await api.conversations.create({ type: 'direct', memberIds: [id] });
+        useChat.getState().upsertConversation(chat);
+        const { auswahl: danach, onChange: aendern } = aktuell.current;
+        if (!danach.personen.includes(id)) aendern(personUmschalten(danach, id));
+      } catch {
+        setMeldung(
+          'Mit dieser Person ließ sich gerade kein Chat beginnen – versuche es noch einmal.',
+        );
+      } finally {
+        verbindet.current = null;
+      }
+    },
+    [bisher, umschalten],
+  );
+  const fremdKlick = useCallback(
+    (id: string) => {
+      void fremdUmschalten(id);
+    },
+    [fremdUmschalten],
+  );
+
   const alleKontakte = useMemo(() => alleWaehlen(waehlbar, auswahl), [waehlbar, auswahl]);
 
   function alle() {
@@ -785,9 +830,13 @@ export function EinladungsWahl({
                         kontakt={kontakt}
                         an={gewaehlt.has(kontakt.id)}
                         antwort={bisher?.[kontakt.id]}
-                        onUmschalten={umschalten}
+                        onUmschalten={fremdKlick}
                       />
-                      <span className="cal-einl-nutzer">nicht in deinen Chats</span>
+                      <span className="cal-einl-nutzer">
+                        {bisher && kontakt.id in bisher
+                          ? 'nicht in deinen Chats'
+                          : 'nicht in deinen Chats – Auswählen beginnt einen Chat'}
+                      </span>
                     </div>
                   ))}
                 </div>

@@ -178,7 +178,13 @@ pub async fn load_conversation_dtos(
     let conversation_ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
 
     let member_rows = sqlx::query_as::<_, ConversationMemberRow>(
-        "select * from conversation_members where conversation_id = any($1) order by joined_at asc",
+        // `user_id` als zweiter Schlüssel: Wer in derselben Transaktion
+        // beitritt (Gründung, mehrere hinzugefügt), hat dasselbe `joined_at`,
+        // und ohne festen Gleichstand hinge die Reihenfolge vom Plan ab – der
+        // Rundruf (`load_conversation_fuer_mitglieder`) fragt anders und muss
+        // trotzdem dieselbe Liste liefern.
+        "select * from conversation_members where conversation_id = any($1)
+          order by joined_at asc, user_id asc",
     )
     .bind(&conversation_ids)
     .fetch_all(&state.pool)
@@ -395,6 +401,14 @@ pub async fn load_conversation_dto(
 }
 
 /// Conversation payloads are viewer specific, so every member gets their own copy.
+///
+/// # Einmal laden, je Person nur das Eigene
+///
+/// Hier stand eine Schleife über `load_conversation_dto` – je Mitglied die
+/// ganze Chatliste für einen Chat, rund neun Abfragen. Bei 200 Mitgliedern
+/// kostete ein Umbenennen so 1800 Abfragen. Jetzt lädt
+/// [`load_conversation_fuer_mitglieder`] Gespräch, Mitglieder und Profile
+/// einmal und ergänzt das Betrachterabhängige in Mengenabfragen.
 pub async fn broadcast_conversation(
     state: &AppState,
     conversation_id: Uuid,
@@ -404,15 +418,280 @@ pub async fn broadcast_conversation(
         Some(ids) => ids,
         None => member_ids(&state.pool, conversation_id).await?,
     };
+    // Wie bisher: Wer (nicht mehr) Mitglied ist oder wofür das Laden
+    // scheitert, bekommt nichts – ein Fehler hier soll die Änderung, die
+    // schon geschrieben ist, nicht als gescheitert melden.
+    let fassungen = match load_conversation_fuer_mitglieder(state, conversation_id, &targets).await
+    {
+        Ok(fassungen) => fassungen,
+        Err(fehler) => {
+            tracing::warn!(%fehler, %conversation_id, "Chat-Rundruf: Laden gescheitert");
+            return Ok(());
+        }
+    };
     for user_id in targets {
-        if let Ok(conversation) = load_conversation_dto(state, user_id, conversation_id).await {
+        if let Some(conversation) = fassungen.get(&user_id) {
             state
                 .hub
-                .publish(vec![user_id], Event::conversation_updated(&conversation))
+                .publish(vec![user_id], Event::conversation_updated(conversation))
                 .await;
         }
     }
     Ok(())
+}
+
+#[derive(sqlx::FromRow)]
+struct GespraechKopf {
+    id: Uuid,
+    r#type: String,
+    title: Option<String>,
+    avatar_attachment_id: Option<Uuid>,
+    created_by: Option<Uuid>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/**
+ * Ein Gespräch, wie es jeder dieser Betrachter sieht – Person → Fassung.
+ *
+ * Das Ergebnis je Person ist dasselbe wie `load_conversation_dto(person, …)`
+ * (der Test `rundruf_gleichwertig` in `tests/pruefpunkte.rs` vergleicht es
+ * Feld für Feld). Wer nicht Mitglied ist, fehlt im Ergebnis.
+ *
+ * # Was für alle gleich ist und was nicht
+ *
+ * Gleich: Kopf des Gesprächs, Mitgliederliste, Profile. Je Person:
+ * Archiviert/Stumm (aus der Mitgliederzeile), Ungelesene, verdeckter
+ * Verlauf, letzte Nachricht (sie hängt an der eigenen Grenze), welche
+ * Lesezeichen der anderen man sehen darf. Jedes davon ist **eine** Abfrage
+ * für alle Betrachter zusammen.
+ *
+ * Die letzte Nachricht wird je verschiedener Nachricht EINMAL aufbereitet,
+ * wenn das Ergebnis nicht vom Betrachter abhängt – kein Zitat und keine
+ * Erweiterung (Umfrage, Termin, Spiel, Sticker; siehe
+ * `expanders::betrachterabhaengig`). Sonst je Person, wie bisher: Eine
+ * Umfrage trägt die eigenen Stimmen, ein Termin ist nicht für jeden sichtbar,
+ * ein Zitat hört an der eigenen Grenze auf.
+ */
+pub async fn load_conversation_fuer_mitglieder(
+    state: &AppState,
+    conversation_id: Uuid,
+    betrachter: &[Uuid],
+) -> AppResult<HashMap<Uuid, ConversationDto>> {
+    use std::collections::HashSet;
+
+    let mut ergebnis = HashMap::new();
+    if betrachter.is_empty() {
+        return Ok(ergebnis);
+    }
+    let Some(kopf) = sqlx::query_as::<_, GespraechKopf>(
+        "select id, type, title, avatar_attachment_id, created_by, created_at, updated_at
+           from conversations where id = $1",
+    )
+    .bind(conversation_id)
+    .fetch_optional(&state.pool)
+    .await?
+    else {
+        return Ok(ergebnis);
+    };
+
+    let member_rows = sqlx::query_as::<_, ConversationMemberRow>(
+        "select * from conversation_members where conversation_id = $1
+          order by joined_at asc, user_id asc",
+    )
+    .bind(conversation_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let mitglied: HashMap<Uuid, &ConversationMemberRow> =
+        member_rows.iter().map(|row| (row.user_id, row)).collect();
+    let mut leser: Vec<Uuid> = betrachter
+        .iter()
+        .copied()
+        .filter(|id| mitglied.contains_key(id))
+        .collect();
+    leser.sort();
+    leser.dedup();
+    if leser.is_empty() {
+        return Ok(ergebnis);
+    }
+
+    // Je Betrachter die letzte Nachricht innerhalb seiner Grenze – dieselbe
+    // Indexsuche wie in der Chatliste, nur für alle auf einmal.
+    let letzte: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "select cm.user_id, m.id
+           from conversation_members cm
+           cross join lateral (
+             select m.id from messages m
+              where m.conversation_id = cm.conversation_id
+                and m.deleted_at is null
+                and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
+              order by m.id desc
+              limit 1
+           ) m
+          where cm.conversation_id = $1 and cm.user_id = any($2)",
+    )
+    .bind(conversation_id)
+    .bind(&leser)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let ungelesen: HashMap<Uuid, i64> = sqlx::query_as::<_, (Uuid, i64)>(
+        "select cm.user_id, count(m.id)::bigint
+         from conversation_members cm
+         join messages m
+           on m.conversation_id = cm.conversation_id
+          and m.deleted_at is null
+          and (m.sender_id is null or m.sender_id <> cm.user_id)
+          and m.id > coalesce(cm.last_read_message_id,
+                              '00000000-0000-0000-0000-000000000000'::uuid)
+          and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
+         where cm.conversation_id = $1 and cm.user_id = any($2)
+         group by cm.user_id",
+    )
+    .bind(conversation_id)
+    .bind(&leser)
+    .fetch_all(&state.pool)
+    .await?
+    .into_iter()
+    .collect();
+
+    let verdeckt: HashSet<Uuid> = sqlx::query_scalar::<_, Uuid>(
+        "select cm.user_id
+           from conversation_members cm
+          where cm.conversation_id = $1
+            and cm.user_id = any($2)
+            and cm.sieht_ab is not null
+            and exists (
+              select 1 from messages m
+               where m.conversation_id = cm.conversation_id
+                 and m.deleted_at is null
+                 and m.created_at < cm.sieht_ab
+            )",
+    )
+    .bind(conversation_id)
+    .bind(&leser)
+    .fetch_all(&state.pool)
+    .await?
+    .into_iter()
+    .collect();
+
+    // Die Lesezeichen aller: Zeitpunkt und Gespräch einmal holen, die Grenze
+    // jedes Betrachters dann ohne weitere Abfrage anlegen – dieselbe Regel
+    // wie in der Chatliste (Nachricht in diesem Gespräch, ab der Grenze).
+    let gelesen_ids: Vec<Uuid> = member_rows
+        .iter()
+        .filter_map(|row| row.last_read_message_id)
+        .collect();
+    let gelesen_zeit: HashMap<Uuid, chrono::DateTime<chrono::Utc>> = if gelesen_ids.is_empty() {
+        HashMap::new()
+    } else {
+        sqlx::query_as::<_, (Uuid, chrono::DateTime<chrono::Utc>)>(
+            "select id, created_at from messages where id = any($1) and conversation_id = $2",
+        )
+        .bind(&gelesen_ids)
+        .bind(conversation_id)
+        .fetch_all(&state.pool)
+        .await?
+        .into_iter()
+        .collect()
+    };
+
+    let user_ids: Vec<Uuid> = member_rows.iter().map(|row| row.user_id).collect();
+    let users = super::users::load_users_by_ids(&state.pool, &user_ids, &state.config).await?;
+
+    // Die letzten Nachrichten aufbereiten: einmal je Nachricht, wo das für
+    // alle dasselbe ergibt; sonst je Betrachter.
+    let mut nachricht_ids: Vec<Uuid> = letzte.iter().map(|(_, id)| *id).collect();
+    nachricht_ids.sort();
+    nachricht_ids.dedup();
+    let zeilen: HashMap<Uuid, MessageRow> = if nachricht_ids.is_empty() {
+        HashMap::new()
+    } else {
+        sqlx::query_as::<_, MessageRow>("select * from messages where id = any($1)")
+            .bind(&nachricht_ids)
+            .fetch_all(&state.pool)
+            .await?
+            .into_iter()
+            .map(|row| (row.id, row))
+            .collect()
+    };
+    let letzte_von: HashMap<Uuid, Uuid> = letzte.into_iter().collect();
+    let mut gemeinsam: Vec<MessageRow> = Vec::new();
+    for zeile in zeilen.values() {
+        if !super::expanders::betrachterabhaengig(zeile) {
+            gemeinsam.push(zeile.clone());
+        }
+    }
+    let mut fertig_gemeinsam: HashMap<Uuid, crate::dto::MessageDto> = HashMap::new();
+    if !gemeinsam.is_empty() {
+        // Der Betrachter spielt hier keine Rolle (siehe oben); irgendeiner
+        // genügt.
+        for nachricht in super::messages::hydrate_messages(state, gemeinsam, leser[0]).await? {
+            fertig_gemeinsam.insert(nachricht.id, nachricht);
+        }
+    }
+
+    for person in leser {
+        let eigene = mitglied[&person];
+        let grenze = eigene.sieht_ab;
+        let members = member_rows
+            .iter()
+            .map(|row| ConversationMemberDto {
+                user_id: row.user_id,
+                role: row.role.clone(),
+                joined_at: row.joined_at,
+                nickname: row.nickname.clone(),
+                last_read_message_id: row.last_read_message_id.filter(|id| {
+                    gelesen_zeit
+                        .get(id)
+                        .is_some_and(|zeit| grenze.is_none_or(|ab| *zeit >= ab))
+                }),
+                sieht_ab: row.sieht_ab,
+                user: users
+                    .get(&row.user_id)
+                    .cloned()
+                    .unwrap_or_else(|| unknown_user(row.user_id)),
+            })
+            .collect();
+
+        let last_message = match letzte_von.get(&person) {
+            None => None,
+            Some(id) => match fertig_gemeinsam.get(id) {
+                Some(nachricht) => Some(nachricht.clone()),
+                None => match zeilen.get(id) {
+                    Some(zeile) => {
+                        super::messages::hydrate_messages(state, vec![zeile.clone()], person)
+                            .await?
+                            .into_iter()
+                            .next()
+                    }
+                    None => None,
+                },
+            },
+        };
+
+        ergebnis.insert(
+            person,
+            ConversationDto {
+                id: kopf.id,
+                r#type: kopf.r#type.clone(),
+                title: kopf.title.clone(),
+                avatar_url: kopf
+                    .avatar_attachment_id
+                    .map(|id| state.config.media_url(&id)),
+                created_by: kopf.created_by,
+                created_at: kopf.created_at,
+                updated_at: kopf.updated_at,
+                members,
+                last_message,
+                unread_count: ungelesen.get(&person).copied().unwrap_or(0),
+                verdeckter_verlauf: verdeckt.contains(&person),
+                muted_until: eigene.muted_until,
+                archived: eigene.archived,
+            },
+        );
+    }
+    Ok(ergebnis)
 }
 
 /// Existing 1:1 chat between two users, if any.
@@ -595,4 +874,121 @@ pub async fn neue_chats_melden(state: &AppState, neu: &[Uuid]) {
             }
         })
         .await;
+}
+
+/* ---------- Besitz einer Gruppe ---------- */
+
+/// Wer in einer Gruppe den Besitz übernommen hat: (Gruppe, neuer Besitzer).
+pub type Uebernahme = (Uuid, Uuid);
+
+/**
+ * Gruppen ohne Besitzer bekommen einen.
+ *
+ * # Warum
+ *
+ * Verliess der Besitzer eine Gruppe (oder löschte er sein Konto), blieb sie
+ * ohne „owner“ zurück. Übergeben kann aber nur ein Besitzer, und niemand
+ * kann sich selbst befördern – die Gruppe war für immer ohne jemanden, der
+ * Admins ernennen oder absetzen darf.
+ *
+ * # Wer
+ *
+ * Der dienstälteste Admin, sonst das dienstälteste Mitglied. Dienstalter ist
+ * `joined_at`; wer gleichzeitig beigetreten ist (Gründung), wird nach Kennung
+ * entschieden, damit die Wahl nicht vom Plan der Abfrage abhängt.
+ *
+ * Nur Gruppen: Im Direktchat ist die Rolle bedeutungslos (dort gibt es nichts
+ * zu moderieren, siehe `modules::conversations::darf_moderieren`).
+ *
+ * Läuft in der Transaktion des Austritts bzw. der Kontolöschung, die die
+ * Gespräche vorher mit `for update` sperrt (siehe [`gespraeche_sperren`]):
+ * Zwei gleichzeitige Austritte können so nicht beide „es gibt noch einen
+ * Besitzer“ sehen, oder den Nachfolger wählen, der gerade selbst geht.
+ */
+pub async fn besitz_nachfolgen(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    chats: &[Uuid],
+) -> AppResult<Vec<Uebernahme>> {
+    if chats.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(sqlx::query_as::<_, (Uuid, Uuid)>(
+        "update conversation_members cm set role = 'owner'
+           from (
+             select distinct on (m.conversation_id) m.conversation_id, m.user_id
+               from conversation_members m
+               join conversations c on c.id = m.conversation_id and c.type = 'group'
+              where m.conversation_id = any($1)
+                and not exists (
+                  select 1 from conversation_members o
+                   where o.conversation_id = m.conversation_id and o.role = 'owner')
+              order by m.conversation_id, (m.role = 'admin') desc, m.joined_at asc, m.user_id asc
+           ) nachfolge
+          where cm.conversation_id = nachfolge.conversation_id
+            and cm.user_id = nachfolge.user_id
+          returning cm.conversation_id, cm.user_id",
+    )
+    .bind(chats)
+    .fetch_all(&mut **tx)
+    .await?)
+}
+
+/// Sperrt die Gespräche für die Dauer der Transaktion – sortiert, damit zwei
+/// Vorgänge, die dieselben Gespräche anfassen, einander nicht verklemmen.
+pub async fn gespraeche_sperren(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    chats: &[Uuid],
+) -> AppResult<()> {
+    if chats.is_empty() {
+        return Ok(());
+    }
+    sqlx::query("select id from conversations where id = any($1) order by id for update")
+        .bind(chats)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Nach dem Commit: Systemzeile „… ist jetzt Besitzer“ und neue Fassung an
+/// alle Mitglieder. Scheitert etwas, steht der Besitz trotzdem – nur die
+/// Meldung fehlt, und die nächste Chatliste zeigt ihn.
+pub async fn uebernahmen_melden(state: &AppState, uebernahmen: &[Uebernahme]) {
+    for (chat, besitzer) in uebernahmen {
+        let karte = super::messages::NewMessage::system(*chat, *besitzer, "owner.changed", vec![]);
+        if let Err(fehler) = super::messages::create_message(state, karte).await {
+            tracing::warn!(%fehler, %chat, "Besitzwechsel: Systemzeile gescheitert");
+        }
+        if let Err(fehler) = broadcast_conversation(state, *chat, None).await {
+            tracing::warn!(%fehler, %chat, "Besitzwechsel: Rundruf gescheitert");
+        }
+    }
+}
+
+/**
+ * Ein Konto löschen – samt Besitzübergabe in seinen Gruppen.
+ *
+ * Der eine Weg für beide Löschungen (selbst und über die Verwaltung). Das
+ * eigentliche Löschen sind weiter die Fremdschlüssel-Kaskaden; hier kommt nur
+ * hinzu, dass Gruppen, die dabei ihren Besitzer verlieren, einen neuen
+ * bekommen – in derselben Transaktion.
+ */
+pub async fn konto_loeschen(state: &AppState, user_id: Uuid) -> AppResult<()> {
+    let mut tx = state.pool.begin().await?;
+    let besessen: Vec<Uuid> = sqlx::query_scalar(
+        "select cm.conversation_id from conversation_members cm
+           join conversations c on c.id = cm.conversation_id and c.type = 'group'
+          where cm.user_id = $1 and cm.role = 'owner'",
+    )
+    .bind(user_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    gespraeche_sperren(&mut tx, &besessen).await?;
+    sqlx::query("delete from users where id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    let uebernahmen = besitz_nachfolgen(&mut tx, &besessen).await?;
+    tx.commit().await?;
+    uebernahmen_melden(state, &uebernahmen).await;
+    Ok(())
 }

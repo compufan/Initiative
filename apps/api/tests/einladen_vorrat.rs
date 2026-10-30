@@ -95,6 +95,16 @@ async fn gleichzeitige_aenderungen_brauchen_nur_eine_verbindung_je_anfrage() {
         ));
     }
     let (anna, bodo, cleo) = (&konten[0], &konten[1], &konten[2]);
+    // Einladen geht nur an Kontakte (`einladen::personen_pruefen`).
+    let (status, _) = call(
+        &router,
+        "POST",
+        "/api/v1/conversations",
+        Some(&anna.0),
+        Some(json!({ "type": "group", "title": "Bekannte", "memberIds": [bodo.1, cleo.1] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
 
     // Sechs Termine von Anna, alle mit Bodo.
     let beginn = chrono::Utc::now() + chrono::Duration::days(3);

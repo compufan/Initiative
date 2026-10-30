@@ -200,6 +200,10 @@ impl MessageExpander for StickerExpander {
         "stickers"
     }
 
+    fn metadaten_schluessel(&self) -> &'static str {
+        "stickerId"
+    }
+
     async fn expand(
         &self,
         state: &AppState,

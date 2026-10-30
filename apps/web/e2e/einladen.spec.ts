@@ -100,18 +100,19 @@ test.describe('Termine einladen', () => {
     const weitere = blatt(seiteA).getByRole('group', { name: 'Weitere Personen', exact: true });
     await expect(weitere.getByText(e.user.displayName)).toBeVisible({ timeout: 15_000 });
     await expect(weitere.getByText('nicht in deinen Chats')).toBeVisible();
-    await weitere.getByRole('checkbox').check();
+
+    // Einladen geht nur an Kontakte: Auswählen beginnt zuerst ausdrücklich einen
+    // Chat mit E. Danach steht E unter den Kontakten – gewählt.
+    await weitere.getByRole('checkbox').click();
+    await expect(person(seiteA, e)).toBeChecked({ timeout: 15_000 });
     await expect(zaehler(seiteA)).toHaveText('1 von 4 Personen');
 
-    // Abgewählt bleibt die Person in der Liste: Wer nur über die Suche erreichbar
-    // ist, ließe sich sonst nach einem Versehen nicht mehr zurückwählen. Auch ohne
-    // den Suchtext, der sie gefunden hat.
+    // Abwählen geht wie bei jedem Kontakt, und E bleibt in der Liste.
     await suche.fill('');
-    await expect(weitere.getByRole('checkbox')).toHaveCount(1);
-    await weitere.getByRole('checkbox').uncheck();
-    await expect(weitere.getByRole('checkbox')).toHaveCount(1);
-    await expect(zaehler(seiteA)).toHaveText('0 von 3 Personen');
-    await weitere.getByRole('checkbox').check();
+    await person(seiteA, e).uncheck();
+    await expect(person(seiteA, e)).toBeVisible();
+    await expect(zaehler(seiteA)).toHaveText('0 von 4 Personen');
+    await person(seiteA, e).check();
     await expect(zaehler(seiteA)).toHaveText('1 von 4 Personen');
   });
 

@@ -276,10 +276,8 @@ async fn remove_member(
         }
     }
 
-    sqlx::query("delete from users where id = $1")
-        .bind(id)
-        .execute(&state.pool)
-        .await?;
+    // Mit Besitzübergabe in den Gruppen, die dabei ihren Besitzer verlieren.
+    crate::services::conversations::konto_loeschen(&state, id).await?;
 
     tracing::info!(by = %admin.id(), removed = %id, "member removed");
     Ok(Json(json!({ "removed": true })))

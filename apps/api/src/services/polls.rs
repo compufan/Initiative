@@ -196,6 +196,25 @@ pub async fn load_poll_dtos(
         .collect())
 }
 
+/// Optionen (nach Position) und Stimmen einer Umfrage – dieselben Abfragen wie
+/// in [`load_poll_dtos`], für den Rundruf ohne Betrachter.
+pub async fn optionen_und_stimmen(
+    state: &AppState,
+    poll_id: Uuid,
+) -> AppResult<(Vec<PollOptionRow>, Vec<PollVoteRow>)> {
+    let options = sqlx::query_as::<_, PollOptionRow>(
+        "select * from poll_options where poll_id = $1 order by position asc",
+    )
+    .bind(poll_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let votes = sqlx::query_as::<_, PollVoteRow>("select * from poll_votes where poll_id = $1")
+        .bind(poll_id)
+        .fetch_all(&state.pool)
+        .await?;
+    Ok((options, votes))
+}
+
 pub async fn load_poll_dto(state: &AppState, poll_id: Uuid, viewer_id: Uuid) -> AppResult<PollDto> {
     load_poll_dtos(state, &[poll_id], viewer_id)
         .await?
@@ -349,15 +368,20 @@ pub async fn broadcast_poll(state: &AppState, poll: &PollDto) -> AppResult<()> {
     // An **alle** beteiligten Chats. Eine gespiegelte Umfrage hat ein
     // gemeinsames Ergebnis; wer nur den Ursprung benachrichtigt, laesst die
     // Einzelchats mit einem veralteten Stand stehen.
+    //
+    // Umfrage, Optionen und Stimmen EINMAL laden; je Empfänger unterscheidet
+    // sich nur, was `to_poll_dto` aus dem Betrachter macht (eigene Stimmen,
+    // bei anonymen Umfragen die Einzelstimmen). Hier stand `load_poll_dto` je
+    // Empfänger – drei Abfragen mal Publikum.
     let row = require_poll(state, poll.id).await?;
     let members = poll_audience(&state.pool, &row).await?;
+    let (options, votes) = optionen_und_stimmen(state, poll.id).await?;
     for user_id in &members {
-        if let Ok(view) = load_poll_dto(state, poll.id, *user_id).await {
-            state
-                .hub
-                .publish(vec![*user_id], Event::poll_updated(&view))
-                .await;
-        }
+        let view = to_poll_dto(&row, &options, &votes, *user_id);
+        state
+            .hub
+            .publish(vec![*user_id], Event::poll_updated(&view))
+            .await;
     }
     // Jede Nachricht, in der die Umfrage steckt, neu ausspielen - die
     // urspruengliche und jeden Auftritt.
@@ -381,6 +405,10 @@ pub struct PollExpander;
 impl MessageExpander for PollExpander {
     fn key(&self) -> &'static str {
         "polls"
+    }
+
+    fn metadaten_schluessel(&self) -> &'static str {
+        "pollId"
     }
 
     async fn expand(

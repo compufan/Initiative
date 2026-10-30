@@ -13,9 +13,9 @@ use crate::error::{AppError, AppResult};
 use crate::realtime::Event;
 use crate::services::attachments::require_eigener_anhang;
 use crate::services::conversations::{
-    assert_can_moderate, assert_membership, broadcast_conversation, einzelchats_sichern,
-    get_membership, load_conversation_dto, load_conversation_dtos, member_ids,
-    require_conversation, ListOptions,
+    assert_can_moderate, assert_membership, besitz_nachfolgen, broadcast_conversation,
+    einzelchats_sichern, gespraeche_sperren, get_membership, load_conversation_dto,
+    load_conversation_dtos, member_ids, require_conversation, uebernahmen_melden, ListOptions,
 };
 use crate::services::messages::{create_message, NewMessage};
 use crate::state::AppState;
@@ -418,6 +418,10 @@ async fn update_member(
     // Besitzer machen und den bisherigen danach herabstufen oder entfernen.
     let mut uebergabe = false;
     if let Some(role) = input.role.as_deref() {
+        // Das schliesst auch den Besitzer ein: Er kann sich nicht selbst zum
+        // Admin herabstufen und die Gruppe ohne Besitzer zurücklassen.
+        // Abgeben geht nur als Übergabe (mit Nachfolger) oder durch Austritt,
+        // nach dem `besitz_nachfolgen` einen bestimmt.
         if !fremd {
             return Err(AppError::forbidden(
                 "Die eigene Rolle kann man nicht selbst ändern",
@@ -487,11 +491,18 @@ async fn remove_member(
     }
 
     let before = member_ids(&state.pool, id).await?;
+    // Austritt und Besitzübergabe in einer Transaktion, unter der Sperre des
+    // Gesprächs: Geht der Besitzer, übernimmt der dienstälteste Admin (sonst
+    // das dienstälteste Mitglied) – siehe `besitz_nachfolgen`.
+    let mut tx = state.pool.begin().await?;
+    gespraeche_sperren(&mut tx, &[id]).await?;
     sqlx::query("delete from conversation_members where conversation_id = $1 and user_id = $2")
         .bind(id)
         .bind(target_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    let uebernahmen = besitz_nachfolgen(&mut tx, &[id]).await?;
+    tx.commit().await?;
 
     let kind = if target_id == user.id() {
         "member.left"
@@ -512,7 +523,12 @@ async fn remove_member(
         .into_iter()
         .filter(|member| *member != target_id)
         .collect();
-    broadcast_conversation(&state, id, Some(remaining)).await?;
+    if uebernahmen.is_empty() {
+        broadcast_conversation(&state, id, Some(remaining)).await?;
+    } else {
+        // Systemzeile „… ist jetzt Besitzer“ und neue Fassung an alle.
+        uebernahmen_melden(&state, &uebernahmen).await;
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }

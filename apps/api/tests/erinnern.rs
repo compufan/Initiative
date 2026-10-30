@@ -229,6 +229,7 @@ impl Probe {
         einzelchats: bool,
         titel: &str,
     ) -> Value {
+        bekannt_machen(&self.state.pool, von.uuid(), personen).await;
         let beginn = Utc::now() + Duration::days(3);
         let mut koerper = json!({
             "title": titel,
@@ -2203,4 +2204,32 @@ async fn erinnern_einmal_laeuft_gegen_ein_schema() {
     let hilfe = laufen(&["--help"]);
     assert!(hilfe.status.success());
     assert!(String::from_utf8_lossy(&hilfe.stdout).contains("NUR FÜR ENTWICKLUNG UND TESTS"));
+}
+
+/// Einladen geht nur an Kontakte (`einladen::personen_pruefen`). Eine
+/// gemeinsame Gruppe „Bekannte“ stiftet die Bekanntschaft, ohne einen
+/// Einzelchat vorwegzunehmen – die Tests hier prüfen Karten und Mitteilungen,
+/// nicht, woher man sich kennt.
+async fn bekannt_machen(pool: &sqlx::PgPool, von: Uuid, personen: &[Uuid]) {
+    let chat = Uuid::now_v7();
+    sqlx::query(
+        "insert into conversations (id, type, title, created_by) values ($1, 'group', 'Bekannte', $2)",
+    )
+    .bind(chat)
+    .bind(von)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into conversation_members (conversation_id, user_id, role, sieht_ab)
+         select $1, p, case when p = $2 then 'owner' else 'member' end, now()
+           from unnest(array_append($3::uuid[], $2)) as p
+         on conflict do nothing",
+    )
+    .bind(chat)
+    .bind(von)
+    .bind(personen)
+    .execute(pool)
+    .await
+    .unwrap();
 }

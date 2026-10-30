@@ -241,6 +241,17 @@ async fn a_von_allen_b_von_drei_c_gar_nicht_d_von_einer_person() {
     // Genau dafuer ist `requiredAll` ein eigenes Feld und keine feste Zahl:
     // Wer spaeter eingeladen wird, muss ebenfalls abhaken.
     let (_, spaet_id) = probe.anmelden(&suffix, "pia").await;
+    // Einladen geht nur an Kontakte (`einladen::personen_pruefen`): Pia teilt
+    // einen Chat mit A, der nicht Chat des Termins ist.
+    let (status, _) = probe
+        .call(
+            "POST",
+            "/api/v1/conversations",
+            Some(&a_token),
+            Some(json!({ "type": "group", "title": "Bekannte", "memberIds": [spaet_id] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
     /*
      * Die volle Liste, nicht nur die Neue.
      *

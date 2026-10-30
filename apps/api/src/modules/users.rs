@@ -277,10 +277,8 @@ async fn loeschen(
         }
     }
 
-    sqlx::query("delete from users where id = $1")
-        .bind(user.id())
-        .execute(&state.pool)
-        .await?;
+    // Mit Besitzübergabe in den Gruppen, die dabei ihren Besitzer verlieren.
+    crate::services::conversations::konto_loeschen(&state, user.id()).await?;
 
     tracing::info!(user = %user.id(), "Konto auf eigenen Wunsch geloescht");
     Ok(StatusCode::NO_CONTENT)

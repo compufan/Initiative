@@ -49,7 +49,7 @@ async fn list_messages(
     Path(id): Path<Uuid>,
     Query(query): Query<ListQuery>,
 ) -> AppResult<Json<ListResult<MessageDto>>> {
-    assert_membership(&state.pool, id, user.id()).await?;
+    let mitgliedschaft = assert_membership(&state.pool, id, user.id()).await?;
     let limit = query
         .limit
         .unwrap_or(MESSAGE_PAGE_SIZE)
@@ -98,6 +98,11 @@ async fn list_messages(
         .bind(user.id())
         .fetch_all(&state.pool)
         .await?
+    } else if let Some(rows) = match mitgliedschaft.sieht_ab {
+        Some(grenze) => duenne_seite(&state, id, grenze, query.before, limit, user.id()).await?,
+        None => None,
+    } {
+        rows
     } else {
         let mut rows = sqlx::query_as::<_, MessageRow>(&format!(
             "select * from messages m
@@ -128,6 +133,96 @@ async fn list_messages(
 
     let items = hydrate_messages(&state, rows, user.id()).await?;
     Ok(Json(ListResult::paged(items, next_cursor)))
+}
+
+/**
+ * Wie viele Nachrichten liegen hinter der Grenze? Höchstens `$3` gezählt.
+ *
+ * Läuft als Indexbereich über `(conversation_id, created_at)` (Migration
+ * 0029) und hört nach `$3` Zeilen auf – egal, wie lang der Verlauf davor ist.
+ * Öffentlich, damit der Test den Plan dieser Abfrage prüfen kann.
+ */
+pub const HINTER_DER_GRENZE_SQL: &str = "select count(*) from (
+       select 1 from messages
+        where conversation_id = $1 and created_at >= $2
+        order by created_at asc
+        limit $3
+     ) hinter";
+
+/// Die Seite, wenn hinter der Grenze höchstens eine Seite liegt: alle diese
+/// Nachrichten über denselben Indexbereich, gefiltert und sortiert wie sonst.
+pub const DUENNE_SEITE_SQL: &str = "select * from (
+       select * from messages m
+        where m.conversation_id = $1 and m.created_at >= $2
+        order by m.created_at asc
+        limit $3
+     ) m
+     where ($4::uuid is null or m.id < $4)
+       and not exists (
+         select 1 from message_hidden h
+          where h.message_id = m.id and h.user_id = $5
+       )
+     order by m.id desc
+     limit $6";
+
+/**
+ * Die Seite rückwärts für jemanden mit Verlaufsgrenze – wenn sie dünn ist.
+ *
+ * # Warum das nötig ist
+ *
+ * Die allgemeine Abfrage läuft rückwärts über `(conversation_id, id)` und
+ * filtert dabei `created_at >= sieht_ab`, bis die Seite voll ist. Liegt hinter
+ * der Grenze weniger als eine Seite – genau der Fall eines Neuzugangs in
+ * einer alten Gruppe –, wird sie nie voll: Postgres las den GANZEN Verlauf
+ * vor der Grenze, Zeile für Zeile, um festzustellen, dass da nichts mehr
+ * kommt. Bei jedem Öffnen des Chats.
+ *
+ * # Wie
+ *
+ * Erst zählen, wie viel hinter der Grenze liegt, über den Zeitindex und
+ * gedeckelt bei einer Seite plus eins ([`HINTER_DER_GRENZE_SQL`]). Passt es
+ * in eine Seite, ist die Antwort genau diese Menge, gefiltert und nach
+ * Kennung sortiert ([`DUENNE_SEITE_SQL`]) – beide Abfragen lesen höchstens
+ * `limit + 1` Zeilen. Sonst `None`, und die allgemeine Abfrage übernimmt:
+ * Dort füllt sich die Seite, bevor die Grenze erreicht ist.
+ *
+ * Das Ergebnis ist dasselbe wie das der allgemeinen Abfrage, nicht nur
+ * ähnlich: Was sie liefern könnte, liegt hinter der Grenze, und das ist hier
+ * vollständig in der Hand.
+ *
+ * Offen bleibt die letzte Seite eines LANGEN Verlaufs hinter der Grenze
+ * (beim Zurückblättern bis an den Anfang): Dort sucht die allgemeine Abfrage
+ * nach der letzten Teilseite weiter. Das geschieht einmal am Ende des
+ * Blätterns, nicht bei jedem Öffnen.
+ */
+async fn duenne_seite(
+    state: &AppState,
+    conversation_id: Uuid,
+    grenze: chrono::DateTime<chrono::Utc>,
+    before: Option<Uuid>,
+    limit: i64,
+    viewer: Uuid,
+) -> AppResult<Option<Vec<MessageRow>>> {
+    let hinter: i64 = sqlx::query_scalar(HINTER_DER_GRENZE_SQL)
+        .bind(conversation_id)
+        .bind(grenze)
+        .bind(limit + 1)
+        .fetch_one(&state.pool)
+        .await?;
+    if hinter > limit {
+        return Ok(None);
+    }
+    let mut rows = sqlx::query_as::<_, MessageRow>(DUENNE_SEITE_SQL)
+        .bind(conversation_id)
+        .bind(grenze)
+        .bind(limit + 1)
+        .bind(before)
+        .bind(viewer)
+        .bind(limit)
+        .fetch_all(&state.pool)
+        .await?;
+    rows.reverse();
+    Ok(Some(rows))
 }
 
 #[derive(Debug, Deserialize)]

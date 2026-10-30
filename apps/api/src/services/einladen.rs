@@ -185,23 +185,64 @@ pub fn anzahl_pruefen(anzahl: usize) -> AppResult<()> {
     Ok(())
 }
 
-/// Alle Eingeladenen haben ein Konto.
+/// Alle Eingeladenen haben ein Konto – und teilen mit dem Ersteller einen Chat.
 ///
 /// Alle Lesezugriffe dieses Moduls nehmen eine Verbindung statt des Vorrats:
 /// Eine Änderung hält eine Transaktion offen, und wer darin noch eine zweite
 /// Verbindung anfordert, lässt bei vielen gleichzeitigen Änderungen den Vorrat
 /// leerlaufen – alle halten eine und warten auf die nächste.
-pub async fn personen_pruefen(conn: &mut PgConnection, personen: &[Uuid]) -> AppResult<()> {
+///
+/// # Warum nur Kontakte
+///
+/// Eine Einladung legte mit **jedem** Konto, dessen Kennung man kannte, einen
+/// Einzelchat an – bis zu 200 auf einmal – und trug die Person als Gast ein.
+/// Beides stiftet eine Beziehung, auf die sich andere Regeln verlassen: Die
+/// Ausgaben nehmen „wer zum Termin eingeladen ist“ als Zusammenhang
+/// (`services::expenses::unpassende_personen`). Ein Fremder liess sich so über
+/// den Umweg einer Einladung eine Forderung anhängen.
+///
+/// Einladbar ist deshalb nur, wer mit dem Ersteller heute einen Chat teilt
+/// (Einzel- oder Gruppenchat) – dieselbe Menge, aus der die Oberfläche ihre
+/// Liste baut (`kontakteAus` in `EinladungsWahl`). Wer jemanden einladen will,
+/// den er noch nicht kennt, beginnt mit ihm ausdrücklich einen Chat (Suche
+/// oder Profil, `POST /conversations`); die Oberfläche tut das für einen
+/// Treffer aus „Weitere Personen“ vor dem Auswählen, sichtbar und einzeln.
+///
+/// Geprüft werden nur die NEU Eingeladenen: Wer schon Gast ist und
+/// inzwischen keinen Chat mehr mit dem Ersteller teilt, bleibt es – sonst
+/// liesse sich ein bestehender Termin nicht mehr ändern.
+pub async fn personen_pruefen(
+    conn: &mut PgConnection,
+    ersteller: Uuid,
+    personen: &[Uuid],
+) -> AppResult<()> {
     if personen.is_empty() {
         return Ok(());
     }
     let bekannt: i64 = sqlx::query_scalar("select count(*) from users where id = any($1)")
         .bind(personen)
-        .fetch_one(conn)
+        .fetch_one(&mut *conn)
         .await?;
     if bekannt as usize != personen.len() {
         return Err(AppError::bad_request(
             "Unbekannte Personen unter den Eingeladenen.",
+        ));
+    }
+    let fremde: i64 = sqlx::query_scalar(
+        "select count(*) from unnest($1::uuid[]) as p
+          where p <> $2
+            and not exists (
+              select 1 from conversation_members a
+                join conversation_members b on b.conversation_id = a.conversation_id
+               where a.user_id = $2 and b.user_id = p)",
+    )
+    .bind(personen)
+    .bind(ersteller)
+    .fetch_one(&mut *conn)
+    .await?;
+    if fremde > 0 {
+        return Err(AppError::bad_request(
+            "Einladen lassen sich nur Personen, mit denen du einen Chat teilst.",
         ));
     }
     Ok(())
@@ -903,7 +944,7 @@ pub async fn aendern_vorbereiten(
             "Solange über den Zeitpunkt abgestimmt wird, lassen sich keine weiteren Personen einladen – lege zuerst den Zeitpunkt fest.",
         ));
     }
-    personen_pruefen(tx, &hinzu).await?;
+    personen_pruefen(tx, ersteller, &hinzu).await?;
 
     // Gruppenkarten: was neu ist, was wegfällt.
     let bestehende: Vec<EventPlacementRow> = sqlx::query_as(

@@ -24,6 +24,11 @@ pub struct Expansion {
 #[async_trait]
 pub trait MessageExpander: Send + Sync {
     fn key(&self) -> &'static str;
+    /// Der Schlüssel in `metadata`, an dem dieser Expander eine Nachricht
+    /// erkennt (`pollId`, `eventId` …). Pflicht und ohne Vorgabe, damit ein
+    /// neuer Expander nicht vergessen werden kann: [`betrachterabhaengig`]
+    /// verlässt sich darauf.
+    fn metadaten_schluessel(&self) -> &'static str;
     async fn expand(
         &self,
         state: &AppState,
@@ -61,6 +66,24 @@ pub fn metadata_id(message: &MessageRow, key: &str) -> Option<Uuid> {
         .get(key)
         .and_then(|value| value.as_str())
         .and_then(|value| Uuid::parse_str(value).ok())
+}
+
+/**
+ * Hängt die Aufbereitung dieser Nachricht vom Betrachter ab?
+ *
+ * Ja, sobald ein Zitat dabei ist (es hört an der Grenze des Betrachters auf)
+ * oder ein Expander sie erweitert (eigene Stimmen, Sichtbarkeit eines
+ * Termins …). Nur wenn beides fehlt, darf der Chat-Rundruf eine Fassung für
+ * alle verwenden. Im Zweifel „ja“ – das kostet Abfragen, aber nie Richtigkeit.
+ */
+pub fn betrachterabhaengig(message: &MessageRow) -> bool {
+    message.reply_to_id.is_some()
+        || EXPANDERS.iter().any(|expander| {
+            message
+                .metadata
+                .get(expander.metadaten_schluessel())
+                .is_some()
+        })
 }
 
 pub async fn run(

@@ -34,6 +34,10 @@ function describe(
       return `${actor} ${isMe ? 'hast' : 'hat'} den Chat verlassen`;
     case 'member.removed':
       return `${actor} ${isMe ? 'hast' : 'hat'} ${joinNames(targets)} entfernt`;
+    // Der Server bestimmt einen neuen Besitzer, wenn der bisherige geht (Austritt
+    // oder Kontolöschung); Handelnder ist der Nachfolger.
+    case 'owner.changed':
+      return `${actor} ${isMe ? 'bist' : 'ist'} jetzt Besitzer der Gruppe`;
     default:
       return '';
   }

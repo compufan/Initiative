@@ -421,6 +421,10 @@ impl MessageExpander for GameExpander {
         "games"
     }
 
+    fn metadaten_schluessel(&self) -> &'static str {
+        "gameSessionId"
+    }
+
     async fn expand(
         &self,
         state: &AppState,
