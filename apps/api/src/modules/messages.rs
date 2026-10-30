@@ -500,15 +500,19 @@ async fn remove(
     // sonst über die Kennung, dass es sie gab.
     let members = crate::services::verlauf::empfaenger_fuer_nachricht(&state.pool, id).await?;
 
+    // Eine Transaktion: Scheiterte vorher der zweite oder dritte Schritt,
+    // stand eine gelöschte Nachricht mit ihren Anhängen da (die weiter
+    // auslieferbar waren) oder eine Termin-Platzierung, deren Karte fort ist.
+    let mut tx = state.pool.begin().await?;
     sqlx::query(
         "update messages set deleted_at = now(), body = null, metadata = '{}'::jsonb where id = $1",
     )
     .bind(id)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
     sqlx::query("delete from attachments where message_id = $1")
         .bind(id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
     // War es die Karte eines Termins, steht sie dort nicht mehr: Die Zeile in
     // `event_placements` mitzunehmen hält Editor, „Erneut zustellen“ und die
@@ -516,8 +520,9 @@ async fn remove(
     // ließe sich nicht wieder zustellen.
     sqlx::query("delete from event_placements where message_id = $1")
         .bind(id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
 
     state
         .hub

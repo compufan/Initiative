@@ -968,3 +968,102 @@ async fn der_passkey_start_verraet_keine_namen() {
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
 }
+
+/* ---------- Robustheit ---------- */
+
+/// Gleichzeitige Wiederholungen mit demselben `clientId` sahen beide keine
+/// Nachricht, und die zweite scheiterte am eindeutigen Index – der Client
+/// hielt eine gesendete Nachricht für nicht gesendet.
+#[tokio::test]
+async fn gleichzeitige_wiederholungen_liefern_das_original() {
+    let probe = probe!();
+    let (anna, _) = probe.konto("anna").await;
+    let (_, bert_id) = probe.konto("bert").await;
+    let chat = probe.gruppe(&anna, &[&bert_id]).await;
+    let schluessel = Uuid::now_v7().to_string();
+    let pfad = format!("/api/v1/conversations/{chat}/messages");
+    let senden = || {
+        probe.call(
+            "POST",
+            &pfad,
+            Some(&anna),
+            Some(json!({ "body": "einmal", "clientId": schluessel })),
+        )
+    };
+
+    let antworten = futures_util::future::join_all((0..8).map(|_| senden())).await;
+    let mut kennungen: Vec<String> = antworten
+        .iter()
+        .map(|(status, body)| {
+            assert!(status.is_success(), "{status}: {body}");
+            body["id"].as_str().unwrap().to_string()
+        })
+        .collect();
+    kennungen.dedup();
+    assert_eq!(kennungen.len(), 1, "alle bekommen dieselbe Nachricht");
+
+    let anzahl: i64 = sqlx::query_scalar(
+        "select count(*) from messages where conversation_id = $1 and client_id = $2",
+    )
+    .bind(Uuid::parse_str(&chat).unwrap())
+    .bind(&schluessel)
+    .fetch_one(&probe.state.pool)
+    .await
+    .unwrap();
+    assert_eq!(anzahl, 1);
+}
+
+/// „Für alle löschen“ lief in drei Schritten ohne Transaktion. Hier nur der
+/// Weg selbst: Nachricht leer, Anhang fort.
+#[tokio::test]
+async fn fuer_alle_loeschen_raeumt_vollstaendig() {
+    let probe = probe!();
+    let (anna, anna_id) = probe.konto("anna").await;
+    let (_, bert_id) = probe.konto("bert").await;
+    let chat = probe.gruppe(&anna, &[&bert_id]).await;
+    let anhang = Uuid::now_v7();
+    sqlx::query(
+        "insert into attachments (id, uploader_id, kind, mime, size, storage_key, status)
+         values ($1, $2, 'file', 'application/pdf', 10, $3, 'ready')",
+    )
+    .bind(anhang)
+    .bind(Uuid::parse_str(&anna_id).unwrap())
+    .bind(format!("probe/{anhang}"))
+    .execute(&probe.state.pool)
+    .await
+    .unwrap();
+    let (status, nachricht) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/conversations/{chat}/messages"),
+            Some(&anna),
+            Some(json!({ "type": "file", "body": "PDF", "attachmentIds": [anhang] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{nachricht}");
+    let id = nachricht["id"].as_str().unwrap();
+
+    let (status, body) = probe
+        .call(
+            "DELETE",
+            &format!("/api/v1/messages/{id}"),
+            Some(&anna),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    let (geloescht, text): (bool, Option<String>) =
+        sqlx::query_as("select deleted_at is not null, body from messages where id = $1")
+            .bind(Uuid::parse_str(id).unwrap())
+            .fetch_one(&probe.state.pool)
+            .await
+            .unwrap();
+    assert!(geloescht);
+    assert!(text.is_none());
+    let anhaenge: i64 = sqlx::query_scalar("select count(*) from attachments where id = $1")
+        .bind(anhang)
+        .fetch_one(&probe.state.pool)
+        .await
+        .unwrap();
+    assert_eq!(anhaenge, 0);
+}

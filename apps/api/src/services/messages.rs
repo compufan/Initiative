@@ -373,25 +373,8 @@ pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<Me
         .filter(|value| !value.is_empty());
 
     // Idempotency: a retried send returns the original message.
-    if let (Some(client_id), Some(sender_id)) = (input.client_id.as_ref(), input.sender_id) {
-        let existing = sqlx::query_as::<_, MessageRow>(
-            "select * from messages
-             where conversation_id = $1 and sender_id = $2 and client_id = $3
-             limit 1",
-        )
-        .bind(input.conversation_id)
-        .bind(sender_id)
-        .bind(client_id)
-        .fetch_optional(&state.pool)
-        .await?;
-        if let Some(row) = existing {
-            let dto = hydrate_messages(state, vec![row], sender_id)
-                .await?
-                .into_iter()
-                .next()
-                .ok_or_else(|| AppError::internal("Nachricht konnte nicht geladen werden"))?;
-            return Ok(dto);
-        }
+    if let Some(dto) = schon_gesendet(state, &input).await? {
+        return Ok(dto);
     }
 
     if let Some(reply_to_id) = input.reply_to_id {
@@ -409,9 +392,21 @@ pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<Me
     }
 
     let id = Uuid::now_v7();
+    /*
+     * `on conflict do nothing` für den Wiederholungsschlüssel.
+     *
+     * Die Abfrage oben fängt nur die Wiederholung, die NACH dem Original kommt.
+     * Zwei gleichzeitige (die Outbox in zwei Tabs, ein Neuversuch, während der
+     * erste noch läuft) sahen beide nichts, und der zweite scheiterte am
+     * eindeutigen Index mit einem Fehler – der Client hielt die Nachricht für
+     * nicht gesendet und versuchte es weiter. Jetzt bekommt er die Nachricht
+     * zurück, die gewonnen hat.
+     */
     let row = sqlx::query_as::<_, MessageRow>(
         "insert into messages (id, conversation_id, sender_id, type, body, reply_to_id, metadata, client_id)
          values ($1, $2, $3, $4, $5, $6, $7, $8)
+         on conflict (conversation_id, sender_id, client_id) where client_id is not null
+           do nothing
          returning *",
     )
     .bind(id)
@@ -422,8 +417,13 @@ pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<Me
     .bind(input.reply_to_id)
     .bind(&input.metadata)
     .bind(&input.client_id)
-    .fetch_one(&state.pool)
+    .fetch_optional(&state.pool)
     .await?;
+    let Some(row) = row else {
+        return schon_gesendet(state, &input).await?.ok_or_else(|| {
+            AppError::internal("Nachricht mit diesem Schlüssel verschwand beim Senden")
+        });
+    };
 
     if !input.attachment_ids.is_empty() {
         sqlx::query(
@@ -462,6 +462,31 @@ pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<Me
         super::bierjunge::nach_nachricht(state, &message).await;
     }
     Ok(message)
+}
+
+/// Die Nachricht, die unter diesem Wiederholungsschlüssel schon steht – in der
+/// Fassung des Absenders.
+async fn schon_gesendet(state: &AppState, input: &NewMessage) -> AppResult<Option<MessageDto>> {
+    let (Some(client_id), Some(sender_id)) = (input.client_id.as_ref(), input.sender_id) else {
+        return Ok(None);
+    };
+    let existing = sqlx::query_as::<_, MessageRow>(
+        "select * from messages
+         where conversation_id = $1 and sender_id = $2 and client_id = $3
+         limit 1",
+    )
+    .bind(input.conversation_id)
+    .bind(sender_id)
+    .bind(client_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    match existing {
+        Some(row) => Ok(hydrate_messages(state, vec![row], sender_id)
+            .await?
+            .into_iter()
+            .next()),
+        None => Ok(None),
+    }
 }
 
 /// Eine Nachricht ausspielen – an die, die sie sehen dürfen, und jedem in der
