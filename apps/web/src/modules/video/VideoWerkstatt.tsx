@@ -23,6 +23,9 @@ import { SavePackSheet, VideoEditorSheet, VideoGifSheet } from '../werkstaetten.
  * beim Wischen, ein gemerkter Blob aber nicht. Mit der Kennung daneben kann
  * der Zwischenspeicher gar nicht zum falschen Video gehören.
  */
+/** Bis zu dieser Grösse werden Bearbeiten und GIF angeboten. */
+export const VIDEO_BEARBEITEN_MAX = LIMITS.direktUploadMax.video;
+
 export function VideoWerkstatt({
   video,
   ablegen,
@@ -95,6 +98,17 @@ export function VideoWerkstatt({
     setStickerGif(null);
     onOffen?.(false);
   }
+
+  /*
+   * Ein riesiges Video gar nicht erst anbieten.
+   *
+   * Beide Werkzeuge brauchen das ganze Video als Blob im Speicher
+   * (`mediaBytes`) und dekodieren es Bild für Bild. Bis 200 MB (die alte
+   * Grenze für Videos) ist das auf einem Telefon machbar; ein Film von
+   * Gigabytes liesse den Tab abstürzen, bevor das Blatt aufgeht. Dann lieber
+   * keine Knöpfe als welche, die nicht halten, was sie versprechen.
+   */
+  if (video.size > VIDEO_BEARBEITEN_MAX) return null;
 
   return (
     <>

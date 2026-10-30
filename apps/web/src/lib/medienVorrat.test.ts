@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MEDIEN_AUFRAEUMEN_ABSTAND_MS,
   MEDIEN_HOECHSTBYTES,
+  MEDIEN_EINZEL_HOECHSTBYTES,
   MEDIEN_HOECHSTZAHL,
+  ablegbar,
   gedrosselt,
   verdraengen,
   type VorratEintrag,
@@ -130,5 +132,20 @@ describe('gedrosselt', () => {
     await vi.advanceTimersByTimeAsync(10);
     await b;
     expect(aufgabe).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('ablegbar', () => {
+  it('lässt kleine Antworten in den Speicher und grosse draussen', () => {
+    expect(ablegbar('1000')).toBe(true);
+    expect(ablegbar(String(MEDIEN_EINZEL_HOECHSTBYTES))).toBe(true);
+    expect(ablegbar(String(MEDIEN_EINZEL_HOECHSTBYTES + 1))).toBe(false);
+    expect(ablegbar(String(2 * 1024 * 1024 * 1024))).toBe(false);
+  });
+
+  it('ohne bekannte Grösse lieber nicht', () => {
+    expect(ablegbar(null)).toBe(false);
+    expect(ablegbar('')).toBe(false);
+    expect(ablegbar('quatsch')).toBe(false);
   });
 });

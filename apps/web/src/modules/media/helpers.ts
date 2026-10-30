@@ -255,6 +255,9 @@ export function deviceErrorMessage(error: unknown, device: 'Kamera' | 'Mikrofon'
   }
 }
 
+/** Ab hier gibt es den Hinweis, dass die App offen bleiben muss. */
+export const GROSS_HINWEIS_AB = 100 * 1024 * 1024;
+
 /** Checks the shared upload ceiling and explains the rejection. */
 export function withinUploadLimit(
   kind: AttachmentKind,
@@ -262,7 +265,22 @@ export function withinUploadLimit(
   name?: string | null,
 ): boolean {
   const max = LIMITS.maxUploadBytes[kind];
-  if (size <= max) return true;
+  if (size <= max) {
+    /*
+     * Ehrlich vorab: Ein grosser Upload braucht die App im Vordergrund. Der
+     * Browser lädt nicht im Hintergrund weiter – auf iOS gar nicht. Besser
+     * jetzt ein Satz als später ein Upload, der still stehen blieb, weil das
+     * Telefon gesperrt wurde.
+     */
+    if (size > GROSS_HINWEIS_AB) {
+      toast(
+        `Grosse Datei (${formatBytes(size)}): Bitte die App offen lassen, bis sie hochgeladen ist – ` +
+          'im Hintergrund lädt das Telefon nicht weiter. Abgebrochenes geht später an derselben Stelle weiter.',
+        'info',
+      );
+    }
+    return true;
+  }
   const subject = name ? `„${name}“` : 'Die Datei';
   toast(`${subject} ist zu groß (${formatBytes(size)}, erlaubt sind ${formatBytes(max)})`, 'error');
   return false;

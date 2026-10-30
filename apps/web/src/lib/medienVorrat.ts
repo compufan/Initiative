@@ -24,6 +24,32 @@ export const MEDIEN_HOECHSTZAHL = 300;
 export const MEDIEN_HOECHSTBYTES = 300 * 1024 * 1024;
 
 /**
+ * Grössere Einzeldateien kommen gar nicht erst hinein – 50 MB.
+ *
+ * Seit Videos und Dateien Gigabytes gross sein dürfen, würde ein einziges
+ * angesehenes Video den ganzen Speicher von 300 MB sprengen und dabei alle
+ * Fotos verdrängen, die eigentlich offline lesbar bleiben sollen. Schlimmer:
+ * Die Ablage liest die Antwort ein zweites Mal komplett mit, und das Schneiden
+ * eines Bereichs (`teilAntwort` in `sw.ts`) lädt die ganze abgelegte Datei in
+ * den Speicher des Arbeiters. Grosses geht deshalb immer übers Netz – mit
+ * `Range`, also spulbar, ohne vorher alles zu laden.
+ */
+export const MEDIEN_EINZEL_HOECHSTBYTES = 50 * 1024 * 1024;
+
+/**
+ * Darf diese Antwort in den Medienspeicher?
+ *
+ * Ohne `Content-Length` wissen wir die Grösse nicht – dann lieber nicht: Die
+ * API nennt sie bei jeder vollständigen Antwort, fehlt sie, ist es etwas
+ * Ungewöhnliches (ein Strom), und das soll nicht blind in den Speicher.
+ */
+export function ablegbar(laenge: string | null): boolean {
+  if (laenge == null || laenge === '') return false;
+  const bytes = Number(laenge);
+  return Number.isFinite(bytes) && bytes >= 0 && bytes <= MEDIEN_EINZEL_HOECHSTBYTES;
+}
+
+/**
  * Frühestens so lange nach einem Schreiben wird aufgeräumt.
  *
  * Ein Chat voller Bilder legt beim Durchscrollen Dutzende in wenigen Sekunden

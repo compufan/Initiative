@@ -8,6 +8,8 @@ export interface MessageRendererProps {
     failed?: boolean;
     /** Nur Termin-Karten: warum der Termin in dieser Sitzung nicht mehr zu sehen ist. */
     terminGrund?: 'geloescht' | 'ausgeladen';
+    /** Grosse Datei nach einem Neustart weg – siehe `ChatMessage.dateiFehlt`. */
+    dateiFehlt?: { index: number; name: string; groesse: number };
   };
   conversation: ConversationDto | null;
   isMine: boolean;

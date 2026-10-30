@@ -179,6 +179,53 @@
   opacity: 0.8;
 }
 
+/* ---------- Upload in Stücken: Fortschritt ---------- */
+
+.media-upload {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  max-width: min(74vw, 320px);
+}
+
+.media-upload-leiste {
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, currentColor 15%, transparent);
+  overflow: hidden;
+}
+
+.media-upload-leiste > span {
+  display: block;
+  height: 100%;
+  background: var(--accent, currentColor);
+  transition: width 0.4s ease;
+}
+
+.media-upload-zeile {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.media-upload-text {
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.media-upload-hinweis {
+  margin: 0;
+  font-size: 0.78rem;
+  opacity: 0.75;
+}
+
+.media-upload-knoepfe {
+  display: flex;
+  gap: var(--space-2);
+}
+
 /* ---------- voice message bubble ---------- */
 
 .media-audio {

@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import {
+  LIMITS,
   TYPING_TTL_MS,
   uuidv7,
   type CalendarEventDto,
@@ -25,6 +26,7 @@ import {
 import {
   cacheConversations,
   cacheMessages,
+  dateiHinterlegen,
   dropCachedMessage,
   enqueueOutbox,
   readCachedConversations,
@@ -38,6 +40,7 @@ import {
   type OutboxEntry,
 } from '../lib/db.js';
 import { uploadBlob } from '../lib/upload.js';
+import { hochladeAbbruch, useHochladen } from './hochladen.js';
 
 /**
  * A message plus client-only delivery state.
@@ -51,6 +54,12 @@ export type ChatMessage = MessageDto & {
   pending?: boolean;
   failed?: boolean;
   terminGrund?: EntferntGrund;
+  /**
+   * Eine grosse Datei dieser Nachricht ist nach einem Neustart nicht mehr
+   * lesbar (sie lag nur im Speicher des Tabs, siehe `OUTBOX_BLOB_MAX`). Die
+   * Blase bittet darum, sie noch einmal auszuwählen.
+   */
+  dateiFehlt?: { index: number; name: string; groesse: number };
 };
 
 export interface Draft {
@@ -104,6 +113,18 @@ interface ChatState {
   sendMessage: (conversationId: string, draft: Draft) => Promise<void>;
   retryFailed: (conversationId: string, clientId: string) => Promise<void>;
   discardFailed: (conversationId: string, clientId: string) => Promise<void>;
+  /** Bricht einen laufenden Upload ab und verwirft die Nachricht. */
+  uploadAbbrechen: (conversationId: string, clientId: string) => Promise<void>;
+  /**
+   * Hinterlegt eine neu ausgewählte Datei für einen liegengebliebenen grossen
+   * Upload. `false`, wenn sie nicht dieselbe ist (andere Grösse).
+   */
+  dateiNachreichen: (
+    conversationId: string,
+    clientId: string,
+    index: number,
+    datei: Blob,
+  ) => Promise<boolean>;
   flushOutbox: () => Promise<void>;
   deleteMessage: (message: MessageDto, scope?: 'me' | 'all') => Promise<void>;
   toggleReaction: (message: MessageDto, emoji: string, mine: boolean) => Promise<void>;
@@ -300,6 +321,22 @@ export const useChat = create<ChatState>((set, get) => ({
    * Deshalb reicht es, den Eintrag zu löschen und die Blase zu entfernen.
    */
   async discardFailed(conversationId, clientId) {
+    // Läuft für diese Nachricht noch ein grosser Upload, hält er hier an –
+    // sonst käme die verworfene Nachricht ein paar Minuten später doch an.
+    const laufend = hochladeAbbruch.get(clientId);
+    if (laufend) {
+      laufend.abort();
+      hochladeAbbruch.delete(clientId);
+      useHochladen.getState().entfernen(clientId);
+    }
+    const entry = (await readOutbox(conversationId)).find((item) => item.clientId === clientId);
+    // Die halbfertigen Teile beim Server gleich mit wegräumen – sonst liegen
+    // sie bis zum Aufräumdienst einen Tag lang auf der Platte.
+    for (const anhang of entry?.pendingAttachments ?? []) {
+      if (anhang.stueckSitzung) {
+        void api.media.stueckeAbbrechen(anhang.stueckSitzung).catch(() => {});
+      }
+    }
     await removeOutbox(clientId);
     set((state) => ({
       messages: {
@@ -309,6 +346,33 @@ export const useChat = create<ChatState>((set, get) => ({
         ),
       },
     }));
+  },
+
+  async uploadAbbrechen(conversationId, clientId) {
+    await get().discardFailed(conversationId, clientId);
+  },
+
+  async dateiNachreichen(conversationId, clientId, index, datei) {
+    const entry = (await readOutbox(conversationId)).find((item) => item.clientId === clientId);
+    const anhang = entry?.pendingAttachments[index];
+    if (!entry || !anhang?.grosseDatei) return false;
+    if (datei.size !== anhang.grosseDatei.groesse) return false;
+    dateiHinterlegen(clientId, index, datei);
+    entry.attempts = 0;
+    entry.lastError = null;
+    await updateOutbox(entry);
+    set((state) => ({
+      messages: {
+        ...state.messages,
+        [conversationId]: (state.messages[conversationId] ?? []).map((message) =>
+          message.clientId === clientId
+            ? { ...message, failed: false, pending: true, dateiFehlt: undefined }
+            : message,
+        ),
+      },
+    }));
+    await get().flushOutbox();
+    return true;
   },
 
   async flushOutbox() {
@@ -427,32 +491,147 @@ let flushNochmal = false;
 async function outboxDurchgang(): Promise<boolean> {
   const entries = await readOutbox();
   for (const entry of entries) {
-    try {
-      const attachmentIds = [...entry.attachmentIds];
-      for (const attachment of entry.pendingAttachments) {
-        const uploaded = await uploadBlob(attachment);
-        attachmentIds.push(uploaded.id);
-      }
-      const message = await api.messages.send(entry.conversationId, {
-        type: entry.type,
-        body: entry.body,
-        replyToId: entry.replyToId,
-        metadata: entry.metadata,
-        attachmentIds,
-        clientId: entry.clientId,
-      });
-      await removeOutbox(entry.clientId);
-      useChat.getState().applyMessage(message);
-    } catch (error) {
-      const offline = error instanceof ApiError && error.isOffline;
-      entry.attempts += 1;
-      entry.lastError = error instanceof Error ? error.message : 'Senden fehlgeschlagen';
-      await updateOutbox(entry);
-      if (offline) return false;
-      if (entry.attempts >= 3) markFailed(useChat.setState, entry);
+    /*
+     * Grosse Anhänge laufen nebenher.
+     *
+     * Ein Video von zwei Gigabyte braucht auf Mobilfunk eine halbe Stunde. Im
+     * selben Durchgang hinge jede danach geschriebene Textnachricht so lange
+     * dahinter. Also: grosse Uploads starten und weitergehen; sie melden sich
+     * selbst, wenn sie fertig sind. Die Reihenfolge im Chat richtet sich
+     * dann nach dem Eintreffen – das Video kommt nach dem Text, der danach
+     * geschrieben wurde. Das ist die ehrlichere Wahl als ein Chat, der
+     * stillsteht.
+     */
+    if (istGross(entry)) {
+      grossAnstossen(entry);
+      continue;
     }
+    if ((await eintragSenden(entry)) === 'offline') return false;
   }
   return true;
+}
+
+/** Hat diese Nachricht einen Anhang, der in Stücken hochgeht? */
+function istGross(entry: OutboxEntry): boolean {
+  return entry.pendingAttachments.some(
+    (anhang) => (anhang.grosseDatei?.groesse ?? anhang.blob.size) > LIMITS.stueckUploadAb,
+  );
+}
+
+/** Die grossen Uploads, die gerade laufen – je Nachricht höchstens einer. */
+const grossLaeuft = new Set<string>();
+
+function grossAnstossen(entry: OutboxEntry): void {
+  const fehlt = entry.pendingAttachments.findIndex((anhang) => anhang.blobFehlt);
+  if (fehlt >= 0) {
+    const anhang = entry.pendingAttachments[fehlt];
+    dateiFehltZeigen(entry, {
+      index: fehlt,
+      name: anhang.fileName,
+      groesse: anhang.grosseDatei?.groesse ?? 0,
+    });
+    return;
+  }
+  // Gescheitert (nicht bloss offline) – erst „Erneut senden" startet wieder.
+  if (entry.attempts >= 3 || grossLaeuft.has(entry.clientId)) return;
+  grossLaeuft.add(entry.clientId);
+  void eintragSenden(entry)
+    .then((ergebnis) => {
+      // Netz weg oder Server nicht erreichbar: Der Upload steht beim Server,
+      // wo er stand. In einer halben Minute noch einmal anklopfen – das
+      // `online`-Ereignis kommt nicht, wenn das Netz nie ganz weg war.
+      if (ergebnis === 'offline') {
+        setTimeout(() => void useChat.getState().flushOutbox(), 30_000);
+      }
+    })
+    .finally(() => grossLaeuft.delete(entry.clientId));
+}
+
+/**
+ * Eine Nachricht der Outbox senden: Anhänge hochladen, dann die Nachricht.
+ *
+ * `abgebrochen` heisst: Der Mensch hat den Upload abgebrochen, der Eintrag
+ * ist schon weg – dann darf er hier auch nicht wieder hineingeschrieben
+ * werden.
+ */
+async function eintragSenden(
+  entry: OutboxEntry,
+): Promise<'ok' | 'offline' | 'fehler' | 'abgebrochen'> {
+  const gross = istGross(entry);
+  const abbruch = new AbortController();
+  if (gross) hochladeAbbruch.set(entry.clientId, abbruch);
+  try {
+    const attachmentIds = [...entry.attachmentIds];
+    for (const attachment of entry.pendingAttachments) {
+      if (attachment.hochgeladenId) {
+        attachmentIds.push(attachment.hochgeladenId);
+        continue;
+      }
+      const uploaded = gross
+        ? await uploadBlob(attachment, {
+            signal: abbruch.signal,
+            async onSitzung(sitzungId) {
+              if (abbruch.signal.aborted) return;
+              attachment.stueckSitzung = sitzungId;
+              await updateOutbox(entry);
+            },
+            onFortschritt: (fortschritt) =>
+              useHochladen.getState().setzen(entry.clientId, fortschritt),
+          })
+        : await uploadBlob(attachment);
+      attachmentIds.push(uploaded.id);
+      if (gross) {
+        // Fertige grosse Anhänge merken: Scheitert danach die Nachricht
+        // selbst, soll nicht noch einmal ein Gigabyte hochgehen.
+        attachment.hochgeladenId = uploaded.id;
+        attachment.stueckSitzung = undefined;
+        if (!abbruch.signal.aborted) await updateOutbox(entry);
+      }
+    }
+    if (abbruch.signal.aborted) return 'abgebrochen';
+    const message = await api.messages.send(entry.conversationId, {
+      type: entry.type,
+      body: entry.body,
+      replyToId: entry.replyToId,
+      metadata: entry.metadata,
+      attachmentIds,
+      clientId: entry.clientId,
+    });
+    await removeOutbox(entry.clientId);
+    useChat.getState().applyMessage(message);
+    return 'ok';
+  } catch (error) {
+    if (abbruch.signal.aborted) return 'abgebrochen';
+    if (error instanceof Error && error.name === 'DateiFehltError') return 'fehler';
+    const offline =
+      error instanceof ApiError &&
+      (error.isOffline || (gross && error.status >= 500 && error.status !== 507));
+    // Ein grosser Upload, dem das Netz wegbricht, ist nicht gescheitert,
+    // sondern unterbrochen – er zählt keinen Fehlversuch und landet nicht
+    // nach dreimal Funkloch auf „Senden fehlgeschlagen".
+    if (!(gross && offline)) entry.attempts += 1;
+    entry.lastError = error instanceof Error ? error.message : 'Senden fehlgeschlagen';
+    await updateOutbox(entry);
+    if (offline) return 'offline';
+    if (entry.attempts >= 3) markFailed(useChat.setState, entry);
+    return 'fehler';
+  } finally {
+    if (gross) {
+      if (hochladeAbbruch.get(entry.clientId) === abbruch) hochladeAbbruch.delete(entry.clientId);
+      useHochladen.getState().entfernen(entry.clientId);
+    }
+  }
+}
+
+function dateiFehltZeigen(entry: OutboxEntry, fehlt: NonNullable<ChatMessage['dateiFehlt']>): void {
+  useChat.setState((state) => ({
+    messages: {
+      ...state.messages,
+      [entry.conversationId]: (state.messages[entry.conversationId] ?? []).map((message) =>
+        message.clientId === entry.clientId ? { ...message, dateiFehlt: fehlt } : message,
+      ),
+    },
+  }));
 }
 
 function mergeList(existing: ChatMessage[] | undefined, incoming: MessageDto[]): ChatMessage[] {
@@ -513,7 +692,15 @@ function outboxToMessage(entry: OutboxEntry): ChatMessage {
     deletedAt: null,
     pending: true,
     failed: entry.attempts >= 3,
+    dateiFehlt: dateiFehltVon(entry),
   };
+}
+
+function dateiFehltVon(entry: OutboxEntry): ChatMessage['dateiFehlt'] {
+  const index = entry.pendingAttachments.findIndex((anhang) => anhang.blobFehlt);
+  if (index < 0) return undefined;
+  const anhang = entry.pendingAttachments[index];
+  return { index, name: anhang.fileName, groesse: anhang.grosseDatei?.groesse ?? 0 };
 }
 
 function markFailed(

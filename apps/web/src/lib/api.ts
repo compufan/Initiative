@@ -41,6 +41,7 @@ import type {
   ErinnernStandDto,
 } from '@initiative/shared';
 import type { OrtTreffer } from './ortSuche.js';
+import type { StueckStand } from './stueckUpload.js';
 import {
   API_PREFIX,
   pressenLaeufeSeiteSchema,
@@ -444,6 +445,8 @@ export interface RequestOptions {
   signal?: AbortSignal;
   /** Eigenes Zeitlimit, wenn die Vorgabe zu knapp ist (Uploads). */
   timeoutMs?: number;
+  /** Zusätzliche Kopfzeilen (etwa `content-range` beim Hochladen in Stücken). */
+  kopfzeilen?: Record<string, string>;
   /** Skip the Authorization header (login, register, public key …). */
   anonymous?: boolean;
   raw?: boolean;
@@ -474,8 +477,10 @@ export async function request<T>(
   options: RequestOptions = {},
 ): Promise<T> {
   const send = async (accessToken: string | null): Promise<Response> => {
-    const headers: Record<string, string> = {};
-    if (options.body !== undefined && !(options.body instanceof FormData)) {
+    // Ein Blob geht roh hinaus – ein Stück einer Datei ist kein JSON.
+    const roh = options.body instanceof FormData || options.body instanceof Blob;
+    const headers: Record<string, string> = { ...options.kopfzeilen };
+    if (options.body !== undefined && !roh) {
       headers['content-type'] = 'application/json';
     }
     if (accessToken) headers.authorization = `Bearer ${accessToken}`;
@@ -488,8 +493,8 @@ export async function request<T>(
       body:
         options.body === undefined
           ? undefined
-          : options.body instanceof FormData
-            ? options.body
+          : roh
+            ? (options.body as FormData | Blob)
             : JSON.stringify(options.body),
     });
   };
@@ -677,6 +682,44 @@ export const api = {
         timeoutMs: UPLOAD_TIMEOUT_MS,
       });
     },
+    /**
+     * Hochladen in Stücken – siehe `lib/stueckUpload.ts` und
+     * `apps/api/src/modules/stuecke.rs`.
+     */
+    stueckeAnlegen: (body: {
+      kind: string;
+      mime: string;
+      size: number;
+      fileName?: string;
+      sha256?: string;
+    }) => post<StueckStand>('/media/stuecke', body),
+    stueckeStand: (sitzungId: string) => get<StueckStand>(`/media/stuecke/${sitzungId}`),
+    stueckSenden: (
+      sitzungId: string,
+      start: number,
+      stueck: Blob,
+      gesamt: number,
+      signal?: AbortSignal,
+    ) =>
+      request<StueckStand>('PUT', `/media/stuecke/${sitzungId}`, {
+        body: stueck,
+        signal,
+        // 8 MiB auf einer zähen Mobilverbindung (≈ 100 kB/s) sind gut eine
+        // Minute. Zwei Minuten lassen Luft, ohne einen hängenden Versuch
+        // ewig stehen zu lassen – die Wiederholung übernimmt dann.
+        timeoutMs: UPLOAD_TIMEOUT_MS,
+        kopfzeilen: {
+          'content-type': 'application/octet-stream',
+          'content-range': `bytes ${start}-${start + stueck.size - 1}/${gesamt}`,
+        },
+      }),
+    stueckeAbschliessen: (sitzungId: string, body: Record<string, unknown>) =>
+      post<AttachmentDto>(`/media/stuecke/${sitzungId}/abschliessen`, body, {
+        // Der Server prüft, verschlüsselt und legt ab – bei Gigabytes dauert
+        // das. Wer hier nach zwanzig Sekunden aufgibt, fragt nur nochmal.
+        timeoutMs: 15 * 60_000,
+      }),
+    stueckeAbbrechen: (sitzungId: string) => del<void>(`/media/stuecke/${sitzungId}`),
     url: (attachmentId: string) => `${API_BASE}${API_PREFIX}/media/${attachmentId}`,
     /**
      * Eine Adresse, die ein Fernseher selbst abrufen kann.

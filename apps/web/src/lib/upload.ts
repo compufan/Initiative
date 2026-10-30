@@ -1,8 +1,59 @@
-import type { AttachmentDto } from '@initiative/shared';
+import { LIMITS, type AttachmentDto } from '@initiative/shared';
 import { flaeche2d } from '../modules/bild/farbraum.js';
-import { api } from './api.js';
+import { api, ApiError } from './api.js';
 import type { OutboxAttachment } from './db.js';
+import { stueckweiseHochladen, type Fortschritt, type StueckTransport } from './stueckUpload.js';
 import { videoBereinigen } from './videoMetadaten.js';
+
+/**
+ * Geht diese Datei in Stücken hoch?
+ *
+ * Ab `stueckUploadAb` (32 MiB) – dort lohnt das Fortsetzen – und immer, wenn
+ * sie über der alten Grenze des Weges in einer Anfrage liegt. Kleines bleibt
+ * beim alten Weg: eine Anfrage statt drei, und ältere Server kennen nur ihn.
+ */
+export function inStuecken(attachment: Pick<OutboxAttachment, 'kind'>, groesse: number): boolean {
+  return (
+    groesse > LIMITS.stueckUploadAb ||
+    groesse > (LIMITS.direktUploadMax[attachment.kind] ?? LIMITS.stueckUploadAb)
+  );
+}
+
+/** Die Datei liegt nicht mehr vor (Neustart) – sie muss neu ausgewählt werden. */
+export class DateiFehltError extends Error {
+  constructor(name: string) {
+    super(`„${name}“ muss neu ausgewählt werden, damit der Upload weitergehen kann`);
+    this.name = 'DateiFehltError';
+  }
+}
+
+/** Was die Outbox beim Hochladen mitgibt. */
+export interface UploadKontext {
+  /** Merkt sich die Sitzung, damit nach Abbruch oder Neustart fortgesetzt wird. */
+  onSitzung?: (sitzungId: string) => void | Promise<void>;
+  onFortschritt?: (fortschritt: Fortschritt) => void;
+  signal?: AbortSignal;
+}
+
+/** Der echte Transport für `stueckweiseHochladen` – die API. */
+export const apiTransport: StueckTransport = {
+  anlegen: (eingabe) => api.media.stueckeAnlegen(eingabe),
+  async stand(sitzungId) {
+    try {
+      return await api.media.stueckeStand(sitzungId);
+    } catch (fehler) {
+      // Abgelaufen und weggeräumt – dann eben neu.
+      if (fehler instanceof ApiError && fehler.status === 404) return null;
+      throw fehler;
+    }
+  },
+  async senden(sitzungId, start, stueck, gesamt, signal) {
+    await api.media.stueckSenden(sitzungId, start, stueck, gesamt, signal);
+  },
+  abschliessen: (sitzungId, metadaten) =>
+    api.media.stueckeAbschliessen(sitzungId, { ...metadaten }),
+  abbrechen: (sitzungId) => api.media.stueckeAbbrechen(sitzungId),
+};
 
 /**
  * Two-step upload:
@@ -56,7 +107,11 @@ const VORSCHAU_KANTE = 160;
  */
 const VORSCHAU_GUETE = 0.62;
 
-export async function uploadBlob(attachment: OutboxAttachment): Promise<AttachmentDto> {
+export async function uploadBlob(
+  attachment: OutboxAttachment,
+  kontext: UploadKontext = {},
+): Promise<AttachmentDto> {
+  if (attachment.blobFehlt) throw new DateiFehltError(attachment.fileName);
   /*
    * Der Vorposten für Video-Metadaten – hier und nirgends sonst.
    *
@@ -83,6 +138,27 @@ export async function uploadBlob(attachment: OutboxAttachment): Promise<Attachme
     } catch {
       /* unbekannter Container – dann eben unverändert */
     }
+  }
+
+  if (inStuecken(attachment, attachment.blob.size)) {
+    return stueckweiseHochladen({
+      datei: attachment.blob,
+      kind: attachment.kind,
+      mime: attachment.mime,
+      fileName: attachment.fileName,
+      metadaten: {
+        width: attachment.width,
+        height: attachment.height,
+        durationMs: attachment.durationMs,
+        waveform: attachment.waveform,
+        previewDataUrl: attachment.previewDataUrl,
+      },
+      transport: apiTransport,
+      sitzungId: attachment.stueckSitzung ?? null,
+      onSitzung: kontext.onSitzung,
+      onFortschritt: kontext.onFortschritt,
+      signal: kontext.signal,
+    });
   }
 
   const target = await api.media.createUpload({

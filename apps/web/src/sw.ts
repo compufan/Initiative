@@ -4,6 +4,7 @@ import type { PushPayload } from '@initiative/shared';
 import { bereichLesen } from './lib/bereich.js';
 import {
   MEDIEN_AUFRAEUMEN_ABSTAND_MS,
+  ablegbar,
   gedrosselt,
   verdraengen,
   type VorratEintrag,
@@ -230,7 +231,10 @@ async function cacheFirst(
   }
   try {
     const response = await fetch(request);
-    if (response.ok && response.status === 200) {
+    // Nur der Medienspeicher kennt die Einzelgrenze; Modelle (bis 94 MB)
+    // sollen weiter abgelegt werden.
+    const zuGross = gebraucht !== undefined && !ablegbar(response.headers.get('content-length'));
+    if (response.ok && response.status === 200 && !zuGross) {
       // Fehlschlagen darf das: Das groesste Modell ist knapp 94 MB, und auf
       // einem iPhone mit knappem Speicherkontingent lehnt der Browser die
       // Ablage ab. Dann wird eben beim naechsten Mal wieder geladen – das ist

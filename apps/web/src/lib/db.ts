@@ -19,6 +19,92 @@ export interface OutboxAttachment {
   durationMs?: number;
   waveform?: number[];
   previewDataUrl?: string;
+  /**
+   * Die Sitzung beim Hochladen in Stücken – damit nach einem Netzabriss oder
+   * Neustart dort weitergemacht wird, wo der Server steht.
+   */
+  stueckSitzung?: string;
+  /**
+   * Gesetzt, wenn der Blob NICHT in IndexedDB liegt (siehe `OUTBOX_BLOB_MAX`).
+   * Merkt sich, woran die Datei beim erneuten Auswählen zu erkennen ist.
+   */
+  grosseDatei?: { groesse: number; geaendert?: number };
+  /** Nach einem Neustart: Die grosse Datei ist weg und muss neu gewählt werden. */
+  blobFehlt?: boolean;
+  /** Schon fertig hochgeladen (grosse Anhänge) – nicht noch einmal senden. */
+  hochgeladenId?: string;
+}
+
+/**
+ * Ab dieser Grösse wandert eine Datei NICHT in die Outbox-Datenbank.
+ *
+ * # Warum
+ *
+ * Ein Blob in IndexedDB ist eine Kopie: Chrome und Safari schreiben ihn in
+ * ihre eigene Ablage. Bei einem Video von zwei Gigabyte hiesse das, vor dem
+ * ersten gesendeten Byte zwei Gigabyte auf dem Telefon zu kopieren – und auf
+ * einem fast vollen iPhone scheitert das Speichern einfach, und mit ihm die
+ * Nachricht. OPFS wäre dieselbe Kopie unter anderem Namen.
+ *
+ * # Was stattdessen
+ *
+ * Die Datei bleibt nur im Arbeitsspeicher dieses Tabs (als Verweis auf die
+ * Datei im Gerät – ein `File` aus der Auswahl ist kein Inhalt, sondern ein
+ * Zeiger). Gemerkt werden Name, Grösse und die Sitzung beim Server. Geht die
+ * App zu, fehlt danach der Zeiger; die Blase bittet dann darum, die Datei
+ * noch einmal auszuwählen, prüft die Grösse und macht beim Server dort
+ * weiter, wo er stand – ohne ein schon empfangenes Stück erneut zu senden.
+ *
+ * Unterhalb der Grenze bleibt alles wie bisher: Ein Foto oder ein kurzes
+ * Video übersteht den Neustart vollständig.
+ */
+export const OUTBOX_BLOB_MAX = 200 * 1024 * 1024;
+
+/** Die grossen Dateien, die nur im Speicher dieses Tabs liegen. */
+const fluechtig = new Map<string, Blob>();
+
+function fluechtigSchluessel(clientId: string, index: number): string {
+  return `${clientId}:${index}`;
+}
+
+/** Eine neu ausgewählte Datei für einen liegengebliebenen Upload hinterlegen. */
+export function dateiHinterlegen(clientId: string, index: number, datei: Blob): void {
+  fluechtig.set(fluechtigSchluessel(clientId, index), datei);
+}
+
+export function fluechtigVergessen(clientId: string): void {
+  for (const schluessel of [...fluechtig.keys()]) {
+    if (schluessel.startsWith(`${clientId}:`)) fluechtig.delete(schluessel);
+  }
+}
+
+/** Für die Datenbank: grosse Blobs durch einen leeren ersetzen und merken. */
+export function zumSpeichern(entry: OutboxEntry): OutboxEntry {
+  return {
+    ...entry,
+    pendingAttachments: entry.pendingAttachments.map((anhang, index) => {
+      if (anhang.blob.size <= OUTBOX_BLOB_MAX && !anhang.grosseDatei) return anhang;
+      if (anhang.blob.size > 0) dateiHinterlegen(entry.clientId, index, anhang.blob);
+      const groesse = anhang.grosseDatei?.groesse ?? anhang.blob.size;
+      const geaendert =
+        anhang.grosseDatei?.geaendert ??
+        (anhang.blob instanceof File ? anhang.blob.lastModified : undefined);
+      const { blobFehlt: _weg, ...rest } = anhang;
+      return { ...rest, blob: new Blob([]), grosseDatei: { groesse, geaendert } };
+    }),
+  };
+}
+
+/** Aus der Datenbank: grosse Blobs aus dem Speicher dieses Tabs zurückholen. */
+export function ausDemSpeicher(entry: OutboxEntry): OutboxEntry {
+  return {
+    ...entry,
+    pendingAttachments: entry.pendingAttachments.map((anhang, index) => {
+      if (!anhang.grosseDatei) return anhang;
+      const datei = fluechtig.get(fluechtigSchluessel(entry.clientId, index));
+      return datei ? { ...anhang, blob: datei, blobFehlt: false } : { ...anhang, blobFehlt: true };
+    }),
+  };
 }
 
 export interface OutboxEntry {
@@ -194,7 +280,7 @@ export async function trimMessageCache(conversationId: string): Promise<void> {
 export async function enqueueOutbox(entry: OutboxEntry): Promise<void> {
   await safe(async () => {
     const db = await getDb();
-    await db.put('outbox', entry);
+    await db.put('outbox', zumSpeichern(entry));
   }, undefined);
 }
 
@@ -204,7 +290,7 @@ export async function readOutbox(conversationId?: string): Promise<OutboxEntry[]
     const items = conversationId
       ? await db.getAllFromIndex('outbox', 'by-conversation', conversationId)
       : await db.getAll('outbox');
-    return items.sort((a, b) => a.createdAt - b.createdAt);
+    return items.map(ausDemSpeicher).sort((a, b) => a.createdAt - b.createdAt);
   }, []);
 }
 
@@ -213,6 +299,7 @@ export async function updateOutbox(entry: OutboxEntry): Promise<void> {
 }
 
 export async function removeOutbox(clientId: string): Promise<void> {
+  fluechtigVergessen(clientId);
   await safe(async () => {
     const db = await getDb();
     await db.delete('outbox', clientId);
