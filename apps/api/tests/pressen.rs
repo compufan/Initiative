@@ -7,8 +7,8 @@
 //! Anbindung stimmt – Katalog, Beitritt gesperrt, Ausgang.
 
 use initiative_api::games::pressen::{
-    dran_sitze, neuer_zustand, plan_fuer, verzoegerung_bei, wertung_ms, zug_anwenden, Malus, State,
-    Zug,
+    dran_sitze, fuer_betrachter, neuer_zustand, plan_fuer, start_anwenden, verzoegerung_bei,
+    wertung_ms, zug_anwenden, Malus, State, Zug,
 };
 use initiative_api::games::{get_game, GameSeat, MoveContext};
 use serde_json::Value;
@@ -101,6 +101,7 @@ fn zug_aus(z: &Value) -> Zug {
         "reaktionMs": z["reaktionMs"],
         "vorzeitig": z["vorzeitig"],
         "verzoegerungMs": z["verzoegerungMs"],
+        "versatzMs": z.get("versatzMs").cloned().unwrap_or(Value::Null),
     }))
     .expect("Zug lesbar")
 }
@@ -224,4 +225,178 @@ fn die_engine_kennt_das_spiel_und_sperrt_den_beitritt() {
         .apply_move(&state, &serde_json::json!({ "typ": "x" }), &ctx)
         .is_err());
     assert_eq!(spiel.describe(&state), "Runde 1 läuft");
+}
+
+#[test]
+fn start_und_versatz_wie_im_typescript_spiegel() {
+    for fall in daten()["startFaelle"].as_array().unwrap() {
+        let name = fall["name"].as_str().unwrap();
+        let spieler = fall["spieler"].as_u64().unwrap() as usize;
+        let mut state: State = neuer_zustand(spieler);
+        for (nr, schritt) in fall["schritte"].as_array().unwrap().iter().enumerate() {
+            let wo = format!("{name}, Schritt {}", nr + 1);
+            let sitz = schritt["sitz"].as_i64().unwrap() as i32;
+            let jetzt = schritt["jetzt"].as_i64().unwrap();
+            let antwort = if schritt["typ"] == "start" {
+                start_anwenden(&state, schritt["art"].as_str().unwrap(), sitz, jetzt)
+            } else {
+                zug_anwenden(&state, &zug_aus(schritt), sitz, jetzt)
+            };
+            let soll_fehler = schritt["fehler"].as_bool().unwrap_or(false);
+            assert_eq!(antwort.is_err(), soll_fehler, "{wo}: {antwort:?}");
+            let Ok(neu) = antwort else { continue };
+            state = neu;
+            let d = &schritt["danach"];
+            if d.is_null() {
+                continue;
+            }
+            if d.get("beginn").is_some() {
+                assert_eq!(state.start.beginn, d["beginn"].as_i64(), "{wo} beginn");
+            }
+            if let Some(art) = d["art"].as_array() {
+                let ist: Vec<Option<String>> = state.start.art.clone();
+                let soll: Vec<Option<String>> =
+                    art.iter().map(|a| a.as_str().map(str::to_string)).collect();
+                assert_eq!(ist, soll, "{wo} art");
+            }
+            if let Some(bereit) = d["bereitAm"].as_array() {
+                let soll: Vec<Option<i64>> = bereit.iter().map(Value::as_i64).collect();
+                assert_eq!(state.start.bereit_am, soll, "{wo} bereitAm");
+            }
+            if d["gruppe"].is_array() {
+                let soll: Vec<i32> = liste(&d["gruppe"]).iter().map(|x| *x as i32).collect();
+                assert_eq!(state.start.gruppe, soll, "{wo} gruppe");
+            }
+            if d["dran"].is_array() {
+                let mut dran: Vec<i64> = dran_sitze(&state).into_iter().map(i64::from).collect();
+                dran.sort();
+                assert_eq!(dran, liste(&d["dran"]), "{wo} dran");
+            }
+            if d["versatz"].is_object() {
+                let s = d["versatz"]["sitz"].as_u64().unwrap() as usize;
+                assert_eq!(
+                    state.ergebnisse[s].as_ref().unwrap().versatz_ms,
+                    d["versatz"]["wert"].as_i64().unwrap(),
+                    "{wo} versatz"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn spiegel_gibt_immer_atempo_und_laesst_den_malus_in_ruhe() {
+    let mut state = neuer_zustand(1);
+    for (nr, (dauer, dezi)) in [(10_000, 0), (80_000, 2900), (14_000, 130), (11_000, 0)]
+        .into_iter()
+        .enumerate()
+    {
+        let zug = Zug {
+            typ: "ergebnis".into(),
+            runde: state.runde,
+            dauer_ms: dauer,
+            verschuettet_dezi: dezi,
+            reaktion_ms: Some(300),
+            vorzeitig: false,
+            verzoegerung_ms: 200,
+            versatz_ms: None,
+        };
+        state = zug_anwenden(&state, &zug, 0, 1000 + nr as i64).expect("gültig");
+        assert!(!state.fertig);
+        assert_eq!(state.atempo, nr as i64 + 1);
+        assert_eq!(state.runde, nr as i64 + 2);
+        assert_eq!(dran_sitze(&state), vec![0]);
+        assert!(state.ergebnisse[0].is_none());
+        assert_eq!(state.malus[0].wert_ms, 0);
+        assert!(state.start.gruppe.is_empty());
+    }
+}
+
+#[test]
+fn die_sicht_zeigt_fremde_laeufe_nur_als_fertig_bis_die_runde_entschieden_ist() {
+    let spiel = get_game("pressen").unwrap();
+    let sitze: Vec<GameSeat> = (0..3)
+        .map(|seat| GameSeat {
+            seat,
+            user_id: Uuid::now_v7(),
+        })
+        .collect();
+    let state = spiel.initial_state(&sitze);
+    // Sitz 2 (Ampel) meldet seinen Lauf.
+    let zug = serde_json::json!({
+        "typ": "ergebnis", "runde": 1, "dauerMs": 12345, "verschuettetDezi": 77,
+        "reaktionMs": 300, "vorzeitig": false, "verzoegerungMs": 0
+    });
+    let ctx = MoveContext {
+        seat: 2,
+        user_id: sitze[2].user_id,
+        players: &sitze,
+    };
+    let danach = spiel.apply_move(&state, &zug, &ctx).expect("gültig");
+
+    // Der Melder sieht sich selbst vollständig …
+    let eigene = spiel.fuer_betrachter(&danach, Some(2));
+    assert_eq!(eigene["ergebnisse"][2]["dauerMs"], 12345);
+    assert_eq!(eigene["ergebnisse"][2]["verschuettetDezi"], 77);
+    // … alle anderen und Zuschauer nur „fertig“, ohne irgendeine Zahl.
+    for seat in [Some(0), Some(1), None] {
+        let sicht = spiel.fuer_betrachter(&danach, seat);
+        assert_eq!(
+            sicht["ergebnisse"][2],
+            serde_json::json!({ "verborgen": true }),
+            "{seat:?}"
+        );
+        let text = sicht.to_string();
+        assert!(
+            !text.contains("12345") && !text.contains("verschuettetDezi\":77"),
+            "{text}"
+        );
+    }
+    // Wer noch nichts gemeldet hat, bleibt `null`.
+    assert!(spiel.fuer_betrachter(&danach, Some(0))["ergebnisse"][0].is_null());
+
+    // Ist die Runde entschieden (hier: Spiel beendet), ist alles offen.
+    let mut ende = danach.clone();
+    ende["fertig"] = serde_json::json!(true);
+    assert_eq!(
+        fuer_betrachter(&ende, Some(0))["ergebnisse"][2]["dauerMs"],
+        12345
+    );
+    // Die Vorrunde (nach Atempo) ist abgeschlossen und offen.
+    let mut atempo = danach.clone();
+    atempo["vorrunde"] = danach["ergebnisse"].clone();
+    assert_eq!(
+        fuer_betrachter(&atempo, Some(0))["vorrunde"][2]["dauerMs"],
+        12345
+    );
+}
+
+#[test]
+fn die_engine_nimmt_die_wahl_vor_dem_start_an() {
+    let spiel = get_game("pressen").unwrap();
+    let sitze: Vec<GameSeat> = (0..2)
+        .map(|seat| GameSeat {
+            seat,
+            user_id: Uuid::now_v7(),
+        })
+        .collect();
+    let state = spiel.initial_state(&sitze);
+    let ctx = |seat: usize| MoveContext {
+        seat: seat as i32,
+        user_id: sitze[seat].user_id,
+        players: &sitze,
+    };
+    let wahl = serde_json::json!({ "typ": "start", "art": "echtzeit" });
+    let nach_a = spiel.apply_move(&state, &wahl, &ctx(0)).expect("gültig");
+    assert!(nach_a["start"]["beginn"].is_null());
+    let nach_b = spiel.apply_move(&nach_a, &wahl, &ctx(1)).expect("gültig");
+    assert!(nach_b["start"]["beginn"].as_i64().unwrap() > 0);
+    // Unsinn bleibt Unsinn.
+    assert!(spiel
+        .apply_move(
+            &state,
+            &serde_json::json!({ "typ": "start", "art": "heimlich" }),
+            &ctx(0)
+        )
+        .is_err());
 }

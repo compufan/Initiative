@@ -5,10 +5,19 @@
  * Hier steht, was der Server prüft und entscheidet (gespiegelt in
  * `apps/api/src/games/pressen.rs`, beide gegen `testdaten/pressen.json`):
  * wer wann dran ist, wie ein gemeldeter Lauf gewertet wird, wann es Atempo
- * gibt, wer gewinnt und wie stark die Tasten verzögert sind.
+ * gibt, wer gewinnt, wie stark die Tasten verzögert sind (Malus = Ermüdung)
+ * und wie ein gemeinsamer Start (Echtzeit) oder ein einzelner (asynchron)
+ * abläuft.
  */
 import type { GameDefinition, GameMoveResult, GameOutcome, GameSeat } from './types.js';
-import { DT_MS, GLAS_ML, MAX_TICKS, MUND_KAPAZITAET_ML, SCHLUCK_RATE_ML_S } from './pressen-sim.js';
+import {
+  DT_MS,
+  ERMUEDUNG_VOLL_MS,
+  GLAS_ML,
+  MAX_TICKS,
+  MUND_KAPAZITAET_ML,
+  SCHLUCK_RATE_ML_S,
+} from './pressen-sim.js';
 
 /* ---------- Konstanten ---------- */
 
@@ -21,7 +30,7 @@ export const ATEMPO_TOLERANZ_MS = 250;
 
 /** Jeder gespielte Lauf macht die Tasten um so viel träger … */
 export const MALUS_PRO_RUNDE_MS = 40;
-export const MALUS_MAX_MS = 250;
+export const MALUS_MAX_MS = ERMUEDUNG_VOLL_MS;
 /** … und nach dieser Zeit ist davon nur noch die Hälfte übrig. */
 export const MALUS_HALBWERTSZEIT_MS = 120_000;
 
@@ -32,8 +41,17 @@ export const GETRUEMMERT_MS = 450;
 export const MIN_REAKTION_MS = 120;
 export const MIN_DAUER_MS = 1500;
 export const MAX_DAUER_MS = MAX_TICKS * DT_MS;
-/** So lange darf zwischen „Los“ und der Meldung höchstens Spielraum liegen. */
+/** So lange darf zwischen „Anstoßen“ und der Meldung höchstens Spielraum liegen. */
 const START_SPIELRAUM_MS = 30_000;
+
+/** Echtzeit: so lange gilt eine „Zusammen“-Bestätigung, bis alle anderen nachziehen müssen. */
+export const START_FRIST_MS = 10_000;
+/** Echtzeit: Countdown 3-2-1 zwischen der letzten Bestätigung und dem gemeinsamen Beginn. */
+export const START_ZAEHLER_MS = 3000;
+/** Wie viel länger als „jetzt − gemeinsamer Beginn“ ein gemeldeter Lauf höchstens dauern darf. */
+export const MELDE_SPIELRAUM_MS = 5000;
+/** Obergrenze für das Warten bis „Anstoßen“ nach dem gemeinsamen Beginn. */
+export const MAX_VERSATZ_MS = 600_000;
 
 export const PRESSEN_MIN_SPIELER = 1;
 export const PRESSEN_MAX_SPIELER = 8;
@@ -42,20 +60,56 @@ export const PRESSEN_MAX_SPIELER = 8;
 
 export type PressenModus = 'spiegel' | 'duell' | 'ampel' | 'staffette';
 
+/** Wie jemand antreten will: gemeinsam mit Countdown oder unabhängig vom anderen. */
+export type PressenArt = 'echtzeit' | 'asynchron';
+
 export interface PressenMalus {
-  /** Verzögerung in ms zum Zeitpunkt `stand` (Serveruhr, ms seit 1970). */
+  /**
+   * Ermüdung als Verzögerung in ms zum Zeitpunkt `stand` (Serveruhr, ms seit
+   * 1970). Sie verzögert die Tasten und steuert Trägheit, Dämpfung und
+   * Haltekurve der Simulation (siehe `physikFuer`).
+   */
   wertMs: number;
   stand: number;
 }
 
 export interface PressenErgebnis {
+  /** Gesamtzeit; bei gemeinsamem Start steckt das Warten bis „Anstoßen“ darin. */
   dauerMs: number;
   verschuettetDezi: number;
   reaktionMs: number | null;
   vorzeitig: boolean;
   verzoegerungMs: number;
+  /** Davon die Zeit zwischen gemeinsamem Beginn und „Anstoßen“ (0 bei asynchronem Lauf). */
+  versatzMs: number;
   wertungMs: number;
   getruemmert: boolean;
+}
+
+/** Was andere vor Abschluss der Runde von einem fremden Lauf sehen: nur „fertig“. */
+export interface PressenVerborgen {
+  verborgen: true;
+}
+
+export function istVerborgen(e: unknown): e is PressenVerborgen {
+  return typeof e === 'object' && e !== null && (e as PressenVerborgen).verborgen === true;
+}
+
+/**
+ * Wie die Gruppe antritt. Eine Gruppe gibt es nur, wenn mindestens zwei Sitze
+ * gleichzeitig loslaufen dürfen (Duell, die beiden ersten Läufer einer
+ * Staffette, die beiden Teams nach der Ampel). Ein Einzelner (Spiegel, Ampel,
+ * Staffetten-Nachfolger) startet immer mit seinem eigenen „Anstoßen“.
+ */
+export interface PressenStart {
+  /** Mitglieder der Gruppe; leer = nichts abzustimmen. */
+  gruppe: number[];
+  /** Je Sitz die Wahl dieser Etappe (null = noch keine). */
+  art: (PressenArt | null)[];
+  /** Je Sitz die Serverzeit (ms), zu der „Zusammen“ bestätigt wurde. */
+  bereitAm: (number | null)[];
+  /** Gemeinsamer Beginn (Serverzeit, ms), sobald alle bestätigt haben; sonst null. */
+  beginn: number | null;
 }
 
 export interface PressenState {
@@ -73,12 +127,25 @@ export interface PressenState {
   vorrunde: (PressenErgebnis | null)[] | null;
   letzterAbstandMs: number | null;
   malus: PressenMalus[];
+  /** Start der laufenden Etappe (Echtzeit/asynchron). */
+  start: PressenStart;
   /** Teamwertungen der entscheidenden Runde. */
   teamWertung: number[] | null;
   sieger: number[];
   fertig: boolean;
 }
 
+/**
+ * Der Stand, wie ihn jemand VOR Abschluss der Runde ausgeliefert bekommt:
+ * fremde Läufe sind nur als „fertig“ erkennbar. Der Server baut ihn
+ * (`fuer_betrachter` in `pressen.rs`); der Client liest ihn.
+ */
+export type PressenAnsicht = Omit<PressenState, 'ergebnisse' | 'vorrunde'> & {
+  ergebnisse: (PressenErgebnis | PressenVerborgen | null)[];
+  vorrunde: (PressenErgebnis | PressenVerborgen | null)[] | null;
+};
+
+/** Ein gemeldeter Lauf. */
 export interface PressenZug {
   typ: 'ergebnis';
   runde: number;
@@ -87,7 +154,17 @@ export interface PressenZug {
   reaktionMs: number | null;
   vorzeitig: boolean;
   verzoegerungMs: number;
+  /** Echtzeit: Zeit zwischen gemeinsamem Beginn und „Anstoßen“ (in `dauerMs` enthalten); sonst null. */
+  versatzMs: number | null;
 }
+
+/** Wahl vor dem Start: „Zusammen (Echtzeit)“ oder „Wann ich will (asynchron)“. */
+export interface PressenStartZug {
+  typ: 'start';
+  art: PressenArt;
+}
+
+export type PressenBewegung = PressenZug | PressenStartZug;
 
 /* ---------- reine Funktionen ---------- */
 
@@ -127,8 +204,12 @@ export function verzoegerungBei(malus: PressenMalus, jetztMs: number): number {
   return Math.round(malusBei(malus, jetztMs));
 }
 
-/** Sitze, die gerade laufen dürfen. */
-export function dranSitze(state: PressenState): number[] {
+/** Sitze, die gerade laufen dürfen (arbeitet auch auf der verborgenen Ansicht). */
+export function dranSitze(
+  state: Pick<PressenState, 'fertig' | 'ampel' | 'teams'> & {
+    ergebnisse: readonly (unknown | null)[];
+  },
+): number[] {
   if (state.fertig) return [];
   const offen = (sitz: number) => state.ergebnisse[sitz] == null;
   if (state.ampel != null && offen(state.ampel)) return [state.ampel];
@@ -141,17 +222,137 @@ export function dranSitze(state: PressenState): number[] {
 }
 
 /** Warum jemand gerade nicht dran ist – für die Anzeige. */
-export function wartetAuf(state: PressenState, sitz: number): 'ampel' | 'teamkollege' | null {
+export function wartetAuf(
+  state: Pick<PressenState, 'fertig' | 'ampel' | 'teams'> & {
+    ergebnisse: readonly (unknown | null)[];
+  },
+  sitz: number,
+): 'ampel' | 'teamkollege' | null {
   if (state.fertig || state.ergebnisse[sitz] != null) return null;
   if (dranSitze(state).includes(sitz)) return null;
   if (state.ampel != null && state.ergebnisse[state.ampel] == null) return 'ampel';
   return 'teamkollege';
 }
 
+/* ---------- Start: Echtzeit oder asynchron ---------- */
+
+export function neuerStart(n: number, gruppe: number[]): PressenStart {
+  return {
+    gruppe: gruppe.length >= 2 ? gruppe.slice() : [],
+    art: Array.from({ length: n }, () => null),
+    bereitAm: Array.from({ length: n }, () => null),
+    beginn: null,
+  };
+}
+
+/** Ältere Stände kennen den Start noch nicht: dort gibt es nichts abzustimmen. */
+function startVon(state: { start?: PressenStart; ergebnisse: readonly unknown[] }): PressenStart {
+  return state.start ?? neuerStart(state.ergebnisse.length, []);
+}
+
+/**
+ * Wo steht ein Sitz im Start?
+ *
+ *  - `frei`: nichts abzustimmen, „Anstoßen“ gilt sofort und die Zeit zählt ab da
+ *    (Einzelne, Staffetten-Nachfolger, Spiegel).
+ *  - `wahl`: der Sitz muss noch wählen.
+ *  - `wartet`: „Zusammen“ ist bestätigt, die anderen haben bis `frist` (Serverzeit).
+ *  - `zaehlt` / `gestartet`: der gemeinsame Beginn steht fest; davor Countdown, danach
+ *    läuft die Uhr, auch wenn „Anstoßen“ noch nicht gedrückt ist.
+ *  - `asynchron`: jemand will unabhängig spielen, oder die Frist ist verfallen
+ *    (`grund: 'frist'`): die Zeit zählt ab dem eigenen „Anstoßen“.
+ */
+export type StartPhase =
+  | { phase: 'frei' }
+  | { phase: 'wahl' }
+  | { phase: 'wartet'; frist: number; bereit: number; von: number }
+  | { phase: 'zaehlt'; beginn: number }
+  | { phase: 'gestartet'; beginn: number }
+  | { phase: 'asynchron'; grund: 'gewaehlt' | 'frist' };
+
+export function startPhase(
+  state: Pick<PressenState, 'fertig' | 'ampel' | 'teams'> & {
+    ergebnisse: readonly (unknown | null)[];
+    start?: PressenStart;
+  },
+  sitz: number,
+  jetztMs: number,
+): StartPhase {
+  const start = startVon(state);
+  const offene = start.gruppe.filter((s) => state.ergebnisse[s] == null);
+  if (!start.gruppe.includes(sitz) || state.ergebnisse[sitz] != null) return { phase: 'frei' };
+  if (start.beginn != null) {
+    return jetztMs < start.beginn
+      ? { phase: 'zaehlt', beginn: start.beginn }
+      : { phase: 'gestartet', beginn: start.beginn };
+  }
+  if (offene.length < 2) return { phase: 'frei' };
+  if (offene.some((s) => start.art[s] === 'asynchron')) {
+    return { phase: 'asynchron', grund: 'gewaehlt' };
+  }
+  const meine = start.art[sitz] ?? null;
+  if (meine == null) return { phase: 'wahl' };
+  const bestaetigt = offene.filter((s) => start.bereitAm[s] != null);
+  const frist = Math.min(...bestaetigt.map((s) => start.bereitAm[s]!)) + START_FRIST_MS;
+  if (jetztMs > frist) return { phase: 'asynchron', grund: 'frist' };
+  return { phase: 'wartet', frist, bereit: bestaetigt.length, von: offene.length };
+}
+
+/** Prüft eine Wahl und bucht sie ein (Serveruhr `jetztMs`). */
+function startAngewendet(
+  state: PressenState,
+  sitz: number,
+  zug: PressenStartZug,
+  jetztMs: number,
+): GameMoveResult<PressenState> {
+  if (state.fertig) return { ok: false, error: 'Das Spiel ist beendet.' };
+  const start = startVon(state);
+  const offene = start.gruppe.filter((s) => state.ergebnisse[s] == null);
+  if (!offene.includes(sitz) || offene.length < 2) {
+    return { ok: false, error: 'Hier gibt es nichts abzustimmen.' };
+  }
+  if (start.beginn != null) return { ok: false, error: 'Der Start steht schon fest.' };
+  const alt = start.art[sitz] ?? null;
+  if (alt === 'asynchron' || (alt === zug.art && zug.art === 'echtzeit')) {
+    // Asynchron ist endgültig; ein zweites „Zusammen“ ändert nichts.
+    if (alt === zug.art) return { ok: true, state };
+    return { ok: false, error: 'Du hast schon „Wann ich will“ gewählt.' };
+  }
+  const art = start.art.slice();
+  const bereitAm = start.bereitAm.slice();
+  art[sitz] = zug.art;
+  bereitAm[sitz] = zug.art === 'echtzeit' ? jetztMs : null;
+  let beginn: number | null = null;
+  const alleZusammen = offene.every((s) => art[s] === 'echtzeit' && bereitAm[s] != null);
+  if (alleZusammen) {
+    const aelteste = Math.min(...offene.map((s) => bereitAm[s]!));
+    // Zu spät bestätigt (Frist verfallen): kein gemeinsamer Beginn mehr.
+    if (jetztMs <= aelteste + START_FRIST_MS) beginn = jetztMs + START_ZAEHLER_MS;
+  }
+  return { ok: true, state: { ...state, start: { ...start, art, bereitAm, beginn } } };
+}
+
+/* ---------- Plausibilität ---------- */
+
 /** Prüft einen gemeldeten Lauf gegen das, was die Physik hergibt. */
-export function pruefeLauf(zug: PressenZug): string | null {
+export function pruefeLauf(
+  zug: PressenZug,
+  gemeinsam?: { jetztMs: number; beginn: number | null },
+): string | null {
   const ganz = (wert: number) => Number.isInteger(wert);
-  if (!ganz(zug.dauerMs) || zug.dauerMs < MIN_DAUER_MS || zug.dauerMs > MAX_DAUER_MS) {
+  const versatz = zug.versatzMs ?? 0;
+  if (!ganz(versatz) || versatz < 0 || versatz > MAX_VERSATZ_MS) return 'Unplausibler Start.';
+  const laufMs = zug.dauerMs - versatz;
+  if (!ganz(zug.dauerMs) || laufMs < MIN_DAUER_MS || laufMs > MAX_DAUER_MS) {
+    return 'Unplausible Dauer.';
+  }
+  // Wer gemeinsam gestartet ist, kann nicht länger gebraucht haben, als seit
+  // dem gemeinsamen Beginn vergangen ist.
+  if (
+    zug.versatzMs != null &&
+    gemeinsam?.beginn != null &&
+    zug.dauerMs > gemeinsam.jetztMs - gemeinsam.beginn + MELDE_SPIELRAUM_MS
+  ) {
     return 'Unplausible Dauer.';
   }
   if (
@@ -164,7 +365,7 @@ export function pruefeLauf(zug: PressenZug): string | null {
   // Getrunken ist, was nicht verschüttet wurde – und mehr als der Mund
   // schlucken kann (plus sein Fassungsvermögen) geht in der Zeit nicht.
   const getrunkenMl = GLAS_ML - zug.verschuettetDezi / 10;
-  if (getrunkenMl > (SCHLUCK_RATE_ML_S * zug.dauerMs) / 1000 + MUND_KAPAZITAET_ML) {
+  if (getrunkenMl > (SCHLUCK_RATE_ML_S * laufMs) / 1000 + MUND_KAPAZITAET_ML) {
     return 'Unplausibel schnell getrunken.';
   }
   if (zug.vorzeitig) {
@@ -173,7 +374,7 @@ export function pruefeLauf(zug: PressenZug): string | null {
     zug.reaktionMs == null ||
     !ganz(zug.reaktionMs) ||
     zug.reaktionMs < MIN_REAKTION_MS ||
-    zug.reaktionMs > zug.dauerMs
+    zug.reaktionMs > laufMs
   ) {
     return 'Unplausible Reaktion.';
   }
@@ -188,7 +389,7 @@ export function pruefeLauf(zug: PressenZug): string | null {
 function neuerZustand(players: GameSeat[]): PressenState {
   const n = Math.max(1, players.length);
   const plan = planFuer(n);
-  return {
+  const zustand: PressenState = {
     ...plan,
     runde: 1,
     atempo: 0,
@@ -196,10 +397,13 @@ function neuerZustand(players: GameSeat[]): PressenState {
     vorrunde: null,
     letzterAbstandMs: null,
     malus: Array.from({ length: n }, () => ({ wertMs: 0, stand: 0 })),
+    start: neuerStart(n, []),
     teamWertung: null,
     sieger: [],
     fertig: false,
   };
+  zustand.start = neuerStart(n, dranSitze(zustand));
+  return zustand;
 }
 
 function angewendet(
@@ -219,6 +423,7 @@ function angewendet(
     verzoegerungBei(malus, jetztMs - zug.dauerMs - START_SPIELRAUM_MS) + 2,
   );
   const verzoegerungMs = spiegel ? 0 : Math.max(untere, Math.min(obere, zug.verzoegerungMs));
+  const start = startVon(state);
 
   const ergebnis: PressenErgebnis = {
     dauerMs: zug.dauerMs,
@@ -226,6 +431,8 @@ function angewendet(
     reaktionMs: zug.reaktionMs,
     vorzeitig: zug.vorzeitig,
     verzoegerungMs,
+    // Ohne gemeinsamen Beginn gibt es keinen Versatz, der zählen könnte.
+    versatzMs: start.beginn != null ? (zug.versatzMs ?? 0) : 0,
     wertungMs: wertungMs(zug.dauerMs, zug.verschuettetDezi),
     getruemmert: !zug.vorzeitig && zug.reaktionMs != null && zug.reaktionMs <= GETRUEMMERT_MS,
   };
@@ -239,12 +446,18 @@ function angewendet(
       stand: jetztMs,
     };
   }
-  const weiter: PressenState = { ...state, ergebnisse, malus: maluse };
+  const weiter: PressenState = { ...state, ergebnisse, malus: maluse, start };
 
   const alleDa =
     state.teams.flat().every((s) => ergebnisse[s] != null) &&
     (state.ampel == null || ergebnisse[state.ampel] != null);
-  if (!alleDa) return weiter;
+  if (!alleDa) {
+    // Wer nach diesem Lauf NEU dran ist: zwei oder mehr gleichzeitig (nach der
+    // Ampel) stimmen sich wieder ab, ein einzelner Nachfolger startet frei.
+    const vorher = dranSitze(state);
+    const neu = dranSitze(weiter).filter((s) => !vorher.includes(s));
+    return neu.length >= 2 ? { ...weiter, start: neuerStart(ergebnisse.length, neu) } : weiter;
+  }
 
   const summen = state.teams.map((team) =>
     team.reduce((summe, s) => summe + ergebnisse[s]!.wertungMs, 0),
@@ -252,7 +465,7 @@ function angewendet(
   const abstand = spiegel ? 0 : Math.abs(summen[0]! - summen[1]!);
   const toleranz = ATEMPO_TOLERANZ_MS * (state.teams[0]?.length ?? 1);
   if (spiegel || abstand < toleranz) {
-    return {
+    const naechste: PressenState = {
       ...weiter,
       runde: state.runde + 1,
       atempo: state.atempo + 1,
@@ -260,6 +473,7 @@ function angewendet(
       letzterAbstandMs: abstand,
       ergebnisse: ergebnisse.map(() => null),
     };
+    return { ...naechste, start: neuerStart(ergebnisse.length, dranSitze(naechste)) };
   }
   const gewinner = summen[0]! < summen[1]! ? 0 : 1;
   return {
@@ -270,14 +484,20 @@ function angewendet(
   };
 }
 
-function lies(raw: unknown): PressenZug | null {
+function lies(raw: unknown): PressenBewegung | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const r = raw as Record<string, unknown>;
   const zahl = (w: unknown): w is number => typeof w === 'number' && Number.isFinite(w);
+  if (r.typ === 'start') {
+    return r.art === 'echtzeit' || r.art === 'asynchron' ? { typ: 'start', art: r.art } : null;
+  }
   if (r.typ !== 'ergebnis' || !zahl(r.runde) || !zahl(r.dauerMs)) return null;
   if (!zahl(r.verschuettetDezi) || !zahl(r.verzoegerungMs)) return null;
   if (typeof r.vorzeitig !== 'boolean') return null;
   if (r.reaktionMs !== null && !zahl(r.reaktionMs)) return null;
+  // Fehlt der Versatz (ältere Clients), ist es ein Lauf ab eigenem „Anstoßen“.
+  const versatz = r.versatzMs ?? null;
+  if (versatz !== null && !zahl(versatz)) return null;
   return {
     typ: 'ergebnis',
     runde: r.runde,
@@ -286,14 +506,15 @@ function lies(raw: unknown): PressenZug | null {
     reaktionMs: r.reaktionMs as number | null,
     vorzeitig: r.vorzeitig,
     verzoegerungMs: r.verzoegerungMs,
+    versatzMs: versatz,
   };
 }
 
-export const pressen: GameDefinition<PressenState, PressenZug> = {
+export const pressen: GameDefinition<PressenState, PressenBewegung> = {
   key: 'pressen',
   name: 'Pressen',
   description:
-    'Bier so schnell wie möglich trinken – und möglichst nichts verschütten. Allein gegen den Spiegel, zu zweit, mit Ampel oder als Staffette.',
+    'Bier so schnell wie möglich trinken – und möglichst nichts verschütten. Allein gegen den Spiegel, zu zweit, mit Ampel oder als Staffette; gemeinsam in Echtzeit oder jeder, wann er will.',
   emoji: '🍺',
   minPlayers: PRESSEN_MIN_SPIELER,
   maxPlayers: PRESSEN_MAX_SPIELER,
@@ -304,14 +525,33 @@ export const pressen: GameDefinition<PressenState, PressenZug> = {
   parseMove: lies,
 
   applyMove(state, zug, ctx): GameMoveResult<PressenState> {
+    const jetzt = ctx.nowMs ?? Date.now();
+    if (zug.typ === 'start') return startAngewendet(state, ctx.seat, zug, jetzt);
     if (state.fertig) return { ok: false, error: 'Das Spiel ist beendet.' };
     if (zug.runde !== state.runde) return { ok: false, error: 'Diese Runde ist schon vorbei.' };
     if (!dranSitze(state).includes(ctx.seat)) {
       return { ok: false, error: 'Du bist gerade nicht dran.' };
     }
-    const fehler = pruefeLauf(zug);
+    const fehler = pruefeLauf(zug, { jetztMs: jetzt, beginn: startVon(state).beginn });
     if (fehler) return { ok: false, error: fehler };
-    return { ok: true, state: angewendet(state, ctx.seat, zug, ctx.nowMs ?? Date.now()) };
+    // Die Vorhersage im Client kennt fremde Läufe nur als „fertig“; steht eine
+    // Runde damit nicht fest, bucht sie nur den eigenen Lauf ein und wartet auf
+    // den Stand des Servers.
+    if (state.ergebnisse.some((e, i) => i !== ctx.seat && istVerborgen(e))) {
+      const ergebnisse = state.ergebnisse.slice();
+      ergebnisse[ctx.seat] = {
+        dauerMs: zug.dauerMs,
+        verschuettetDezi: zug.verschuettetDezi,
+        reaktionMs: zug.reaktionMs,
+        vorzeitig: zug.vorzeitig,
+        verzoegerungMs: zug.verzoegerungMs,
+        versatzMs: zug.versatzMs ?? 0,
+        wertungMs: wertungMs(zug.dauerMs, zug.verschuettetDezi),
+        getruemmert: false,
+      };
+      return { ok: true, state: { ...state, ergebnisse } };
+    }
+    return { ok: true, state: angewendet(state, ctx.seat, zug, jetzt) };
   },
 
   currentSeat(state) {

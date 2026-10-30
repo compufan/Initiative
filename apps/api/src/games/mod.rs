@@ -6,6 +6,7 @@
 
 pub mod connect_four;
 pub mod pressen;
+pub mod pressen_figur;
 pub mod tic_tac_toe;
 
 use std::sync::LazyLock;
@@ -50,6 +51,13 @@ pub trait GameDefinition: Send + Sync {
     /// Validates and applies one move. `Err` carries a message for the player.
     fn apply_move(&self, state: &Value, mv: &Value, ctx: &MoveContext<'_>)
         -> Result<Value, String>;
+    /// Der Stand, wie ihn `seat` (None = Zuschauer) ausgeliefert bekommt.
+    /// Standard: alles. Spiele mit verdeckten Zügen (Pressen: fremde Zeiten bis
+    /// zum Rundenende) schwärzen hier – der Server ruft das auf JEDEM Weg nach
+    /// draußen auf (Abfrage, Liste, Echtzeitereignis, Karte im Chat).
+    fn fuer_betrachter(&self, state: &Value, _seat: Option<i32>) -> Value {
+        state.clone()
+    }
     /// Seat that has to move next, or `None` when nobody has to.
     fn current_seat(&self, state: &Value) -> Option<i32>;
     fn outcome(&self, state: &Value) -> Outcome;

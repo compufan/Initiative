@@ -1,5 +1,5 @@
 {
-  "hinweis": "Gemeinsame Testfälle für Pressen. Die TypeScript-Fassung (src/games/pressen.ts, geprüft in pressen.test.ts) und die Rust-Fassung (apps/api/src/games/pressen.rs, geprüft in apps/api/tests/pressen.rs) müssen für jeden Fall dasselbe ergeben. Die Physik (pressen-sim.ts) läuft nur im Client und steht hier nicht drin.",
+  "hinweis": "Gemeinsame Testfälle für Pressen. Die TypeScript-Fassung (src/games/pressen.ts, geprüft in pressen.test.ts) und die Rust-Fassung (apps/api/src/games/pressen.rs, geprüft in apps/api/tests/pressen.rs) müssen für jeden Fall dasselbe ergeben. Die Physik (pressen-sim.ts) läuft nur im Client und steht hier nicht drin. startFaelle: die Wahl vor dem Start (Echtzeit/asynchron) und der Versatz im Lauf.",
   "wertung": [
     { "dauerMs": 10000, "verschuettetDezi": 0, "erwartet": 10000 },
     { "dauerMs": 12000, "verschuettetDezi": 100, "erwartet": 13200 },
@@ -469,6 +469,395 @@
           "reaktionMs": 300,
           "vorzeitig": false,
           "verzoegerungMs": 0
+        }
+      ]
+    }
+  ],
+  "startFaelle": [
+    {
+      "name": "Duell: beide Zusammen, der Server setzt den Beginn drei Sekunden nach der letzten Bestätigung",
+      "spieler": 2,
+      "schritte": [
+        {
+          "typ": "start",
+          "sitz": 0,
+          "art": "echtzeit",
+          "jetzt": 1000000,
+          "danach": {
+            "beginn": null,
+            "art": ["echtzeit", null],
+            "bereitAm": [1000000, null],
+            "gruppe": [0, 1]
+          }
+        },
+        {
+          "typ": "start",
+          "sitz": 1,
+          "art": "echtzeit",
+          "jetzt": 1004000,
+          "danach": {
+            "beginn": 1007000,
+            "art": ["echtzeit", "echtzeit"],
+            "bereitAm": [1000000, 1004000]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Genau zehn Sekunden nach der ersten Bestätigung reichen noch",
+      "spieler": 2,
+      "schritte": [
+        {
+          "typ": "start",
+          "sitz": 0,
+          "art": "echtzeit",
+          "jetzt": 1000000
+        },
+        {
+          "typ": "start",
+          "sitz": 1,
+          "art": "echtzeit",
+          "jetzt": 1010000,
+          "danach": {
+            "beginn": 1013000
+          }
+        }
+      ]
+    },
+    {
+      "name": "Eine Millisekunde zu spät: kein gemeinsamer Beginn (Rückfall in asynchron)",
+      "spieler": 2,
+      "schritte": [
+        {
+          "typ": "start",
+          "sitz": 0,
+          "art": "echtzeit",
+          "jetzt": 1000000
+        },
+        {
+          "typ": "start",
+          "sitz": 1,
+          "art": "echtzeit",
+          "jetzt": 1010001,
+          "danach": {
+            "beginn": null,
+            "art": ["echtzeit", "echtzeit"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Asynchron ist endgültig; Zusammen lässt sich zu Asynchron wechseln",
+      "spieler": 2,
+      "schritte": [
+        {
+          "typ": "start",
+          "sitz": 0,
+          "art": "echtzeit",
+          "jetzt": 1000000,
+          "danach": {
+            "bereitAm": [1000000, null]
+          }
+        },
+        {
+          "typ": "start",
+          "sitz": 0,
+          "art": "asynchron",
+          "jetzt": 1000500,
+          "danach": {
+            "art": ["asynchron", null],
+            "bereitAm": [null, null],
+            "beginn": null
+          }
+        },
+        {
+          "typ": "start",
+          "sitz": 0,
+          "art": "echtzeit",
+          "jetzt": 1000900,
+          "fehler": true
+        },
+        {
+          "typ": "start",
+          "sitz": 0,
+          "art": "asynchron",
+          "jetzt": 1001000,
+          "danach": {
+            "art": ["asynchron", null]
+          }
+        },
+        {
+          "typ": "start",
+          "sitz": 1,
+          "art": "echtzeit",
+          "jetzt": 1002000,
+          "danach": {
+            "beginn": null,
+            "art": ["asynchron", "echtzeit"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Nach dem gemeinsamen Beginn ändert sich nichts mehr",
+      "spieler": 2,
+      "schritte": [
+        {
+          "typ": "start",
+          "sitz": 0,
+          "art": "echtzeit",
+          "jetzt": 1000000
+        },
+        {
+          "typ": "start",
+          "sitz": 1,
+          "art": "echtzeit",
+          "jetzt": 1001000,
+          "danach": {
+            "beginn": 1004000
+          }
+        },
+        {
+          "typ": "start",
+          "sitz": 0,
+          "art": "asynchron",
+          "jetzt": 1002000,
+          "fehler": true
+        }
+      ]
+    },
+    {
+      "name": "Einzelne stimmen sich nicht ab: Spiegel und Ampel allein",
+      "spieler": 1,
+      "schritte": [
+        {
+          "typ": "start",
+          "sitz": 0,
+          "art": "echtzeit",
+          "jetzt": 1000000,
+          "fehler": true
+        }
+      ]
+    },
+    {
+      "name": "Drei: die Ampel läuft allein, danach stimmen sich die beiden Teams ab",
+      "spieler": 3,
+      "schritte": [
+        {
+          "typ": "start",
+          "sitz": 2,
+          "art": "echtzeit",
+          "jetzt": 1000000,
+          "fehler": true
+        },
+        {
+          "typ": "start",
+          "sitz": 0,
+          "art": "echtzeit",
+          "jetzt": 1000000,
+          "fehler": true
+        },
+        {
+          "typ": "ergebnis",
+          "sitz": 2,
+          "jetzt": 1030000,
+          "runde": 1,
+          "dauerMs": 12000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": {
+            "dran": [0, 1]
+          }
+        },
+        {
+          "typ": "start",
+          "sitz": 0,
+          "art": "echtzeit",
+          "jetzt": 1031000,
+          "danach": {
+            "gruppe": [0, 1],
+            "art": ["echtzeit", null, null]
+          }
+        },
+        {
+          "typ": "start",
+          "sitz": 1,
+          "art": "echtzeit",
+          "jetzt": 1032000,
+          "danach": {
+            "beginn": 1035000
+          }
+        }
+      ]
+    },
+    {
+      "name": "Vier: nur die beiden Erstläufer stimmen sich ab, Nachfolger starten frei",
+      "spieler": 4,
+      "schritte": [
+        {
+          "typ": "start",
+          "sitz": 2,
+          "art": "echtzeit",
+          "jetzt": 1000000,
+          "fehler": true
+        },
+        {
+          "typ": "start",
+          "sitz": 0,
+          "art": "echtzeit",
+          "jetzt": 1000000,
+          "danach": {
+            "gruppe": [0, 1]
+          }
+        },
+        {
+          "typ": "start",
+          "sitz": 1,
+          "art": "asynchron",
+          "jetzt": 1000100
+        },
+        {
+          "typ": "ergebnis",
+          "sitz": 0,
+          "jetzt": 1020000,
+          "runde": 1,
+          "dauerMs": 12000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": {
+            "dran": [1, 2]
+          }
+        },
+        {
+          "typ": "start",
+          "sitz": 2,
+          "art": "echtzeit",
+          "jetzt": 1021000,
+          "fehler": true
+        }
+      ]
+    },
+    {
+      "name": "Der Versatz zwischen gemeinsamem Beginn und Anstoßen geht in die Dauer ein und wird geprüft",
+      "spieler": 2,
+      "schritte": [
+        {
+          "typ": "start",
+          "sitz": 0,
+          "art": "echtzeit",
+          "jetzt": 1000000
+        },
+        {
+          "typ": "start",
+          "sitz": 1,
+          "art": "echtzeit",
+          "jetzt": 1001000,
+          "danach": {
+            "beginn": 1004000
+          }
+        },
+        {
+          "typ": "ergebnis",
+          "sitz": 0,
+          "jetzt": 1020000,
+          "runde": 1,
+          "dauerMs": 14500,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "versatzMs": 2500,
+          "danach": {
+            "versatz": {
+              "sitz": 0,
+              "wert": 2500
+            }
+          }
+        },
+        {
+          "typ": "ergebnis",
+          "sitz": 1,
+          "jetzt": 1020000,
+          "runde": 1,
+          "dauerMs": 30000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "versatzMs": 2000,
+          "fehler": true
+        },
+        {
+          "typ": "ergebnis",
+          "sitz": 1,
+          "jetzt": 1020000,
+          "runde": 1,
+          "dauerMs": 12000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "versatzMs": -5,
+          "fehler": true
+        },
+        {
+          "typ": "ergebnis",
+          "sitz": 1,
+          "jetzt": 1020000,
+          "runde": 1,
+          "dauerMs": 1200,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "versatzMs": 500,
+          "fehler": true
+        },
+        {
+          "typ": "ergebnis",
+          "sitz": 1,
+          "jetzt": 1020000,
+          "runde": 1,
+          "dauerMs": 15000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "versatzMs": 3000,
+          "danach": {
+            "versatz": {
+              "sitz": 1,
+              "wert": 3000
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Ohne gemeinsamen Beginn zählt kein Versatz",
+      "spieler": 2,
+      "schritte": [
+        {
+          "typ": "ergebnis",
+          "sitz": 0,
+          "jetzt": 1000000,
+          "runde": 1,
+          "dauerMs": 12000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "versatzMs": 2000,
+          "danach": {
+            "versatz": {
+              "sitz": 0,
+              "wert": 0
+            }
+          }
         }
       ]
     }

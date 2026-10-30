@@ -23,6 +23,10 @@ export interface GameSessionDto {
   createdAt: string;
   updatedAt: string;
   version: number;
+  /** Uhr des Servers beim Ausliefern (Echtzeitspiele schätzen daraus ihre Uhrabweichung). */
+  serverTime?: string;
+  /** Pressen: Strichmännchen der Spielenden, Benutzer-Kennung → Figur (siehe `pressen-figur.ts`). */
+  figuren?: Record<string, unknown>;
 }
 
 export interface GameInfoDto {
