@@ -2,10 +2,11 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { gunzipSync } from 'node:zlib';
+import { createHash } from 'node:crypto';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { MODELLE, laden, vorkomprimieren } from './prepare-models.mjs';
+import { MODELLE, gzAbgleichen, gzPruefsumme, laden, vorkomprimieren } from './prepare-models.mjs';
 
 /** Lizenzen, unter denen ein Modell mit der App ausgeliefert werden darf. */
 const ERLAUBT = new Set(['MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause']);
@@ -78,5 +79,50 @@ describe('laden', () => {
     } finally {
       server.close();
     }
+  });
+});
+
+describe('gzAbgleichen', () => {
+  const summe = (puffer) => createHash('sha256').update(puffer).digest('hex');
+  const groesse = 1024 * 1024 + 11;
+
+  it('erzeugt eine .gz neu, die zu einer anderen Datei gehört', async () => {
+    const pfad = join(await frischerOrdner(), 'm.onnx');
+    const inhalt = Buffer.alloc(groesse, 5);
+    await writeFile(pfad, inhalt);
+    // Eine gültige .gz – aber vom Modell von gestern.
+    await writeFile(`${pfad}.gz`, gzipSync(Buffer.alloc(groesse, 4)));
+    expect(await gzAbgleichen(pfad, summe(inhalt))).toBe(true);
+    expect(gunzipSync(await readFile(`${pfad}.gz`)).equals(inhalt)).toBe(true);
+  });
+
+  it('erzeugt eine abgeschnittene .gz neu', async () => {
+    const pfad = join(await frischerOrdner(), 'm.onnx');
+    const inhalt = Buffer.alloc(groesse, 6);
+    await writeFile(pfad, inhalt);
+    const ganz = gzipSync(inhalt);
+    await writeFile(`${pfad}.gz`, ganz.subarray(0, ganz.length >> 1));
+    expect(await gzPruefsumme(`${pfad}.gz`)).toBeNull();
+    expect(await gzAbgleichen(pfad, summe(inhalt))).toBe(true);
+    expect(gunzipSync(await readFile(`${pfad}.gz`)).equals(inhalt)).toBe(true);
+  });
+
+  it('lässt eine passende .gz unangetastet', async () => {
+    const pfad = join(await frischerOrdner(), 'm.onnx');
+    const inhalt = Buffer.alloc(groesse, 7);
+    await writeFile(pfad, inhalt);
+    // Andere Stufe als `vorkomprimieren` – ein Neuschreiben sähe man an den Bytes.
+    const vorhandene = gzipSync(inhalt, { level: 1 });
+    await writeFile(`${pfad}.gz`, vorhandene);
+    expect(await gzAbgleichen(pfad, summe(inhalt))).toBe(false);
+    expect((await readFile(`${pfad}.gz`)).equals(vorhandene)).toBe(true);
+  });
+
+  it('legt eine fehlende .gz an', async () => {
+    const pfad = join(await frischerOrdner(), 'm.onnx');
+    const inhalt = Buffer.alloc(groesse, 8);
+    await writeFile(pfad, inhalt);
+    expect(await gzAbgleichen(pfad, summe(inhalt))).toBe(true);
+    expect(gunzipSync(await readFile(`${pfad}.gz`)).equals(inhalt)).toBe(true);
   });
 });

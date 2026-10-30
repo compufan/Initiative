@@ -13,10 +13,10 @@
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, copyFile, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, copyFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
-import { createGzip } from 'node:zlib';
+import { createGunzip, createGzip } from 'node:zlib';
 import { Readable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -284,11 +284,59 @@ export async function laden(url, pfad) {
 }
 
 async function pruefsummeVon(pfad) {
-  // Nur fuer die kleinen Dateien beim erneuten Pruefen – die grosse traegt
-  // ihre Summe schon vom Laden her.
-  return createHash('sha256')
-    .update(await readFile(pfad))
-    .digest('hex');
+  // Gestreamt: Die grossen Modelle haben um die 100 MB, und die liegen beim
+  // erneuten Prüfen sonst einmal ganz im Speicher.
+  const hash = createHash('sha256');
+  for await (const stueck of createReadStream(pfad)) hash.update(stueck);
+  return hash.digest('hex');
+}
+
+/**
+ * Die Prüfsumme dessen, was in einer `.gz` steckt – oder `null`, wenn sie
+ * sich nicht entpacken lässt.
+ */
+export async function gzPruefsumme(pfadGz) {
+  const hash = createHash('sha256');
+  try {
+    // `pipeline` und nicht `.pipe()`: Nur so kommt ein Lesefehler der Datei
+    // auch beim Entpacker an, statt die Schleife ewig warten zu lassen.
+    await pipeline(createReadStream(pfadGz), createGunzip(), async (quelle) => {
+      for await (const stueck of quelle) hash.update(stueck);
+    });
+  } catch {
+    return null;
+  }
+  return hash.digest('hex');
+}
+
+/**
+ * Bei einer Rohdatei, die schon da und geprüft ist: passt die `.gz` daneben?
+ *
+ * WARUM entpacken und nachrechnen: Caddy liefert die `.gz` jedem Browser,
+ * der gzip versteht, ohne sie mit der Rohdatei abzugleichen. Eine `.gz` von
+ * einem früheren Modell, eine halbe aus einem abgebrochenen Lauf von vor der
+ * Zwischendatei, eine von Hand hingelegte – sie alle gingen am Prüfen der
+ * Rohdatei vorbei. Einmal entpacken kostet beim Bauen eine Sekunde.
+ *
+ * Fehlt sie oder passt sie nicht, wird sie neu erzeugt. Gibt zurück, ob neu
+ * erzeugt wurde.
+ */
+export async function gzAbgleichen(pfad, summe) {
+  const groesse = (await stat(pfad)).size;
+  // Unter der Schwelle von `vorkomprimieren` gibt es keine `.gz` – liegt doch
+  // eine da, ist sie fremd und muss weg.
+  if (groesse < 1024 * 1024) {
+    await rm(`${pfad}.gz`, { force: true });
+    return false;
+  }
+  if ((await vorhanden(`${pfad}.gz`)) && (await gzPruefsumme(`${pfad}.gz`)) === summe) {
+    return false;
+  }
+  if (await vorhanden(`${pfad}.gz`)) {
+    console.warn('    .gz passt nicht zur Datei – wird neu erzeugt');
+  }
+  await vorkomprimieren(pfad, groesse);
+  return true;
 }
 
 /**
@@ -352,16 +400,16 @@ async function modelleLaden() {
       if (await vorhanden(pfad, modell.mindestGroesse)) {
         // Eine vorhandene Datei nur dann noch einmal pruefen, wenn wir wissen,
         // wie sie aussehen soll – sonst vertrauen wir wie bisher der Groesse.
-        if (modell.sha256 && (await pruefsummeVon(pfad)) !== modell.sha256) {
+        const summe = await pruefsummeVon(pfad);
+        if (modell.sha256 && summe !== modell.sha256) {
           console.warn(`  ${modell.name}: Pruefsumme passt nicht, wird neu geladen`);
           await rm(pfad, { force: true });
         } else {
           console.log(`  ${modell.name}: schon da`);
           // Die Datei liegt, die `.gz` vielleicht nicht – etwa nach einem
-          // Wechsel auf einen Stand, der sie noch nicht kannte.
-          if (!(await vorhanden(`${pfad}.gz`))) {
-            await vorkomprimieren(pfad, (await stat(pfad)).size);
-          }
+          // Wechsel auf einen Stand, der sie noch nicht kannte – oder eine,
+          // die zu etwas anderem gehört.
+          await gzAbgleichen(pfad, summe);
           continue;
         }
       }
