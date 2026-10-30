@@ -30,7 +30,7 @@ use crate::services::conversations::assert_membership;
 use crate::services::events::assert_attendee;
 use crate::services::expenses::{
     balances, may_edit, paypal_me_url, readable_expense, require_expense, split_evenly,
-    to_expense_dto, VISIBILITIES,
+    to_expense_dto, unpassende_personen, PERSONEN_MAX, VISIBILITIES,
 };
 use crate::state::AppState;
 use crate::validate::{clean, Validator};
@@ -93,11 +93,26 @@ async fn list(
             and ($1::uuid is null or conversation_id = $1)
             and ($2::uuid is null or event_id = $2)
             and ($3 or settled_at is null)
+            -- Grob vorsortiert: Ohne Filter kamen hier sonst ALLE Ausgaben
+            -- des Systems in den Speicher, je mit eigenen Abfragen. Das ist
+            -- bewusst eine Obermenge (jeder Weg, auf dem `may_see` ja sagen
+            -- kann) – entschieden wird weiter unten, an einer Stelle.
+            and (
+              created_by = $4 or paid_by = $4
+              or exists (select 1 from expense_shares s
+                          where s.expense_id = expenses.id and s.user_id = $4)
+              or exists (select 1 from expense_viewers v
+                          where v.expense_id = expenses.id and v.user_id = $4)
+              or exists (select 1 from conversation_members m
+                          where m.conversation_id = expenses.conversation_id
+                            and m.user_id = $4)
+            )
           order by spent_at desc",
     )
     .bind(query.conversation_id)
     .bind(query.event_id)
     .bind(query.include_settled)
+    .bind(user.id())
     .fetch_all(&state.pool)
     .await?;
 
@@ -200,16 +215,76 @@ async fn create(
         assert_attendee(&state.pool, &event, user.id()).await?;
     }
 
-    let anteile = verteile(input.amount_cents, &input.shares)?;
+    // Jede Liste in Grenzen; Anteile dürfen niemanden doppelt nennen (zwei
+    // Zeilen für dieselbe Person verstießen gegen den Schlüssel der Tabelle,
+    // und welcher Betrag gilt, wäre ohnehin offen). Bei Zuschauern und
+    // Ausgenommenen ist doppelt nur überflüssig – dort wird still entdoppelt.
+    let mut viewer_ids = input.viewer_ids.clone();
+    viewer_ids.sort();
+    viewer_ids.dedup();
+    let mut hidden_from_ids = input.hidden_from_ids.clone();
+    hidden_from_ids.sort();
+    hidden_from_ids.dedup();
     let beteiligte: Vec<Uuid> = input.shares.iter().map(|share| share.user_id).collect();
+    let mut einmalig = beteiligte.clone();
+    einmalig.sort();
+    einmalig.dedup();
+    Validator::new()
+        .require(
+            "shares",
+            beteiligte.len() <= PERSONEN_MAX,
+            "zu viele Personen",
+        )
+        .require(
+            "shares",
+            einmalig.len() == beteiligte.len(),
+            "jede Person nur einmal",
+        )
+        .require(
+            "viewerIds",
+            viewer_ids.len() <= PERSONEN_MAX,
+            "zu viele Personen",
+        )
+        .require(
+            "hiddenFromIds",
+            hidden_from_ids.len() <= PERSONEN_MAX,
+            "zu viele Personen",
+        )
+        .finish()?;
+
+    let anteile = verteile(input.amount_cents, &input.shares)?;
 
     // Verbergen geht nur vor jemandem, der nicht mitzahlt.
-    for hidden in &input.hidden_from_ids {
+    for hidden in &hidden_from_ids {
         if beteiligte.contains(hidden) {
             return Err(AppError::bad_request(
                 "Eine Ausgabe lässt sich nur vor jemandem verbergen, der keinen Anteil daran hat – sonst stimmte sein Saldo nicht mehr",
             ));
         }
+    }
+
+    // Nur Personen aus dem Zusammenhang der Ausgabe – siehe
+    // `unpassende_personen`. Auch wer auslegt: Sonst ließe sich einem
+    // Fremden eine Forderung zuschreiben, die in seinem Saldo auftaucht.
+    let paid_by = input.paid_by.unwrap_or_else(|| user.id());
+    let mut genannt: Vec<Uuid> = beteiligte.clone();
+    genannt.push(paid_by);
+    genannt.extend(&viewer_ids);
+    genannt.extend(&hidden_from_ids);
+    genannt.sort();
+    genannt.dedup();
+    let unpassend = unpassende_personen(
+        &state.pool,
+        user.id(),
+        input.conversation_id,
+        input.event_id,
+        &genannt,
+    )
+    .await?;
+    if !unpassend.is_empty() {
+        return Err(AppError::bad_request(
+            "Eine Ausgabe kann nur Personen nennen, die zum Chat oder Termin gehören – ohne beides nur Leute, mit denen du einen Chat teilst",
+        ));
     }
 
     let id = Uuid::now_v7();
@@ -228,7 +303,7 @@ async fn create(
     .bind(clean(input.note))
     .bind(input.amount_cents)
     .bind(input.currency.to_uppercase())
-    .bind(input.paid_by.unwrap_or_else(|| user.id()))
+    .bind(paid_by)
     .bind(input.spent_at)
     .bind(&input.visibility)
     .execute(&mut *tx)
@@ -244,14 +319,14 @@ async fn create(
         .execute(&mut *tx)
         .await?;
     }
-    for viewer in &input.viewer_ids {
+    for viewer in &viewer_ids {
         sqlx::query("insert into expense_viewers (expense_id, user_id) values ($1, $2)")
             .bind(id)
             .bind(viewer)
             .execute(&mut *tx)
             .await?;
     }
-    for hidden in &input.hidden_from_ids {
+    for hidden in &hidden_from_ids {
         sqlx::query("insert into expense_hidden_from (expense_id, user_id) values ($1, $2)")
             .bind(id)
             .bind(hidden)

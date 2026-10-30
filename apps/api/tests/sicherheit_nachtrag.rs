@@ -1,0 +1,400 @@
+//! Lücken aus dem zweiten Sicherheits-Review – Fortsetzung von `sicherheit.rs`.
+//!
+//! Dieselbe Frage wie dort: Lässt sich mit einer Eingabe, die die eigene
+//! Oberfläche nie schickt, etwas erreichen, das sie nie erlaubt? Jeder Test
+//! hier war gegen den Stand vor der Behebung rot.
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use axum::Router;
+use http_body_util::BodyExt;
+use serde_json::{json, Value};
+use tower::ServiceExt;
+use uuid::Uuid;
+
+use initiative_api::config::Config;
+use initiative_api::state::AppState;
+use initiative_api::{app, MIGRATOR};
+
+struct Probe {
+    router: Router,
+    state: AppState,
+}
+
+impl Probe {
+    async fn call(
+        &self,
+        method: &str,
+        uri: &str,
+        token: Option<&str>,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        let mut builder = Request::builder().method(method).uri(uri);
+        if let Some(token) = token {
+            builder = builder.header("authorization", format!("Bearer {token}"));
+        }
+        let request = match body {
+            Some(body) => builder
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+            None => builder.body(Body::empty()).unwrap(),
+        };
+        let response = self.router.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    /// Legt ein Konto an: (Zugriffstoken, Kennung).
+    async fn konto(&self, vorne: &str) -> (String, String) {
+        let (token, id, _) = self.konto_voll(vorne).await;
+        (token, id)
+    }
+
+    /// Wie `konto`, dazu das Erneuerungs-Token.
+    async fn konto_voll(&self, vorne: &str) -> (String, String, String) {
+        let kennung = Uuid::now_v7().simple().to_string();
+        let name = format!("{vorne}{}", &kennung[kennung.len() - 12..]);
+        let (status, body) = self
+            .call(
+                "POST",
+                "/api/v1/auth/register",
+                None,
+                Some(json!({
+                    "username": name,
+                    "displayName": name,
+                    "password": "richtigespasswort",
+                })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{body}");
+        (
+            body["accessToken"].as_str().unwrap().to_string(),
+            body["user"]["id"].as_str().unwrap().to_string(),
+            body["refreshToken"].as_str().unwrap().to_string(),
+        )
+    }
+
+    async fn gruppe(&self, token: &str, mitglieder: &[&str]) -> String {
+        let (status, chat) = self
+            .call(
+                "POST",
+                "/api/v1/conversations",
+                Some(token),
+                Some(json!({ "type": "group", "title": "Runde", "memberIds": mitglieder })),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{chat}");
+        chat["id"].as_str().unwrap().to_string()
+    }
+
+    async fn ausgabe(&self, token: &str, koerper: Value) -> (StatusCode, Value) {
+        self.call("POST", "/api/v1/expenses", Some(token), Some(koerper))
+            .await
+    }
+
+    async fn salden(&self, token: &str) -> Vec<(String, i64)> {
+        let (status, body) = self
+            .call("GET", "/api/v1/expenses/balances", Some(token), None)
+            .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let mut liste: Vec<(String, i64)> = body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|eintrag| {
+                (
+                    eintrag["userId"].as_str().unwrap().to_string(),
+                    eintrag["netCents"].as_i64().unwrap(),
+                )
+            })
+            .collect();
+        liste.sort();
+        liste
+    }
+}
+
+async fn aufbauen() -> Option<Probe> {
+    let url = std::env::var("TEST_DATABASE_URL")
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .ok()?;
+    std::env::set_var("DATABASE_URL", &url);
+    std::env::set_var("NODE_ENV", "test");
+    std::env::set_var("JWT_SECRET", "test-secret-value-at-least-16-characters");
+    std::env::set_var("REALTIME_BUS", "memory");
+    std::env::set_var("STORAGE_DRIVER", "local");
+    std::env::set_var("LOCAL_STORAGE_DIR", "./.data/test-uploads");
+    let state = AppState::new(Config::from_env().expect("config"))
+        .await
+        .expect("state");
+    MIGRATOR.run(&state.pool).await.expect("migrations");
+    Some(Probe {
+        router: app::build(state.clone()),
+        state,
+    })
+}
+
+macro_rules! probe {
+    () => {
+        match aufbauen().await {
+            Some(probe) => probe,
+            None => {
+                eprintln!("TEST_DATABASE_URL fehlt – übersprungen");
+                return;
+            }
+        }
+    };
+}
+
+/* ---------- Ausgaben: wen eine Ausgabe nennen darf ---------- */
+
+/// Anteile, Auslegende, Zuschauer und Ausgenommene nahmen jede Konto-Kennung
+/// an – man konnte einem Fremden eine Schuld anhängen oder ihm Ereignisse
+/// schicken.
+#[tokio::test]
+async fn ausgaben_nennen_nur_leute_aus_dem_zusammenhang() {
+    let probe = probe!();
+    let (anna, anna_id) = probe.konto("anna").await;
+    let (_, bert_id) = probe.konto("bert").await;
+    let (_, cleo_id) = probe.konto("cleo").await;
+    let (_, dora_id) = probe.konto("dora").await;
+    let chat = probe.gruppe(&anna, &[&bert_id]).await;
+    // Dora teilt mit Anna einen anderen Chat, aber nicht diesen.
+    probe.gruppe(&anna, &[&dora_id]).await;
+
+    let mit_chat = |zusatz: Value| {
+        let mut koerper = json!({
+            "conversationId": chat,
+            "title": "Pizza",
+            "amountCents": 3000,
+            "shares": [{ "userId": anna_id }, { "userId": bert_id }],
+        });
+        for (schluessel, wert) in zusatz.as_object().unwrap() {
+            koerper[schluessel] = wert.clone();
+        }
+        koerper
+    };
+
+    for (fall, zusatz) in [
+        (
+            "Fremder als Anteil",
+            json!({ "shares": [{ "userId": anna_id }, { "userId": cleo_id }] }),
+        ),
+        ("Fremder legt aus", json!({ "paidBy": cleo_id })),
+        (
+            "Fremder als Zuschauer",
+            json!({ "visibility": "listed", "viewerIds": [cleo_id] }),
+        ),
+        ("Fremder ausgenommen", json!({ "hiddenFromIds": [cleo_id] })),
+        (
+            "aus einem anderen Chat",
+            json!({ "shares": [{ "userId": anna_id }, { "userId": dora_id }] }),
+        ),
+        (
+            "unbekannte Kennung",
+            json!({ "shares": [{ "userId": Uuid::now_v7() }] }),
+        ),
+    ] {
+        let (status, body) = probe.ausgabe(&anna, mit_chat(zusatz)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{fall}: {body}");
+    }
+
+    // Doppelt im Anteil: abgelehnt. Doppelt als Zuschauer: still entdoppelt.
+    let (status, body) = probe
+        .ausgabe(
+            &anna,
+            mit_chat(json!({ "shares": [{ "userId": bert_id }, { "userId": bert_id }] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let (status, body) = probe
+        .ausgabe(
+            &anna,
+            mit_chat(json!({ "visibility": "listed", "viewerIds": [bert_id, bert_id] })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    assert_eq!(body["viewerIds"], json!([bert_id]), "{body}");
+
+    // Zu viele auf einmal.
+    let viele: Vec<String> = (0..101).map(|_| Uuid::now_v7().to_string()).collect();
+    let (status, body) = probe
+        .ausgabe(
+            &anna,
+            mit_chat(json!({ "visibility": "listed", "viewerIds": viele })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+    // Ohne Chat und Termin: nur wer mit mir einen Chat teilt.
+    let ohne = |wer: &str| {
+        json!({
+            "title": "Kino",
+            "amountCents": 1000,
+            "shares": [{ "userId": anna_id }, { "userId": wer }],
+        })
+    };
+    let (status, body) = probe.ausgabe(&anna, ohne(&dora_id)).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (status, body) = probe.ausgabe(&anna, ohne(&cleo_id)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // Mit Termin: wer eingeladen ist, auch ohne den Chat.
+    let (status, termin) = probe
+        .call(
+            "POST",
+            "/api/v1/calendar/events",
+            Some(&anna),
+            Some(json!({
+                "title": "Grillen",
+                "startsAt": "2027-06-01T18:00:00Z",
+                "endsAt": "2027-06-01T21:00:00Z",
+                "attendeeIds": [dora_id],
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{termin}");
+    let termin_id = termin["event"]["id"]
+        .as_str()
+        .or_else(|| termin["id"].as_str())
+        .unwrap()
+        .to_string();
+    let mit_termin = |wer: &str| {
+        json!({
+            "eventId": termin_id,
+            "title": "Kohle",
+            "amountCents": 1000,
+            "shares": [{ "userId": anna_id }, { "userId": wer }],
+        })
+    };
+    let (status, body) = probe.ausgabe(&anna, mit_termin(&dora_id)).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let (status, body) = probe.ausgabe(&anna, mit_termin(&bert_id)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // Der gewöhnliche Fall geht weiter durch.
+    let (status, body) = probe.ausgabe(&anna, mit_chat(json!({}))).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}
+
+/// Die Übersicht lud alle offenen Ausgaben des Systems und fragte je Ausgabe
+/// nach der Sichtbarkeit. Jetzt filtert die Abfrage vor – das Ergebnis muss
+/// für alle sichtbaren Fälle dasselbe bleiben, auch beim Geschenk.
+#[tokio::test]
+async fn salden_bleiben_dieselben_nur_schneller() {
+    let probe = probe!();
+    let (anna, anna_id) = probe.konto("anna").await;
+    let (bert, bert_id) = probe.konto("bert").await;
+    let (cleo, cleo_id) = probe.konto("cleo").await;
+    let chat = probe.gruppe(&anna, &[&bert_id, &cleo_id]).await;
+
+    // 1. Anna legt 30 € für alle drei aus: Bert und Cleo schulden je 10 €.
+    let (status, body) = probe
+        .ausgabe(
+            &anna,
+            json!({
+                "conversationId": chat, "title": "Pizza", "amountCents": 3000,
+                "visibility": "conversation",
+                "shares": [{ "userId": anna_id }, { "userId": bert_id }, { "userId": cleo_id }],
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // 2. Das Geschenk für Cleo: Anna legt 20 € aus, Bert zahlt die Hälfte –
+    //    vor Cleo verborgen. Cleos Saldo darf es nicht kennen.
+    let (status, body) = probe
+        .ausgabe(
+            &anna,
+            json!({
+                "conversationId": chat, "title": "Geschenk", "amountCents": 2000,
+                "visibility": "conversation", "hiddenFromIds": [cleo_id],
+                "shares": [{ "userId": anna_id }, { "userId": bert_id }],
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // 3. Bert legt 9 € für Cleo aus – geht Anna nichts an, obwohl sie es sieht.
+    let (status, body) = probe
+        .ausgabe(
+            &bert,
+            json!({
+                "conversationId": chat, "title": "Taxi", "amountCents": 900,
+                "visibility": "conversation",
+                "shares": [{ "userId": cleo_id, "amountCents": 900 }],
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    // 4. Cleo hat ihren Anteil an einer weiteren Ausgabe schon beglichen.
+    let (status, beglichen) = probe
+        .ausgabe(
+            &anna,
+            json!({
+                "conversationId": chat, "title": "Kaffee", "amountCents": 400,
+                "shares": [{ "userId": cleo_id, "amountCents": 400 }],
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{beglichen}");
+    let id = beglichen["id"].as_str().unwrap();
+    let (status, body) = probe
+        .call(
+            "POST",
+            &format!("/api/v1/expenses/{id}/settle"),
+            Some(&cleo),
+            Some(json!({})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let mut erwartet_anna = vec![(bert_id.clone(), 1000 + 1000), (cleo_id.clone(), 1000)];
+    erwartet_anna.sort();
+    assert_eq!(probe.salden(&anna).await, erwartet_anna);
+
+    let mut erwartet_bert = vec![(anna_id.clone(), -2000), (cleo_id.clone(), 900)];
+    erwartet_bert.sort();
+    assert_eq!(probe.salden(&bert).await, erwartet_bert);
+
+    let mut erwartet_cleo = vec![(anna_id.clone(), -1000), (bert_id.clone(), -900)];
+    erwartet_cleo.sort();
+    assert_eq!(probe.salden(&cleo).await, erwartet_cleo);
+
+    // Und je Chat gefiltert dasselbe.
+    let (status, body) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/expenses/balances?conversationId={chat}"),
+            Some(&cleo),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["items"].as_array().unwrap().len(), 2, "{body}");
+
+    // Die Liste zeigt Cleo das Geschenk weiter nicht.
+    let (status, liste) = probe
+        .call(
+            "GET",
+            &format!("/api/v1/expenses?conversationId={chat}"),
+            Some(&cleo),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{liste}");
+    assert!(
+        liste["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|ausgabe| ausgabe["title"] != "Geschenk"),
+        "{liste}"
+    );
+    let _ = &probe.state;
+}

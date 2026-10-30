@@ -95,6 +95,59 @@ pub async fn may_see(pool: &PgPool, expense: &ExpenseRow, user_id: Uuid) -> AppR
     }
 }
 
+/// Wie viele Personen eine Ausgabe höchstens nennt – je Liste (Anteile,
+/// Zuschauer, Ausgenommene). Jede Kennung kostet eine Zeile und bei jeder
+/// Änderung eine Meldung; ohne Grenze stand das offen.
+pub const PERSONEN_MAX: usize = 100;
+
+/// Welche der genannten Personen eine Ausgabe NICHT nennen darf.
+///
+/// Wer eine Ausgabe anlegt, schreibt anderen Schulden zu und schickt ihnen
+/// Ereignisse. Vorher nahm das jede Konto-Kennung an – man konnte einem
+/// Fremden eine Schuld anhängen oder ihn als Zuschauer eintragen. Erlaubt
+/// ist jetzt nur, wer zum Zusammenhang der Ausgabe gehört:
+///
+/// - mit Chat: wer darin Mitglied ist,
+/// - mit Termin: wer dazu eingeladen ist (oder ihn angelegt hat),
+/// - mit beidem: wer zu einem von beiden gehört – die Oberfläche wählt aus
+///   dem Chat, und ein Termin bringt seine Gäste mit,
+/// - ohne beides: wer mit dem Anleger einen Chat teilt.
+///
+/// Der Anleger selbst ist immer erlaubt.
+pub async fn unpassende_personen(
+    pool: &PgPool,
+    anleger: Uuid,
+    conversation_id: Option<Uuid>,
+    event_id: Option<Uuid>,
+    personen: &[Uuid],
+) -> AppResult<Vec<Uuid>> {
+    if personen.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(sqlx::query_scalar(
+        "select p from unnest($1::uuid[]) as p
+          where p <> $2
+            and not (
+              ($3::uuid is not null and exists (
+                 select 1 from conversation_members
+                  where conversation_id = $3 and user_id = p))
+              or ($4::uuid is not null and (
+                 exists (select 1 from event_attendees where event_id = $4 and user_id = p)
+                 or exists (select 1 from calendar_events where id = $4 and created_by = p)))
+              or ($3::uuid is null and $4::uuid is null and exists (
+                 select 1 from conversation_members a
+                   join conversation_members b on b.conversation_id = a.conversation_id
+                  where a.user_id = $2 and b.user_id = p))
+            )",
+    )
+    .bind(personen)
+    .bind(anleger)
+    .bind(conversation_id)
+    .bind(event_id)
+    .fetch_all(pool)
+    .await?)
+}
+
 pub async fn require_expense(pool: &PgPool, id: Uuid) -> AppResult<ExpenseRow> {
     sqlx::query_as::<_, ExpenseRow>("select * from expenses where id = $1 and deleted_at is null")
         .bind(id)
@@ -290,44 +343,53 @@ pub async fn balances(
     user_id: Uuid,
     conversation_id: Option<Uuid>,
 ) -> AppResult<Vec<BalanceDto>> {
-    let expenses = sqlx::query_as::<_, ExpenseRow>(
-        "select * from expenses
-          where deleted_at is null
-            and settled_at is null
-            and ($1::uuid is null or conversation_id = $1)",
+    /*
+     * Eine Abfrage statt „alle offenen Ausgaben des Systems laden und je
+     * Ausgabe `may_see` fragen“.
+     *
+     * Vorher kamen ohne Chat-Filter ALLE offenen Ausgaben aller Konten in den
+     * Speicher, und für jede liefen bis zu vier Abfragen – eine Übersicht,
+     * die mit jeder fremden Ausgabe langsamer wurde und sich von außen
+     * beliebig aufblähen ließ.
+     *
+     * Die Sichtbarkeit bleibt dabei dieselbe, nur in SQL gelesen: Zum Saldo
+     * trägt eine Zeile nur bei, wenn ich ausgelegt habe oder den Anteil trage.
+     * Genau in beiden Fällen sagt `may_see` „ja“ – außer ich bin
+     * ausgenommen, und das prüft das `not exists`. Alle übrigen Wege in
+     * `may_see` (Chat, Liste) machen eine Ausgabe sichtbar, ändern aber an
+     * meinem Saldo nichts.
+     */
+    let zeilen = sqlx::query_as::<_, (Uuid, Uuid, i64, String)>(
+        "select e.paid_by, s.user_id, s.amount_cents, e.currency
+           from expenses e
+           join expense_shares s on s.expense_id = e.id
+          where e.deleted_at is null
+            and e.settled_at is null
+            and s.settled_at is null
+            and ($2::uuid is null or e.conversation_id = $2)
+            and e.paid_by is not null
+            -- Der eigene Anteil dessen, der ausgelegt hat, ist kein Posten.
+            and s.user_id <> e.paid_by
+            and (e.paid_by = $1 or s.user_id = $1)
+            and not exists (
+              select 1 from expense_hidden_from h
+               where h.expense_id = e.id and h.user_id = $1
+            )
+          order by e.spent_at, e.id",
     )
+    .bind(user_id)
     .bind(conversation_id)
     .fetch_all(pool)
     .await?;
 
     let mut netto: HashMap<Uuid, i64> = HashMap::new();
     let mut waehrung = "EUR".to_string();
-
-    for expense in expenses {
-        if !may_see(pool, &expense, user_id).await? {
-            continue;
-        }
-        let shares = sqlx::query_as::<_, ExpenseShareRow>(
-            "select * from expense_shares where expense_id = $1 and settled_at is null",
-        )
-        .bind(expense.id)
-        .fetch_all(pool)
-        .await?;
-        waehrung = expense.currency.clone();
-
-        let Some(payer) = expense.paid_by else {
-            continue;
-        };
-        for share in shares {
-            if share.user_id == payer {
-                // Der eigene Anteil dessen, der ausgelegt hat, ist kein Posten.
-                continue;
-            }
-            if payer == user_id {
-                *netto.entry(share.user_id).or_insert(0) += share.amount_cents;
-            } else if share.user_id == user_id {
-                *netto.entry(payer).or_insert(0) -= share.amount_cents;
-            }
+    for (payer, schuldner, cents, currency) in zeilen {
+        waehrung = currency;
+        if payer == user_id {
+            *netto.entry(schuldner).or_insert(0) += cents;
+        } else {
+            *netto.entry(payer).or_insert(0) -= cents;
         }
     }
 
