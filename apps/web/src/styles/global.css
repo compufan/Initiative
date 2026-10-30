@@ -1089,6 +1089,9 @@ body {
 .ort-zeile .ort-suchen {
   padding: 12px 0;
   margin: -12px 0;
+  /* Mindestens 44 px, auch wo die Ersatzschrift eine niedrigere Zeile hat. */
+  min-height: 44px;
+  box-sizing: border-box;
 }
 
 .ort-zeile .ort-mehr {
