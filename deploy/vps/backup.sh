@@ -18,9 +18,16 @@
 # der Maschine.
 #
 # Was `ablage = 'fern'` ist (Hetzner Storage Box, KALT_TREIBER=sftp), liegt NUR
-# dort und ist in diesem Skript NICHT enthalten – die Box ist die einzige Kopie.
-# Dafür die Snapshots der Storage Box einschalten (docs/DEPLOYMENT.md,
-# „Grosse Dateien"). Abgebrochene Übertragungen heissen dort `*.teil`.
+# dort. Standardmässig ist die Box die einzige Kopie – dafür die Snapshots der
+# Storage Box einschalten (docs/DEPLOYMENT.md, „Sicherung und Wiederherstellung").
+# Abgebrochene Übertragungen heissen dort `*.teil` und gehören nicht in eine
+# Sicherung.
+#
+# Optional: eine zweite Kopie der Box. Ist KALT_SICHERUNG_ZIEL gesetzt (ein
+# Verzeichnis oder benutzer@host:pfad, z. B. eine zweite Storage Box), läuft
+# bei `--auswaerts` (täglich) und bei `--kalt` kalt-sicherung.sh: inkrementell,
+# mit Aufbewahrung gelöschter Dateien, Grössenvergleich und SHA-256-Stichprobe.
+# Scheitert sie, scheitert dieses Skript laut (kein Healthcheck-Ping).
 #
 # Der MEDIA_KEY wird bewusst NICHT mitgesichert. Er liegt in der `.env`, und
 # die bleibt draussen – sonst läge der Schlüssel neben dem, was er schützt.
@@ -76,6 +83,13 @@ if [ "${1:-}" = "--auswaerts" ] && [ -n "${RESTIC_REPOSITORY:-}" ]; then
 	# würden und nach einem Tag ohnehin weggeräumt sind.
 	restic backup --exclude '.teile' "$ZIEL" "${UPLOADS_DIR:-/var/lib/docker/volumes/initiative_uploads/_data}"
 	restic forget --keep-hourly 24 --keep-daily 7 --keep-weekly 5 --keep-monthly 12 --prune
+fi
+
+# Die zweite Kopie der Kaltablage. Läuft NACH Datenbank und Uploads: Ein
+# Fehler dort darf die wichtigeren Sicherungen nicht verhindern, soll aber
+# laut sein (set -e: kein Healthcheck-Ping, Exit-Code ungleich 0).
+if [ -n "${KALT_SICHERUNG_ZIEL:-}" ] && { [ "${1:-}" = "--kalt" ] || [ "${1:-}" = "--auswaerts" ]; }; then
+	"$(dirname "$(readlink -f "$0")")/kalt-sicherung.sh"
 fi
 
 # Erst nach dem Erfolg melden. Ein Dienst, der nur bei Erfolg angepingt wird,
