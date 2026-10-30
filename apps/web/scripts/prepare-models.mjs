@@ -13,7 +13,7 @@
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, copyFile, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, copyFile, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { createGzip } from 'node:zlib';
@@ -45,6 +45,11 @@ export const MODELLE = [
     urheber: 'Google, MediaPipe Selfie Segmentation',
     url: 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/1/selfie_segmenter.tflite',
     mindestGroesse: 200_000,
+    // Die `/1/` im Pfad ist eine Fassungsnummer der Ablage, keine Zusage: Ein
+    // Objekt im Speicher-Eimer lässt sich unter derselben Adresse ersetzen.
+    // Die Summe stammt von der Datei, die die App seit Mai 2023 ausliefert
+    // (x-goog-generation 1683436452886295).
+    sha256: '191ac9529ae506ee0beefa6b2c945a172dab9d07d1e802a290a4e4038226658b',
   },
   {
     name: 'blaze-face-short-range.tflite',
@@ -52,6 +57,7 @@ export const MODELLE = [
     urheber: 'Google, MediaPipe BlazeFace',
     url: 'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite',
     mindestGroesse: 150_000,
+    sha256: 'b4578f35940bf5a1a655214a1cce5cab13eba73c1297cd78e1a04c2380b0152f',
   },
   {
     // U^2-Net, kleine Fassung. Apache-2.0 (github.com/xuebinqin/U-2-Net).
@@ -259,13 +265,21 @@ async function wasmKopieren() {
  * komplett in den Speicher zu ziehen, nur um sie gleich wieder wegzuschreiben,
  * ist unnoetig – auf einem kleinen Bauknecht kann es sogar schiefgehen.
  */
-async function laden(url, pfad) {
+export async function laden(url, pfad) {
   const antwort = await fetch(url);
   if (!antwort.ok || !antwort.body) throw new Error(`HTTP ${antwort.status} von ${url}`);
   const hash = createHash('sha256');
   const strom = Readable.fromWeb(antwort.body);
   strom.on('data', (stueck) => hash.update(stueck));
-  await pipeline(strom, createWriteStream(pfad));
+  try {
+    await pipeline(strom, createWriteStream(pfad));
+  } catch (fehler) {
+    // Ein abgerissener Download hinterliesse sonst eine halbe Datei, und die
+    // nimmt der nächste Lauf als „schon da“, sobald sie über der
+    // Mindestgrösse liegt.
+    await rm(pfad, { force: true });
+    throw fehler;
+  }
   return hash.digest('hex');
 }
 
@@ -298,22 +312,32 @@ async function pruefsummeVon(pfad) {
  * Fehlschlagen darf das: Ohne `.gz` liefert Caddy die Rohfassung aus. Das ist
  * langsamer, aber nicht kaputt.
  */
-async function vorkomprimieren(pfad, groesse) {
+export async function vorkomprimieren(pfad, groesse) {
   // Unter einem Megabyte lohnt der Aufwand nicht – und die tflite-Dateien
   // von MediaPipe sind ohnehin schon dicht gepackt.
   if (groesse < 1024 * 1024) return;
+  /*
+   * Erst in eine Zwischendatei, dann umbenennen – und im Fehlerfall die
+   * `.gz` ganz weg.
+   *
+   * Caddy reicht mit `precompressed gzip` die `.gz` aus, ohne sie mit der
+   * Rohdatei abzugleichen. Eine halb geschriebene `.gz` wäre ein kaputtes
+   * Modell bei jedem Browser, der gzip versteht, und eine alte `.gz` neben
+   * einer neuen Rohdatei das Modell von gestern – beides an der Prüfsumme
+   * vorbei, die nur die Rohdatei sieht.
+   */
+  const teil = `${pfad}.gz.teil`;
   try {
-    await pipeline(
-      createReadStream(pfad),
-      createGzip({ level: 9 }),
-      createWriteStream(`${pfad}.gz`),
-    );
+    await pipeline(createReadStream(pfad), createGzip({ level: 9 }), createWriteStream(teil));
+    await rename(teil, `${pfad}.gz`);
     const klein = (await stat(`${pfad}.gz`)).size;
     console.log(
       `    vorkomprimiert: ${(klein / 1024 / 1024).toFixed(1)} MB` +
         ` (${Math.round((1 - klein / groesse) * 100)} % weniger)`,
     );
   } catch (fehler) {
+    await rm(teil, { force: true });
+    await rm(`${pfad}.gz`, { force: true });
     console.warn(`    nicht vorkomprimierbar (${fehler.message}) – wird roh ausgeliefert`);
   }
 }
@@ -342,18 +366,25 @@ async function modelleLaden() {
         }
       }
 
-      const summe = await laden(modell.url, pfad);
-      const groesse = (await stat(pfad)).size;
+      // Eine `.gz` von vorher gehört zu einer anderen Datei – weg damit, bevor
+      // sie neben der neuen ausgeliefert wird (siehe `vorkomprimieren`).
+      await rm(`${pfad}.gz`, { force: true });
+      // In eine Zwischendatei laden und erst nach bestandener Prüfung an ihren
+      // Platz: Unter dem echten Namen liegt nie etwas Ungeprüftes.
+      const teil = `${pfad}.teil`;
+      const summe = await laden(modell.url, teil);
+      const groesse = (await stat(teil)).size;
       if (groesse < modell.mindestGroesse) {
         // Ein Fehlerbild oder eine HTML-Seite statt des Modells – lieber laut
         // scheitern als eine kaputte Datei ausliefern.
-        await rm(pfad, { force: true });
+        await rm(teil, { force: true });
         throw new Error(`nur ${groesse} Bytes erhalten, das kann nicht stimmen`);
       }
       if (modell.sha256 && summe !== modell.sha256) {
-        await rm(pfad, { force: true });
+        await rm(teil, { force: true });
         throw new Error(`Pruefsumme ${summe} statt ${modell.sha256}`);
       }
+      await rename(teil, pfad);
       console.log(`  ${modell.name}: ${(groesse / 1024 / 1024).toFixed(1)} MB geladen`);
       await vorkomprimieren(pfad, groesse);
     } catch (fehler) {

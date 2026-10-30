@@ -2022,4 +2022,12 @@ describe('eindeutigerName bei riesigen Endzahlen', () => {
     const belegt = [{ name: riesig } as unknown as Maske];
     expect(eindeutigerName(riesig, belegt)).toBe(`${riesig} 2`);
   });
+
+  it('bleibt nicht an 2^53 hängen, wenn die Endzahl knapp darunter liegt', () => {
+    // 2^53 − 1 ist noch „sicher“, +1 ergibt 2^53, und ab dort bleibt `n += 1`
+    // stehen. War genau dieser Name vergeben, drehte die Schleife ewig.
+    const namen = ['Bereich 9007199254740991', 'Bereich 9007199254740992'];
+    const belegt = namen.map((name) => ({ name }) as unknown as Maske);
+    expect(eindeutigerName(namen[0], belegt)).toBe('Bereich 9007199254740991 2');
+  });
 });

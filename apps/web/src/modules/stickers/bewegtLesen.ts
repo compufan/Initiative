@@ -95,17 +95,29 @@ export async function teilbilderLesen(datei: Blob, typ: string): Promise<Gelesen
       if (anzahl < 2) return null;
 
       const raus: GelesenesBild[] = [];
-      for (let i = 0; i < anzahl; i += 1) {
-        const { image } = await decoder.decode({ frameIndex: i });
-        /*
-         * `duration` steht in MIKROsekunden. In Millisekunden gelesen liefe
-         * ein Sticker tausendmal zu schnell, und das sähe aus wie ein
-         * Flackern, nicht wie ein Fehler in einer Einheit.
-         */
-        const dauerMs = image.duration != null ? image.duration / 1000 : 100;
-        const bild = await createImageBitmap(image);
-        image.close?.();
-        raus.push({ bild, dauerMs: dauerMs > 0 ? dauerMs : 100 });
+      try {
+        for (let i = 0; i < anzahl; i += 1) {
+          const { image } = await decoder.decode({ frameIndex: i });
+          try {
+            /*
+             * `duration` steht in MIKROsekunden. In Millisekunden gelesen liefe
+             * ein Sticker tausendmal zu schnell, und das sähe aus wie ein
+             * Flackern, nicht wie ein Fehler in einer Einheit.
+             */
+            const dauerMs = image.duration != null ? image.duration / 1000 : 100;
+            const bild = await createImageBitmap(image);
+            raus.push({ bild, dauerMs: dauerMs > 0 ? dauerMs : 100 });
+          } finally {
+            // Auch wenn `createImageBitmap` wirft: Ein offenes `VideoFrame`
+            // hält Decoderspeicher, an den der Einsammler nicht herankommt.
+            image.close?.();
+          }
+        }
+      } catch (fehler) {
+        // Scheitert Teilbild zwölf, sind elf schon entpackt – und mit `null`
+        // erfährt der Aufrufer nie von ihnen. Also hier freigeben.
+        for (const { bild } of raus) bild.close();
+        throw fehler;
       }
       return raus;
     } finally {

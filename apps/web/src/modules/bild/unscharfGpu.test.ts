@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ausgelieheneAufraeumen, type UnscharfWerk } from './unscharfGpu.js';
+import { ausgelieheneAufraeumen, defektesWerkLeeren, type UnscharfWerk } from './unscharfGpu.js';
 
 /** Ein Werk aus Attrappen: genug, um zu sehen, was gelöscht wird. */
 function attrappe() {
@@ -41,5 +41,24 @@ describe('ausgelieheneAufraeumen', () => {
     const n = geloescht.length;
     ausgelieheneAufraeumen(w);
     expect(geloescht.length).toBe(n);
+  });
+});
+
+describe('defektesWerkLeeren', () => {
+  it('gibt auch Vorrat und Ergebnis frei – das Werk wird nie wieder benutzt', () => {
+    const { w, geloescht, zaehler } = attrappe();
+    const v = { textur: 'v', puffer: 'v', b: 4, h: 4, art: 'f16' };
+    (w.vorrat as unknown[]).push(v);
+    zaehler.texturenLebend += 1;
+    defektesWerkLeeren(w);
+    expect(geloescht.filter((x) => x.startsWith('textur:')).sort()).toEqual([
+      'textur:a',
+      'textur:b',
+      'textur:ergebnis',
+      'textur:v',
+    ]);
+    expect(zaehler.texturenLebend).toBe(0);
+    expect(w.vorrat).toEqual([]);
+    expect(w.ergebnis).toBeNull();
   });
 });

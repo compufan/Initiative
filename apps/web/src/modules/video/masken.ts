@@ -2794,8 +2794,16 @@ export function eindeutigerName(name: string, masken: readonly Maske[]): string 
   // (`n + 1 === n`): Die Schleife käme nie voran. Solche Namen zählen als Text.
   const mitZahl = gefunden && Number.isSafeInteger(Number(gefunden[2])) ? gefunden : null;
   const stamm = mitZahl ? mitZahl[1] : name;
-  for (let n = mitZahl ? Number(mitZahl[2]) + 1 : 2; ; n += 1) {
+  // Auch eine Endzahl knapp UNTER 2^53 reicht: Ab dort bleibt `n += 1` stehen,
+  // und ist genau dieser Name schon vergeben, dreht die Schleife ewig. Darum
+  // nur zählen, solange `n` exakt ist, danach wie ein Name ohne Zahl.
+  for (let n = mitZahl ? Number(mitZahl[2]) + 1 : 2; Number.isSafeInteger(n); n += 1) {
     const versuch = `${stamm} ${n}`;
+    if (!belegt.has(versuch)) return versuch;
+  }
+  // Endet immer: `belegt` ist endlich, und jeder Versuch ist ein neuer Name.
+  for (let n = 2; ; n += 1) {
+    const versuch = `${name} ${n}`;
     if (!belegt.has(versuch)) return versuch;
   }
 }

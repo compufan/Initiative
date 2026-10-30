@@ -1929,41 +1929,49 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
     if (!bewegteQuelle || !lesenMoeglich()) return null;
     const typ = bewegteQuelle.format === 'gif' ? 'image/gif' : 'image/webp';
     const gelesen = await teilbilderLesen(bewegteQuelle.datei, typ);
-    if (!gelesen || gelesen.length < 2) return null;
+    if (!gelesen) return null;
+    // Bis zu vierzig Bitmaps in Originalgrösse: Was die Schleife nicht mehr
+    // erreicht – früher Ausstieg, ein Wurf in `renderSticker` –, wird hier
+    // geschlossen. Ein zweites `close()` auf einem schon geschlossenen ist harmlos.
+    try {
+      if (gelesen.length < 2) return null;
 
-    const flaeche = document.createElement('canvas');
-    flaeche.width = STICKER_SIZE;
-    flaeche.height = STICKER_SIZE;
-    const ctx = flaeche.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return null;
+      const flaeche = document.createElement('canvas');
+      flaeche.width = STICKER_SIZE;
+      flaeche.height = STICKER_SIZE;
+      const ctx = flaeche.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return null;
 
-    const teilbilder: Teilbild[] = [];
-    for (let i = 0; i < gelesen.length; i += 1) {
-      const { bild, dauerMs } = gelesen[i];
-      renderSticker(
-        flaeche,
-        { kind: 'image', image: bild, width: bild.width, height: bild.height },
-        docRef.current,
-        { fast: false },
-      );
-      teilbilder.push({
-        daten: ctx.getImageData(0, 0, flaeche.width, flaeche.height),
-        dauerMs,
-      });
-      bild.close();
-      /*
-       * Zwischendurch Luft holen. Vierzig Durchgänge durch die ganze Kette
-       * sind auf einem Telefon mehrere Sekunden – ohne das steht die
-       * Oberfläche währenddessen still und sieht abgestürzt aus.
-       */
-      if (i % 4 === 3) await new Promise((auf) => setTimeout(auf, 0));
+      const teilbilder: Teilbild[] = [];
+      for (let i = 0; i < gelesen.length; i += 1) {
+        const { bild, dauerMs } = gelesen[i];
+        renderSticker(
+          flaeche,
+          { kind: 'image', image: bild, width: bild.width, height: bild.height },
+          docRef.current,
+          { fast: false },
+        );
+        teilbilder.push({
+          daten: ctx.getImageData(0, 0, flaeche.width, flaeche.height),
+          dauerMs,
+        });
+        bild.close();
+        /*
+         * Zwischendurch Luft holen. Vierzig Durchgänge durch die ganze Kette
+         * sind auf einem Telefon mehrere Sekunden – ohne das steht die
+         * Oberfläche währenddessen still und sieht abgestürzt aus.
+         */
+        if (i % 4 === 3) await new Promise((auf) => setTimeout(auf, 0));
+      }
+
+      const roh = gifSchreiben(teilbilder);
+      return {
+        blob: new Blob([roh as unknown as BlobPart], { type: 'image/gif' }),
+        mime: 'image/gif',
+      };
+    } finally {
+      for (const { bild } of gelesen) bild.close();
     }
-
-    const roh = gifSchreiben(teilbilder);
-    return {
-      blob: new Blob([roh as unknown as BlobPart], { type: 'image/gif' }),
-      mime: 'image/gif',
-    };
   }
 
   async function openSave() {

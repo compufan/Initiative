@@ -137,6 +137,26 @@ describe('BirefnetKanal', () => {
     await expect(zweiter).resolves.toBeTruthy();
   });
 
+  it('beendet einen abgestürzten Arbeiter und hört nicht mehr auf ihn', async () => {
+    // Ein `error`-Ereignis beendet den Faden nicht: Ohne `terminate` lebte die
+    // alte Sitzung neben der neuen weiter, und ihr spätes „fertig“ erfüllte
+    // den Auftrag des Nachfolgers mit einem fremden Ergebnis.
+    const { kanal, doppel } = aufbau();
+    const erster = kanal.rechne(tensor());
+    const alt = doppel();
+    alt.stirb();
+    await expect(erster).rejects.toThrow();
+    expect(alt.beendet).toBe(1);
+
+    const zweiter = kanal.rechne(tensor());
+    const neu = doppel();
+    alt.sende({ art: 'fertig', roh: new Float32Array([7]), ladeMs: 0, laufMs: 1 });
+    neu.sende({ art: 'fertig', roh: new Float32Array([1]), ladeMs: 0, laufMs: 1 });
+    expect((await zweiter).roh[0]).toBe(1);
+    alt.stirb('spät');
+    expect(neu.beendet).toBe(0);
+  });
+
   it('verwendet den Arbeiter für einen zweiten Lauf wieder', async () => {
     // Sonst wären es beim zweiten Bild wieder 94 MB Download.
     const { kanal, doppel, gebaut } = aufbau();

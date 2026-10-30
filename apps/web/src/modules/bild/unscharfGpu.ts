@@ -504,6 +504,23 @@ export function ausgelieheneAufraeumen(w: UnscharfWerk): void {
   w.ausgeliehen.clear();
 }
 
+/**
+ * Gibt alle Arbeitstexturen eines Werks frei, das als defekt gilt.
+ *
+ * Ein defektes Werk wird nie wieder benutzt (`unscharfWerk` reicht es nicht
+ * mehr heraus) – bis der Kontext stirbt. Was dann noch im Vorrat liegt (bis
+ * 48 MB) und das Ergebnis in voller Bildgrösse (bei 12 Megapixeln weitere
+ * 48 MB) wäre Grafikspeicher, den niemand mehr liest, auf einem Telefon
+ * genau der, der dem Hybridweg danach fehlt.
+ */
+export function defektesWerkLeeren(w: UnscharfWerk): void {
+  ausgelieheneAufraeumen(w);
+  for (const z of w.vorrat) zielLoeschen(w, z);
+  w.vorrat.length = 0;
+  if (w.ergebnis) zielLoeschen(w, w.ergebnis);
+  w.ergebnis = null;
+}
+
 /* ---------- Durchgänge ---------- */
 
 function binden(w: UnscharfWerk, einheit: number, textur: WebGLTexture): void {
@@ -756,7 +773,7 @@ export function unscharfRechnen(
     // Grafikeinheit. Dann rechnet der Prozessor, und zwar jedes Mal.
     if (gl.isContextLost()) throw fehler;
     console.error('Unschärfe auf der Grafikeinheit gescheitert:', fehler);
-    ausgelieheneAufraeumen(w);
+    defektesWerkLeeren(w);
     w.defekt = true;
     w.zettel = null;
     return null;

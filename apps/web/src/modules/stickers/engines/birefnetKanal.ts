@@ -57,7 +57,12 @@ export class BirefnetKanal {
   private hole(): ArbeiterAehnlich {
     if (this.arbeiter) return this.arbeiter;
     const neu = this.bauen();
-    neu.onmessage = (ereignis) => this.empfangen(ereignis.data);
+    // Nur der AKTUELLE Arbeiter darf antworten. Ein abgelöster, der noch ein
+    // spätes „fertig“ schickt, erfüllte sonst den Auftrag seines Nachfolgers
+    // – mit dem Ergebnis eines anderen Bildes.
+    neu.onmessage = (ereignis) => {
+      if (this.arbeiter === neu) this.empfangen(ereignis.data);
+    };
     /*
      * Ein Arbeiter kann sterben, ohne eine Nachricht zu schicken.
      *
@@ -66,6 +71,7 @@ export class BirefnetKanal {
      * Abbruch. Von allen Arten zu scheitern ist das die schlechteste.
      */
     neu.onerror = (ereignis) => {
+      if (this.arbeiter !== neu) return;
       const text =
         typeof ereignis === 'object' && ereignis && 'message' in ereignis
           ? String((ereignis as { message: unknown }).message)
@@ -102,10 +108,22 @@ export class BirefnetKanal {
 
   private abbrechen(fehler: Error): void {
     const auftrag = this.offen;
+    const alt = this.arbeiter;
     this.offen = null;
     // Ein abgestürzter Arbeiter wird nicht wiederverwendet: Der nächste
     // Auftrag baut einen frischen.
     this.arbeiter = null;
+    /*
+     * Und beendet. Ein `error`-Ereignis heisst nur, dass im Arbeiter etwas
+     * Ungefangenes geflogen ist – der Faden lebt danach weiter, samt der
+     * geladenen Sitzung (rund hundert Megabyte). Ohne `terminate` stünden nach
+     * jedem Absturz zwei davon im Speicher, auf einem Telefon das Aus.
+     */
+    try {
+      alt?.terminate();
+    } catch {
+      // Schon tot – das war das Ziel.
+    }
     auftrag?.scheitert(fehler);
   }
 
