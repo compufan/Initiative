@@ -72,6 +72,11 @@ impl AppError {
         Self::api(StatusCode::TOO_MANY_REQUESTS, "too_many_requests", message)
     }
 
+    /// 502 – ein Dienst, auf den wir uns stützen, antwortet nicht brauchbar.
+    pub fn upstream(message: impl Into<String>) -> Self {
+        Self::api(StatusCode::BAD_GATEWAY, "upstream_unavailable", message)
+    }
+
     pub fn too_large(message: impl Into<String>) -> Self {
         Self::api(StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large", message)
     }

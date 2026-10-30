@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LIMITS, type CalendarEventDto, type ConversationDto } from '@initiative/shared';
-import { OrtHinweis } from '../../components/OrtHinweis.js';
+import { OrtFeld } from '../../components/OrtFeld.js';
 import { Sheet } from '../../components/Sheet.js';
 import { api } from '../../lib/api.js';
 import { useMyId } from '../../state/session.js';
@@ -260,15 +260,13 @@ export function PlanningSheet({ open, onClose, initialDate, onSaved }: PlanningS
 
         <div className="field">
           <label htmlFor="plan-location">Ort (freiwillig)</label>
-          <input
+          <OrtFeld
             id="plan-location"
-            className="input"
-            value={location}
-            maxLength={200}
-            aria-describedby="plan-location-hint"
-            onChange={(event) => setLocation(event.target.value)}
+            wert={location}
+            onChange={setLocation}
+            hinweisId="plan-location-hint"
+            maxLaenge={200}
           />
-          <OrtHinweis ort={location} id="plan-location-hint" />
         </div>
 
         <div className="field">

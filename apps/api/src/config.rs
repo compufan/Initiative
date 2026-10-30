@@ -259,6 +259,10 @@ pub struct Config {
     pub repair_migrations: bool,
     /// Commit, aus dem dieses Abbild gebaut wurde. Wird in der App angezeigt.
     pub git_sha: String,
+    /// Photon-kompatible Ortssuche (`GEO_URL`), siehe `modules/orte.rs`. Leer: aus.
+    pub geo_url: String,
+    /// Länder, deren Treffer bei der Ortssuche vorn stehen (`GEO_BEVORZUGT`, ISO-Codes).
+    pub geo_bevorzugt: Vec<String>,
 }
 
 fn var(key: &str) -> Option<String> {
@@ -496,6 +500,15 @@ impl Config {
             git_sha: var("GIT_SHA")
                 .map(|value| value.chars().take(7).collect())
                 .unwrap_or_else(|| "unbekannt".to_string()),
+            geo_url: var_or("GEO_URL", "https://photon.komoot.io/api/"),
+            geo_bevorzugt: {
+                let eintraege = list("GEO_BEVORZUGT");
+                if eintraege.is_empty() {
+                    vec!["DE".into(), "AT".into(), "CH".into()]
+                } else {
+                    eintraege.into_iter().map(|c| c.to_uppercase()).collect()
+                }
+            },
         })
     }
 

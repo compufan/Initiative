@@ -36,6 +36,7 @@ import type {
   ZustellungStandDto,
   ErinnernStandDto,
 } from '@initiative/shared';
+import type { OrtTreffer } from './ortSuche.js';
 import { API_PREFIX } from '@initiative/shared';
 
 export class ApiError extends Error {
@@ -355,6 +356,11 @@ export const api = {
     changePassword: (body: { currentPassword: string; newPassword: string }) =>
       post<void>('/auth/password', body),
     rotateCalendarToken: () => post<{ calendarToken: string }>('/auth/calendar-token/rotate'),
+  },
+  orte: {
+    /** Vorschläge für Adressen und Orte; `quelle` ist die Namensnennung, die angezeigt werden muss. */
+    suche: (q: string, signal?: AbortSignal) =>
+      get<{ items: OrtTreffer[]; quelle: string }>('/orte/suche', { query: { q }, signal }),
   },
   users: {
     search: (q: string, limit = 20) => get<ListResult<UserDto>>('/users', { query: { q, limit } }),

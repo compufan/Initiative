@@ -1228,3 +1228,54 @@ body {
   min-height: 44px;
   font-size: 0.85rem;
 }
+
+/* Ort-Feld mit Vorschlägen */
+.ort-feld {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ort-liste {
+  position: absolute;
+  inset-inline: 0;
+  top: calc(var(--feld-hoehe, 44px) + 2px);
+  z-index: 20;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  max-height: 16rem;
+  overflow-y: auto;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md, 12px);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+}
+.ort-liste[hidden] {
+  display: none;
+}
+.ort-treffer {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  min-height: 44px;
+  justify-content: center;
+}
+.ort-treffer:hover,
+.ort-treffer.is-active {
+  background: var(--accent-soft);
+}
+.ort-titel {
+  color: var(--text);
+}
+.ort-zeile,
+.ort-quelle {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+.ort-quelle {
+  padding: 4px 10px 2px;
+}

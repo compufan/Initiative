@@ -957,7 +957,20 @@ Was nicht geht, ehrlich:
 - **Agenda und Monatsliste** zeigen den Ort als Text: Die ganze Zeile öffnet
   den Termin, und ein Link darin wäre ein Link im Link. Die Adresse ist einen
   Tipp tiefer, in der Detailansicht.
-- **Was dabei weder passiert noch kostet:** Die Erkennung läuft im Gerät, ohne
+- **Ortssuche beim Tippen:** Im Ort-Feld erscheinen ab drei Zeichen
+  Vorschläge – „Willy" bietet „Willy-Brandt-Platz, 64293 Darmstadt" an. Die
+  Reihenfolge der Angaben ist gleich: „Straße Nummer, PLZ Ort" und „PLZ Straße
+  Nummer" finden dasselbe; eine Postleitzahl wird erst zum Ort aufgelöst und
+  bevorzugt. Die Daten sind OpenStreetMap (ODbL, auch kommerziell frei, die
+  Namensnennung steht unter der Liste), die Suche ist Photon (Apache-2.0). Die
+  Anfrage geht **über den eigenen Server** (`GET /orte/suche`), nicht vom Gerät:
+  Der Suchdienst sieht weder die Mitglieder noch ihre Eingaben, Treffer werden
+  10 Minuten gemerkt, und je Konto gilt eine Bremse. Standard ist der
+  öffentliche Dienst (`GEO_URL`, faire Nutzung, keine Kosten); wer viel Last
+  hat, betreibt Photon selbst und trägt dessen Adresse ein. `GEO_URL` leer
+  schaltet die Suche ab – das Feld bleibt ein Textfeld, ebenso bei Ausfall.
+  Webadressen und Koordinaten gehen nie an den Suchdienst.
+- **Was die Erkennung selbst weder tut noch kostet:** Die Erkennung läuft im Gerät, ohne
   Netz und ohne Schlüssel; es gibt keine eigene Geokodierung und keine Karte
   von einem fremden Server. Die Seite lädt nichts vor, bevor du tippst – erst
   dann geht die Adresse an die gewählte App. Das Kalender-Abo ist unverändert:

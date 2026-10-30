@@ -7,7 +7,7 @@ import {
   type RsvpStatus,
 } from '@initiative/shared';
 import { Sheet } from '../../components/Sheet.js';
-import { OrtHinweis } from '../../components/OrtHinweis.js';
+import { OrtFeld } from '../../components/OrtFeld.js';
 import { ApiError, api } from '../../lib/api.js';
 import { aktualisiert } from '../../lib/terminEreignisse.js';
 import { useChat } from '../../state/chat.js';
@@ -440,17 +440,14 @@ export function EventEditor(props: EventEditorProps) {
 
       <div className="field">
         <label htmlFor="cal-location">Ort</label>
-        <input
+        <OrtFeld
           id="cal-location"
-          className="input"
-          value={form.location}
-          maxLength={LIMITS.eventLocationMax}
-          placeholder="z. B. Stadtpark, Eingang Nord"
-          autoComplete="off"
-          aria-describedby="cal-location-hint"
-          onChange={(changed) => patch({ location: changed.target.value })}
+          wert={form.location}
+          onChange={(neu) => patch({ location: neu })}
+          hinweisId="cal-location-hint"
+          maxLaenge={LIMITS.eventLocationMax}
+          platzhalter="z. B. Stadtpark oder Willy-Brandt-Platz"
         />
-        <OrtHinweis ort={form.location} id="cal-location-hint" />
       </div>
 
       <label className="cal-switch">
