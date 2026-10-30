@@ -33,6 +33,12 @@ export class RealtimeClient {
   private currentState: ConnectionState = 'idle';
   /** Zeitpunkt des letzten empfangenen Frames – Grundlage des Wachhunds. */
   private lastFrameAt = 0;
+  /**
+   * Zählt jeden Verbindungsversuch und jedes Trennen. Ein `open`, das beim
+   * Warten auf das Token überholt wurde (`reconnect` mittendrin), baut danach
+   * keine zweite Leitung mehr auf.
+   */
+  private lauf = 0;
 
   get state(): ConnectionState {
     return this.currentState;
@@ -73,25 +79,41 @@ export class RealtimeClient {
       return;
     }
 
+    const lauf = ++this.lauf;
     this.setState('connecting');
     const token = await validAccessToken();
+    // Während des Wartens kann ein anderer Aufruf schon verbunden oder
+    // getrennt haben.
+    if (lauf !== this.lauf || this.socket || this.closedByUser) return;
     if (!token) {
       this.setState('idle');
       return;
     }
-    // Während des Wartens kann ein anderer Aufruf schon verbunden haben.
-    if (this.socket || this.closedByUser) return;
 
     const socket = new WebSocket(this.url(token));
     this.socket = socket;
 
+    /*
+     * Jeder Behandler prüft, ob er noch zur AKTUELLEN Verbindung gehört.
+     *
+     * `reconnect` (nach jeder Tokenrotation, also etwa alle Viertelstunde)
+     * schliesst die alte Verbindung und öffnet sofort eine neue. Das `close`
+     * der alten kommt aber erst danach an – und setzte bisher `this.socket`
+     * auf `null`, obwohl dort schon die neue stand, und plante eine weitere
+     * Verbindung. Die neue lief verwaist weiter: Zwei Leitungen, jedes
+     * Ereignis doppelt, und beim nächsten `close` begann es von vorn.
+     */
+    const aktuell = () => this.socket === socket;
+
     socket.onopen = () => {
+      if (!aktuell()) return;
       this.attempts = 0;
       this.setState('online');
       this.startHeartbeat();
     };
 
     socket.onmessage = (event) => {
+      if (!aktuell()) return;
       this.lastFrameAt = Date.now();
       const frame = parseEnvelope(typeof event.data === 'string' ? event.data : '');
       if (!frame) return;
@@ -99,6 +121,7 @@ export class RealtimeClient {
     };
 
     socket.onclose = (event) => {
+      if (!aktuell()) return;
       this.stopHeartbeat();
       this.socket = null;
       this.setState('offline');
@@ -109,8 +132,12 @@ export class RealtimeClient {
         // abgelaufenen abgewiesen zu werden.
         void forceRefresh().then((next) => {
           if (this.closedByUser) return;
-          if (next) this.connect();
-          else this.setState('idle');
+          if (!next) this.setState('idle');
+          // Kein neues Token bekommen (Drossel, Server im Neustart, kein
+          // Netz): Sofort wieder zu verbinden hiesse, sofort wieder mit 4401
+          // abgewiesen zu werden – eine Schleife ohne Pause gegen den Server.
+          else if (next.accessToken === token) this.scheduleReconnect();
+          else this.connect();
         });
         return;
       }
@@ -118,6 +145,7 @@ export class RealtimeClient {
     };
 
     socket.onerror = () => {
+      if (!aktuell()) return;
       try {
         socket.close();
       } catch {
@@ -127,6 +155,7 @@ export class RealtimeClient {
   }
 
   disconnect(): void {
+    this.lauf += 1;
     this.closedByUser = true;
     this.stopHeartbeat();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
