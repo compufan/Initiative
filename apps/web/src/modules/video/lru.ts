@@ -20,7 +20,10 @@ export class BytesLru<S, W> {
 
   constructor(
     private readonly maxBytes: number,
-    /** Wird für jeden Eintrag gerufen, der weichen muss – nicht für `loeschen`. */
+    /**
+     * Wird für jeden Eintrag gerufen, der weichen muss – auch für einen, den
+     * `ablegen` unter demselben Schlüssel ersetzt; nicht für `loeschen`.
+     */
     private readonly verdraengt?: (schluessel: S, wert: W) => void,
   ) {}
 
@@ -44,9 +47,19 @@ export class BytesLru<S, W> {
    * Ein Eintrag, der allein schon grösser ist als die Grenze, wird gar
    * nicht erst abgelegt: Er verdrängte alles andere und flöge beim nächsten
    * Mal selbst hinaus.
+   *
+   * Ersetzt er einen ANDEREN Wert unter demselben Schlüssel, muss der alte
+   * genauso weichen wie ein verdrängter – `verdraengt` wird für ihn gerufen.
+   * WARUM: Im Wischspeicher können zwei Entpackaufträge für dasselbe Bild
+   * landen (nach `pagehide` oder knappem Speicher wird die Liste der
+   * laufenden geleert, die Aufträge selbst laufen weiter). Der zweite
+   * überschrieb den ersten, und dessen `ImageBitmap` blieb offen, bis der
+   * Reiter ging – unerreichbar für jedes `close`.
    */
   ablegen(schluessel: S, wert: W, bytes: number): void {
+    const vorher = this.eintraege.get(schluessel);
     this.loeschen(schluessel);
+    if (vorher && vorher.wert !== wert) this.verdraengt?.(schluessel, vorher.wert);
     if (bytes > this.maxBytes) return;
     this.eintraege.set(schluessel, { wert, bytes });
     this.summe += bytes;

@@ -60,4 +60,20 @@ describe('BytesLru', () => {
     expect(lru.anzahl).toBe(0);
     expect(lru.bytes).toBe(0);
   });
+
+  it('gibt beim Ersetzen desselben Schlüssels den alten Wert frei – denselben nicht', () => {
+    const frei: [string, number][] = [];
+    const lru = new BytesLru<string, number>(100, (schluessel, wert) =>
+      frei.push([schluessel, wert]),
+    );
+    lru.ablegen('a', 1, 10);
+    lru.ablegen('a', 2, 10);
+    expect(frei).toEqual([['a', 1]]);
+    // Derselbe Wert noch einmal (etwa mit neuer Grösse): nicht freigeben, er lebt weiter.
+    lru.ablegen('a', 2, 20);
+    expect(frei).toEqual([['a', 1]]);
+    expect(lru.holen('a')).toBe(2);
+    expect(lru.bytes).toBe(20);
+    expect(lru.anzahl).toBe(1);
+  });
 });

@@ -565,6 +565,43 @@ describe('Wischspeicher – Entpacken', () => {
     await warten(() => geschlossen.length === 1);
     expect(speicher.entpacktBild(2)).toBeNull();
   });
+  it('schliesst das erste Bild, wenn nach knappem Speicher ein zweiter Auftrag dasselbe Bild ablegt', async () => {
+    const leser = ersatzLeser();
+    const offen: (() => void)[] = [];
+    const geschlossen: number[] = [];
+    let nummer = 0;
+    const { speicher } = speicherMit(leser, {
+      entpacken: () =>
+        new Promise<WischBild>((fertig) => {
+          const n = (nummer += 1);
+          offen.push(() =>
+            fertig({
+              width: 480,
+              height: 270,
+              nummer: n,
+              close: () => geschlossen.push(n),
+            } as unknown as ImageBitmap),
+          );
+        }),
+    });
+    speicher.setzen(filmVon(16));
+    await warten(() => speicher.stand().fertig);
+    speicher.vorladen(2);
+    // Knapper Speicher leert die Liste der laufenden Aufträge – der erste läuft weiter.
+    speicher.speicherKnapp(true);
+    speicher.speicherKnapp(false);
+    speicher.vorladen(2);
+    expect(offen).toHaveLength(2);
+    offen[0]();
+    await warten(() => speicher.entpacktBild(2) !== null);
+    offen[1]();
+    await warten(() => geschlossen.length === 1);
+    // Vorher blieb Bild 1 offen: überschrieben, aber nie geschlossen.
+    expect(geschlossen).toEqual([1]);
+    expect((speicher.entpacktBild(2) as unknown as { nummer: number }).nummer).toBe(2);
+    speicher.schliessen();
+    expect(geschlossen).toEqual([1, 2]);
+  });
 });
 
 describe('Wischspeicher – Schliessen', () => {
