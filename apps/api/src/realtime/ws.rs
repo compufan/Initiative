@@ -27,6 +27,72 @@ pub fn router() -> Router<AppState> {
     Router::new().route(REALTIME_PATH, get(upgrade))
 }
 
+/// Unter `/api/v1`: das Ticket für den Aufbau der Leitung.
+pub fn api_router() -> Router<AppState> {
+    Router::new().route("/realtime/ticket", axum::routing::post(ticket_ausstellen))
+}
+
+/// Wie lange ein Ticket gilt – Zeit genug für den Aufbau, zu kurz zum
+/// Weiterreichen.
+pub const TICKET_GUELTIG_S: i64 = 30;
+
+/**
+ * `POST /realtime/ticket`: ein Einmal-Ticket für die Echtzeit-Leitung.
+ *
+ * Ein Browser kann beim Aufbau eines WebSockets keinen `Authorization`-Kopf
+ * setzen. Bisher stand deshalb das Zugriffstoken in der Adresse (`?token=`) –
+ * und damit in jedem Protokoll eines Zwischenknotens, eine Viertelstunde lang
+ * ein Schlüssel zum ganzen Konto. Das Ticket wird hier mit dem Token im Kopf
+ * geholt, gilt 30 Sekunden und genau EINEN Aufbau ([`ticket_einloesen`]).
+ *
+ * Eine widerrufene Sitzung bekommt keins (`sitzung_lebt`): Sonst holte sich
+ * ein Client mit einem noch nicht abgelaufenen Token einer beendeten Sitzung
+ * Ticket um Ticket, und jeder Aufbau endete mit 4401.
+ */
+async fn ticket_ausstellen(
+    State(state): State<AppState>,
+    user: crate::auth::AuthUser,
+) -> crate::error::AppResult<axum::Json<serde_json::Value>> {
+    if !sitzung_lebt(&state.pool, user.id()).await {
+        return Err(crate::error::AppError::unauthorized("Sitzung beendet"));
+    }
+    let ticket = crate::auth::password::random_token(32);
+    // Abgelaufene gleich mit wegräumen: Die Tabelle bleibt so klein, dass sie
+    // keinen weiteren Index braucht.
+    let _ = sqlx::query("delete from echtzeit_tickets where gueltig_bis < now()")
+        .execute(&state.pool)
+        .await;
+    sqlx::query(
+        "insert into echtzeit_tickets (hash, user_id, gueltig_bis)
+         values ($1, $2, now() + make_interval(secs => $3))",
+    )
+    .bind(crate::auth::password::sha256_hex(&ticket))
+    .bind(user.id())
+    .bind(TICKET_GUELTIG_S as f64)
+    .execute(&state.pool)
+    .await?;
+    Ok(axum::Json(serde_json::json!({
+        "ticket": ticket,
+        "expiresIn": TICKET_GUELTIG_S,
+    })))
+}
+
+/// Löst ein Ticket ein – höchstens einmal, und nur innerhalb seiner Frist.
+/// `delete … returning` macht beides in einem Schritt: Zwei gleichzeitige
+/// Aufbauten mit demselben Ticket bekommen nicht beide eine Leitung.
+async fn ticket_einloesen(pool: &sqlx::PgPool, ticket: &str) -> Option<Uuid> {
+    sqlx::query_scalar::<_, Uuid>(
+        "delete from echtzeit_tickets
+          where hash = $1 and gueltig_bis > now()
+          returning user_id",
+    )
+    .bind(crate::auth::password::sha256_hex(ticket))
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+}
+
 /// Wie oft eine offene Leitung nachsieht, ob ihre Sitzung noch besteht.
 const SITZUNG_PRUEFEN: Duration = Duration::from_secs(60);
 
@@ -92,8 +158,36 @@ fn abgelaufen() -> Message {
 
 #[derive(Debug, Deserialize)]
 struct TokenQuery {
+    ticket: Option<String>,
     token: Option<String>,
     access_token: Option<String>,
+}
+
+/**
+ * Wer sich da verbindet.
+ *
+ * Neu: ein Einmal-Ticket (`?ticket=`, siehe [`ticket_ausstellen`]). Weil der
+ * Client die Adresse an einer Stelle baut, die das alte Feld schreibt, nimmt
+ * auch `?token=` ein Ticket an – ein Zugriffstoken ist ein JWT mit Punkten,
+ * ein Ticket nie.
+ *
+ * Übergangsweise geht weiter das Zugriffstoken selbst (`?token=` bzw.
+ * `?access_token=`), damit Clients von vor der Umstellung nicht stumm
+ * bleiben. Es kann entfallen, sobald keine alten Stände mehr im Umlauf sind.
+ */
+async fn wer_verbindet(state: &AppState, query: TokenQuery) -> Option<Uuid> {
+    let token = query.token.or(query.access_token);
+    let ticket = query
+        .ticket
+        .or_else(|| token.clone().filter(|wert| !wert.contains('.')));
+    if let Some(ticket) = ticket {
+        return ticket_einloesen(&state.pool, &ticket).await;
+    }
+    token
+        .as_deref()
+        .and_then(|token| jwt::decode(token, &state.config.jwt_secret))
+        .filter(|claims| claims.typ == "access")
+        .and_then(|claims| Uuid::parse_str(&claims.sub).ok())
 }
 
 async fn upgrade(
@@ -101,12 +195,7 @@ async fn upgrade(
     State(state): State<AppState>,
     Query(query): Query<TokenQuery>,
 ) -> Response {
-    let token = query.token.or(query.access_token);
-    let user_id = token
-        .as_deref()
-        .and_then(|token| jwt::decode(token, &state.config.jwt_secret))
-        .filter(|claims| claims.typ == "access")
-        .and_then(|claims| Uuid::parse_str(&claims.sub).ok());
+    let user_id = wer_verbindet(&state, query).await;
 
     // Ein noch nicht abgelaufenes Token einer widerrufenen Sitzung verbindet
     // nicht mehr – siehe `sitzung_lebt`.

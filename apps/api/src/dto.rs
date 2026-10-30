@@ -57,7 +57,12 @@ pub struct SelfUserDto {
 pub struct AuthSession {
     pub access_token: String,
     pub expires_in: i64,
-    pub refresh_token: String,
+    /// Fehlt, wenn der Client die Sitzung über den Keks führt (Kopf
+    /// `X-Initiative-Sitzung`) und der Keks gesetzt werden konnte – dann
+    /// soll kein Skript der Seite den Token je zu sehen bekommen. Ältere
+    /// Clients ohne den Kopf bekommen ihn wie bisher (Übergangszeit).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
     pub user: SelfUserDto,
 }
 

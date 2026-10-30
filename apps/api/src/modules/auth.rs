@@ -1,7 +1,7 @@
 //! Registrierung, Login und Token-Rotation.
 
 use axum::extract::State;
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::auth::password::{
     hash_password, hash_password_async, random_token, sha256_hex, verify_password_async,
 };
-use crate::auth::{jwt, medienkeks, AuthUser};
+use crate::auth::{erneuerungskeks, jwt, medienkeks, AuthUser};
 use crate::config::{Config, RegistrationMode};
 use crate::db::UserRow;
 use crate::drossel::{regeln, Absender};
@@ -52,7 +52,9 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
-        .route("/auth/refresh", post(refresh))
+        // `DELETE` auf derselben Adresse meldet über den Keks ab: Der Keks
+        // gilt nur für diesen einen Pfad (siehe `erneuerungskeks`).
+        .route("/auth/refresh", post(refresh).delete(abmelden_keks))
         .route("/auth/logout", post(logout))
         .route("/auth/me", get(me))
         .route("/auth/password", post(change_password))
@@ -132,7 +134,7 @@ fn sitzung_mit(state: &AppState, user: &UserRow, refresh_token: String) -> AuthS
     AuthSession {
         access_token,
         expires_in: state.config.access_token_ttl.as_secs() as i64,
-        refresh_token,
+        refresh_token: Some(refresh_token),
         user: to_self_user_dto(user, &state.config),
     }
 }
@@ -207,28 +209,54 @@ async fn nachfolger_in_frist(
 }
 
 /**
- * Die Sitzung samt Medien-Keks ausliefern.
+ * Die Sitzung samt Medien-Keks und Erneuerungs-Keks ausliefern.
  *
- * Der Keks geht bei JEDER Sitzungsantwort mit – beim Anmelden, beim
+ * Der Medien-Keks geht bei JEDER Sitzungsantwort mit – beim Anmelden, beim
  * Registrieren und bei jeder Erneuerung. Das ist zugleich der Übergang für
  * Sitzungen, die es schon gibt: Sie bekommen ihn bei der nächsten Erneuerung,
  * ohne dass sich jemand neu anmelden müsste.
  *
- * Bekommt er kein Beiwerk (App und API auf fremden Stellen ohne TLS), bleibt
- * die Kopfzeile weg. Ein Keks, den der Browser ohnehin verwirft, wäre nur
- * Rauschen in der Antwort.
+ * Ebenso der Erneuerungs-Keks (`erneuerungskeks`): Auch ein Client, der den
+ * Token noch im Rumpf schickt, bekommt ihn gesetzt – so zieht eine bestehende
+ * Sitzung beim nächsten Erneuern von selbst in den Keks um. Den Token im
+ * Rumpf gibt es nur noch für Clients, die nicht ausdrücklich den Keks wollen,
+ * oder wenn sich kein Keks setzen lässt (fremde Stelle über http).
+ *
+ * Bekommt ein Keks kein Beiwerk (App und API auf fremden Stellen ohne TLS),
+ * bleibt seine Kopfzeile weg. Ein Keks, den der Browser ohnehin verwirft,
+ * wäre nur Rauschen in der Antwort.
  */
-fn mit_keks(config: &Config, user_id: Uuid, sitzung: AuthSession) -> Response {
-    let rumpf = Json(sitzung);
-    match medienkeks::setzen(config, user_id) {
-        Some(keks) => ([(header::SET_COOKIE, keks)], rumpf).into_response(),
-        None => rumpf.into_response(),
+pub(crate) fn ausliefern(
+    config: &Config,
+    kopf: &HeaderMap,
+    user_id: Uuid,
+    mut sitzung: AuthSession,
+) -> Response {
+    let mut kekse: Vec<String> = Vec::new();
+    if let Some(keks) = medienkeks::setzen(config, user_id) {
+        kekse.push(keks);
     }
+    if let Some(token) = sitzung.refresh_token.as_deref() {
+        if let Some(keks) = erneuerungskeks::setzen(config, token) {
+            kekse.push(keks);
+            if erneuerungskeks::will_keks(kopf) {
+                sitzung.refresh_token = None;
+            }
+        }
+    }
+    let mut antwort = Json(sitzung).into_response();
+    for keks in kekse {
+        if let Ok(wert) = header::HeaderValue::from_str(&keks) {
+            antwort.headers_mut().append(header::SET_COOKIE, wert);
+        }
+    }
+    antwort
 }
 
 async fn register(
     State(state): State<AppState>,
     absender: Absender,
+    kopf: HeaderMap,
     Json(input): Json<RegisterInput>,
 ) -> AppResult<(StatusCode, Response)> {
     // Ohne Bremse liesse sich ein Einladungscode durchprobieren – und mit ihm
@@ -301,7 +329,7 @@ async fn register(
     let sitzung = issue_session(&state, &user).await?;
     Ok((
         StatusCode::CREATED,
-        mit_keks(&state.config, user.id, sitzung),
+        ausliefern(&state.config, &kopf, user.id, sitzung),
     ))
 }
 
@@ -355,6 +383,7 @@ async fn redeem_invite_code(state: &AppState, code: &str, user_id: Uuid) -> AppR
 async fn login(
     State(state): State<AppState>,
     absender: Absender,
+    kopf: HeaderMap,
     Json(input): Json<LoginInput>,
 ) -> AppResult<Response> {
     let username = input.username.trim().to_lowercase();
@@ -407,13 +436,43 @@ async fn login(
         .await;
 
     let sitzung = issue_session(&state, &user).await?;
-    Ok(mit_keks(&state.config, user.id, sitzung))
+    Ok(ausliefern(&state.config, &kopf, user.id, sitzung))
+}
+
+/**
+ * Woher der Erneuerungs-Token kommt: aus dem Rumpf (ältere Clients, native
+ * Werkzeuge) oder aus dem Keks.
+ *
+ * Der Rumpf gewinnt: Ein Client, der ihn schickt, meint ihn – das ist auch der
+ * Weg, auf dem der Web-Client einen alten Token aus `localStorage` ein letztes
+ * Mal vorlegt und dafür den Keks bekommt. Der Rumpf braucht keine
+ * CSRF-Prüfung, denn der Token darin IST der Nachweis; der Keks dagegen kommt
+ * von selbst mit und gilt nur zusammen mit dem eigenen Kopf und einer
+ * bekannten Herkunft (`erneuerungskeks::anfrage_vertrauenswuerdig`).
+ */
+fn vorgelegter_token(
+    config: &Config,
+    kopf: &HeaderMap,
+    rumpf: Option<RefreshInput>,
+) -> AppResult<String> {
+    if let Some(token) = rumpf.and_then(|rumpf| rumpf.refresh_token) {
+        return Ok(token);
+    }
+    let token = erneuerungskeks::aus_kopfzeilen(kopf)
+        .ok_or_else(|| AppError::unauthorized("Kein Refresh-Token"))?;
+    if !erneuerungskeks::anfrage_vertrauenswuerdig(config, kopf) {
+        return Err(AppError::forbidden(
+            "Diese Anfrage darf die Sitzung nicht erneuern",
+        ));
+    }
+    Ok(token)
 }
 
 async fn refresh(
     State(state): State<AppState>,
     absender: Absender,
-    Json(input): Json<RefreshInput>,
+    kopf: HeaderMap,
+    rumpf: Option<Json<RefreshInput>>,
 ) -> AppResult<Response> {
     if !state
         .drossel
@@ -421,9 +480,7 @@ async fn refresh(
     {
         return Err(zu_schnell());
     }
-    let token = input
-        .refresh_token
-        .ok_or_else(|| AppError::unauthorized("Kein Refresh-Token"))?;
+    let token = vorgelegter_token(&state.config, &kopf, rumpf.map(|Json(rumpf)| rumpf))?;
     let hash = sha256_hex(&token);
 
     let row = sqlx::query_as::<_, crate::db::RefreshTokenRow>(
@@ -489,7 +546,7 @@ async fn refresh(
         if let Some(naechster) = naechster {
             let user = load_user(&state.pool, row.user_id).await?;
             let sitzung = sitzung_mit(&state, &user, naechster);
-            return Ok(mit_keks(&state.config, user.id, sitzung));
+            return Ok(ausliefern(&state.config, &kopf, user.id, sitzung));
         }
 
         // Ein schon eingeloester, aber noch nicht abgelaufener Token, der
@@ -532,7 +589,7 @@ async fn refresh(
 
     let user = load_user(&state.pool, row.user_id).await?;
     let sitzung = sitzung_mit(&state, &user, naechster);
-    Ok(mit_keks(&state.config, user.id, sitzung))
+    Ok(ausliefern(&state.config, &kopf, user.id, sitzung))
 }
 
 async fn logout(
@@ -545,12 +602,44 @@ async fn logout(
             .execute(&state.pool)
             .await?;
     }
-    // Der Keks geht mit. Sonst bliebe auf einem geteilten Gerät ein Ausweis
-    // liegen, der noch Wochen gilt – ausgerechnet beim Abmelden.
-    Ok(match medienkeks::loeschen(&state.config) {
-        Some(keks) => ([(header::SET_COOKIE, keks)], StatusCode::NO_CONTENT).into_response(),
-        None => StatusCode::NO_CONTENT.into_response(),
-    })
+    Ok(kekse_weg(&state.config))
+}
+
+/// Abmelden über den Keks: `DELETE /auth/refresh`.
+///
+/// Auf dem Pfad des Kekses, weil er nur dorthin mitgeschickt wird. Mit
+/// derselben CSRF-Prüfung wie das Erneuern – sonst könnte eine fremde Seite
+/// jeden abmelden, der sie besucht. Ohne Keks gibt es nichts zu widerrufen;
+/// geräumt wird trotzdem.
+async fn abmelden_keks(State(state): State<AppState>, kopf: HeaderMap) -> AppResult<Response> {
+    if let Some(token) = erneuerungskeks::aus_kopfzeilen(&kopf) {
+        if !erneuerungskeks::anfrage_vertrauenswuerdig(&state.config, &kopf) {
+            return Err(AppError::forbidden("Diese Anfrage darf nicht abmelden"));
+        }
+        sqlx::query("update refresh_tokens set revoked_at = now() where token_hash = $1")
+            .bind(sha256_hex(&token))
+            .execute(&state.pool)
+            .await?;
+    }
+    Ok(kekse_weg(&state.config))
+}
+
+/// Beide Kekse gehen mit. Sonst bliebe auf einem geteilten Gerät ein Ausweis
+/// liegen, der noch Wochen gilt – ausgerechnet beim Abmelden.
+fn kekse_weg(config: &Config) -> Response {
+    let mut antwort = StatusCode::NO_CONTENT.into_response();
+    for keks in [
+        medienkeks::loeschen(config),
+        erneuerungskeks::loeschen(config),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if let Ok(wert) = header::HeaderValue::from_str(&keks) {
+            antwort.headers_mut().append(header::SET_COOKIE, wert);
+        }
+    }
+    antwort
 }
 
 async fn me(

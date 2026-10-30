@@ -37,7 +37,12 @@ export interface AuthTokens {
   accessToken: string;
   /** Seconds until `accessToken` expires. */
   expiresIn: number;
-  refreshToken: string;
+  /**
+   * Fehlt, wenn der Client die Sitzung über den `HttpOnly`-Keks führt (Kopf
+   * `x-initiative-sitzung`) und der Server ihn setzen konnte. Ältere Clients
+   * ohne den Kopf bekommen ihn wie bisher.
+   */
+  refreshToken?: string;
 }
 
 export interface AuthSession extends AuthTokens {

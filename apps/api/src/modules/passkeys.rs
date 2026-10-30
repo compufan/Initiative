@@ -22,7 +22,6 @@ use webauthn_rs::prelude::*;
 use crate::auth::AuthUser;
 use crate::db::UserRow;
 use crate::drossel::{regeln, Absender};
-use crate::dto::AuthSession;
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
@@ -403,8 +402,9 @@ struct LoginFinishInput {
 
 async fn login_finish(
     State(state): State<AppState>,
+    kopf: axum::http::HeaderMap,
     Json(input): Json<LoginFinishInput>,
-) -> AppResult<Json<AuthSession>> {
+) -> AppResult<axum::response::Response> {
     let webauthn = webauthn(&state)?;
     let (_, value) = take_state(&state, input.request_id, "login").await?;
 
@@ -459,8 +459,15 @@ async fn login_finish(
         .await;
 
     tracing::info!(user_id = %user.id, "passkey login");
-    Ok(Json(
-        crate::modules::auth::issue_session(&state, &user).await?,
+    // Dieselbe Auslieferung wie bei Passwort-Anmeldung: Medien-Keks und
+    // Erneuerungs-Keks. Bisher kam hier nur der Rumpf – wer sich mit einem
+    // Passkey anmeldete, sah bis zur ersten Erneuerung keine Bilder.
+    let sitzung = crate::modules::auth::issue_session(&state, &user).await?;
+    Ok(crate::modules::auth::ausliefern(
+        &state.config,
+        &kopf,
+        user.id,
+        sitzung,
     ))
 }
 

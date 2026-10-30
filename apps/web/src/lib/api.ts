@@ -2,7 +2,6 @@ import type {
   ApiErrorBody,
   AttachmentDto,
   AuthSession,
-  AuthTokens,
   AddCollectionItemInput,
   CalendarEventDto,
   CollectionDto,
@@ -67,9 +66,22 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Was der Client von einer Sitzung aufhebt: NUR das kurzlebige Zugriffstoken.
+ *
+ * Der Erneuerungs-Token lag früher hier mit drin – in `localStorage`, wo ihn
+ * jedes Skript der Seite lesen kann. Ein eingeschleuster Schnipsel nahm ihn
+ * mit und hatte sechzig Tage lang eine rotierende Sitzung. Jetzt steht er in
+ * einem `HttpOnly`-Keks, den nur der Browser kennt und nur an
+ * `/auth/refresh` schickt (siehe `apps/api/src/auth/erneuerungskeks.rs`).
+ *
+ * Das Zugriffstoken bleibt wie bisher im gemeinsamen Speicher der Tabs: Es
+ * gilt eine Viertelstunde, und so erneuert nicht jeder Tab für sich. Dass ein
+ * Eintrag hier steht, heisst zugleich „es gibt eine Sitzung“ – auch wenn das
+ * Token darin abgelaufen ist; dann holt der Keks ein neues.
+ */
 export interface StoredTokens {
   accessToken: string;
-  refreshToken: string;
   /** Epoch milliseconds. */
   expiresAt: number;
 }
@@ -78,20 +90,59 @@ type TokenListener = (tokens: StoredTokens | null) => void;
 
 const TOKEN_KEY = 'initiative.tokens';
 
+/**
+ * Der Kopf, mit dem der Client sagt „ich führe die Sitzung über den Keks“.
+ *
+ * Beim Anmelden heisst das: Erneuerungs-Token nicht in den Rumpf. Beim
+ * Erneuern und Abmelden ist er der CSRF-Nachweis – ein Formular oder ein
+ * Querverweis einer fremden Seite kann ihn nicht setzen.
+ */
+export const SITZUNG_KOPF = 'x-initiative-sitzung';
+
 /** Base URL of the API. Empty string keeps everything same-origin (dev proxy,
  *  single-domain deployments); set VITE_API_URL when API and PWA are split. */
 export const API_BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '');
 
-function readTokens(): StoredTokens | null {
+interface Gespeichert extends StoredTokens {
+  /** Nur in Einträgen von vor der Umstellung – siehe `altToken`. */
+  refreshToken?: string;
+}
+
+function readRaw(): Gespeichert | null {
   try {
     const raw = localStorage.getItem(TOKEN_KEY);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as StoredTokens;
-    if (!parsed.accessToken || !parsed.refreshToken) return null;
+    const parsed = JSON.parse(raw) as Gespeichert;
+    if (!parsed.accessToken) return null;
     return parsed;
   } catch {
     return null;
   }
+}
+
+function readTokens(): StoredTokens | null {
+  const roh = readRaw();
+  return roh ? { accessToken: roh.accessToken, expiresAt: roh.expiresAt } : null;
+}
+
+/**
+ * Ein Erneuerungs-Token, den der Server im Rumpf geschickt hat, weil er keinen
+ * Keks setzen konnte (App und API auf fremden Stellen ohne TLS). Er bleibt
+ * nur im Speicher dieses Tabs – nach dem Neuladen ist die Sitzung dann weg,
+ * aber er steht nirgends, wo ein Skript ihn später noch fände.
+ */
+let fluechtigerToken: string | null = null;
+
+/**
+ * Der Erneuerungs-Token aus einem Eintrag von vor der Umstellung.
+ *
+ * Er wird beim nächsten Erneuern ein letztes Mal im Rumpf vorgelegt; der
+ * Server setzt dafür den Keks, und `setTokens` schreibt den Eintrag ohne ihn
+ * neu. Bis dahin bleibt er stehen: Wer ihn vorher löscht und dann offline
+ * ist, wäre abgemeldet.
+ */
+function altToken(): string | null {
+  return readRaw()?.refreshToken ?? fluechtigerToken;
 }
 
 let tokens: StoredTokens | null = readTokens();
@@ -101,15 +152,20 @@ export function getTokens(): StoredTokens | null {
   return tokens;
 }
 
-export function setTokens(next: AuthTokens | null): StoredTokens | null {
+export function setTokens(
+  next: { accessToken: string; expiresIn: number; refreshToken?: string } | null,
+): StoredTokens | null {
   tokens = next
     ? {
         accessToken: next.accessToken,
-        refreshToken: next.refreshToken,
         expiresAt: Date.now() + next.expiresIn * 1000,
       }
     : null;
+  // Kam der Erneuerungs-Token trotz Keks-Wunsch im Rumpf, gibt es keinen Keks
+  // – dann nur im Speicher dieses Tabs (siehe `fluechtigerToken`).
+  fluechtigerToken = next?.refreshToken ?? null;
   try {
+    // Ohne `refreshToken`: Auch ein alter Eintrag verliert ihn hier.
     if (tokens) localStorage.setItem(TOKEN_KEY, JSON.stringify(tokens));
     else localStorage.removeItem(TOKEN_KEY);
   } catch {
@@ -124,17 +180,19 @@ export function onTokenChange(listener: TokenListener): () => void {
   return () => listeners.delete(listener);
 }
 
+function frisch(eintrag: StoredTokens | null): boolean {
+  return !!eintrag && eintrag.expiresAt - Date.now() >= 30_000;
+}
+
 /**
- * Übernimmt eine Rotation, die ein anderer Tab vorgenommen hat.
+ * Übernimmt eine Erneuerung, die ein anderer Tab vorgenommen hat.
  *
- * Der Server verbrennt bei jedem Refresh den alten Token. Ohne diesen Abgleich
- * würde ein zweiter Tab weiter mit dem verbrannten Token arbeiten, eine 401
- * kassieren und die Sitzung wegwerfen – obwohl nebenan längst ein gültiger
- * Token liegt.
+ * Erneuert ein Tab, legt er das neue Zugriffstoken in den gemeinsamen
+ * Speicher. Die anderen nehmen es von dort, statt selbst zu erneuern.
  */
 function adoptStoredTokens(): StoredTokens | null {
   const stored = readTokens();
-  if (stored && stored.refreshToken !== tokens?.refreshToken) {
+  if (stored && stored.accessToken !== tokens?.accessToken) {
     tokens = stored;
     for (const listener of listeners) listener(tokens);
   }
@@ -142,11 +200,11 @@ function adoptStoredTokens(): StoredTokens | null {
 }
 
 if (typeof window !== 'undefined') {
-  // Ein anderer Tab hat die Token erneuert oder sich abgemeldet.
+  // Ein anderer Tab hat erneuert oder sich abgemeldet.
   window.addEventListener('storage', (event) => {
     if (event.key !== TOKEN_KEY) return;
     const next = readTokens();
-    if (next?.refreshToken === tokens?.refreshToken) return;
+    if (next?.accessToken === tokens?.accessToken) return;
     tokens = next;
     for (const listener of listeners) listener(tokens);
   });
@@ -175,12 +233,12 @@ function sitzungAbgelehnt(status: number): boolean {
 /**
  * Führt `arbeit` unter einer Sperre aus, die für alle Tabs dieser Herkunft gilt.
  *
- * Der Server verbrennt beim Erneuern den alten Token, und wer einen schon
- * verbrannten noch einmal vorlegt, beendet damit ALLE Sitzungen des Kontos
- * (Wiederverwendungserkennung in `apps/api/src/modules/auth.rs`). Zwei Tabs,
- * die gleichzeitig aus dem Hintergrund kommen, lasen bisher denselben Token aus
- * dem Speicher und schickten ihn beide los – der zweite meldete damit jedes
- * Gerät des Kontos ab. `refreshInFlight` bündelt nur innerhalb EINES Tabs.
+ * Der Server verbrennt beim Erneuern den alten Token. Den Keks teilen sich
+ * zwar alle Tabs, aber zwei gleichzeitige Erneuerungen schicken denselben
+ * (der Browser setzt den neuen erst, wenn die erste Antwort da ist). Das fängt
+ * die Nachfrist des Servers ab (30 s) – sicherer ist, es gar nicht erst zu
+ * tun: Unter der Sperre erneuert einer, die anderen übernehmen sein Ergebnis
+ * aus dem Speicher. `refreshInFlight` bündelt nur innerhalb EINES Tabs.
  *
  * Ohne Web Locks (sehr alte Browser) läuft die Arbeit wie bisher ohne Sperre.
  */
@@ -204,36 +262,47 @@ async function tabuebergreifend<T>(arbeit: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * Die Erneuerung selbst: mit Keks (`credentials: 'include'`, damit er auch bei
+ * getrennter API mitgeht) und dem Sitzungskopf. Ein Token im Rumpf nur, wenn
+ * es noch einen alten oder flüchtigen gibt (`altToken`).
+ */
+function erneuerungAnfragen(): Promise<Response> {
+  const alt = altToken();
+  return fetch(`${API_BASE}${API_PREFIX}/auth/refresh`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'content-type': 'application/json', [SITZUNG_KOPF]: 'keks' },
+    body: JSON.stringify(alt ? { refreshToken: alt } : {}),
+    // Ohne Zeitlimit hielte eine hängende Erneuerung die Sperre – und
+    // damit jede Anfrage aller Tabs – unbegrenzt fest.
+    signal: withTimeout(),
+  });
+}
+
 async function refreshTokens(): Promise<StoredTokens | null> {
   // Erst nachsehen, ob ein anderer Tab schon erneuert hat.
   const vorher = adoptStoredTokens();
   if (!vorher) return null;
   if (!refreshInFlight) {
     refreshInFlight = tabuebergreifend(async () => {
-      // Unter der Sperre noch einmal lesen: Wer vor uns dran war, hat den
-      // Token, den wir losschicken wollten, gerade verbrannt.
+      // Unter der Sperre noch einmal lesen: Wer vor uns dran war, hat
+      // erneuert und das frische Token hinterlegt.
       const gespeichert = readTokens();
-      if (gespeichert && gespeichert.refreshToken !== vorher.refreshToken) {
+      if (gespeichert && gespeichert.accessToken !== vorher.accessToken && frisch(gespeichert)) {
         tokens = gespeichert;
         for (const listener of listeners) listener(tokens);
         return tokens;
       }
       const current = tokens ?? vorher;
       try {
-        const response = await fetch(`${API_BASE}${API_PREFIX}/auth/refresh`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ refreshToken: current.refreshToken }),
-          // Ohne Zeitlimit hielte eine hängende Erneuerung die Sperre – und
-          // damit jede Anfrage aller Tabs – unbegrenzt fest.
-          signal: withTimeout(),
-        });
+        const response = await erneuerungAnfragen();
         if (!response.ok) {
           // Abgelehnt heißt nicht zwangsläufig „abgemeldet“: Zwischen Lesen und
-          // Senden kann ein anderer Tab rotiert haben. Nur wegwerfen, wenn im
+          // Senden kann ein anderer Tab erneuert haben. Nur wegwerfen, wenn im
           // Speicher wirklich nichts Neueres steht.
           const stored = readTokens();
-          if (stored && stored.refreshToken !== current.refreshToken) {
+          if (stored && stored.accessToken !== current.accessToken && frisch(stored)) {
             tokens = stored;
             for (const listener of listeners) listener(tokens);
             return tokens;
@@ -255,17 +324,79 @@ async function refreshTokens(): Promise<StoredTokens | null> {
   return refreshInFlight;
 }
 
+/** Braucht es vor der nächsten Anfrage eine Erneuerung? Auch, um einen alten
+ *  Eintrag aus `localStorage` gleich in den Keks umzuziehen. */
+function mussErneuern(current: StoredTokens | null): boolean {
+  return !!current && (!frisch(current) || !!readRaw()?.refreshToken);
+}
+
 /** Gültiges Zugriffstoken, notfalls frisch geholt. Für den WebSocket. */
 export async function validAccessToken(): Promise<string | null> {
   const current = adoptStoredTokens();
   if (!current) return null;
-  if (current.expiresAt - Date.now() >= 30_000) return current.accessToken;
+  if (!mussErneuern(current)) return current.accessToken;
   return (await refreshTokens())?.accessToken ?? null;
 }
 
 /** Erzwingt eine Erneuerung, etwa wenn der WebSocket mit 4401 abgewiesen wurde. */
 export async function forceRefresh(): Promise<StoredTokens | null> {
   return refreshTokens();
+}
+
+/**
+ * Abmelden: den Keks beim Server widerrufen und löschen lassen, dann lokal
+ * vergessen.
+ *
+ * `DELETE /auth/refresh`, weil der Keks nur an diesen Pfad geht. Gibt es noch
+ * einen alten oder flüchtigen Token, wird er zusätzlich über den alten Weg
+ * widerrufen. Fehler werden geschluckt – abgemeldet wird lokal in jedem Fall.
+ */
+export async function abmelden(): Promise<void> {
+  const alt = altToken();
+  await Promise.all([
+    fetch(`${API_BASE}${API_PREFIX}/auth/refresh`, {
+      method: 'DELETE',
+      credentials: 'include',
+      headers: { [SITZUNG_KOPF]: 'keks' },
+      signal: withTimeout(),
+    }).catch(() => undefined),
+    alt
+      ? fetch(`${API_BASE}${API_PREFIX}/auth/logout`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ refreshToken: alt }),
+          signal: withTimeout(),
+        }).catch(() => undefined)
+      : undefined,
+  ]);
+  setTokens(null);
+}
+
+/**
+ * Was der WebSocket in seine Adresse schreibt: ein Einmal-Ticket.
+ *
+ * Das Zugriffstoken stand früher als `?token=` in der Adresse und damit in
+ * jedem Protokoll eines Zwischenknotens. Das Ticket (`POST /realtime/ticket`)
+ * gilt 30 Sekunden und genau einen Aufbau; der Server nimmt es auch unter dem
+ * alten Feldnamen `token` an, damit `lib/realtime.ts` nur diesen Aufruf
+ * tauschen musste.
+ *
+ * - `null`, wenn es keine Sitzung gibt oder der Server die Sitzung ablehnt –
+ *   wie `validAccessToken`.
+ * - Ohne Netz (oder bei einem Serverfehler) das Zugriffstoken selbst, wie
+ *   bisher: Die Leitung scheitert dann ohnehin und versucht es mit Pause
+ *   erneut, statt stehen zu bleiben. Der Server nimmt das alte Verfahren
+ *   übergangsweise noch an.
+ */
+export async function echtzeitZugang(): Promise<string | null> {
+  const token = await validAccessToken();
+  if (!token) return null;
+  try {
+    return (await api.realtime.ticket()).ticket;
+  } catch (error) {
+    if (error instanceof ApiError && error.status >= 400 && error.status < 500) return null;
+    return token;
+  }
 }
 
 /**
@@ -318,6 +449,12 @@ export interface RequestOptions {
   raw?: boolean;
   /** Pfad liegt auf der Wurzel, nicht unter `/api/v1` (etwa `/healthz`). */
   root?: boolean;
+  /**
+   * Anmelden/Registrieren: Sitzung über den Keks. Schickt `SITZUNG_KOPF` und
+   * `credentials: 'include'` – sonst nähme der Browser den Keks einer
+   * getrennten API nicht an, und der Server legte den Token in den Rumpf.
+   */
+  sitzung?: boolean;
 }
 
 function buildUrl(path: string, query?: RequestOptions['query'], root = false): string {
@@ -342,9 +479,11 @@ export async function request<T>(
       headers['content-type'] = 'application/json';
     }
     if (accessToken) headers.authorization = `Bearer ${accessToken}`;
+    if (options.sitzung) headers[SITZUNG_KOPF] = 'keks';
     return fetch(buildUrl(path, options.query, options.root), {
       method,
       headers,
+      ...(options.sitzung ? { credentials: 'include' as const } : {}),
       signal: withTimeout(options.signal, options.timeoutMs),
       body:
         options.body === undefined
@@ -358,7 +497,7 @@ export async function request<T>(
   let accessToken: string | null = null;
   if (!options.anonymous) {
     let current = adoptStoredTokens();
-    if (current && current.expiresAt - Date.now() < 30_000) current = await refreshTokens();
+    if (mussErneuern(current)) current = await refreshTokens();
     accessToken = current?.accessToken ?? null;
   }
 
@@ -433,10 +572,11 @@ export const api = {
       password: string;
       displayName: string;
       inviteCode?: string;
-    }) => post<AuthSession>('/auth/register', body, { anonymous: true }),
+    }) => post<AuthSession>('/auth/register', body, { anonymous: true, sitzung: true }),
     login: (body: { username: string; password: string }) =>
-      post<AuthSession>('/auth/login', body, { anonymous: true }),
-    logout: (refreshToken: string) => post<void>('/auth/logout', { refreshToken }),
+      post<AuthSession>('/auth/login', body, { anonymous: true, sitzung: true }),
+    /** Widerruft die Sitzung (Keks und ggf. alten Token) und vergisst sie lokal. */
+    logout: () => abmelden(),
     me: () => get<SelfUserDto>('/auth/me'),
     changePassword: (body: { currentPassword: string; newPassword: string }) =>
       post<void>('/auth/password', body),
@@ -960,6 +1100,14 @@ export const api = {
     removeMember: (id: string) => del<{ removed: boolean }>(`/admin/members/${id}`),
     storageCheck: () => get<StorageCheck>('/admin/storage-check'),
   },
+  realtime: {
+    /**
+     * Ein Einmal-Ticket für den Aufbau der Echtzeit-Leitung: 30 Sekunden
+     * gültig, genau ein Aufbau. Statt des Zugriffstokens in der Adresse –
+     * siehe `echtzeitZugang`.
+     */
+    ticket: () => post<{ ticket: string; expiresIn: number }>('/realtime/ticket'),
+  },
   passkeys: {
     list: () => get<PasskeyDto[]>('/passkeys'),
     remove: (id: string) => del<{ removed: boolean }>(`/passkeys/${id}`),
@@ -968,7 +1116,7 @@ export const api = {
     loginStart: (username: string) =>
       post<PasskeyStart>('/passkeys/login/start', { username }, { anonymous: true }),
     loginFinish: (body: unknown) =>
-      post<AuthSession>('/passkeys/login/finish', body, { anonymous: true }),
+      post<AuthSession>('/passkeys/login/finish', body, { anonymous: true, sitzung: true }),
   },
 };
 

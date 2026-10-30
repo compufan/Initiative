@@ -48,6 +48,9 @@ pub fn router() -> Router<AppState> {
         .merge(polls::router())
         .merge(games::router())
         .merge(push::router())
+        // Das Einmal-Ticket für die Echtzeit-Leitung; die Leitung selbst
+        // hängt ausserhalb von `/api/v1` (`realtime::ws::router`).
+        .merge(crate::realtime::ws::api_router())
 }
 
 pub const MODULE_KEYS: &[&str] = &[

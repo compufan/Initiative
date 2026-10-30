@@ -16,6 +16,7 @@ vi.mock('./api.js', () => ({
   getTokens: () => ({ accessToken: token }),
   onTokenChange: () => () => {},
   validAccessToken: vi.fn(async () => token),
+  echtzeitZugang: vi.fn(async () => token),
 }));
 
 class FakeSocket {

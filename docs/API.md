@@ -17,8 +17,8 @@ Healthcheck: {PUBLIC_API_URL}/healthz       außerhalb des Präfixes
   als RFC 3339 in UTC (`2026-08-24T10:00:00Z`), IDs als **UUID v7** – zeitlich
   sortierbar, deshalb funktioniert Keyset-Pagination ohne Extra-Index.
 - **Authentifizierung**: `Authorization: Bearer <accessToken>`.
-  Wo kein Header möglich ist (WebSocket-Upgrade, Downloads), wird auch
-  `?token=…` bzw. `?access_token=…` akzeptiert.
+  Der WebSocket nimmt ein Einmal-Ticket in der Adresse (siehe
+  [Realtime-Protokoll](#realtime-protokoll)); Medien gehen über den Medien-Keks.
 - **Listen** antworten immer als `{ "items": [...], "nextCursor": "…" | null }`.
   Fehlt `nextCursor`, ist die Liste vollständig.
 - **Löschen** antwortet mit `204` ohne Rumpf, **Anlegen** mit `201`.
@@ -64,6 +64,46 @@ curl -X POST https://api.example.com/api/v1/auth/refresh \
 Der Client in `apps/web/src/lib/api.ts` erneuert automatisch, sobald weniger als
 30 Sekunden Restlaufzeit bleiben, und wiederholt eine `401` genau einmal nach
 einem Refresh.
+
+### Refresh-Token im Keks (Browser)
+
+Ein Browser-Client hält den Refresh-Token **nicht** selbst: Er steht in einem
+Keks, den kein Skript der Seite lesen kann.
+
+```
+Set-Cookie: initiative_erneuern=<token>; Path=/api/v1/auth/refresh; Max-Age=<60 Tage>;
+            HttpOnly; SameSite=Strict[; Secure]
+```
+
+- **Pfad** nur `/api/v1/auth/refresh`: `POST` erneuert, `DELETE` meldet ab.
+  Keine andere Anfrage trägt den Keks. Kein `Domain` – er gilt nur für den
+  Namen, der ihn gesetzt hat.
+- **SameSite=Strict**, wenn App und API unter demselben Namen laufen (auch mit
+  verschiedenen Häfen, etwa der Vite-Proxy). Getrennte Domains über https:
+  `SameSite=None; Secure` – dann muss `CORS_ORIGINS` die App ausdrücklich nennen.
+  Getrennte Domains über http: kein Keks, der Token kommt wie früher im Rumpf.
+- **Secure**, sobald `PUBLIC_API_URL` https ist. Über http (Entwicklung) fehlt
+  es, damit der Keks auch in Safari und im Heimnetz ankommt.
+- **CSRF**: Wer mit dem Keks erneuert oder abmeldet, schickt den Kopf
+  `X-Initiative-Sitzung: keks`; eine mitgeschickte `Origin` muss eine bekannte
+  Herkunft sein (`PUBLIC_APP_URL`, `PUBLIC_API_URL`, `CORS_ORIGINS` ohne `*`,
+  ausserhalb von `production` die lokalen Adressen). Sonst `403`.
+
+Mit dem Kopf `X-Initiative-Sitzung` schicken auch `login`, `register` und
+`passkeys/login/finish` den Token **nicht** im Rumpf, wenn der Keks gesetzt
+werden konnte (`refreshToken` fehlt dann in der `AuthSession`). Ohne den Kopf
+(ältere Clients, `curl`) bleibt alles wie oben – **Übergang**: Wer den Token im
+Rumpf schickt, wird weiter bedient und bekommt den Keks zusätzlich gesetzt. Der
+Web-Client legt einen alten Token aus `localStorage` beim ersten Erneuern ein
+letztes Mal im Rumpf vor und schreibt den Eintrag danach ohne ihn neu.
+
+```bash
+# Erneuern über den Keks (Browser macht das mit credentials: 'include')
+curl -X POST https://api.example.com/api/v1/auth/refresh \
+  -H 'x-initiative-sitzung: keks' -H 'origin: https://app.example.com' \
+  -H 'content-type: application/json' -d '{}' \
+  --cookie 'initiative_erneuern=…'
+```
 
 Ein gerade rotierter Refresh-Token gilt **30 Sekunden** lang noch einmal und
 liefert dann dieselbe neue Sitzung (denselben neuen Refresh-Token, ein frisches
@@ -115,11 +155,16 @@ Der Client ergänzt zwei eigene Codes, die nie vom Server kommen:
 | ------- | ----------------------------- | ------ | -------------------------------------------------- | -------------------------------- |
 | POST    | `/auth/register`              | –      | `{ username, password, displayName, inviteCode? }` | `201` `AuthSession`              |
 | POST    | `/auth/login`                 | –      | `{ username, password }`                           | `200` `AuthSession`              |
-| POST    | `/auth/refresh`               | –      | `{ refreshToken }`                                 | `200` `AuthSession` (neues Paar) |
+| POST    | `/auth/refresh`               | Keks¹  | `{ refreshToken? }`                                | `200` `AuthSession` (neues Paar) |
+| DELETE  | `/auth/refresh`               | Keks¹  | –                                                  | `204`, löscht beide Kekse        |
 | POST    | `/auth/logout`                | –      | `{ refreshToken }`                                 | `204`                            |
 | GET     | `/auth/me`                    | Bearer | –                                                  | `200` `SelfUser`                 |
 | POST    | `/auth/password`              | Bearer | `{ currentPassword, newPassword }`                 | `204`                            |
 | POST    | `/auth/calendar-token/rotate` | Bearer | –                                                  | `200` `{ calendarToken }`        |
+
+¹ Keks `initiative_erneuern` plus Kopf `X-Initiative-Sitzung` (siehe
+[Refresh-Token im Keks](#refresh-token-im-keks-browser)); ein `refreshToken` im
+Rumpf geht vor und braucht weder Keks noch Kopf.
 
 `inviteCode` ist nur bei `REGISTRATION_MODE=invite` nötig; bei `closed` lehnt die
 Registrierung grundsätzlich ab. `rotate` entwertet das alte ICS-Abo – praktisch,
@@ -135,6 +180,9 @@ wenn der Feed-Link irgendwo gelandet ist, wo er nicht hingehört.
   "user": { "…": "SelfUser" }
 }
 ```
+
+`refreshToken` fehlt, wenn die Anfrage `X-Initiative-Sitzung` trug und der
+Keks gesetzt wurde.
 
 **SelfUser** = `User` + `calendarToken` + `settings` (freies JSON-Objekt der PWA).
 
@@ -239,6 +287,13 @@ die eigene Rolle ändert man nicht selbst. Ernannt wird bis zum eigenen Rang;
 `role: "owner"` ist die **Übergabe** und geht nur vom Besitzer aus – er wird
 dabei `admin`. Titel, Bild, Spitznamen anderer und Entfernen gibt es nur in
 Gruppen; im Direktchat antworten sie mit `403`.
+
+**Nachfolge**: Verlässt der Besitzer eine Gruppe oder löscht er sein Konto,
+wird in derselben Transaktion der dienstälteste `admin` Besitzer, ohne Admin das
+dienstälteste Mitglied (`joined_at`, bei Gleichstand die Kennung). Alle
+Mitglieder bekommen `conversation.updated` und eine Systemzeile
+`owner.changed` (Handelnder: der Nachfolger). Herabstufen kann sich der
+Besitzer nicht selbst – abgeben geht nur als Übergabe oder durch Austritt.
 
 **Conversation**
 
@@ -637,6 +692,7 @@ Auslöser und denen, die abgesagt haben, werden benachrichtigt.
 | ----------------------------------------------------- | ------ | ----------------------------------------------------------------------------------- |
 | mehr als 200 Eingeladene                              | `400`  | Zu viele Eingeladene (höchstens 200).                                               |
 | unbekannte Kennung unter `attendeeIds`                | `400`  | Unbekannte Personen unter den Eingeladenen.                                         |
+| neu Eingeladene ohne gemeinsamen Chat mit dem Ersteller | `400`  | Einladen lassen sich nur Personen, mit denen du einen Chat teilst.                  |
 | mehr als 10 `gruppenChatIds`                          | `400`  | Zu viele Gruppenchats (höchstens 10).                                               |
 | Einzelchat unter `gruppenChatIds`                     | `400`  | Nur Gruppenchats lassen sich als Ziel wählen.                                       |
 | nicht Mitglied eines gewählten Gruppenchats           | `403`  | Du bist kein Mitglied dieses Chats                                                  |
@@ -808,7 +864,7 @@ Fließkomma wäre bei Geld die falsche Zahlenart.
 | GET     | `/expenses/payment-profile`          | –                                                         | `200` `PaymentProfile`         |
 | PUT     | `/expenses/payment-profile`          | `{ paypalMe?, iban?, bic?, accountHolder?, note? }`       | `200` `PaymentProfile`         |
 | GET     | `/expenses/payment-profile/{userId}` | –                                                         | `200` `PaymentProfile`         |
-| POST    | `/expenses/{id}/hidden/{userId}`     | –                                                         | `200` `Expense`                |
+| POST    | `/expenses/{id}/hidden/{userId}`     | – (nur Personen aus dem Zusammenhang, sonst `400`)        | `200` `Expense`                |
 | DELETE  | `/expenses/{id}/hidden/{userId}`     | –                                                         | `200` `Expense`                |
 
 **Ausgabe anlegen**
@@ -1056,13 +1112,24 @@ kann, ist keine.
 ## Realtime-Protokoll
 
 ```
-wss://api.example.com/ws?token=<accessToken>
+POST /api/v1/realtime/ticket      (Bearer)  → { "ticket": "…", "expiresIn": 30 }
+wss://api.example.com/ws?ticket=<ticket>
 ```
 
-Der WebSocket akzeptiert das Access-Token nur als Query-Parameter (`token` oder
-`access_token`) – ein Upgrade kann keine Header setzen. Ist es ungültig,
-schließt der Server mit Code **4401**: Der Client soll das Token erneuern und
-sich neu verbinden.
+Ein Upgrade kann keine Kopfzeilen setzen, also steht der Ausweis in der
+Adresse – und damit in den Protokollen jedes Zwischenknotens. Deshalb ein
+**Einmal-Ticket** statt des Zugriffstokens: 30 Sekunden gültig, genau ein
+Aufbau, in der Datenbank nur als Hash (Tabelle `echtzeit_tickets`, damit es bei
+mehreren Maschinen gleich wo eingelöst werden kann). Eine widerrufene Sitzung
+bekommt keins (`401`).
+
+`?token=` nimmt ebenfalls ein Ticket an (ein Ticket enthält nie einen Punkt,
+ein JWT immer). **Übergangsweise** akzeptiert der Server dort und in
+`?access_token=` noch das Zugriffstoken selbst; das entfällt, sobald keine
+älteren Clients mehr im Umlauf sind.
+
+Ist der Ausweis ungültig, verbraucht oder abgelaufen, schließt der Server mit
+Code **4401**: Der Client soll das Token erneuern und sich neu verbinden.
 
 ### Envelope
 

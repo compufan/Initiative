@@ -100,7 +100,9 @@ export const useSession = create<SessionState>((set, get) => ({
       // Benachrichtigungen fuer ein Konto, von dem es sich abgemeldet hat.
       await pushAbmelden().catch(() => {});
 
-      if (tokens) await api.auth.logout(tokens.refreshToken).catch(() => {});
+      // Widerruft den Erneuerungs-Keks beim Server (`DELETE /auth/refresh`);
+      // der Token selbst ist für die Seite unsichtbar.
+      if (tokens) await api.auth.logout().catch(() => {});
       setTokens(null);
       await clearOfflineData();
       await medienSpeicherLeeren();

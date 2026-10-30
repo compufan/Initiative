@@ -115,6 +115,27 @@ nicht im normalen Safari-Tab.
 | `PUBLIC_API_URL` | `http://localhost:8080` | Öffentliche URL der API. Bildet die Medien-URLs in jedem DTO.                                             |
 | `CORS_ORIGINS`   | leer                    | Kommaliste zusätzlicher Origins. `*` erlaubt alle (dann ohne Credentials).                                |
 
+**Sitzungs-Kekse.** Der Refresh-Token der PWA steht in einem `HttpOnly`-Keks
+(`initiative_erneuern`, Pfad nur `/api/v1/auth/refresh`, kein `Domain`); der
+Browser-Speicher hält nur noch das kurzlebige Zugriffstoken. Wie der Keks
+gesetzt wird, folgt aus `PUBLIC_APP_URL` und `PUBLIC_API_URL`:
+
+| Lage                                                           | Keks                              | Was zu tun ist                                                                 |
+| -------------------------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------ |
+| Eine Domain (Caddy vor beidem), oder gleicher Name, anderer Port | `SameSite=Strict`, `Secure` bei https | nichts                                                                         |
+| Entwicklung: Vite auf `:5173`, API auf `:8080` (Proxy oder direkt) | `SameSite=Strict`, ohne `Secure`  | nichts – ohne `Secure`, damit es auch in Safari und im Heimnetz (http) geht    |
+| Getrennte Domains über https                                   | `SameSite=None; Secure`           | `CORS_ORIGINS` = PWA-Adresse (nie `*`), `VITE_API_URL` setzen                   |
+| Getrennte Domains über http                                    | keiner                            | geht nicht dauerhaft: Sitzung hält nur bis zum Neuladen (Token nur im Speicher) |
+
+Erneuern und Abmelden über den Keks verlangen den Kopf `X-Initiative-Sitzung`
+und eine bekannte `Origin` (dieselbe Liste wie CORS, ohne `*`) – Schutz gegen
+CSRF zusätzlich zu `SameSite`. Ältere Clients, die den Token noch im Rumpf
+schicken, funktionieren weiter und bekommen den Keks beim nächsten Erneuern
+gesetzt. Die Echtzeit-Leitung holt sich ein Einmal-Ticket
+(`POST /api/v1/realtime/ticket`); in Proxy-Protokollen steht in `/ws?…` also kein
+Zugriffstoken mehr, sondern ein nach 30 Sekunden bzw. einmaliger Nutzung
+wertloser Wert.
+
 ### Speicher
 
 | Variable               | Standard          | Bedeutung                                                                                                  |
@@ -1173,7 +1194,8 @@ Bestehende Sitzungen bleiben davon unberührt.
 - [ ] **`NODE_ENV=production`** – erst dann ist `JWT_SECRET` erzwungen und die
       CORS-Ausnahme für lokale Netze abgeschaltet.
 - [ ] **`CORS_ORIGINS`** ist leer (eine Domain) oder nennt genau die PWA-Domain.
-      Niemals `*` – das schaltet `allow_credentials` ab.
+      Niemals `*` – das schaltet `allow_credentials` ab, und ohne die gehen bei
+      getrennten Domains weder Medien- noch Erneuerungs-Keks mit.
 - [ ] **`PUBLIC_APP_URL`** und **`PUBLIC_API_URL`** zeigen auf die echten
       https-Adressen – daraus entstehen Medien-URLs, Push-Links und ICS-Einträge.
 - [ ] **HTTPS überall.** Ohne https keine Kamera, kein Mikrofon, kein Service

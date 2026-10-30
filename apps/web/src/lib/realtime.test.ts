@@ -53,6 +53,7 @@ vi.mock('./api.js', () => ({
   }),
   onTokenChange: () => () => {},
   validAccessToken: async () => tokenState.access,
+  echtzeitZugang: async () => tokenState.access,
   forceRefresh: async () => {
     tokenState.refreshed += 1;
     tokenState.access = `erneuert-${tokenState.refreshed}`;

@@ -7,7 +7,7 @@ import {
   type ServerEvent,
   type ServerEventType,
 } from '@initiative/shared';
-import { API_BASE, forceRefresh, getTokens, onTokenChange, validAccessToken } from './api.js';
+import { API_BASE, echtzeitZugang, forceRefresh, getTokens, onTokenChange } from './api.js';
 import { beiRueckkehr } from './wiederaufnahme.js';
 
 /** Der Server schließt mit diesem Code, wenn das Token abgelaufen ist. */
@@ -97,7 +97,7 @@ export class RealtimeClient {
 
     const lauf = ++this.lauf;
     this.setState('connecting');
-    const token = await validAccessToken();
+    const token = await echtzeitZugang(); // Einmal-Ticket statt Zugriffstoken in der Adresse
     // Während des Wartens kann ein anderer Aufruf schon verbunden oder
     // getrennt haben.
     if (lauf !== this.lauf || this.socket || this.closedByUser) return;

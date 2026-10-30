@@ -47,7 +47,16 @@ fn cors_layer(state: &AppState) -> CorsLayer {
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::RANGE])
+        // `x-initiative-sitzung`: Der Web-Client führt die Sitzung über den
+        // Erneuerungs-Keks und schickt dafür diesen Kopf (CSRF-Schutz, siehe
+        // `auth::erneuerungskeks`). Ohne ihn hier scheiterte der Vorabcheck,
+        // sobald App und API getrennt laufen.
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::RANGE,
+            header::HeaderName::from_static(crate::auth::erneuerungskeks::KOPF),
+        ])
         .expose_headers([header::CONTENT_RANGE, header::CONTENT_LENGTH])
         .allow_credentials(!allow_any)
         .max_age(std::time::Duration::from_secs(3600));
