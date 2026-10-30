@@ -401,6 +401,15 @@ Android-Geräts). Dann gelten deren Bedingungen; wir haben mit ihnen keinen Vert
 können keinen schliessen. Wir laden keine Karten und keine Vorschaubilder. Welche App
 du gewählt hast, merkt sich nur dein Gerät.</p>
 
+<h2>Ortssuche beim Tippen</h2>
+<p>Im Feld „Ort“ schlägt die App beim Tippen Adressen und Orte vor. Dazu schickt
+<strong>unser Server</strong> den getippten Text (nicht dein Gerät, nicht dein Name und
+nicht deine Adresse im Netz) an einen Suchdienst auf Basis von OpenStreetMap-Daten
+(Photon). Bei einem Text, der wie ein Link oder eine Koordinate aussieht, geschieht das
+nicht. Der Dienst sieht nur unseren Server. Wir speichern die Suchtexte nicht dauerhaft,
+merken uns die Treffer aber zehn Minuten im Arbeitsspeicher. Der Betreiber kann die
+Suche abschalten; dann bleibt das Feld ein Textfeld.</p>
+
 <h2>Was auf deinem Gerät bleibt</h2>
 <p>Die App legt in deinem Browser ab: den Anmelde-Token, deine noch nicht gesendeten
 Nachrichten, einen Zwischenspeicher der Chats für den Betrieb ohne Netz, deine
