@@ -517,6 +517,10 @@ impl Storage for Tresor {
     async fn delete(&self, key: &str) -> AppResult<()> {
         self.innen.delete(key).await
     }
+
+    async fn kapazitaet(&self) -> Option<(u64, u64)> {
+        self.innen.kapazitaet().await
+    }
 }
 
 #[cfg(test)]

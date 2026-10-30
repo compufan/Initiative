@@ -66,23 +66,58 @@ use crate::config::SftpEinstellungen;
 use crate::error::{AppError, AppResult};
 
 /**
- * Wie viele Zugriffe gleichzeitig zur Box gehen.
+ * Wie viele LESER gleichzeitig an der Box hängen.
  *
  * Nicht, weil SFTP nicht mehr könnte – über eine Verbindung laufen beliebig
  * viele Anfragen –, sondern weil die Gegenseite eine gemeinsam genutzte
- * Maschine ist. Acht gleichzeitige Leser sind für eine kalte Ablage reichlich;
- * wer als neunter kommt, wartet Millisekunden.
+ * Maschine ist.
+ *
+ * Lesen und Schreiben haben getrennte Vorräte (siehe `SCHREIB_PLAETZE`):
+ * Ein Leser hält seinen Platz, solange sein Strom offen ist – und ein
+ * Abspieler, der pausiert, lässt die Antwort stundenlang offen stehen. Mit
+ * EINEM gemeinsamen Vorrat genügten acht pausierte Videos, und weder ein
+ * Umzug noch ein Löschen käme je wieder durch.
  */
-const PLAETZE: usize = 8;
+const PLAETZE: usize = 16;
+
+/// Plätze für Schreiben, Umbenennen und Löschen – getrennt von den Lesern, damit
+/// pausierte Abspieler den Auslagerungsdienst und das Aufräumen nicht aushungern.
+const SCHREIB_PLAETZE: usize = 4;
 
 /// Wie lange auf die Gegenseite gewartet wird, bevor aufgegeben wird.
 const FRIST_S: u64 = 30;
+
+/// Wie lange auf einen freien Platz gewartet wird, bevor der Aufruf eine klare
+/// Absage bekommt, statt ewig in der Schlange zu hängen.
+const PLATZ_FRIST_S: u64 = 60;
+
+/**
+ * Endung einer Datei, die gerade erst übertragen wird.
+ *
+ * Geschrieben wird NIE direkt unter den Endnamen: Ein Abbruch mitten in vier
+ * Gigabyte liesse sonst unter dem richtigen Namen eine halbe Datei liegen,
+ * die für `read` genauso aussieht wie eine ganze. Erst wenn Grösse und
+ * Inhalt stimmen, wird umbenannt.
+ */
+const TEIL: &str = ".teil";
+
+/// Wie viel vom Anfang und vom Ende eines liegengebliebenen Teilstücks gegen
+/// die Quelle verglichen wird, bevor an ihm weitergeschrieben wird.
+const PROBE_BYTES: u64 = 64 * 1024;
+
+/// Fortgesetzt wird erst ab dieser Grösse des Teilstücks – darunter kostet das
+/// Prüfen mehr, als das Neuschreiben spart. Zugleich die Rundung: Es wird ab
+/// der letzten vollen Mebibyte davor fortgesetzt, weil das letzte Paket eines
+/// abgerissenen Schreibens unvollständig angekommen sein kann.
+const FORTSETZEN_AB: u64 = 8 * 1024 * 1024;
+const MIB: u64 = 1024 * 1024;
 
 pub struct SftpSpeicher {
     einstellungen: SftpEinstellungen,
     /// Die eine Verbindung. `None` heisst: noch nicht oder nicht mehr.
     verbindung: Mutex<Option<Arc<Verbindung>>>,
     plaetze: Arc<Semaphore>,
+    schreib_plaetze: Arc<Semaphore>,
 }
 
 struct Verbindung {
@@ -96,6 +131,9 @@ struct Verbindung {
      */
     _griff: Handle<Wachmann>,
     sftp: SftpSession,
+    /// Wann sie zuletzt nachweislich antwortete – spart die Probe bei jedem
+    /// Zugriff (siehe `sitzung`).
+    zuletzt_ok: std::sync::Mutex<std::time::Instant>,
 }
 
 /**
@@ -177,6 +215,7 @@ impl SftpSpeicher {
             einstellungen,
             verbindung: Mutex::new(None),
             plaetze: Arc::new(Semaphore::new(PLAETZE)),
+            schreib_plaetze: Arc::new(Semaphore::new(SCHREIB_PLAETZE)),
         }
     }
 
@@ -204,8 +243,25 @@ impl SftpSpeicher {
                  * Kurz nachfassen, ob sie noch steht. Eine tote Verbindung
                  * merkt man sonst erst am halb ausgelieferten Video – und
                  * dann hat der Abspieler schon abgebrochen.
+                 *
+                 * Aber nicht bei JEDEM Zugriff: Die Probe kostet einen
+                 * Umlauf unter dem Schloss, und eine Kachelansicht oder der
+                 * Tresor (zwei Lesevorgänge je Abruf) machte daraus eine
+                 * Warteschlange. Hat die Verbindung in den letzten zwanzig
+                 * Sekunden etwas beantwortet, gilt sie als lebendig.
                  */
+                let frisch = v
+                    .zuletzt_ok
+                    .lock()
+                    .map(|t| t.elapsed() < std::time::Duration::from_secs(20))
+                    .unwrap_or(false);
+                if frisch {
+                    return Ok(v.clone());
+                }
                 if v.sftp.canonicalize(".").await.is_ok() {
+                    if let Ok(mut t) = v.zuletzt_ok.lock() {
+                        *t = std::time::Instant::now();
+                    }
                     return Ok(v.clone());
                 }
                 tracing::info!("Verbindung zur Storage Box war tot – es wird neu verbunden");
@@ -215,6 +271,19 @@ impl SftpSpeicher {
         let mut da = self.verbindung.lock().await;
         *da = Some(neu.clone());
         Ok(neu)
+    }
+
+    /// Eine Verbindung, die mitten in einer Übertragung riss, wegwerfen –
+    /// der nächste Zugriff baut eine neue, statt erst die Probe abzuwarten.
+    async fn verwerfen(&self, v: &Arc<Verbindung>) {
+        let mut da = self.verbindung.lock().await;
+        if da.as_ref().is_some_and(|aktuell| Arc::ptr_eq(aktuell, v)) {
+            *da = None;
+        }
+    }
+
+    async fn schreib_platz(&self) -> AppResult<tokio::sync::OwnedSemaphorePermit> {
+        platz_holen(&self.schreib_plaetze).await
     }
 
     async fn verbinden(&self) -> AppResult<Verbindung> {
@@ -272,15 +341,32 @@ impl SftpSpeicher {
             .request_subsystem(true, "sftp")
             .await
             .map_err(|fehler| AppError::internal(format!("Kein SFTP auf der Box: {fehler}")))?;
-        let sftp = SftpSession::new(kanal.into_stream())
-            .await
-            .map_err(|fehler| AppError::internal(format!("SFTP nicht gestartet: {fehler}")))?;
+        /*
+         * Mehr Anfragen gleichzeitig unterwegs als die Vorgabe (16).
+         *
+         * Eine Übertragung ist so schnell wie (Anfragen in der Luft × Paket)
+         * / Laufzeit. Mit 16 × 32 KiB und 30 ms zur Box sind das gut 17 MB/s
+         * – ein 4-GiB-Video bräuchte vier Minuten, wo die Leitung es in einer
+         * hätte. 64 vervierfacht das und kostet zwei Mebibyte Puffer.
+         */
+        let sftp = SftpSession::new_with_config(
+            kanal.into_stream(),
+            russh_sftp::client::Config {
+                max_concurrent_reads: 64,
+                max_concurrent_writes: 64,
+                request_timeout_secs: FRIST_S,
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|fehler| AppError::internal(format!("SFTP nicht gestartet: {fehler}")))?;
         sftp.set_timeout(FRIST_S);
 
         tracing::info!(wirt = %e.wirt, hafen = e.hafen, "Mit der Storage Box verbunden");
         Ok(Verbindung {
             _griff: griff,
             sftp,
+            zuletzt_ok: std::sync::Mutex::new(std::time::Instant::now()),
         })
     }
 
@@ -341,63 +427,124 @@ impl Storage for SftpSpeicher {
     }
 
     async fn put(&self, key: &str, body: Bytes, _mime: &str) -> AppResult<()> {
-        let _platz = self
-            .plaetze
-            .acquire()
-            .await
-            .map_err(|_| AppError::internal("Die kalte Ablage nimmt gerade nichts entgegen"))?;
+        let _platz = self.schreib_platz().await?;
         let pfad = self.pfad_fuer(key)?;
+        let teil = format!("{pfad}{TEIL}");
         let v = self.sitzung().await?;
         self.ordner_sichern(&v.sftp, &pfad).await?;
-        let mut datei = v
-            .sftp
-            .create(pfad.clone())
+        let ergebnis =
+            async {
+                let mut datei = v.sftp.create(teil.clone()).await.map_err(|fehler| {
+                    AppError::internal(format!("Ablegen gescheitert: {fehler}"))
+                })?;
+                datei.write_all(&body).await.map_err(|fehler| {
+                    AppError::internal(format!("Schreiben gescheitert: {fehler}"))
+                })?;
+                /*
+                 * `shutdown` und nicht bloss fallen lassen: Es wartet darauf, dass
+                 * alles wirklich hinüber ist. Ohne das meldete diese Funktion
+                 * Erfolg, während die letzten Blöcke noch unterwegs sind – und der
+                 * Auslagerungsdienst löscht die lokale Fassung, bevor die ferne
+                 * vollständig ist.
+                 */
+                datei.shutdown().await.map_err(|fehler| {
+                    AppError::internal(format!("Abschluss gescheitert: {fehler}"))
+                })
+            }
+            .await;
+        if let Err(fehler) = ergebnis {
+            self.verwerfen(&v).await;
+            let _ = v.sftp.remove_file(teil).await;
+            return Err(fehler);
+        }
+        self.fertigstellen(&v, &pfad, &teil, body.len() as u64)
             .await
-            .map_err(|fehler| AppError::internal(format!("Ablegen gescheitert: {fehler}")))?;
-        datei
-            .write_all(&body)
-            .await
-            .map_err(|fehler| AppError::internal(format!("Schreiben gescheitert: {fehler}")))?;
-        /*
-         * `shutdown` und nicht bloss fallen lassen: Es wartet darauf, dass
-         * alles wirklich hinüber ist. Ohne das meldete diese Funktion Erfolg,
-         * während die letzten Blöcke noch unterwegs sind – und der
-         * Auslagerungsdienst löscht die lokale Fassung, bevor die ferne
-         * vollständig ist.
-         */
-        datei
-            .shutdown()
-            .await
-            .map_err(|fehler| AppError::internal(format!("Abschluss gescheitert: {fehler}")))?;
-        Ok(())
     }
 
-    /// Wie `put`, aber im Strom von der Platte – ein ausgelagertes Video von
-    /// Gigabytes geht so hinüber, ohne je ganz im Arbeitsspeicher zu liegen.
+    /**
+     * Wie `put`, aber im Strom von der Platte – ein ausgelagertes Video von
+     * Gigabytes geht so hinüber, ohne je ganz im Arbeitsspeicher zu liegen.
+     *
+     * # Was bei einem Abbruch passiert
+     *
+     * Geschrieben wird nach `<Pfad>.teil`. Reisst die Verbindung nach drei
+     * von vier Gigabyte, bleibt dieses Teilstück liegen – absichtlich: Der
+     * nächste Versuch prüft Anfang und Ende des Teilstücks gegen die Quelle
+     * und schreibt ab dort weiter, statt dreieinhalb Gigabyte noch einmal zu
+     * schicken. Stimmt die Probe nicht (zum Beispiel weil ein Tresor die Datei
+     * zwischendurch mit neuem Salz neu verschlüsselt hat), wird von vorn
+     * geschrieben. Unter dem Endnamen erscheint die Datei erst, wenn die
+     * Grösse drüben genau der Quelle entspricht.
+     */
     async fn put_datei(&self, key: &str, quelle: &std::path::Path, _mime: &str) -> AppResult<()> {
-        let _platz = self
-            .plaetze
-            .acquire()
-            .await
-            .map_err(|_| AppError::internal("Die kalte Ablage nimmt gerade nichts entgegen"))?;
+        let _platz = self.schreib_platz().await?;
         let mut ein = tokio::fs::File::open(quelle).await?;
+        let laenge = ein.metadata().await?.len();
         let pfad = self.pfad_fuer(key)?;
+        let teil = format!("{pfad}{TEIL}");
         let v = self.sitzung().await?;
         self.ordner_sichern(&v.sftp, &pfad).await?;
-        let mut datei = v
-            .sftp
-            .create(pfad.clone())
-            .await
-            .map_err(|fehler| AppError::internal(format!("Ablegen gescheitert: {fehler}")))?;
-        tokio::io::copy(&mut ein, &mut datei)
-            .await
-            .map_err(|fehler| AppError::internal(format!("Schreiben gescheitert: {fehler}")))?;
-        // Siehe `put`: erst `shutdown` sagt, dass alles drüben ist.
-        datei
-            .shutdown()
-            .await
-            .map_err(|fehler| AppError::internal(format!("Abschluss gescheitert: {fehler}")))?;
-        Ok(())
+
+        let start = fortsetzpunkt(&v.sftp, &mut ein, &teil, laenge).await;
+        if start > 0 {
+            tracing::info!(
+                %key, bereits_mib = start / MIB, von_mib = laenge / MIB,
+                "Übertragung zur Storage Box wird fortgesetzt"
+            );
+        }
+        let ergebnis = async {
+            use russh_sftp::protocol::OpenFlags;
+            let flags = if start > 0 {
+                OpenFlags::WRITE | OpenFlags::CREATE
+            } else {
+                OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::TRUNCATE
+            };
+            let mut datei = v
+                .sftp
+                .open_with_flags(teil.clone(), flags)
+                .await
+                .map_err(|fehler| AppError::internal(format!("Ablegen gescheitert: {fehler}")))?;
+            /*
+             * IMMER an die Startstelle – auch bei 0. Die Probe in
+             * `fortsetzpunkt` hat die Quelle verstellt, und ein Test gegen
+             * einen echten Server fand es: Nach einer fehlgeschlagenen Probe
+             * stand der Lesezeiger 64 KiB weit hinten, und die Datei kam
+             * drüben um genau so viel zu kurz an.
+             */
+            ein.seek(std::io::SeekFrom::Start(start)).await?;
+            if start > 0 {
+                datei
+                    .seek(std::io::SeekFrom::Start(start))
+                    .await
+                    .map_err(|fehler| {
+                        AppError::internal(format!("Fortsetzen gescheitert: {fehler}"))
+                    })?;
+            }
+            // Ein grosser Lesepuffer: `tokio::io::copy` nähme 8 KiB und
+            // schickte damit Pakete, die weit unter dem liegen, was die
+            // Leitung vertrüge.
+            let mut gepuffert = tokio::io::BufReader::with_capacity(256 * 1024, ein);
+            tokio::io::copy_buf(&mut gepuffert, &mut datei)
+                .await
+                .map_err(|fehler| AppError::internal(format!("Schreiben gescheitert: {fehler}")))?;
+            // Siehe `put`: erst `shutdown` sagt, dass alles drüben ist.
+            datei
+                .shutdown()
+                .await
+                .map_err(|fehler| AppError::internal(format!("Abschluss gescheitert: {fehler}")))
+        }
+        .await;
+        if let Err(fehler) = ergebnis {
+            /*
+             * Das Teilstück bleibt für den nächsten Versuch liegen. Die
+             * Verbindung dagegen wird weggeworfen: Nach einem Abriss mitten im
+             * Strom ist sie mit hoher Wahrscheinlichkeit tot, und die nächste
+             * Probe würde erst nach der Frist merken, dass sie es ist.
+             */
+            self.verwerfen(&v).await;
+            return Err(fehler);
+        }
+        self.fertigstellen(&v, &pfad, &teil, laenge).await
     }
 
     async fn read(&self, key: &str, range: Option<ByteRange>) -> AppResult<Option<ObjectStream>> {
@@ -409,30 +556,61 @@ impl Storage for SftpSpeicher {
          * wirkungslos. `forget` löst ihn vom Geltungsbereich, `Freigabe` gibt
          * ihn zurück, wenn der Strom wirklich zu Ende ist.
          */
-        self.plaetze
-            .acquire()
-            .await
-            .map_err(|_| AppError::internal("Die kalte Ablage antwortet gerade nicht"))?
-            .forget();
-        let pfad = self.pfad_fuer(key)?;
-        let v = self.sitzung().await?;
-
-        let mut datei = match v.sftp.open(pfad.clone()).await {
-            Ok(datei) => datei,
-            Err(_) => {
+        platz_holen(&self.plaetze).await?.forget();
+        let pfad = match self.pfad_fuer(key) {
+            Ok(p) => p,
+            Err(f) => {
                 self.plaetze.add_permits(1);
-                // Nicht da ist kein Fehler – die Auslieferung macht daraus
-                // eine 404, genau wie bei der lokalen Ablage.
-                return Ok(None);
+                return Err(f);
+            }
+        };
+        let v = match self.sitzung().await {
+            Ok(v) => v,
+            Err(f) => {
+                self.plaetze.add_permits(1);
+                return Err(f);
             }
         };
 
-        let gesamt = datei
-            .metadata()
-            .await
-            .ok()
-            .and_then(|m| m.size)
-            .unwrap_or(0);
+        let mut datei = match v.sftp.open(pfad.clone()).await {
+            Ok(datei) => datei,
+            Err(fehler) => {
+                self.plaetze.add_permits(1);
+                /*
+                 * Nur „gibt es nicht" ist ein Nichts. Eine Zeitüberschreitung
+                 * oder ein Verbindungsabriss ist KEIN 404: Der Abspieler
+                 * würde eine Datei, die da ist, für gelöscht halten – und die
+                 * Weiche suchte sie in der falschen Ablage weiter.
+                 */
+                if fehlt_wirklich(&v.sftp, &pfad, &fehler).await {
+                    return Ok(None);
+                }
+                return Err(AppError::internal(format!(
+                    "Die kalte Ablage antwortet nicht: {fehler}"
+                )));
+            }
+        };
+
+        /*
+         * Die Grösse MUSS stimmen. Früher stand hier `unwrap_or(0)`: Ein
+         * verlorenes `fstat` machte aus einem Video von 3 GiB eine leere
+         * Antwort mit Status 200 – ohne Fehler, ohne Protokoll.
+         */
+        let gesamt = match datei.metadata().await {
+            Ok(m) => match m.size {
+                Some(g) => g,
+                None => {
+                    self.plaetze.add_permits(1);
+                    return Err(AppError::internal("Die Box nennt keine Dateigrösse"));
+                }
+            },
+            Err(fehler) => {
+                self.plaetze.add_permits(1);
+                return Err(AppError::internal(format!(
+                    "Dateigrösse in der kalten Ablage nicht lesbar: {fehler}"
+                )));
+            }
+        };
 
         let (anfang, laenge) = match range {
             Some(bereich) => {
@@ -449,18 +627,21 @@ impl Storage for SftpSpeicher {
         };
 
         if anfang > 0 {
-            datei
-                .seek(std::io::SeekFrom::Start(anfang))
-                .await
-                .map_err(|fehler| {
-                    AppError::internal(format!("Vorspulen in der kalten Ablage: {fehler}"))
-                })?;
+            if let Err(fehler) = datei.seek(std::io::SeekFrom::Start(anfang)).await {
+                self.plaetze.add_permits(1);
+                return Err(AppError::internal(format!(
+                    "Vorspulen in der kalten Ablage: {fehler}"
+                )));
+            }
         }
 
-        let strom = ReaderStream::new(Freigabe {
-            innen: datei.take(laenge),
-            plaetze: self.plaetze.clone(),
-        });
+        let strom = ReaderStream::with_capacity(
+            Freigabe {
+                innen: datei.take(laenge),
+                plaetze: self.plaetze.clone(),
+            },
+            256 * 1024,
+        );
         Ok(Some(ObjectStream {
             stream: Box::pin(strom),
             size: Some(laenge),
@@ -469,19 +650,216 @@ impl Storage for SftpSpeicher {
         }))
     }
 
+    /**
+     * Löschen – die Datei UND ihr Teilstück.
+     *
+     * Ein Fehler ausser „gibt es nicht" wird gemeldet. Früher stand hier
+     * `let _ =`: Eine Zeitüberschreitung galt als erledigt, die Müllzeile
+     * wurde ausgetragen und das Objekt blieb für immer auf der Box – bei
+     * einem Video von vier Gigabyte der teuerste Fehler dieses Treibers.
+     */
     async fn delete(&self, key: &str) -> AppResult<()> {
-        let _platz = self
-            .plaetze
-            .acquire()
-            .await
-            .map_err(|_| AppError::internal("Die kalte Ablage antwortet gerade nicht"))?;
+        let _platz = self.schreib_platz().await?;
         let pfad = self.pfad_fuer(key)?;
         let v = self.sitzung().await?;
-        // Eine Datei, die nicht da ist, gilt als gelöscht – sonst bliebe sie
-        // für immer in der Müllliste stehen.
-        let _ = v.sftp.remove_file(pfad).await;
-        Ok(())
+        let teil = format!("{pfad}{TEIL}");
+        let a = entfernen(&v.sftp, &pfad).await;
+        let b = entfernen(&v.sftp, &teil).await;
+        a.and(b)
     }
+
+    /// Wie viel Platz auf der Box ist – falls sie es sagt (`statvfs@openssh.com`).
+    async fn kapazitaet(&self) -> Option<(u64, u64)> {
+        let v = self.sitzung().await.ok()?;
+        let wurzel = self.pfad_fuer("").ok()?;
+        let s = v.sftp.fs_info(wurzel).await.ok()??;
+        let einheit = s.fragment_size.max(1);
+        Some((
+            s.blocks_avail.saturating_mul(einheit),
+            s.blocks.saturating_mul(einheit),
+        ))
+    }
+
+    /**
+     * Liegengebliebene Teilstücke (`….teil`) wegräumen, die seit `aelter_als`
+     * nicht mehr angefasst wurden.
+     *
+     * Ein Teilstück bleibt nach einem Abbruch absichtlich stehen (Fortsetzen).
+     * Gehört die Datei inzwischen zu einer gelöschten Nachricht oder wurde
+     * der Umzug nie wiederholt, räumt sonst niemand es weg: Die Müllliste
+     * kennt nur den Endnamen.
+     */
+    async fn teilreste_raeumen(&self, aelter_als: std::time::Duration) -> AppResult<usize> {
+        let _platz = self.schreib_platz().await?;
+        let v = self.sitzung().await?;
+        let wurzel = self.pfad_fuer("")?;
+        let grenze = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+            .saturating_sub(aelter_als.as_secs());
+        let mut offen = vec![wurzel];
+        let mut weg = 0usize;
+        while let Some(ordner) = offen.pop() {
+            let Ok(eintraege) = v.sftp.read_dir(ordner).await else {
+                continue;
+            };
+            for e in eintraege {
+                let m = e.metadata();
+                if m.is_dir() || m.file_type().is_dir() {
+                    offen.push(e.path());
+                } else if e.file_name().ends_with(TEIL)
+                    && u64::from(m.mtime.unwrap_or(u32::MAX)) < grenze
+                    && v.sftp.remove_file(e.path()).await.is_ok()
+                {
+                    weg += 1;
+                }
+            }
+        }
+        Ok(weg)
+    }
+}
+
+impl SftpSpeicher {
+    /**
+     * Teilstück zur Datei machen – nachmessen, dann umbenennen.
+     *
+     * Die Grösse drüben muss genau `erwartet` sein; sonst wird das Teilstück
+     * VERWORFEN (nicht behalten): Hat es die falsche Länge, taugt es auch
+     * nicht zum Fortsetzen. Umbenannt wird mit „erst den Zielnamen freimachen":
+     * SFTP (Version 3) überschreibt beim Umbenennen nicht, und ein Rest unter
+     * dem Endnamen soll den Umzug nicht für immer scheitern lassen.
+     */
+    async fn fertigstellen(
+        &self,
+        v: &Arc<Verbindung>,
+        pfad: &str,
+        teil: &str,
+        erwartet: u64,
+    ) -> AppResult<()> {
+        let drueben = v
+            .sftp
+            .metadata(teil.to_string())
+            .await
+            .map_err(|fehler| AppError::internal(format!("Nachmessen gescheitert: {fehler}")))?
+            .size;
+        if drueben != Some(erwartet) {
+            let _ = v.sftp.remove_file(teil.to_string()).await;
+            return Err(AppError::internal(format!(
+                "Auf der Box liegen {drueben:?} statt {erwartet} Bytes"
+            )));
+        }
+        entfernen(&v.sftp, pfad).await?;
+        v.sftp
+            .rename(teil.to_string(), pfad.to_string())
+            .await
+            .map_err(|fehler| AppError::internal(format!("Umbenennen gescheitert: {fehler}")))
+    }
+}
+
+/// Einen Platz holen – mit Frist, damit niemand ewig in der Schlange hängt.
+async fn platz_holen(plaetze: &Arc<Semaphore>) -> AppResult<tokio::sync::OwnedSemaphorePermit> {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(PLATZ_FRIST_S),
+        plaetze.clone().acquire_owned(),
+    )
+    .await
+    {
+        Ok(Ok(platz)) => Ok(platz),
+        Ok(Err(_)) => Err(AppError::internal(
+            "Die kalte Ablage nimmt gerade nichts entgegen",
+        )),
+        Err(_) => Err(AppError::internal(
+            "Die kalte Ablage ist gerade ausgelastet – bitte gleich noch einmal",
+        )),
+    }
+}
+
+/// Ist der Fehler „die Datei gibt es nicht"? Auch Server, die dafür nur
+/// „Failure" melden, werden erkannt: Dann entscheidet eine zweite Frage.
+async fn fehlt_wirklich(
+    sftp: &SftpSession,
+    pfad: &str,
+    fehler: &russh_sftp::client::error::Error,
+) -> bool {
+    use russh_sftp::client::error::Error as F;
+    use russh_sftp::protocol::StatusCode;
+    match fehler {
+        F::Status(s) if s.status_code == StatusCode::NoSuchFile => true,
+        F::Status(s) if s.status_code == StatusCode::Failure => {
+            matches!(sftp.try_exists(pfad.to_string()).await, Ok(false))
+        }
+        _ => false,
+    }
+}
+
+/// Datei löschen; „gibt es nicht" ist Erfolg, alles andere ein Fehler.
+async fn entfernen(sftp: &SftpSession, pfad: &str) -> AppResult<()> {
+    match sftp.remove_file(pfad.to_string()).await {
+        Ok(()) => Ok(()),
+        Err(fehler) => {
+            if fehlt_wirklich(sftp, pfad, &fehler).await {
+                Ok(())
+            } else {
+                Err(AppError::internal(format!(
+                    "Löschen in der kalten Ablage gescheitert: {fehler}"
+                )))
+            }
+        }
+    }
+}
+
+/**
+ * Ab welchem Byte ein liegengebliebenes Teilstück weitergeschrieben werden
+ * darf – 0 heisst: von vorn.
+ *
+ * Geprüft wird nur das Billige: Länge plausibel, Anfang und Ende des
+ * Teilstücks gleich der Quelle. Dazwischen ist nichts zu prüfen, weil SFTP
+ * über EINE Verbindung in Reihenfolge schreibt – eine Lücke in der Mitte
+ * könnte nur entstehen, wenn die Box selbst Daten verloren hätte, und die
+ * Endprobe (Grösse drüben = Grösse der Quelle) fängt wenigstens jede
+ * Längenabweichung.
+ */
+async fn fortsetzpunkt(
+    sftp: &SftpSession,
+    quelle: &mut tokio::fs::File,
+    teil: &str,
+    laenge: u64,
+) -> u64 {
+    let Ok(m) = sftp.metadata(teil.to_string()).await else {
+        return 0;
+    };
+    let da = m.size.unwrap_or(0);
+    if da < FORTSETZEN_AB || da > laenge {
+        return 0;
+    }
+    let start = if da == laenge { da } else { da - da % MIB };
+    let probe = PROBE_BYTES.min(start);
+    for ab in [0, start - probe] {
+        let Some(drueben) = remote_lesen(sftp, teil, ab, probe).await else {
+            return 0;
+        };
+        let mut hier = vec![0u8; probe as usize];
+        if quelle.seek(std::io::SeekFrom::Start(ab)).await.is_err()
+            || quelle.read_exact(&mut hier).await.is_err()
+            || hier != drueben
+        {
+            tracing::info!(
+                stelle = ab,
+                "Teilstück auf der Box passt nicht zur Quelle – es wird von vorn geschrieben"
+            );
+            return 0;
+        }
+    }
+    start
+}
+
+async fn remote_lesen(sftp: &SftpSession, pfad: &str, ab: u64, laenge: u64) -> Option<Vec<u8>> {
+    let mut datei = sftp.open(pfad.to_string()).await.ok()?;
+    datei.seek(std::io::SeekFrom::Start(ab)).await.ok()?;
+    let mut puffer = vec![0u8; laenge as usize];
+    datei.read_exact(&mut puffer).await.ok()?;
+    Some(puffer)
 }
 
 /**

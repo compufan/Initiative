@@ -304,26 +304,60 @@ async fn anlegen(
     Ok((StatusCode::CREATED, Json(stand(&state, &sitzung).await?)))
 }
 
+/// Was offene Sitzungen noch schicken werden (die Teildateien sind dünn
+/// besetzt und wachsen erst) – die Versprechen, mit denen die Platzrechnung
+/// rechnen muss.
+pub async fn ausstehende_bytes(pool: &PgPool) -> i64 {
+    sqlx::query_scalar(
+        "select coalesce(sum(s.groesse - coalesce(
+                  (select sum(laenge) from upload_stuecke t where t.sitzung_id = s.id), 0)), 0)::bigint
+           from upload_sitzungen s where s.status <> 'fertig'",
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0)
+}
+
 /**
- * Ist auf der Platte genug Platz für das, was kommen soll?
+ * Ist auf der Platte genug Platz für das, was kommen soll – oder lässt er sich
+ * schaffen?
  *
  * Gerechnet wird nicht nur mit dieser Datei, sondern mit allem, was offene
  * Sitzungen noch schicken werden (die Teildateien sind dünn besetzt und
  * wachsen erst). Bei eingeschalteter Verschlüsselung liegt eine Datei beim
  * Abschluss kurz zweimal da (Klartext und Geheimtext), also doppelt.
  *
- * Lieber hier eine klare Absage als später eine volle Platte, die Postgres
- * mitreisst. Lässt sich der Platz nicht ermitteln (kein Unix), wird nicht
- * geprüft – die Sitzungsgrenzen gelten trotzdem.
+ * # Warme Platte voll, Storage Box leer
+ *
+ * Früher war das eine Absage. Das ist falsch, sobald es eine kalte Ablage
+ * gibt: Alles, was schon fertig auf der Platte liegt, kann auf die Box
+ * wandern und macht Platz. Die Regel jetzt:
+ *
+ *   1. Reicht der freie Platz: weiter wie bisher.
+ *   2. Sonst, mit kalter Ablage: Was an fertigen Originalen warm liegt, kann
+ *      im Notfall ALLES gehen (auch „hoch" – die Klassen regeln, was bei
+ *      voller Platte zuerst geht, nicht ob eine volle Platte überhaupt
+ *      Uploads abweist). Reicht frei + auslagerbar, wird die Sitzung
+ *      angenommen und der Auslagerungsdienst SOFORT geweckt, statt auf seinen
+ *      Viertelstundentakt zu warten.
+ *   3. Nur wenn auch das nicht reicht, oder die Box erkennbar nicht
+ *      erreichbar ist oder selbst zu wenig Platz meldet: klare Absage, die
+ *      sagt, WELCHE der beiden Seiten nicht reicht.
+ *
+ * Warum die Datei nicht „gleich kalt" landet: Die Stücke kommen in beliebiger
+ * Reihenfolge und müssen irgendwo hin, bevor die Datei vollständig ist – das
+ * ist die Teildatei auf DIESER Platte, in voller Grösse. Der Abschluss
+ * (`rename`) braucht danach keinen Platz mehr. Direkt in die Box zu schreiben
+ * hiesse, die Abschlussanfrage um die Dauer des Hinüberschreibens zu
+ * verlängern – bei vier Gigabyte Minuten, länger als jeder Proxy wartet.
+ * Der Umzug im Hintergrund direkt nach dem Abschluss ist dasselbe ohne diesen
+ * Haken.
+ *
+ * Lässt sich der Platz nicht ermitteln (kein Unix), wird nicht geprüft – die
+ * Sitzungsgrenzen gelten trotzdem.
  */
 async fn platz_pruefen(state: &AppState, groesse: i64) -> AppResult<()> {
-    let ausstehend: i64 = sqlx::query_scalar(
-        "select coalesce(sum(s.groesse - coalesce(
-                  (select sum(laenge) from upload_stuecke t where t.sitzung_id = s.id), 0)), 0)::bigint
-           from upload_sitzungen s where s.status <> 'fertig'",
-    )
-    .fetch_one(&state.pool)
-    .await?;
+    let ausstehend = ausstehende_bytes(&state.pool).await;
     let faktor = if state.config.media_key.is_some() {
         2
     } else {
@@ -333,16 +367,79 @@ async fn platz_pruefen(state: &AppState, groesse: i64) -> AppResult<()> {
         .saturating_add(groesse.saturating_mul(faktor))
         .saturating_add(state.config.upload_platte_reserve_bytes);
     tokio::fs::create_dir_all(&state.config.upload_teile_dir).await?;
-    if let Some(frei) = frei_auf_platte(DateiPfad::new(&state.config.upload_teile_dir)) {
-        if (frei as i64) < noetig {
-            return Err(AppError::platte_voll(format!(
-                "Auf dem Server ist gerade nicht genug Platz für {} (frei: {}). Versuch es später.",
-                menschlich(groesse),
-                menschlich(frei as i64)
+    let Some(frei) = frei_auf_platte(DateiPfad::new(&state.config.upload_teile_dir)) else {
+        return Ok(());
+    };
+    let fehlt = noetig.saturating_sub(frei as i64);
+    if fehlt <= 0 {
+        return Ok(());
+    }
+    let voll = |zusatz: &str| {
+        AppError::platte_voll(format!(
+            "Auf dem Server ist gerade nicht genug Platz für {} (frei: {}). {zusatz}",
+            menschlich(groesse),
+            menschlich(frei as i64)
+        ))
+    };
+    let Some(kalt) = state.speicher.kalt.clone() else {
+        return Err(voll("Versuch es später."));
+    };
+    if !crate::services::auslagern::kalt_erreichbar() {
+        return Err(voll(
+            "Die Storage Box ist gerade nicht erreichbar, deshalb lässt sich auch nichts auslagern. Versuch es später.",
+        ));
+    }
+    // Hat die Box selbst zu wenig Platz? Nicht jede Box sagt es (statvfs ist
+    // eine Erweiterung) – dann wird optimistisch angenommen.
+    if let Ok(Some((box_frei, _))) =
+        tokio::time::timeout(Duration::from_secs(10), kalt.kapazitaet()).await
+    {
+        if (box_frei as i64) < fehlt {
+            return Err(voll(&format!(
+                "Auch die Storage Box hat nur noch {} frei.",
+                menschlich(box_frei as i64)
             )));
         }
     }
+    let schaffbar = crate::services::auslagern::auslagerbar(&state.pool).await;
+    if schaffbar < fehlt {
+        return Err(voll(&format!(
+            "Es liesse sich nur {} auf die Storage Box auslagern, benötigt werden {}.",
+            menschlich(schaffbar),
+            menschlich(fehlt)
+        )));
+    }
+    tracing::info!(
+        fehlt = fehlt,
+        schaffbar = schaffbar,
+        "Platte knapp – Upload angenommen, Auslagerung wird sofort angestossen"
+    );
+    crate::services::auslagern::wecken();
     Ok(())
+}
+
+/// `true`, wenn der Fehler „Platte voll" heisst.
+fn ist_platte_voll(fehler: &std::io::Error) -> bool {
+    fehler.raw_os_error() == Some(libc::ENOSPC)
+}
+
+/// Gesamtgrösse des Dateisystems in Bytes – für die Anzeige der Speicherprüfung.
+#[cfg(unix)]
+pub fn gesamt_auf_platte(pfad: &DateiPfad) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(pfad.as_os_str().as_bytes()).ok()?;
+    // SAFETY: wie in `frei_auf_platte`.
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    #[allow(clippy::unnecessary_cast)]
+    Some(st.f_blocks as u64 * st.f_frsize as u64)
+}
+
+#[cfg(not(unix))]
+pub fn gesamt_auf_platte(_pfad: &DateiPfad) -> Option<u64> {
+    None
 }
 
 /// Freier Platz für Nicht-root in Bytes – `statvfs`, wie `df` es zeigt.
@@ -505,7 +602,17 @@ async fn stueck_empfangen(
             // nächsten Stückes.
             return Err(AppError::too_large("Stück ist länger als angesagt"));
         }
-        datei.write_all(&paket).await?;
+        if let Err(fehler) = datei.write_all(&paket).await {
+            if ist_platte_voll(&fehler) {
+                // Das Stück bleibt „nicht empfangen"; der Client kann nach einer
+                // Weile fortsetzen, sobald die Auslagerung Platz gemacht hat.
+                crate::services::auslagern::wecken();
+                return Err(AppError::platte_voll(
+                    "Auf dem Server ist die Platte voll geworden. Die Auslagerung auf die Storage Box wurde angestossen – setze den Upload in einigen Minuten fort.",
+                ));
+            }
+            return Err(fehler.into());
+        }
     }
     if geschrieben != laenge {
         return Err(AppError::bad_request(format!(
@@ -774,6 +881,16 @@ async fn abschluss_durchfuehren(
         .bind(sitzung.id)
         .execute(&state.pool)
         .await;
+    /*
+     * Wird die Platte knapp, soll die neue Datei (oder eine ältere) nicht erst
+     * in einer Viertelstunde auf die Box wandern: Der Dienst wird gleich
+     * angestossen und rechnet den Bedarf selbst aus.
+     */
+    if state.speicher.kalt.is_some()
+        && crate::services::auslagern::platzbedarf(&state.pool, &state.config).await > 0
+    {
+        crate::services::auslagern::wecken();
+    }
     Ok(dto)
 }
 

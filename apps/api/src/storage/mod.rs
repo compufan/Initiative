@@ -120,6 +120,26 @@ pub trait Storage: Send + Sync {
     }
     async fn read(&self, key: &str, range: Option<ByteRange>) -> AppResult<Option<ObjectStream>>;
     async fn delete(&self, key: &str) -> AppResult<()>;
+
+    /**
+     * (frei, gesamt) in Bytes – falls die Ablage das beantworten kann.
+     *
+     * Die Box kann es über `statvfs@openssh.com`, die lokale Platte über
+     * `statvfs`; ein Objektspeicher nicht. `None` heisst „unbekannt", nicht
+     * „voll".
+     */
+    async fn kapazitaet(&self) -> Option<(u64, u64)> {
+        None
+    }
+
+    /**
+     * Liegengebliebene Teilobjekte wegräumen, die älter als `aelter_als` sind.
+     * Gibt die Zahl der entfernten zurück. Nur Ablagen, die unter einem
+     * Zwischennamen schreiben (SFTP), haben hier etwas zu tun.
+     */
+    async fn teilreste_raeumen(&self, _aelter_als: std::time::Duration) -> AppResult<usize> {
+        Ok(0)
+    }
 }
 
 /**

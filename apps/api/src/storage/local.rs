@@ -156,6 +156,13 @@ impl Storage for LocalStorage {
         let _ = fs::remove_file(path).await;
         Ok(())
     }
+
+    async fn kapazitaet(&self) -> Option<(u64, u64)> {
+        let _ = fs::create_dir_all(&self.root).await;
+        let frei = crate::modules::stuecke::frei_auf_platte(&self.root)?;
+        let gesamt = crate::modules::stuecke::gesamt_auf_platte(&self.root)?;
+        Some((frei, gesamt))
+    }
 }
 
 /// Ein Name neben dem Ziel, den kein Schlüssel je trägt.

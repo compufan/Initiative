@@ -5,7 +5,7 @@
 //! hier aus lässt sich dagegen jeder Schritt einzeln prüfen – Zugangsdaten,
 //! Endpunkt, Bucket und vor allem die CORS-Regel, die der Browser braucht.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::routing::get;
 use axum::{Json, Router};
 use serde::Serialize;
@@ -17,17 +17,19 @@ use crate::error::AppResult;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/admin/storage-check", get(storage_check))
+    Router::new()
+        .route("/admin/storage-check", get(storage_check))
+        .route("/admin/storage-check/kalt", get(kalt_check))
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct Step {
-    name: String,
-    ok: bool,
-    detail: String,
+pub struct Step {
+    pub name: String,
+    pub ok: bool,
+    pub detail: String,
     /// Was zu tun ist, falls der Schritt fehlschlägt.
-    hint: Option<String>,
+    pub hint: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -274,4 +276,357 @@ async fn storage_check(
         verdict: "S3-Konfiguration fehlt".into(),
         steps,
     }))
+}
+
+/* ==========================================================================
+ * Grossdatei-Probe für die kalte Ablage
+ * ========================================================================== */
+
+#[derive(serde::Deserialize)]
+struct KaltFrage {
+    /// Grösse der Probe in MiB (Vorgabe 64, höchstens 512).
+    mib: Option<u64>,
+}
+
+/// Das Prüfmuster: jedes Byte hängt nur von seiner Stelle in der Datei ab.
+/// So lässt sich nach einem Bereichslesen ohne Kopie der Datei prüfen, ob
+/// WIRKLICH die richtigen Bytes von der richtigen Stelle kamen – und nicht
+/// zufällig ein Anfang, der gleich aussieht.
+fn muster_byte(stelle: u64) -> u8 {
+    (stelle.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 56) as u8
+}
+
+fn muster(ab: u64, laenge: usize) -> Vec<u8> {
+    (0..laenge as u64).map(|i| muster_byte(ab + i)).collect()
+}
+
+fn schritt(name: &str, ok: bool, detail: String, hint: Option<&str>) -> Step {
+    Step {
+        name: name.into(),
+        ok,
+        detail,
+        hint: hint.map(str::to_string),
+    }
+}
+
+fn mb_pro_s(bytes: u64, dauer: std::time::Duration) -> String {
+    format!(
+        "{:.1} MB/s in {:.1} s",
+        bytes as f64 / 1_048_576.0 / dauer.as_secs_f64().max(0.001),
+        dauer.as_secs_f64()
+    )
+}
+
+/**
+ * Schreibt eine Datei von `mib` MiB in die kalte Ablage, misst sie nach,
+ * liest Bereiche aus der Mitte und vom Ende, löscht sie wieder – und stoppt
+ * jeden Schritt.
+ *
+ * # Warum das eine eigene Probe ist
+ *
+ * Der kleine Selbsttest (ein paar Byte) beweist Zugangsdaten und Berechtigung.
+ * Er beweist NICHT, dass ein Video von Gigabytes hinüberkommt: Zeitfristen,
+ * Teilstück und Umbenennen, die Grössenprüfung drüben und vor allem das
+ * Bereichslesen (Spulen im Video) zeigen sich erst an einer Datei, die gross
+ * genug ist, um mehr als ein Paket zu brauchen.
+ *
+ * # Ohne die Platte zu füllen
+ *
+ * Die Datei entsteht in einem Durchgang in 1-MiB-Stücken im Teile-Verzeichnis
+ * (`mib` MiB, höchstens 512) und wird nach der Probe sofort entfernt. Sie ist
+ * eine KOPIE des Musters, nichts Dauerhaftes – und sie wird unabhängig vom
+ * Ausgang gelöscht (auch drüben).
+ */
+pub async fn grossdatei_probe(
+    kalt: &std::sync::Arc<dyn crate::storage::Storage>,
+    teile_dir: &std::path::Path,
+    mib: u64,
+) -> Vec<Step> {
+    use crate::storage::ByteRange;
+    use futures_util::StreamExt;
+    use tokio::io::AsyncWriteExt;
+
+    let mut schritte = Vec::new();
+    let mib = mib.clamp(1, 512);
+    let laenge = mib * 1_048_576;
+    let schluessel = format!("_selbsttest/gross-{}.bin", Uuid::now_v7());
+    let quelle = teile_dir.join(format!("selbsttest-{}.bin", Uuid::now_v7().simple()));
+
+    match kalt.kapazitaet().await {
+        Some((frei, gesamt)) => schritte.push(schritt(
+            "Platz auf der Box",
+            frei >= laenge,
+            format!(
+                "{:.1} GB frei von {:.1} GB",
+                frei as f64 / 1e9,
+                gesamt as f64 / 1e9
+            ),
+            (frei < laenge).then_some("Auf der Box ist weniger Platz als die Probe braucht."),
+        )),
+        None => schritte.push(schritt(
+            "Platz auf der Box",
+            true,
+            "Die Gegenstelle meldet ihren Platz nicht (statvfs fehlt) – nicht geprüft".into(),
+            None,
+        )),
+    }
+
+    // 1. Die Quelle erzeugen.
+    let erzeugt = async {
+        tokio::fs::create_dir_all(teile_dir).await?;
+        let mut datei = tokio::fs::File::create(&quelle).await?;
+        for stueck in 0..mib {
+            datei
+                .write_all(&muster(stueck * 1_048_576, 1_048_576))
+                .await?;
+        }
+        datei.flush().await
+    }
+    .await;
+    if let Err(fehler) = erzeugt {
+        let _ = tokio::fs::remove_file(&quelle).await;
+        schritte.push(schritt(
+            "Probedatei erzeugen",
+            false,
+            fehler.to_string(),
+            Some("Im Verzeichnis der Teildateien ist kein Platz oder keine Schreibberechtigung."),
+        ));
+        return schritte;
+    }
+
+    // 2. Hinüberschreiben, im Strom und mehrteilig.
+    let start = std::time::Instant::now();
+    let geschrieben = kalt
+        .put_datei(&schluessel, &quelle, "application/octet-stream")
+        .await;
+    let _ = tokio::fs::remove_file(&quelle).await;
+    match &geschrieben {
+        Ok(()) => schritte.push(schritt(
+            "Grosse Datei schreiben",
+            true,
+            format!("{mib} MiB: {}", mb_pro_s(laenge, start.elapsed())),
+            None,
+        )),
+        Err(fehler) => {
+            schritte.push(schritt(
+                "Grosse Datei schreiben",
+                false,
+                fehler.to_string(),
+                Some("Ein Umzug grosser Videos würde genauso scheitern. Prüfe Verbindung, Platz auf der Box und die Fristen."),
+            ));
+            let _ = kalt.delete(&schluessel).await;
+            return schritte;
+        }
+    }
+
+    // 3. Nachmessen, wie der Auslagerungsdienst es tut.
+    match kalt.read(&schluessel, None).await {
+        Ok(Some(o)) if o.total_size == Some(laenge) => schritte.push(schritt(
+            "Grösse drüben",
+            true,
+            format!("{laenge} Bytes – wie geschrieben"),
+            None,
+        )),
+        Ok(Some(o)) => schritte.push(schritt(
+            "Grösse drüben",
+            false,
+            format!("{:?} statt {laenge} Bytes", o.total_size),
+            Some("Die Box hat nicht alles behalten – der Auslagerungsdienst würde solche Dateien nicht löschen, aber auch nicht verschieben."),
+        )),
+        Ok(None) => schritte.push(schritt("Grösse drüben", false, "Datei nicht gefunden".into(), None)),
+        Err(fehler) => schritte.push(schritt("Grösse drüben", false, fehler.to_string(), None)),
+    }
+
+    // 4. Bereiche lesen – Spulen im Video. Mitte (ungerade Stelle, über eine
+    //    Blockgrenze) und Ende; dazu ein Vollabruf für die Geschwindigkeit.
+    let proben = [
+        ("Mitte", laenge / 2 + 17, 300_000u64),
+        ("Ende", laenge - 4096, 4096u64),
+        ("Anfang", 0, 4096u64),
+    ];
+    for (name, ab, wieviel) in proben {
+        let t = std::time::Instant::now();
+        let ergebnis = async {
+            let Some(o) = kalt
+                .read(
+                    &schluessel,
+                    Some(ByteRange {
+                        start: ab,
+                        end: Some(ab + wieviel - 1),
+                    }),
+                )
+                .await?
+            else {
+                return Ok::<_, crate::error::AppError>(None);
+            };
+            let mut roh = Vec::new();
+            let mut strom = o.stream;
+            while let Some(teil) = strom.next().await {
+                roh.extend_from_slice(&teil?);
+            }
+            Ok(Some(roh))
+        }
+        .await;
+        schritte.push(match ergebnis {
+            Ok(Some(roh)) if roh == muster(ab, wieviel as usize) => schritt(
+                &format!("Bereich lesen ({name})"),
+                true,
+                format!(
+                    "{wieviel} Bytes ab {ab} stimmen, {} ms",
+                    t.elapsed().as_millis()
+                ),
+                None,
+            ),
+            Ok(Some(roh)) => schritte_falsch(name, roh.len(), wieviel),
+            Ok(None) => schritt(
+                &format!("Bereich lesen ({name})"),
+                false,
+                "Datei nicht gefunden".into(),
+                None,
+            ),
+            Err(fehler) => schritt(
+                &format!("Bereich lesen ({name})"),
+                false,
+                fehler.to_string(),
+                None,
+            ),
+        });
+    }
+
+    let t = std::time::Instant::now();
+    let voll = async {
+        let Some(o) = kalt.read(&schluessel, None).await? else {
+            return Ok::<_, crate::error::AppError>(None);
+        };
+        let mut strom = o.stream;
+        let mut n = 0u64;
+        let mut stelle = 0u64;
+        let mut stimmt = true;
+        while let Some(teil) = strom.next().await {
+            let teil = teil?;
+            // Stichprobe je Paket genügt: erstes und letztes Byte.
+            if let (Some(a), Some(z)) = (teil.first(), teil.last()) {
+                stimmt &=
+                    *a == muster_byte(stelle) && *z == muster_byte(stelle + teil.len() as u64 - 1);
+            }
+            stelle += teil.len() as u64;
+            n += teil.len() as u64;
+        }
+        Ok(Some((n, stimmt)))
+    }
+    .await;
+    schritte.push(match voll {
+        Ok(Some((n, true))) if n == laenge => schritt(
+            "Ganz lesen",
+            true,
+            format!("{n} Bytes: {}", mb_pro_s(n, t.elapsed())),
+            None,
+        ),
+        Ok(Some((n, stimmt))) => schritt(
+            "Ganz lesen",
+            false,
+            format!("{n} von {laenge} Bytes, Inhalt stimmt: {stimmt}"),
+            None,
+        ),
+        Ok(None) => schritt("Ganz lesen", false, "Datei nicht gefunden".into(), None),
+        Err(fehler) => schritt("Ganz lesen", false, fehler.to_string(), None),
+    });
+
+    // 5. Löschen – und prüfen, dass wirklich nichts liegen bleibt.
+    let weg = kalt.delete(&schluessel).await;
+    let danach = kalt.read(&schluessel, None).await;
+    schritte.push(match (weg, danach) {
+        (Ok(()), Ok(None)) => schritt("Löschen", true, "Datei und Teilstück sind weg".into(), None),
+        (Err(fehler), _) => schritt(
+            "Löschen",
+            false,
+            fehler.to_string(),
+            Some("Ein gelöschtes Video bliebe auf der Box liegen."),
+        ),
+        (Ok(()), _) => schritt(
+            "Löschen",
+            false,
+            "Die Datei ist nach dem Löschen noch lesbar".into(),
+            None,
+        ),
+    });
+    schritte
+}
+
+fn schritte_falsch(name: &str, bekommen: usize, wieviel: u64) -> Step {
+    schritt(
+        &format!("Bereich lesen ({name})"),
+        false,
+        format!("{bekommen} Bytes statt {wieviel}, oder andere Bytes als erwartet"),
+        Some("Bereichslesen liefert falsche Daten – Vorspulen im Video würde Müll zeigen."),
+    )
+}
+
+async fn kalt_check(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Query(frage): Query<KaltFrage>,
+) -> AppResult<Json<CheckResult>> {
+    let origin = state.config.public_app_url.clone();
+    let Some(kalt) = state.speicher.kalt.clone() else {
+        return Ok(Json(CheckResult {
+            driver: "keine".into(),
+            endpoint: None,
+            bucket: None,
+            path_style: None,
+            browser_origin: origin,
+            steps: vec![schritt(
+                "Kalte Ablage",
+                false,
+                "KALT_TREIBER steht auf aus".into(),
+                Some("Setze KALT_TREIBER=sftp (oder lokal zum Ausprobieren)."),
+            )],
+            verdict: "Keine kalte Ablage eingerichtet".into(),
+        }));
+    };
+    let steps = grossdatei_probe(
+        &kalt,
+        std::path::Path::new(&state.config.upload_teile_dir),
+        frage.mib.unwrap_or(64),
+    )
+    .await;
+    let alles = steps.iter().all(|s| s.ok);
+    Ok(Json(CheckResult {
+        driver: kalt.kind().to_string(),
+        endpoint: state.config.kalt_sftp.as_ref().map(|s| s.wirt.clone()),
+        bucket: None,
+        path_style: None,
+        browser_origin: origin,
+        verdict: if alles {
+            "Grosse Dateien gehen hin und zurück – Umzug und Spulen sollten funktionieren.".into()
+        } else {
+            "Es hakt. Die Hinweise nennen die Ursache.".into()
+        },
+        steps,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn die_grossdatei_probe_laeuft_gegen_die_lokale_ablage_durch() {
+        let wurzel = std::env::temp_dir().join(format!("kaltprobe-{}", Uuid::now_v7().simple()));
+        let kalt: std::sync::Arc<dyn crate::storage::Storage> = std::sync::Arc::new(
+            crate::storage::local::LocalStorage::new(wurzel.join("kalt").to_str().unwrap()),
+        );
+        let schritte = grossdatei_probe(&kalt, &wurzel.join("teile"), 3).await;
+        let _ = std::fs::remove_dir_all(&wurzel);
+        for s in &schritte {
+            assert!(s.ok, "{}: {}", s.name, s.detail);
+        }
+        assert!(schritte.iter().any(|s| s.name == "Löschen"));
+        assert!(schritte.len() >= 7, "{} Schritte", schritte.len());
+    }
+
+    #[test]
+    fn das_muster_haengt_nur_von_der_stelle_ab() {
+        assert_eq!(muster(1000, 16), muster(0, 1016)[1000..].to_vec());
+    }
 }

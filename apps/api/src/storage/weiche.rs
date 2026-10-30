@@ -83,17 +83,23 @@ impl Weiche {
                 .unwrap_or(None);
         if let Some((ablage,)) = aus_anhang {
             /*
-             * `wandert` gilt als WARM.
+             * `wandert` wird GELESEN wie warm – aber GELÖSCHT wie unklar.
              *
              * Das ist der Zustand während des Umzugs: Die Datei ist vielleicht
              * schon drüben, aber die lokale Fassung steht noch. Wer sie in
              * diesem Fenster abruft, soll die schnelle bekommen – und vor
              * allem soll er überhaupt etwas bekommen.
+             *
+             * Beim Löschen dagegen darf die ferne Fassung (bei einem Video von
+             * Gigabytes: das halbe Teilstück) nicht übersehen werden. Wird die
+             * Nachricht mitten im Umzug gelöscht, steht in der Müllliste
+             * `wandert`; als „warm" behandelt, bliebe das Objekt auf der Box
+             * für immer liegen.
              */
-            return if ablage == "fern" {
-                Lage::Kalt
-            } else {
-                Lage::Warm
+            return match ablage.as_str() {
+                "fern" => Lage::Kalt,
+                "wandert" => Lage::Wandert,
+                _ => Lage::Warm,
             };
         }
         let aus_muell: Option<(String,)> =
@@ -104,6 +110,7 @@ impl Weiche {
                 .unwrap_or(None);
         match aus_muell {
             Some((ablage,)) if ablage == "fern" => Lage::Kalt,
+            Some((ablage,)) if ablage == "wandert" => Lage::Wandert,
             Some(_) => Lage::Warm,
             /*
              * Weder Anhang noch Müllzeile: ein Miniaturbild, der Prüfschlüssel
@@ -130,6 +137,8 @@ impl Weiche {
 enum Lage {
     Warm,
     Kalt,
+    /// Mitten im Umzug: lesen wie warm, löschen in beiden.
+    Wandert,
     Unbekannt,
 }
 
@@ -219,6 +228,9 @@ impl Storage for Weiche {
      *
      * **Warm eingetragen**: nur warm. Dort lag sie, dort liegt sie.
      *
+     * **Wandert**: beide. Das Hinüberschreiben läuft oder ist eben
+     * gescheitert; ein Teil davon kann drüben liegen.
+     *
      * **Unbekannt**: beide. Das ist der Fall, in dem niemand es weiss – und
      * eine Datei, die jemand gelöscht hat, muss weg sein, nicht „an einer von
      * zwei Stellen weg".
@@ -233,5 +245,9 @@ impl Storage for Weiche {
         }
         let kalt = self.kalt.delete(key).await;
         warm.and(kalt)
+    }
+
+    async fn kapazitaet(&self) -> Option<(u64, u64)> {
+        self.warm.kapazitaet().await
     }
 }

@@ -502,6 +502,8 @@ pub struct Bilanz {
     pub bewegt: usize,
     pub bytes: i64,
     pub gescheitert: usize,
+    /// Der Durchgang wurde abgebrochen, weil die kalte Ablage nicht antwortet.
+    pub kalt_gestoert: bool,
 }
 
 /// Wie viel app-eigene Daten gerade auf dem Server liegen.
@@ -589,6 +591,106 @@ async fn kandidaten(pool: &PgPool, erlaubt: Erlaubt) -> Vec<Kandidat> {
 }
 
 /**
+ * Ein Umzug, der nicht zustande kam.
+ *
+ * `kalt` unterscheidet „die Box macht Ärger" (Verbindung, Zeitüberschreitung,
+ * voll, falsche Grösse drüben) von „diese eine Datei ist das Problem" (liegt
+ * lokal gar nicht da). Nur das Erste soll den Durchgang abbrechen und den
+ * Dienst eine Weile ruhen lassen: Zwanzig Dateien nacheinander gegen eine
+ * Box laufen zu lassen, die nicht antwortet, hiesse zwanzigmal die Frist
+ * abzuwarten – bei dreissig Sekunden zehn Minuten Nichtstun.
+ */
+struct Fehlschlag {
+    text: String,
+    kalt: bool,
+}
+
+impl Fehlschlag {
+    fn lokal(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            kalt: false,
+        }
+    }
+    fn kalt(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            kalt: true,
+        }
+    }
+}
+
+/// Ob die kalte Ablage nach dem letzten Durchgang als erreichbar gilt.
+/// Beginnt als `true` – wer nichts weiss, nimmt das Beste an.
+static KALT_GEHT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Weckruf an den Dienst: Platz wird gebraucht, nicht erst in einer Viertelstunde.
+static WECKEN: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Der Dienst soll sofort einen Durchgang machen (er rechnet den Bedarf selbst aus).
+pub fn wecken() {
+    WECKEN.notify_one();
+}
+
+/// Den Erreichbarkeits-Vermerk von aussen setzen (Tests, Betriebshilfe).
+pub fn kalt_erreichbar_setzen(geht: bool) {
+    KALT_GEHT.store(geht, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Hat die kalte Ablage zuletzt geantwortet? (`false` nach einem gescheiterten
+/// Durchgang, bis ein späterer wieder durchkommt.)
+pub fn kalt_erreichbar() -> bool {
+    KALT_GEHT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Wie viel sich im Notfall auslagern liesse: alle fertigen, warmen Originale.
+/// (Dieselbe Summe wie der Füllstand – ohne Rücksicht auf die Klassen; die
+/// bestimmen nur die REIHENFOLGE, nicht ob eine volle Platte Uploads abweist.)
+pub async fn auslagerbar(pool: &PgPool) -> i64 {
+    belegt(pool).await
+}
+
+/// Wie viel Luft über die Reserve hinaus frei sein soll, wenn Uploads laufen:
+/// Platz für noch einen grossen Upload, ohne dass der erst einen Umzug abwarten muss.
+const PLATZ_PUFFER: i64 = 8 * 1024 * 1024 * 1024;
+
+/**
+ * Wie viele Bytes die warme Platte JETZT zusätzlich frei haben müsste.
+ *
+ * Das ist die zweite, davon unabhängige Schwelle: `belegt` zählt nur fertige
+ * Anhänge, aber auf derselben Platte liegen die Teildateien offener Uploads
+ * (bis 4 GiB je Datei, mehrere gleichzeitig), die Datenbank und Sicherungen.
+ * Bei 256 GB und 100 GB Schwelle bleiben 156 GB für all das – drei, vier
+ * Gruppen mit je mehreren Videos im Aufwärtsstrom reichen, und die Platte ist
+ * voll, OHNE dass `belegt` je an die Schwelle kam.
+ *
+ * `ziel = Reserve + noch ausstehende Upload-Bytes + Puffer`; was an freiem
+ * Platz darunter liegt, ist der Bedarf. Nur bei lokaler warmer Ablage – ein
+ * Objektspeicher hat dieses Problem nicht.
+ */
+pub async fn platzbedarf(pool: &PgPool, config: &Config) -> i64 {
+    if config.storage_driver != crate::config::StorageDriver::Local {
+        return 0;
+    }
+    let Some(frei) =
+        crate::modules::stuecke::frei_auf_platte(std::path::Path::new(&config.upload_teile_dir))
+    else {
+        return 0;
+    };
+    let ausstehend = crate::modules::stuecke::ausstehende_bytes(pool).await;
+    let ziel = config
+        .upload_platte_reserve_bytes
+        .saturating_add(ausstehend)
+        .saturating_add(PLATZ_PUFFER);
+    ziel.saturating_sub(frei as i64).max(0)
+}
+
+/// Mehr als das wird nicht in den Arbeitsspeicher geladen, wenn die warme
+/// Ablage keinen lokalen Pfad hat (Objektspeicher). Darüber lieber eine klare
+/// Absage im Protokoll als ein Prozess, den das Betriebssystem beendet.
+const SPEICHER_WEG_MAX: i64 = 512 * 1024 * 1024;
+
+/**
  * Eine Datei hinüberschaffen.
  *
  * # Die Reihenfolge ist der ganze Trick
@@ -608,17 +710,26 @@ async fn kandidaten(pool: &PgPool, erlaubt: Erlaubt) -> Vec<Kandidat> {
  * # Im Strom, wo es geht
  *
  * Liegt die warme Fassung auf der Platte dieser Maschine (der Normalfall),
- * geht sie mit `Storage::put_datei` im Strom hinüber – seit Uploads in Stücken
- * Gigabytes gross sein dürfen, wäre das Einlesen ein Speicherfresser. Nur ein
+ * geht sie mit `Storage::put_datei` im Strom hinüber – ohne zweite lokale
+ * Kopie und ohne die Datei je ganz im Arbeitsspeicher zu haben. Nur ein
  * warmer Speicher ohne lokalen Pfad (Objektspeicher als warme Ablage) nimmt
- * weiter den alten Weg über den Arbeitsspeicher.
+ * den Weg über den Arbeitsspeicher, und der ist auf `SPEICHER_WEG_MAX`
+ * begrenzt.
+ *
+ * # Wird die Datei während des Umzugs gelöscht?
+ *
+ * Dann ist die Zeile weg, wenn der Umzug fertig wird, und die Müllliste hat
+ * ihren Schlüssel schon (als `wandert`) abgearbeitet – BEVOR das Ferne
+ * existierte. Ohne die Prüfung in `abschliessen` bliebe das Objekt auf der
+ * Box für immer liegen.
  */
 async fn umziehen(
     pool: &PgPool,
     warm: &Arc<dyn Storage>,
     kalt: &Arc<dyn Storage>,
     id: uuid::Uuid,
-) -> Result<i64, String> {
+) -> Result<i64, Fehlschlag> {
+    let db = |f: sqlx::Error| Fehlschlag::lokal(f.to_string());
     let zeile: Option<(String, i64, String)> = sqlx::query_as(
         "select storage_key, size, mime from attachments
           where id = $1 and ablage = 'lokal' and status = 'ready'",
@@ -626,7 +737,7 @@ async fn umziehen(
     .bind(id)
     .fetch_optional(pool)
     .await
-    .map_err(|f| f.to_string())?;
+    .map_err(db)?;
     let Some((schluessel, groesse, mime)) = zeile else {
         // Zwischen Auswahl und Umzug gelöscht oder schon gewandert. Kein
         // Fehler, nur nichts zu tun.
@@ -649,7 +760,7 @@ async fn umziehen(
     .bind(&schluessel)
     .execute(pool)
     .await
-    .map_err(|f| f.to_string())?;
+    .map_err(db)?;
 
     let zurueck = || async {
         let _ = sqlx::query(
@@ -663,25 +774,37 @@ async fn umziehen(
     if let Some(pfad) = warm.lokaler_pfad(&schluessel) {
         if tokio::fs::metadata(&pfad).await.is_err() {
             zurueck().await;
-            return Err(format!("{schluessel}: liegt gar nicht da"));
+            return Err(Fehlschlag::lokal(format!(
+                "{schluessel}: liegt gar nicht da"
+            )));
         }
         if let Err(fehler) = kalt.put_datei(&schluessel, &pfad, &mime).await {
             zurueck().await;
-            return Err(format!("{schluessel}: Schreiben gescheitert – {fehler}"));
+            return Err(Fehlschlag::kalt(format!(
+                "{schluessel}: Schreiben gescheitert – {fehler}"
+            )));
         }
         let erwartet = tokio::fs::metadata(&pfad).await.map(|m| m.len()).ok();
         return abschliessen(pool, warm, kalt, &schluessel, erwartet, groesse, zurueck).await;
     }
 
+    if groesse > SPEICHER_WEG_MAX {
+        zurueck().await;
+        return Err(Fehlschlag::lokal(format!(
+            "{schluessel}: {groesse} Bytes sind zu gross für den Umzug über den Arbeitsspeicher \
+             (die warme Ablage hat keinen lokalen Pfad)"
+        )));
+    }
     let Some(objekt) = warm
         .read(&schluessel, None)
         .await
-        .map_err(|f| f.to_string())?
+        .map_err(|f| Fehlschlag::lokal(f.to_string()))?
     else {
         zurueck().await;
-        return Err(format!("{schluessel}: liegt gar nicht da"));
+        return Err(Fehlschlag::lokal(format!(
+            "{schluessel}: liegt gar nicht da"
+        )));
     };
-
     let mut bytes = Vec::with_capacity(groesse.max(0) as usize);
     let mut strom = objekt.stream;
     while let Some(stueck) = strom.next().await {
@@ -689,18 +812,21 @@ async fn umziehen(
             Ok(daten) => bytes.extend_from_slice(&daten),
             Err(fehler) => {
                 zurueck().await;
-                return Err(format!("{schluessel}: Lesen abgebrochen – {fehler}"));
+                return Err(Fehlschlag::lokal(format!(
+                    "{schluessel}: Lesen abgebrochen – {fehler}"
+                )));
             }
         }
     }
-
     let erwartet = Some(bytes.len() as u64);
     if let Err(fehler) = kalt
         .put(&schluessel, axum::body::Bytes::from(bytes), &mime)
         .await
     {
         zurueck().await;
-        return Err(format!("{schluessel}: Schreiben gescheitert – {fehler}"));
+        return Err(Fehlschlag::kalt(format!(
+            "{schluessel}: Schreiben gescheitert – {fehler}"
+        )));
     }
     abschliessen(pool, warm, kalt, &schluessel, erwartet, groesse, zurueck).await
 }
@@ -714,7 +840,7 @@ async fn abschliessen<F, Fut>(
     erwartet: Option<u64>,
     groesse: i64,
     zurueck: F,
-) -> Result<i64, String>
+) -> Result<i64, Fehlschlag>
 where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = ()>,
@@ -726,29 +852,48 @@ where
      * ist weg – die kalte Fassung ist unvollständig, die warme gelöscht.
      * Gemessen wird, was wirklich dort liegt, und nicht, was wir glauben
      * geschrieben zu haben.
+     *
+     * Verglichen wird mit der Grösse der Bytes, die wirklich über die Leitung
+     * gingen – bei eingeschaltetem Tresor also dem GEHEIMTEXT (Kopf und
+     * Prüfsummen je Block machen ihn grösser als `attachments.size`).
      */
-    let drueben = kalt
-        .read(schluessel, None)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|o| o.total_size);
+    let drueben = match kalt.read(schluessel, None).await {
+        Ok(objekt) => objekt.and_then(|o| o.total_size),
+        Err(fehler) => {
+            zurueck().await;
+            return Err(Fehlschlag::kalt(format!(
+                "{schluessel}: Nachmessen drüben gescheitert – {fehler}"
+            )));
+        }
+    };
     if erwartet.is_none() || drueben != erwartet {
         zurueck().await;
-        return Err(format!(
+        return Err(Fehlschlag::kalt(format!(
             "{schluessel}: drüben liegen {drueben:?} statt {erwartet:?} Bytes"
-        ));
+        )));
     }
-
-    sqlx::query(
+    let geschrieben = sqlx::query(
         "update attachments set ablage = 'fern', ausgelagert_at = now()
           where storage_key = $1",
     )
     .bind(schluessel)
     .execute(pool)
     .await
-    .map_err(|f| f.to_string())?;
-
+    .map_err(|f| Fehlschlag::lokal(f.to_string()))?
+    .rows_affected();
+    if geschrieben == 0 {
+        /*
+         * Die Zeile gibt es nicht mehr: Die Nachricht (oder das Konto) wurde
+         * gelöscht, während die Datei unterwegs war. Die Müllliste hat ihren
+         * Schlüssel längst bearbeitet – vor dem Ankommen drüben. Das Ferne
+         * hier selbst entfernen; die lokale Fassung ebenfalls (falls die
+         * Müllliste sie noch nicht erwischt hat).
+         */
+        tracing::info!(%schluessel, "Während des Umzugs gelöscht – ferne Fassung wird entfernt");
+        let _ = kalt.delete(schluessel).await;
+        let _ = warm.delete(schluessel).await;
+        return Ok(0);
+    }
     /*
      * Erst jetzt die lokale Fassung. Scheitert das, ist es kein Drama: Die
      * Datei ist erreichbar, sie belegt nur weiter Platz. Der nächste
@@ -761,6 +906,10 @@ where
     Ok(groesse)
 }
 
+/// Wie viele Umzüge in Folge an der Box scheitern dürfen, bevor der Durchgang
+/// aufgibt (und der Dienst eine Weile ruht).
+const KALT_FEHLER_MAX: usize = 2;
+
 /// Ein Durchgang.
 pub async fn durchgang(
     pool: &PgPool,
@@ -769,26 +918,87 @@ pub async fn durchgang(
     grenze: i64,
     grenze_hoch: i64,
 ) -> Bilanz {
+    durchgang_mit_bedarf(pool, warm, kalt, grenze, grenze_hoch, 0).await
+}
+
+/**
+ * Ein Durchgang, der zusätzlich `bedarf` Bytes freimachen soll – unabhängig
+ * vom Füllstand der Anhänge (siehe [`platzbedarf`]).
+ *
+ * Der Bedarf überstimmt die Klassen NICHT bei der Reihenfolge (niedrig vor
+ * normal vor hoch, innerhalb nach Gewicht), wohl aber bei der Erlaubnis: Eine
+ * physisch volle Platte nimmt keine Uploads mehr an, egal wie wichtig die
+ * Dateien darauf sind.
+ */
+pub async fn durchgang_mit_bedarf(
+    pool: &PgPool,
+    warm: &Arc<dyn Storage>,
+    kalt: &Arc<dyn Storage>,
+    grenze: i64,
+    grenze_hoch: i64,
+    bedarf: i64,
+) -> Bilanz {
     let belegt_jetzt = belegt(pool).await;
-    let erlaubt = erlaubt_bei_mit(belegt_jetzt, grenze, grenze_hoch);
+    let erlaubt = if bedarf > 0 {
+        Erlaubt::Alles
+    } else {
+        erlaubt_bei_mit(belegt_jetzt, grenze, grenze_hoch)
+    };
     let liste = kandidaten(pool, erlaubt).await;
     if liste.is_empty() {
         return Bilanz::default();
     }
     let ziel = (grenze - ABSTAND).max(0);
-    let gewaehlt = auswahl_mit(&liste, belegt_jetzt, ziel, Utc::now(), grenze, grenze_hoch);
+    let jetzt = Utc::now();
+    let mut gewaehlt = auswahl_mit(&liste, belegt_jetzt, ziel, jetzt, grenze, grenze_hoch);
+    if bedarf > 0 {
+        // Der übliche Teil zählt schon mit; was darüber hinaus fehlt, kommt in
+        // der Reihenfolge von „Alles" dazu.
+        let schon: i64 = gewaehlt.iter().map(|k| k.groesse).sum();
+        if schon < bedarf {
+            let bereits: std::collections::HashSet<_> = gewaehlt.iter().map(|k| k.id).collect();
+            let uebrig: Vec<Kandidat> = liste
+                .iter()
+                .filter(|k| !bereits.contains(&k.id))
+                .cloned()
+                .collect();
+            let mut rest = bedarf - schon;
+            for k in reihenfolge_mit(&uebrig, grenze_hoch, jetzt, grenze, grenze_hoch) {
+                if rest <= 0 {
+                    break;
+                }
+                rest -= k.groesse;
+                gewaehlt.push(k);
+            }
+        }
+    }
 
     let mut bilanz = Bilanz::default();
+    let mut kalt_fehler_in_folge = 0usize;
     for kandidat in gewaehlt.into_iter().take(STAPEL) {
         match umziehen(pool, warm, kalt, kandidat.id).await {
             Ok(0) => {}
             Ok(bytes) => {
                 bilanz.bewegt += 1;
                 bilanz.bytes += bytes;
+                kalt_fehler_in_folge = 0;
+                KALT_GEHT.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             Err(fehler) => {
                 bilanz.gescheitert += 1;
-                tracing::warn!(%fehler, "Auslagern gescheitert");
+                tracing::warn!(fehler = %fehler.text, "Auslagern gescheitert");
+                if fehler.kalt {
+                    kalt_fehler_in_folge += 1;
+                    if kalt_fehler_in_folge >= KALT_FEHLER_MAX {
+                        KALT_GEHT.store(false, std::sync::atomic::Ordering::Relaxed);
+                        bilanz.kalt_gestoert = true;
+                        tracing::error!(
+                            "Die kalte Ablage antwortet nicht – der Durchgang wird abgebrochen, \
+                             nichts geht verloren (die Dateien liegen weiter warm)"
+                        );
+                        break;
+                    }
+                }
             }
         }
     }
@@ -802,6 +1012,10 @@ pub async fn durchgang(
     }
     bilanz
 }
+
+/// Wie lange ein liegengebliebenes Teilstück auf der Box bleiben darf, bevor
+/// es als verwaist gilt: länger, als ein Umzug mit Wiederholungen dauert.
+const TEILRESTE_ALTER: std::time::Duration = std::time::Duration::from_secs(3 * 24 * 3600);
 
 /// Den Dienst starten. Gibt zurück, wie man ihn beendet.
 pub fn starten(
@@ -822,9 +1036,54 @@ pub fn starten(
          * ein Video über SFTP schiebt, macht den Start langsam.
          */
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        let mut ruhe_s = 0u64;
+        let mut letzte_aufraeumung =
+            std::time::Instant::now() - std::time::Duration::from_secs(86_400);
         loop {
-            durchgang(&pool, &speicher.warm, &kalt, grenze, grenze_hoch).await;
-            tokio::time::sleep(std::time::Duration::from_secs(TAKT_S)).await;
+            let bedarf = platzbedarf(&pool, &config).await;
+            let bilanz =
+                durchgang_mit_bedarf(&pool, &speicher.warm, &kalt, grenze, grenze_hoch, bedarf)
+                    .await;
+            /*
+             * Ruhe, wenn die Box nicht antwortet: 1, 2, 4 … bis 60 Minuten
+             * statt alle fünfzehn Minuten neu gegen eine tote Gegenstelle zu
+             * rennen (und dabei jedes Mal die Frist abzuwarten). Ein Weckruf
+             * (Platz wird knapp) beendet die Ruhe NICHT vorzeitig – er würde
+             * sonst genau das auslösen, was hier verhindert wird.
+             */
+            let warten = if bilanz.kalt_gestoert {
+                ruhe_s = if ruhe_s == 0 {
+                    60
+                } else {
+                    (ruhe_s * 2).min(3600)
+                };
+                ruhe_s
+            } else {
+                ruhe_s = 0;
+                TAKT_S
+            };
+            if letzte_aufraeumung.elapsed() > std::time::Duration::from_secs(86_400)
+                && !bilanz.kalt_gestoert
+            {
+                letzte_aufraeumung = std::time::Instant::now();
+                match kalt.teilreste_raeumen(TEILRESTE_ALTER).await {
+                    Ok(0) => {}
+                    Ok(n) => {
+                        tracing::info!(anzahl = n, "verwaiste Teilstücke auf der Box weggeräumt")
+                    }
+                    Err(fehler) => {
+                        tracing::warn!(%fehler, "Teilstücke auf der Box nicht aufräumbar")
+                    }
+                }
+            }
+            if bilanz.kalt_gestoert {
+                tokio::time::sleep(std::time::Duration::from_secs(warten)).await;
+            } else {
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(warten)) => {}
+                    _ = WECKEN.notified() => {}
+                }
+            }
         }
     })
 }
