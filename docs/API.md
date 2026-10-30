@@ -985,6 +985,8 @@ Der Verwaltungsbereich ist aus, solange `ADMIN_PASSWORD` fehlt oder kürzer als
 | GET     | `/admin/members`        | –                                 | `200` `Member[]`                        |
 | DELETE  | `/admin/members/{id}`   | –                                 | `200` `{ removed: true }`               |
 | GET     | `/admin/storage-check`  | –                                 | `200` `{ driver, …, steps[], verdict }` |
+| GET     | `/admin/storage-check/kalt?mib=64` | –                      | `200` wie oben – Grossdatei-Probe der Storage Box (Zeiten, MB/s, Verbindungen) |
+| GET     | `/admin/storage-check/konsistenz?stichprobe=3&maxMib=256` | – | `200` wie oben, dazu `bericht{…}` – Datenbank gegen Box (fehlend, falsche Grösse, verwaist, Teilreste, SHA-256-Stichprobe) |
 
 `available` sagt, ob überhaupt ein Passwort hinterlegt ist; `isAdmin`, ob
 **dieses** Konto Verwaltungsrechte hat. Der Einladungscode wird serverseitig

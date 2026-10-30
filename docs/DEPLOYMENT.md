@@ -155,32 +155,6 @@ wertloser Wert.
 | `UPLOAD_TEILE_DIR`     | `<LOCAL_STORAGE_DIR>/.teile` | Halbfertige Uploads. Bei `local` auf demselben Volume lassen (Abschluss = `rename`). Bei `r2`/`s3` sonst das Temp-Verzeichnis – im Container ist `/tmp` ein 64-MB-tmpfs, dort also ein Volume angeben. |
 | `UPLOAD_PLATTE_RESERVE_BYTES` | `1073741824` | So viel bleibt nach allen offenen Uploads mindestens frei; sonst `507` statt voller Platte.               |
 | `UPLOAD_SITZUNG_STUNDEN` | `24`            | Nach so vielen Stunden ohne Bewegung wird ein unfertiger Upload weggeräumt.                                 |
-
-#### Grosse Dateien (bis 4 GiB)
-
-Dateien und Videos über 32 MiB gehen in Stücken zu 8 MiB hoch
-(`/media/stuecke`, siehe [API.md](API.md#hochladen-in-stücken--mediastuecke)).
-Für den Betrieb heisst das:
-
-- **Kein Proxy-Limit nötig.** Jede Anfrage trägt höchstens ein Stück; Caddy hat
-  von sich aus weder eine Körpergrenze noch eine Lesefrist. Wer einen anderen
-  Proxy davor hat (nginx: `client_max_body_size` ≥ 10m, `proxy_request_buffering
-  off`, `proxy_buffering off` für Downloads), muss das selbst einstellen. Der
-  alte Weg in einer Anfrage braucht weiter bis 210 MB.
-- **Platz.** Unfertige Uploads liegen als dünn besetzte Dateien in
-  `UPLOAD_TEILE_DIR` und wachsen mit jedem Stück. Mit `MEDIA_KEY` liegt eine
-  Datei beim Abschluss kurz zweimal da (Klartext und Geheimtext); die Prüfung
-  des freien Platzes rechnet das ein. `deploy/vps/backup.sh` lässt `.teile`
-  aus.
-- **Speicher.** Der Server hält nie eine ganze Datei im Arbeitsspeicher –
-  gemessen wuchs die Spitze bei 512 MiB um 10 MiB. Mit `r2`/`s3` geht die
-  fertige Datei als Multipart-Upload (16-MiB-Teile) in den Eimer; grosse
-  Uploads laufen dann also einmal durch den Server statt direkt in den Eimer.
-- **Im Hintergrund lädt kein Telefon.** Die App sagt das bei grossen Dateien
-  offen: Sie muss im Vordergrund bleiben. Bricht es ab, geht es beim nächsten
-  Öffnen an derselben Stelle weiter; nach einem Neustart der App über 200 MB
-  muss die Datei einmal neu gewählt werden (sie liegt bewusst nicht in
-  IndexedDB – das wäre eine zweite Kopie auf dem Telefon).
 | `MEDIA_KEY`            | leer              | 32 Bytes base64. Gesetzt → alles Neue wird verschlüsselt abgelegt (`initiative-api --generate-media-key`). |
 | `MEDIA_AUTH`           | `true`            | Medienrouten verlangen eine angemeldete Person (Medien-Keks). `false` gibt jede Datei heraus, deren Kennung man kennt. |
 | `KALT_TREIBER`         | `aus`             | `aus` \| `sftp` \| `lokal`. Zweite, grössere, langsamere Ablage für Anhänge. Siehe unten.                    |
@@ -204,6 +178,52 @@ Für den Betrieb heisst das:
 > wie sie sind, und werden weiter unverschlüsselt gelesen. Geht der Schlüssel
 > verloren, sind alle damit abgelegten Dateien verloren – er gehört in dieselbe
 > Sicherung wie `JWT_SECRET`, und keinesfalls ins Repository.
+
+#### Grosse Dateien (bis 4 GiB)
+
+Dateien und Videos über 32 MiB gehen in Stücken zu 8 MiB hoch
+(`/media/stuecke`, siehe [API.md](API.md#hochladen-in-stücken--mediastuecke)).
+Für den Betrieb heisst das:
+
+- **Kein Proxy-Limit nötig.** Jede Anfrage trägt höchstens ein Stück; Caddy hat
+  von sich aus weder eine Körpergrenze noch eine Lesefrist. Wer einen anderen
+  Proxy davor hat (nginx: `client_max_body_size` ≥ 10m, `proxy_request_buffering
+  off`, `proxy_buffering off` für Downloads), muss das selbst einstellen. Der
+  alte Weg in einer Anfrage braucht weiter bis 210 MB.
+- **Platz.** Unfertige Uploads liegen als dünn besetzte Dateien in
+  `UPLOAD_TEILE_DIR` und wachsen mit jedem Stück. Mit `MEDIA_KEY` liegt eine
+  Datei beim Abschluss kurz zweimal da (Klartext und Geheimtext); die Prüfung
+  des freien Platzes rechnet das ein. `deploy/vps/backup.sh` lässt `.teile`
+  aus.
+- **Speicher.** Der Server hält nie eine ganze Datei im Arbeitsspeicher –
+  gemessen wuchs die Spitze bei 512 MiB um 10 MiB. Mit `r2`/`s3` geht die
+  fertige Datei als Multipart-Upload (16-MiB-Teile) in den Eimer; grosse
+  Uploads laufen dann also einmal durch den Server statt direkt in den Eimer.
+- **Warum keine signierten Teil-Uploads direkt in S3/R2.** Bei der Zielkonfiguration
+  (warm = lokale Platte, kalt = Storage Box per SFTP) wäre das sinnlos: Die Datei
+  muss ohnehin erst warm landen, und der Auslagerungsdienst zieht sie später
+  um. Auch bei S3 als warmer Ablage bleibt der Upload durch den Server – nur dort
+  können `MEDIA_KEY` (Verschlüsselung), Inhaltsprüfung, Stück-Prüfsummen, Platz-
+  und Kontogrenzen greifen, und ein lokaler S3-Ersatz zum Testen fehlt; danach
+  zieht der Auslagerungsdienst die Datei wie gewohnt nach kalt.
+- **Prüfsummen.** Jedes Stück geht mit seiner SHA-256 (`X-Stueck-Sha256`, per
+  WebCrypto im Browser) hoch; der Server prüft sie streamend vor dem Buchen
+  (`422` bei Abweichung, die App sendet das Stück noch einmal). Beim Abschluss
+  rechnet der Server die Gesamt-SHA-256, legt sie in `attachments.sha256` ab
+  und liefert sie in der Antwort mit. Sie dient dem Konsistenzcheck der Box
+  (`/admin/storage-check/konsistenz`) und – ohne `MEDIA_KEY`, bis 256 MiB – dem
+  Gegenlesen beim Auslagern. Bei grösseren Dateien und mit `MEDIA_KEY` prüft der
+  Umzug nur die Grösse drüben: Gegenlesen hiesse, ein 4-GiB-Video noch einmal
+  über die einzige Bulk-Verbindung zu holen, und SSH sichert die Übertragung
+  schon selbst; der Tresor prüft ohnehin jeden Block beim Lesen.
+- **Grenzen.** `GET /media/grenzen` nennt der App die wirksamen Grenzen
+  (`UPLOAD_MAX_BYTES`, Stückgrösse, Grenzen des Wegs in einer Anfrage). Die App
+  holt sie einmal je Sitzung; ohne Antwort gelten die Konstanten.
+- **Im Hintergrund lädt kein Telefon.** Die App sagt das bei grossen Dateien
+  offen: Sie muss im Vordergrund bleiben. Bricht es ab, geht es beim nächsten
+  Öffnen an derselben Stelle weiter; nach einem Neustart der App über 200 MB
+  muss die Datei einmal neu gewählt werden (sie liegt bewusst nicht in
+  IndexedDB – das wäre eine zweite Kopie auf dem Telefon).
 
 ### Realtime und Push
 
@@ -620,21 +640,102 @@ löschen), wenn *alle* Bedingungen stimmen:
   (5 Min, verdoppelnd, bis 1 Tag je Datei; 15 Min Ruhe, wenn die Box selbst
   Ärger macht).
 
-**Probe auf der echten Box:** `GET /api/v1/admin/storage-check/kalt?mib=64`
-(als Admin) schreibt eine Datei von 64 MiB (höchstens 512) mehrteilig auf die
-Box, misst nach, liest Bereiche aus Anfang, Mitte und Ende, liest alles,
-löscht sie – und nennt die Übertragungsrate. Ohne die Platte zu füllen: die
-Probedatei liegt kurz im Teile-Verzeichnis und wird sofort wieder entfernt.
-**Einmal nach dem Einrichten ausführen.**
+**Probe auf der echten Box.** Zwei Wege, derselbe Endpunkt:
 
-**Sicherung und Wiederherstellung:** `backup.sh` sichert nur die *warme*
-Ablage und die Datenbank. Was `fern` ist, liegt **nur auf der Box** – es gibt
-keine zweite Kopie. Die Box gehört deshalb in die eigene Datensicherung
-(Hetzner-Snapshots der Storage Box einschalten). Zum Wiederherstellen eines
-neuen Servers gehören neben dem Datenbank-Abzug: `MEDIA_KEY`, die `KALT_*`
-Einstellungen samt SSH-Schlüsseldatei und `KALT_SFTP_PFAD` – dann findet der
-neue Server die fernen Dateien dort, wo die Datenbank sie vermerkt. Fehlt der
-`MEDIA_KEY`, sind die Dateien auf der Box unlesbar.
+- **In der App:** Verwaltung (Profil → Einstellungen → Verwaltung, nach dem
+  Aufschliessen mit `ADMIN_PASSWORD`) → Abschnitt „Kalte Ablage (Storage Box)“ →
+  **Box prüfen (64 MiB)**. Die Anzeige nennt je Schritt Zeit und MB/s und die
+  Befunde.
+- **Per `curl`** – der Admin-Endpunkt läuft auf dem **Server** (die Box wird von
+  dort angesprochen, nicht vom Browser) und braucht das Bearer-Token eines
+  Kontos mit Verwaltungsrechten. Das Token ist das `accessToken` aus der
+  Anmeldung; Verwaltungsrechte bekommt ein Konto, indem es sich einmal mit
+  `ADMIN_PASSWORD` aufschliesst (`POST /admin/unlock`, in der App: Einstellungen →
+  Verwaltung):
+
+  ```bash
+  API=https://initiative.example.de/api/v1
+  TOKEN=$(curl -s $API/auth/login -H 'content-type: application/json' \
+    -d '{"username":"du","password":"…"}' | jq -r .accessToken)
+  curl -s -X POST $API/admin/unlock -H "authorization: Bearer $TOKEN" \
+    -H 'content-type: application/json' -d '{"password":"<ADMIN_PASSWORD>"}'
+  curl -s "$API/admin/storage-check/kalt?mib=64" -H "authorization: Bearer $TOKEN" | jq .
+  ```
+
+`GET /api/v1/admin/storage-check/kalt?mib=64` schreibt eine Datei von 64 MiB
+(höchstens 512) mehrteilig auf die Box, misst nach, liest Bereiche aus Anfang,
+Mitte und Ende, liest alles, löscht sie – und nennt die Übertragungsrate und
+den Zustand der SSH-Verbindungen. Ohne die Platte zu füllen: die Probedatei
+liegt kurz im Teile-Verzeichnis und wird sofort wieder entfernt. **Einmal nach
+dem Einrichten ausführen.**
+
+**Konsistenz Datenbank ↔ Box.** `GET /api/v1/admin/storage-check/konsistenz`
+(Knopf „Konsistenz prüfen“) vergleicht alle Anhangszeilen mit `ablage = 'fern'`
+mit den Objekten auf der Box: **fehlend**, **falsche Grösse** (mit `MEDIA_KEY`
+wird die Länge des Geheimtexts erwartet), **verwaist** (drüben ohne Zeile),
+**Reste eines Umzugs**, **Teilreste** – und liest `?stichprobe=3` zufällige
+Dateien (je höchstens `?maxMib=256`) ganz, um ihre SHA-256 gegen
+`attachments.sha256` zu halten. Sonst werden nur Verzeichnisse gelesen, keine
+Dateien: Zehntausende Objekte brauchen Minuten, nicht Stunden. Einmal im Monat
+und nach jedem Zurückspielen einer Sicherung ausführen.
+
+#### Sicherung und Wiederherstellung
+
+`backup.sh` sichert die *warme* Ablage und die Datenbank. Was `fern` ist, liegt
+**nur auf der Box**. Deshalb zwei Schichten:
+
+1. **Hetzner-Snapshots der Storage Box einschalten** (Konsole → Storage Box →
+   Snapshots; automatische Snapshots mit Aufbewahrung, z. B. täglich/30 Tage). Das
+   ist die Empfehlung und kostet keine Konfiguration im Server.
+2. **Optional eine zweite Kopie** (`deploy/vps/kalt-sicherung.sh`, von `backup.sh
+   --auswaerts` bzw. `--kalt` gerufen), falls auch die Box samt Snapshots
+   verloren gehen darf: `KALT_SICHERUNG_ZIEL` = ein Verzeichnis (zweite Platte)
+   oder `benutzer@host:pfad` (zweite Storage Box). Inkrementell (nur was fehlt
+   oder eine andere Grösse hat), `rsync`/`ssh`/`sftp`; was in der Quelle fehlt,
+   bleibt noch `KALT_SICHERUNG_AUFBEWAHREN_TAGE` (30) Tage im Ziel, mit
+   Notbremse (leere Quelle / mehr als ein Fünftel fehlt ⇒ nichts wird
+   gelöscht); danach Grössenvergleich beider Seiten und SHA-256-Stichprobe.
+   Fehler sind laut: Exit-Code ungleich 0, kein Healthcheck-Ping. Bei Zielen auf
+   einem anderen Host läuft jede Datei über das Zwischenverzeichnis
+   `KALT_SICHERUNG_ZWISCHEN` (Platz für die grösste Datei, 4 GiB). Mit
+   `MEDIA_KEY` ist die Kopie Geheimtext und ohne den Schlüssel wertlos.
+
+**Was zu einer Wiederherstellung gehört – die Checkliste.** Alles Folgende
+muss *getrennt vom Server* aufbewahrt sein (Passwortprogramm, nicht im
+Repository):
+
+- [ ] **`MEDIA_KEY`** (aus der `.env`). Ohne ihn sind alle Dateien auf Platte
+      *und* Box unlesbar – er wird bewusst nicht mitgesichert.
+- [ ] **`JWT_SECRET`** und der Rest der `.env` (sonst melden sich alle neu an).
+- [ ] **Die `KALT_*`-Einstellungen**: `KALT_TREIBER`, `KALT_SFTP_WIRT`,
+      `_HAFEN`, `_BENUTZER`, **`KALT_SFTP_PFAD`** (genau derselbe, sonst findet
+      der neue Server die Dateien nicht), `KALT_SFTP_FINGERABDRUCK`.
+- [ ] **Die SSH-Schlüsseldatei** (`KALT_SFTP_SCHLUESSEL`) – und der öffentliche
+      Teil muss weiter in der Box hinterlegt sein.
+- [ ] **Der Datenbank-Abzug** (`db-*.dump.age` bzw. aus restic) samt dem privaten
+      age-Schlüssel (`BACKUP_PUBKEY` gehört dazu), und das Upload-Verzeichnis
+      (restic/Sicherung der warmen Ablage).
+
+**Reihenfolge der Wiederherstellung:**
+
+1. Neuen Server aufsetzen (Docker, Compose-Dateien, `.env` aus der Sicherung
+   mit *unverändertem* `MEDIA_KEY`, `JWT_SECRET`, `KALT_*`; Schlüsseldatei an
+   den Pfad legen, `chmod 600`).
+2. **Datenbank zuerst:** Abzug mit dem age-Schlüssel entschlüsseln und mit
+   `pg_restore` einspielen. Die Zeilen sagen, wo jede Datei liegt (`lokal`/`fern`).
+3. **Warme Ablage:** Upload-Verzeichnis zurückspielen (restic restore).
+4. **Kalte Ablage prüfen, nicht kopieren:** API starten, dann
+   `/admin/storage-check/kalt` (geht die Box?) und `/admin/storage-check/konsistenz`
+   (fehlt etwas?). Fehlende ferne Dateien aus Snapshot/zweiter Kopie zurück an
+   denselben Pfad unter `KALT_SFTP_PFAD` legen und die Konsistenz wiederholen.
+5. Erst dann die Domain umschalten. Den Auslagerungsdienst nicht vorher
+   stoppen – er schreibt nichts Neues, solange die Platte unter der Schwelle ist.
+
+**Die Wiederherstellung üben.** Eine Sicherung, die nie zurückgespielt wurde,
+ist eine Behauptung. Einmal im Quartal auf einem Wegwerf-Server: Abzug
+einspielen, mit der Kopie der `.env` starten, `konsistenz` ausführen, ein Video
+von der Box abspielen. Ein Konsistenzcheck ohne Befund *und* ein spielendes Video
+sind der Beleg; ein Dump, der sich nicht einspielen lässt, ist es nicht.
 
 ---
 
