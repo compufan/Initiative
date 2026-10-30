@@ -1,4 +1,4 @@
-import { api } from './api.js';
+import { ApiError, api } from './api.js';
 
 /**
  * Web Push registration.
@@ -60,10 +60,27 @@ export async function enablePush(): Promise<boolean> {
   if (permission !== 'granted') return false;
 
   const registration = await navigator.serviceWorker.ready;
-  const existing = await registration.pushManager.getSubscription();
+  return aboMelden(registration.pushManager, publicKey);
+}
+
+/**
+ * Das Abo dieses Browsers beim Server anmelden.
+ *
+ * Antwortet der Server mit 409, gehört die Adresse schon einem anderen Konto –
+ * etwa weil sich auf diesem Gerät jemand angemeldet hat, ohne dass das vorige
+ * Konto sauber abgemeldet wurde. Der Server hängt ein fremdes Abo nicht mehr
+ * um (sonst ließe es sich kapern). Also wird das Browser-Abo gelöst und ein
+ * neues mit neuer Adresse angelegt – einmal, nicht in einer Schleife.
+ */
+export async function aboMelden(
+  pushManager: PushManager,
+  publicKey: string,
+  zweiterVersuch = false,
+): Promise<boolean> {
+  const existing = await pushManager.getSubscription();
   const subscription =
     existing ??
-    (await registration.pushManager.subscribe({
+    (await pushManager.subscribe({
       userVisibleOnly: true,
       applicationServerKey: urlBase64ToBuffer(publicKey),
     }));
@@ -74,7 +91,13 @@ export async function enablePush(): Promise<boolean> {
   };
   if (!json.endpoint || !json.keys) return false;
 
-  await api.push.subscribe({ endpoint: json.endpoint, keys: json.keys });
+  try {
+    await api.push.subscribe({ endpoint: json.endpoint, keys: json.keys });
+  } catch (error) {
+    if (zweiterVersuch || !(error instanceof ApiError) || error.status !== 409) throw error;
+    await subscription.unsubscribe().catch(() => false);
+    return aboMelden(pushManager, publicKey, true);
+  }
   return true;
 }
 

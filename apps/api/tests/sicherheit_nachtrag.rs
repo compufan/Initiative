@@ -555,3 +555,49 @@ async fn im_direktchat_moderiert_niemand() {
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
 }
+
+/* ---------- Push: ein fremdes Abo umhängen ---------- */
+
+/// `on conflict (endpoint) do update set user_id` hängte das Abo eines
+/// anderen auf das eigene Konto um – samt neuer Schlüssel.
+#[tokio::test]
+async fn ein_fremdes_push_abo_bleibt_wo_es_ist() {
+    let probe = probe!();
+    let (anna, anna_id) = probe.konto("anna").await;
+    let (bert, _) = probe.konto("bert").await;
+    let endpunkt = format!(
+        "https://updates.push.services.mozilla.com/wpush/v2/{}",
+        Uuid::now_v7().simple()
+    );
+    let abo = |schluessel: &str| {
+        json!({
+            "endpoint": endpunkt,
+            "keys": { "p256dh": schluessel, "auth": "c2VjcmV0" },
+        })
+    };
+
+    let (status, body) = probe
+        .call("POST", "/api/v1/push/subscriptions", Some(&anna), Some(abo("annas")))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+
+    let (status, body) = probe
+        .call("POST", "/api/v1/push/subscriptions", Some(&bert), Some(abo("berts")))
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    let (besitzer, schluessel): (Uuid, String) =
+        sqlx::query_as("select user_id, p256dh from push_subscriptions where endpoint = $1")
+            .bind(&endpunkt)
+            .fetch_one(&probe.state.pool)
+            .await
+            .unwrap();
+    assert_eq!(besitzer.to_string(), anna_id);
+    assert_eq!(schluessel, "annas");
+
+    // Das eigene Abo zu erneuern (neue Schlüssel) geht weiter.
+    let (status, body) = probe
+        .call("POST", "/api/v1/push/subscriptions", Some(&anna), Some(abo("neu")))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+}

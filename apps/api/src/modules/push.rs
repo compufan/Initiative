@@ -60,14 +60,33 @@ async fn subscribe(
         .user_agent
         .as_deref()
         .map(|value| value.chars().take(300).collect());
-    sqlx::query(
+    /*
+     * Gehört die Adresse schon einem ANDEREN Konto, wird sie nicht angefasst.
+     *
+     * Hier stand `on conflict (endpoint) do update set user_id = ...`: Wer die
+     * Adresse eines fremden Abos kannte (sie steht etwa in Protokollen des
+     * Push-Dienstes oder auf einem geteilten Gerät), hängte es auf sein Konto
+     * um und tauschte die Schlüssel – der andere bekam nichts mehr, und seine
+     * Mitteilungen gingen an ein Gerät, das sie nicht mehr entschlüsseln kann.
+     *
+     * 409 statt stillem Erfolg: Eine Antwort „ok“ ließe den Client glauben, er
+     * sei angemeldet, und es käme nie eine Mitteilung. Mit 409 weiß er, dass
+     * diese Adresse vergeben ist, löst das Abo im Browser und legt ein neues
+     * an (`enablePush`) – mit neuer Adresse, die niemandem sonst gehört. Das
+     * ist auch der ehrliche Weg für ein Gerät, auf dem sich das Konto
+     * gewechselt hat, ohne dass das alte abgemeldet wurde: Das alte Abo stirbt
+     * beim Push-Dienst und fällt beim nächsten Senden weg (410).
+     */
+    let eigenes: Option<Uuid> = sqlx::query_scalar(
         "insert into push_subscriptions (id, user_id, endpoint, p256dh, auth, user_agent)
          values ($1, $2, $3, $4, $5, $6)
          on conflict (endpoint) do update
-         set user_id = excluded.user_id,
-             p256dh = excluded.p256dh,
+         set p256dh = excluded.p256dh,
              auth = excluded.auth,
-             failure_count = 0",
+             user_agent = coalesce(excluded.user_agent, push_subscriptions.user_agent),
+             failure_count = 0
+         where push_subscriptions.user_id = excluded.user_id
+         returning id",
     )
     .bind(Uuid::now_v7())
     .bind(user.id())
@@ -75,8 +94,13 @@ async fn subscribe(
     .bind(&input.keys.p256dh)
     .bind(&input.keys.auth)
     .bind(user_agent)
-    .execute(&state.pool)
+    .fetch_optional(&state.pool)
     .await?;
+    if eigenes.is_none() {
+        return Err(AppError::conflict(
+            "Dieses Push-Abo gehört zu einem anderen Konto",
+        ));
+    }
 
     Ok((StatusCode::CREATED, Json(json!({ "ok": true }))))
 }
