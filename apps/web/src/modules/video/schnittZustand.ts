@@ -241,13 +241,28 @@ export function useSchnitt(auftrag: SchnittAuftrag): SchnittZustand {
    * nicht in `useMemo` (StrictMode: Fabrik und Aufräumen laufen doppelt).
    */
   const [wisch, setWisch] = useState<Wischspeicher | null>(null);
+  /**
+   * Der Speicher, der gerade gilt – nicht der, den `wisch` noch zeigt.
+   *
+   * Ändert sich die Bildrate, ändern sich `leser`, `schrittMs` UND `raster` im
+   * selben Zug: Zuerst räumt das Aufräumen den alten Speicher weg, dann läuft
+   * der Effekt unten noch mit dem ALTEN `wisch` (der neue steht erst im
+   * nächsten Durchlauf im Zustand). Ein `setzen` auf den geschlossenen Speicher
+   * liesse ihn von vorn anlaufen: ein Geist, der den alten Leser wieder öffnet,
+   * Frames mit dem alten Raster liest und seine Horcher nie abgibt.
+   */
+  const wischGilt = useRef<Wischspeicher | null>(null);
   useEffect(() => {
     const speicher = new Wischspeicher({ leser, s: schrittMs });
+    wischGilt.current = speicher;
     setWisch(speicher);
-    return () => speicher.schliessen();
+    return () => {
+      if (wischGilt.current === speicher) wischGilt.current = null;
+      speicher.schliessen();
+    };
   }, [leser, schrittMs]);
   useEffect(() => {
-    wisch?.setzen(raster.bilder);
+    if (wisch && wischGilt.current === wisch) wisch.setzen(raster.bilder);
   }, [raster, wisch]);
   const wischStand = useSyncExternalStore(
     wisch?.abonnieren ?? keineMeldung,

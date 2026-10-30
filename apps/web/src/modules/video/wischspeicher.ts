@@ -682,6 +682,8 @@ export class Wischspeicher {
     this.aenderung(true);
 
     while (this.gilt(generation)) {
+      /** Das Bild, das gerade gelesen wird – damit ein Wurf es treffen kann. */
+      let gewaehlt: number | null = null;
       try {
         await this.tor.offen();
         if (!this.gilt(generation)) return;
@@ -701,6 +703,7 @@ export class Wischspeicher {
           await this.schlafen();
           continue;
         }
+        gewaehlt = wahl.k;
         const prioritaet = wahl.stufe <= MITTE_STUFE_MAX ? 'mitte' : 'hinten';
         this.haken.zaehler.gelesen += 1;
         const lesung = await this.leser.holen(bildMitte(wahl.k, this.s), prioritaet, {
@@ -720,7 +723,10 @@ export class Wischspeicher {
         if (!this.gilt(generation)) return;
         // Ein Abbruch kommt vom Schliessen des Dienstes (Filmbau) – kurz Luft holen.
         if (fehler instanceof AbbruchError) await this.warten(50);
-        else this.fehlerMelden(null);
+        // Wirft das Lesen an EINEM Bild (Dekodierfehler), gilt es wie ein Kodierfehler: dieses
+        // Bild auslassen. Ohne das versuchte die Schleife dasselbe Bild dreimal und gäbe dann
+        // den ganzen Speicher auf.
+        else this.fehlerMelden(gewaehlt);
       }
       if (!this.verfuegbarFlag) return;
     }
@@ -746,6 +752,10 @@ export class Wischspeicher {
         !this.haken.aus &&
         !this.tor.zu &&
         this.imFilm.has(k) &&
+        // Wie beim Füllen: Eine Stufe, an der das Budget gerissen ist, wird nicht mehr
+        // aufgenommen – das Bild flöge sofort wieder hinaus und die Verfolgung kodierte
+        // es bei jedem Durchgang umsonst.
+        stufeVon(k, this.schritt) < this.verbotenAb &&
         !this.blobs.has(k) &&
         !this.aufgegeben.has(k),
       ablegen: (k, blob) => {

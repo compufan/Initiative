@@ -655,6 +655,26 @@ describe('Wischspeicher – wenn etwas fehlt', () => {
     speicher.schliessen();
   });
 
+  it('lässt bei einem Bild, dessen Lesen wirft, nur dieses aus – statt es dreimal zu versuchen und alles zu beenden', async () => {
+    const leser = ersatzLeser();
+    const echt = leser.holen.bind(leser);
+    leser.holen = async (ms, prio, optionen) => {
+      if (Math.floor(ms / S) === 3) {
+        leser.auftraege.push({ ms, prio });
+        throw new Error('Dekodierfehler an diesem Bild');
+      }
+      return echt(ms, prio, optionen);
+    };
+    const { speicher } = speicherMit(leser);
+    speicher.setzen(filmVon(16));
+    await warten(() => speicher.stand().fertig, 4000);
+    expect(speicher.stand().verfuegbar).toBe(true);
+    expect(speicher.hat(3)).toBe(false);
+    expect(speicher.stand().bilder).toBe(15);
+    expect(leser.ks().filter((k) => k === 3)).toHaveLength(1);
+    speicher.schliessen();
+  });
+
   it('läuft nach einem Abbruch des Dienstes weiter, statt zu enden', async () => {
     let abgebrochen = 0;
     const leser = ersatzLeser();
@@ -706,6 +726,21 @@ describe('Wischspeicher – Mitschnitt', () => {
     expect(m.braucht(5)).toBe(false);
     expect(speicher.stand().bytes).toBe(500);
     leser.weiter();
+    speicher.schliessen();
+  });
+});
+
+describe('Wischspeicher – Mitschnitt und Budget', () => {
+  it('braucht keine Bilder einer Stufe, an der das Budget gerissen ist – sonst kodiert die Verfolgung sie jedes Mal neu', async () => {
+    const leser = ersatzLeser(() => 1000);
+    const { speicher } = speicherMit(leser, { budget: 5_500 });
+    speicher.setzen(filmVon(64));
+    await new Promise((weiter) => setTimeout(weiter, 150));
+    const m = leser.mitschnitt!;
+    // Das Budget fasst 5 Bilder, Stufe 0 (jedes 16.) hat 4: Stufe 1 ist gerissen.
+    // Ein Bild der feinsten Stufe würde sofort wieder verdrängt – es zu kodieren ist verlorene Arbeit.
+    expect(speicher.hat(1)).toBe(false);
+    expect(m.braucht(1)).toBe(false);
     speicher.schliessen();
   });
 });
