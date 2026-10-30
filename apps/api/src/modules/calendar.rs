@@ -45,6 +45,7 @@ use crate::services::polls::{
     best_option, broadcast_poll, create_poll, load_poll_dto, place_poll, require_poll, NewPoll,
     NewPollOption,
 };
+use crate::services::vorab;
 use crate::state::AppState;
 use crate::validate::{clean, Validator};
 
@@ -633,6 +634,14 @@ async fn update(
         .await?;
     }
 
+    // Eine Absage nimmt die Karten der Erinnerung vor dem Termin zurück (der
+    // Push ist ohnehin gesendet); bei der Wiederaufnahme beginnt es neu.
+    let vorab_karten = if neuer_status.as_deref() == Some("cancelled") {
+        vorab::vorab_entfernen(&mut tx, id, None).await?
+    } else {
+        Vec::new()
+    };
+
     let aenderung = wesentlich_geaendert(
         &alt,
         starts_at,
@@ -662,6 +671,8 @@ async fn update(
         None
     };
     tx.commit().await?;
+
+    einladen::karten_melden(&state, vorab_karten).await;
 
     let abgesagt = neuer_status.as_deref() == Some("cancelled");
     let (dto, zustellung) = abschliessen(

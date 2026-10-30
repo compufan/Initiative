@@ -20,8 +20,12 @@ export interface MessageMetadata {
   stickerId?: string;
   pollId?: string;
   eventId?: string;
-  /** Eine Termin-Karte, die der Erinnerungsdienst gesendet hat; `nummer` zählt je Person. */
-  erinnerung?: { nummer: number };
+  /**
+   * Eine Termin-Karte, die der Erinnerungsdienst gesendet hat; `nummer` zählt je Person.
+   * `art: 'vorab'` ist die „Erinnerung vor dem Termin“ (nummer 1, `minuten` vor dem
+   * Beginn); ohne `art` ist es die Erinnerung an eine ausstehende Antwort.
+   */
+  erinnerung?: { nummer: number; art?: 'vorab'; minuten?: number };
   gameSessionId?: string;
   forwardedFrom?: { conversationId: string; messageId: string };
   /** System messages: machine readable event describing what happened. */
@@ -65,7 +69,13 @@ export const messageMetadataSchema: z.ZodType<MessageMetadata> = z.object({
   stickerId: z.string().uuid().optional(),
   pollId: z.string().uuid().optional(),
   eventId: z.string().uuid().optional(),
-  erinnerung: z.object({ nummer: z.number().int().min(1).max(100) }).optional(),
+  erinnerung: z
+    .object({
+      nummer: z.number().int().min(1).max(100),
+      art: z.literal('vorab').optional(),
+      minuten: z.number().int().min(1).max(60 * 24 * 14).optional(),
+    })
+    .optional(),
   gameSessionId: z.string().uuid().optional(),
   forwardedFrom: z
     .object({ conversationId: z.string().uuid(), messageId: z.string().uuid() })

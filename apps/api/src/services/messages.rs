@@ -312,6 +312,34 @@ impl NewMessage {
         karte
     }
 
+    /// Die Karte einer „Erinnerung vor dem Termin“ (`services::vorab`).
+    ///
+    /// Wie [`NewMessage::erinnerung`] eine stumme `event`-Karte mit
+    /// `metadata.erinnerung` – dieselbe Blase, nur mit dem Kennzeichen
+    /// `art: "vorab"` und den `minuten`, damit die Oberfläche „Beginnt in 1
+    /// Stunde“ sagt statt „Antwort ausstehend“. `nummer` steht auf 1, damit
+    /// ältere App-Stände (Schema: `nummer` ≥ 1) die Karte weiter lesen können.
+    /// Der feste `client_id` hängt an der Kennung der Zeile, aus demselben Grund
+    /// wie bei der Erinnerung an Antworten.
+    pub fn vorab_erinnerung(
+        conversation_id: Uuid,
+        sender_id: Uuid,
+        event_id: Uuid,
+        zeile_id: Uuid,
+        minuten: i32,
+        titel: &str,
+    ) -> Self {
+        let mut karte = Self::entity(conversation_id, sender_id, "event", "eventId", event_id);
+        karte.client_id = Some(format!("vorab:{zeile_id}"));
+        karte.silent = true;
+        karte.body = Some(super::vorab::vorab_text(titel, minuten));
+        karte.metadata = json!({
+            "eventId": event_id,
+            "erinnerung": { "nummer": 1, "art": "vorab", "minuten": minuten },
+        });
+        karte
+    }
+
     pub fn entity(
         conversation_id: Uuid,
         sender_id: Uuid,
@@ -561,6 +589,29 @@ mod tests {
         );
         assert_eq!(karte.metadata["eventId"], json!(termin));
         assert_eq!(karte.metadata["erinnerung"]["nummer"], json!(2));
+    }
+
+    #[test]
+    fn eine_vorab_erinnerung_traegt_art_und_minuten() {
+        let zeile = Uuid::from_u128(4);
+        let karte = NewMessage::vorab_erinnerung(
+            Uuid::from_u128(1),
+            Uuid::from_u128(2),
+            Uuid::from_u128(3),
+            zeile,
+            60,
+            "Grillen",
+        );
+        assert_eq!(karte.r#type, "event");
+        assert!(karte.silent);
+        assert_eq!(karte.client_id, Some(format!("vorab:{zeile}")));
+        assert_eq!(
+            karte.body.as_deref(),
+            Some("Erinnerung: „Grillen“ beginnt in 1 Stunde.")
+        );
+        assert_eq!(karte.metadata["erinnerung"]["art"], json!("vorab"));
+        assert_eq!(karte.metadata["erinnerung"]["minuten"], json!(60));
+        assert_eq!(karte.metadata["erinnerung"]["nummer"], json!(1));
     }
 
     #[test]

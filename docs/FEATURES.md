@@ -889,9 +889,34 @@ Was nicht geht, ehrlich:
 - Wer keine Einzelkarte bekommen hat (Einzelchats beim Einladen abgewählt),
   wird nicht erinnert – der Ersteller sieht auf der Terminseite, **wer** nicht
   erinnerbar ist und wie oft die anderen schon erinnert wurden.
-- Die Erinnerungen „vor dem Termin“ (10 Minuten, 1 Stunde, 1 Tag) sind etwas
-  anderes: Sie kommen aus der Kalender-App und sind im Editor jetzt so
-  beschriftet.
+- Die Erinnerung „vor dem Termin“ ist etwas anderes (siehe unten): Sie kommt zu
+  einer Uhrzeit vor dem Beginn, nicht nach einer Wartezeit auf Antwort.
+
+#### Erinnerung vor dem Termin
+
+Die Erinnerungen „vor dem Termin“ (10 Minuten, 1 Stunde, 1 Tag … im Editor)
+liefert der **Server selbst** aus – zusätzlich zum Kalenderabo (.ics), das sie
+weiter als Alarm enthält:
+
+- **Push an jeden Empfänger**: den Ersteller und alle Eingeladenen, die nicht
+  abgesagt haben („Grillen beginnt in 1 Stunde“; ohne Vorschau nur „Erinnerung an
+  einen Termin“; Push-Einstellung und Stummschaltung des Chats gelten).
+- **Stille Karte im Einzelchat** Ersteller ↔ Eingeladener, in dem die Einladungskarte
+  liegt: „🔔 Erinnerung: Beginnt in 1 Stunde“. Wer keinen solchen Einzelchat hat
+  (der Ersteller selbst, nur Gruppenchat, Einzelchats beim Einladen abgewählt),
+  bekommt nur den Push – es wird kein Chat angelegt und nichts in den
+  Gruppenchat gepostet.
+- **Genau einmal** je Person, Minutenzahl und Beginn; ein **verschobener** Termin
+  erinnert zum neuen Beginn erneut.
+- **Nicht rückwirkend**: Wer einen Termin erst nach dem Erinnerungszeitpunkt
+  anlegt, bekommt diese Erinnerung nicht. **Nicht veraltet**: höchstens eine
+  Stunde nach dem Zeitpunkt (nach einem Serverausfall kommt nichts Altes).
+  Ganztägige Termine zählen ab dem Tagesbeginn (zwölf Stunden vor 12:00).
+- Wer abgesagt, ausgeladen oder gelöscht ist, wird nicht erinnert. Beim Löschen,
+  Absagen und Ausladen verschwinden die schon gesendeten Karten.
+- Serien: Es gilt der erste Termin der Serie (wie beim Erinnern an Antworten).
+- Läuft im selben Takt wie das Erinnern an Antworten (`ERINNERN_TAKT_S`, 0 = aus).
+  Zum Ausprobieren: `erinnern_einmal --vorab --jetzt <Zeitpunkt>`.
 
 ### Notizen und Listen am Termin
 

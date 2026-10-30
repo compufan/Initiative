@@ -137,12 +137,28 @@ const ANTWORT: Record<RsvpStatus, string> = {
   pending: 'Offen',
 };
 
+/** „in …“ für die Erinnerung vor dem Termin: 60 → „1 Stunde“, 2880 → „2 Tagen“ (wie der Server). */
+export function vorlaufText(minuten: number): string {
+  if (minuten > 0 && minuten % 1440 === 0) {
+    const tage = minuten / 1440;
+    return tage === 1 ? '1 Tag' : `${tage} Tagen`;
+  }
+  if (minuten > 0 && minuten % 60 === 0) {
+    const stunden = minuten / 60;
+    return stunden === 1 ? '1 Stunde' : `${stunden} Stunden`;
+  }
+  return minuten === 1 ? '1 Minute' : `${minuten} Minuten`;
+}
+
 /**
  * Die Kopfzeile der Erinnerungskarte – je Betrachter und Zustand.
  *
  * Nicht gespeichert, sondern hier formuliert: Ein gespeichertes „Du hast noch
  * nicht geantwortet“ würde nach der Antwort lügen. Die Karte sagt in jedem
  * Zustand, dass sie automatisch kam – sie ist keine Nachricht des Erstellers.
+ *
+ * Die „Erinnerung vor dem Termin“ (`art: 'vorab'`) sagt nur, wann es losgeht –
+ * unabhängig von der Antwort: „Erinnerung: Beginnt in 1 Stunde“.
  */
 export function erinnerungsZeile(eingabe: {
   ichBinErsteller: boolean;
@@ -152,7 +168,19 @@ export function erinnerungsZeile(eingabe: {
   status: RsvpStatus | null;
   titel: string;
   nummer: number;
+  art?: 'vorab';
+  /** Bei `art: 'vorab'`: wie viele Minuten vor dem Beginn. */
+  minuten?: number;
 }): { kopf: string; text: string | null } {
+  if (eingabe.art === 'vorab' && eingabe.minuten) {
+    const beginnt = `Beginnt in ${vorlaufText(eingabe.minuten)}`;
+    return {
+      kopf: eingabe.ichBinErsteller
+        ? `Automatische Erinnerung an ${eingabe.partner}: ${beginnt}`
+        : `Erinnerung: ${beginnt}`,
+      text: null,
+    };
+  }
   const zaehler = eingabe.nummer > 1 ? ` · ${eingabe.nummer}.` : '';
   if (eingabe.ichBinErsteller) {
     return { kopf: `Automatische Erinnerung an ${eingabe.partner}${zaehler}`, text: null };

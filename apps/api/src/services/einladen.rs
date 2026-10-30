@@ -983,6 +983,8 @@ pub async fn aendern_vorbereiten(
         // weg und mit ihnen die Kennung ihrer Nachricht.
         erinnerungskarten =
             super::erinnern::erinnerungen_entfernen(tx, termin.id, Some(&entfernt)).await?;
+        erinnerungskarten
+            .extend(super::vorab::vorab_entfernen(tx, termin.id, Some(&entfernt)).await?);
         sqlx::query("delete from event_attendees where event_id = $1 and user_id = any($2)")
             .bind(termin.id)
             .bind(&entfernt)
@@ -1065,6 +1067,7 @@ pub async fn termin_loeschen(
     // Auch die Erinnerungen an den Termin: Sie sind Karten im Einzelchat und
     // verschwinden mit ihm wie die Einladungskarte.
     geloescht.extend(super::erinnern::erinnerungen_entfernen(&mut tx, termin.id, None).await?);
+    geloescht.extend(super::vorab::vorab_entfernen(&mut tx, termin.id, None).await?);
     tx.commit().await?;
     Ok(geloescht)
 }

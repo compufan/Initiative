@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { erinnernSchema } from './schemas/calendar.js';
 import { LIMITS } from './constants.js';
 import { erinnerungenBisBeginn } from './util/erinnern.js';
+import { messageMetadataSchema } from './schemas/message.js';
 import { messagePreview } from './util/format.js';
 
 interface Fall {
@@ -75,5 +76,25 @@ describe('Vorschau einer Erinnerung', () => {
     const karte = { type: 'event' as const, metadata: { eventId: 'x', erinnerung: { nummer: 1 } } };
     expect(messagePreview(karte)).toBe('🔔 Erinnerung');
     expect(messagePreview({ type: 'event', metadata: { eventId: 'x' } })).toBe('📅 Termin');
+  });
+  it('gilt auch für die Erinnerung vor dem Termin', () => {
+    const karte = {
+      type: 'event' as const,
+      metadata: { eventId: 'x', erinnerung: { nummer: 1, art: 'vorab' as const, minuten: 60 } },
+    };
+    expect(messagePreview(karte)).toBe('🔔 Erinnerung');
+  });
+});
+
+describe('Metadaten einer Erinnerung', () => {
+  it('behalten Art und Minuten der Erinnerung vor dem Termin', () => {
+    const eventId = '0192b7e0-0000-7000-8000-000000000001';
+    const vorab = { eventId, erinnerung: { nummer: 1, art: 'vorab', minuten: 60 } };
+    expect(messageMetadataSchema.parse(vorab)).toEqual(vorab);
+    const antwort = { eventId, erinnerung: { nummer: 2 } };
+    expect(messageMetadataSchema.parse(antwort)).toEqual(antwort);
+    expect(() =>
+      messageMetadataSchema.parse({ eventId, erinnerung: { nummer: 1, art: 'anders' } }),
+    ).toThrow();
   });
 });

@@ -64,6 +64,16 @@ pub const ERINNERN_ANZAHL_MAX: i32 = 10;
 /// In den letzten Stunden vor dem Beginn wird nicht mehr erinnert: Eine Bitte um
 /// Antwort kurz vorher hilft der Planung nicht mehr, sie ist nur Lärm.
 pub const ERINNERN_RESERVE_STD: i32 = 2;
+/// Ganztägige Termine beginnen für das Erinnern zwölf Stunden vor `starts_at`:
+/// Der Editor legt sie auf 12:00 Ortszeit, und zwölf Stunden früher ist der
+/// Tagesbeginn des Erstellers, ohne dass der Server die Zeitzone kennt. Gilt für
+/// beide Erinnerungsarten (ausstehende Antworten und „Erinnerung vor dem Termin“).
+pub const ERINNERN_GANZTAG_BEZUG_STD: i32 = 12;
+/// Wie lange nach ihrer Fälligkeit eine „Erinnerung vor dem Termin“ noch
+/// gesendet wird, in Minuten. Nach einem Ausfall des Servers soll nicht eine
+/// Stunde alte Erinnerung nachträglich eintreffen („beginnt in 10 Minuten“,
+/// obwohl der Termin schon läuft).
+pub const VORAB_NACHFRIST_MIN: i32 = 60;
 pub const STICKER_PACK_NAME_MAX: usize = 60;
 
 /**

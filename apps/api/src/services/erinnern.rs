@@ -51,8 +51,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::constants::{
-    EINLADUNG_PARALLEL, ERINNERN_ANZAHL_MAX, ERINNERN_NACH_STD_MAX, ERINNERN_NACH_STD_MIN,
-    ERINNERN_RESERVE_STD,
+    EINLADUNG_PARALLEL, ERINNERN_ANZAHL_MAX, ERINNERN_GANZTAG_BEZUG_STD, ERINNERN_NACH_STD_MAX,
+    ERINNERN_NACH_STD_MIN, ERINNERN_RESERVE_STD,
 };
 use crate::db::CalendarEventRow;
 use crate::dto::{ErinnernDto, ErinnernStandDto, ErinnerterDto};
@@ -363,7 +363,7 @@ pub async fn durchgang(state: &AppState, jetzt: DateTime<Utc>) -> Bilanz {
 ///   beide noch im Einzelchat.
 /// * **wann**: Fälligkeit erreicht, Anzahl nicht erreicht, und nicht in den
 ///   letzten Stunden vor dem Beginn. Ganztägige beginnen zwölf Stunden vor
-///   `starts_at`: Der Editor legt sie auf 12:00 Ortszeit, und zwölf Stunden
+///   `starts_at` (`ERINNERN_GANZTAG_BEZUG_STD`): Der Editor legt sie auf 12:00 Ortszeit, und zwölf Stunden
 ///   früher ist der Tagesbeginn des Erstellers, ohne dass der Server die
 ///   Zeitzone kennt.
 /// * **eine je Person**: Wer mehrere fällige Termine hat, bekommt sie in
@@ -401,7 +401,8 @@ async fn beanspruchen(pool: &PgPool, jetzt: DateTime<Utc>) -> AppResult<Vec<Ansp
               and e.created_by is not null
               and r.anzahl < least(coalesce(e.erinnern_anzahl, $2::int), $2::int)
               and $1::timestamptz <= e.starts_at
-                    - case when e.all_day then interval '12 hours' else interval '0' end
+                    - case when e.all_day then make_interval(hours => $5::int)
+                           else interval '0' end
                     - make_interval(hours => $3::int)
          ),
          je_person as (
@@ -432,6 +433,7 @@ async fn beanspruchen(pool: &PgPool, jetzt: DateTime<Utc>) -> AppResult<Vec<Ansp
     .bind(ERINNERN_ANZAHL_MAX)
     .bind(ERINNERN_RESERVE_STD)
     .bind(STAPEL)
+    .bind(ERINNERN_GANZTAG_BEZUG_STD)
     .fetch_all(pool)
     .await?)
 }
@@ -612,7 +614,7 @@ async fn zustellen(state: &AppState, anspruch: &Anspruch) -> Ausgang {
 }
 
 /// Nimmt eine Nachricht zurück, deren Zeile verschwunden ist.
-async fn verwaist_loeschen(state: &AppState, nachricht: Uuid) {
+pub(super) async fn verwaist_loeschen(state: &AppState, nachricht: Uuid) {
     let ergebnis = async {
         let mut tx = state.pool.begin().await?;
         let geloescht = nachrichten_loeschen(&mut tx, &[nachricht]).await?;
@@ -655,6 +657,32 @@ pub fn starten(state: AppState) -> Option<tokio::task::JoinHandle<()>> {
     Some(tokio::spawn(async move {
         tokio::time::sleep(ERSTER_DURCHGANG).await;
         loop {
+            // Erst die Erinnerungen vor dem Termin (`vorab`): Sie sind zeitkritisch,
+            // die Nachfrage nach Antworten kann einen Takt warten. Jeder Durchgang
+            // in einer eigenen Aufgabe, damit eine Panik im einen den anderen
+            // nicht mitnimmt.
+            let fuer_vorab = state.clone();
+            let vorab = tokio::spawn(async move {
+                let jetzt = datenbankzeit(&fuer_vorab.pool).await;
+                super::vorab::durchgang(&fuer_vorab, jetzt).await
+            });
+            match vorab.await {
+                Ok(bilanz) if bilanz.geschah_etwas() => {
+                    tracing::info!(
+                        beansprucht = bilanz.beansprucht,
+                        karten = bilanz.karten,
+                        ohne_karte = bilanz.ohne_karte,
+                        zurueckgenommen = bilanz.zurueckgenommen,
+                        gescheitert = bilanz.gescheitert,
+                        "Erinnerungen vor dem Termin"
+                    );
+                }
+                Ok(_) => {}
+                Err(fehler) => {
+                    tracing::error!(%fehler, "Ein Durchgang der Erinnerungen vor dem Termin ist abgebrochen");
+                }
+            }
+
             let fuer_durchgang = state.clone();
             let aufgabe = tokio::spawn(async move {
                 let jetzt = datenbankzeit(&fuer_durchgang.pool).await;
