@@ -2,7 +2,11 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
 import { App } from './App.js';
-import { anmeldungMerken, nachNeuerFassungSehen } from './lib/aktualisieren.js';
+import {
+  anmeldungMerken,
+  nachNeuerFassungSehen,
+  neueFassungAnwenden,
+} from './lib/aktualisieren.js';
 import { useUi } from './state/ui.js';
 import './styles/schriften.css';
 import './styles/global.css';
@@ -18,12 +22,10 @@ createRoot(container).render(
 
 // The service worker never reloads the app behind the user's back – the update
 // banner asks first (a chat you are typing in should not vanish).
-const updateSW = registerSW({
+registerSW({
   immediate: true,
   onNeedRefresh() {
-    useUi.getState().setSwUpdate(() => {
-      void updateSW(true);
-    });
+    useUi.getState().setSwUpdate(() => neueFassungAnwenden());
   },
   onOfflineReady() {
     useUi.getState().toast('Initiative ist offline verfügbar', 'success');

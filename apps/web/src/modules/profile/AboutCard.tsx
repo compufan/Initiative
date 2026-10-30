@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { clearOfflineData } from '../../lib/db.js';
-import { nachUpdateSuchen } from '../../lib/aktualisieren.js';
+import { nachUpdateSuchen, neueFassungAnwenden } from '../../lib/aktualisieren.js';
 import { toast, useUi } from '../../state/ui.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
 import { api } from '../../lib/api.js';
@@ -56,6 +56,13 @@ export function AboutCard() {
       // keine Service-Worker-Anmeldung gab und niemand irgendwo nachgesehen
       // hatte.
       if (stand === 'aktuell') toast('Du hast schon den neuesten Stand', 'success');
+      // Gefunden und fertig geladen, aber das Band kam nicht (iOS meldet den
+      // wartenden Arbeiter nicht immer an workbox-window): Wer hier tippt,
+      // will aktualisieren – also gleich anwenden statt auf das Band zu warten.
+      if (stand === 'neu' && !useUi.getState().swUpdateReady) {
+        toast('Neue Version wird geladen …', 'info');
+        neueFassungAnwenden();
+      }
       // „Gefunden, aber noch nicht fertig geladen" ist ein eigener Fall: Als
       // Erfolg gemeldet, widerspräche er dem Band, das kurz darauf erscheint.
       if (stand === 'laedt') {

@@ -120,3 +120,40 @@ export async function nachUpdateSuchen(): Promise<UpdateStand> {
     }, 15_000);
   });
 }
+
+/**
+ * Die bereitliegende Fassung anwenden: Wartenden Arbeiter übernehmen lassen,
+ * dann neu laden.
+ *
+ * Nicht mehr über `updateSW(true)` aus `virtual:pwa-register`: Das wartet auf
+ * das `controlling`-Ereignis von workbox-window und lädt erst dann. Auf iOS
+ * (installierte App wie Safari-Tab) kommt dieses Ereignis oft gar nicht oder
+ * erst beim nächsten Start – der Knopf „Aktualisieren“ tat dann scheinbar
+ * nichts. Hier wird auf `controllerchange` gewartet UND nach kurzer Frist
+ * ohnehin neu geladen: Der neue Arbeiter hat `skipWaiting` dann längst
+ * bekommen, und ein Neuladen holt die Seite durch ihn.
+ */
+export function neueFassungAnwenden(
+  frist = 2500,
+  neuLaden: () => void = () => window.location.reload(),
+): void {
+  let geladen = false;
+  const einmal = () => {
+    if (geladen) return;
+    geladen = true;
+    neuLaden();
+  };
+  const wartend = anmeldung?.waiting;
+  if (!wartend || !('serviceWorker' in navigator)) {
+    einmal();
+    return;
+  }
+  navigator.serviceWorker.addEventListener('controllerchange', einmal, { once: true });
+  // Wird der Wartende aktiv, ohne dass die Seite ihn als Steuerer meldet
+  // (iOS), genügt das auch.
+  wartend.addEventListener('statechange', () => {
+    if (wartend.state === 'activated') einmal();
+  });
+  wartend.postMessage({ type: 'SKIP_WAITING' });
+  window.setTimeout(einmal, frist);
+}
