@@ -525,6 +525,7 @@ export function PressenBoard({ session, mySeat, onMove, busy, onRematch }: GameB
                 figur={figurVon(mySeat)}
                 gespiegelt
                 klein
+                lebendig
                 bewegt={!reduziert}
                 stimmung={meineStimmung}
                 farbe="var(--warning)"
@@ -950,7 +951,7 @@ export function PressenBoard({ session, mySeat, onMove, busy, onRematch }: GameB
       )}
 
       {mySeat != null && spiegel && (
-        <p className="game-hint">
+        <p className="game-hint pressen-spiegel-hinweis">
           Gegen den Spiegel trinkt das zweite Männchen genau wie du – es gibt immer Atempo. Jede
           weitere Runde beginnt erst, wenn du auf „Anstoßen“ drückst; „Aufgeben“ beendet die Übung.
           Der Malus wächst dabei nicht.

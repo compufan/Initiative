@@ -13,6 +13,8 @@ import {
   type PressenFigurDaten,
   type SimZustand,
 } from '@initiative/shared';
+import { MAX_BLASEN, MAX_PFUETZEN, MAX_RESTE, MAX_TROPFEN } from './pressenFluessigkeit.js';
+import { usePressenAnimation } from './usePressenAnimation.js';
 
 /**
  * Was die Zeichnung vom Lauf braucht – ein Ausschnitt von `SimZustand`, damit
@@ -22,7 +24,9 @@ export type FigurAnsicht = Pick<
   SimZustand,
   | 'x'
   | 'y'
+  | 'vx'
   | 'neigung'
+  | 'neigungV'
   | 'fuellung'
   | 'mund'
   | 'getrunken'
@@ -40,7 +44,9 @@ export function ansichtAus(z: SimZustand): FigurAnsicht {
   return {
     x: z.x,
     y: z.y,
+    vx: z.vx,
     neigung: z.neigung,
+    neigungV: z.neigungV,
     fuellung: z.fuellung,
     mund: z.mund,
     getrunken: z.getrunken,
@@ -57,7 +63,9 @@ export function ansichtAus(z: SimZustand): FigurAnsicht {
 export const BEREIT: FigurAnsicht = {
   x: GLAS_START_X,
   y: GLAS_START_Y,
+  vx: 0,
   neigung: 0,
+  neigungV: 0,
   fuellung: GLAS_ML,
   mund: 0,
   getrunken: 0,
@@ -370,6 +378,12 @@ interface FigurProps {
   gespiegelt?: boolean;
   /** Atmen, Blinzeln, Schlucken – bei reduzierter Bewegung aus. */
   bewegt: boolean;
+  /**
+   * Das Bier lebt: Schwappen, Tropfen, Blasen, Schluck. Vorgabe: jede Figur außer
+   * den kleinen Bahnen der anderen (dort steht nur „trinkt …“, es lohnt keine
+   * Schleife). Gilt nur zusammen mit `bewegt`.
+   */
+  lebendig?: boolean;
   titel: string;
   /** Schmale Darstellung für fremde Bahnen und Vorschau. */
   klein?: boolean;
@@ -391,6 +405,7 @@ export function PressenFigur({
   figur,
   gespiegelt,
   bewegt,
+  lebendig,
   titel,
   klein,
   stimmung = 'normal',
@@ -401,10 +416,11 @@ export function PressenFigur({
   const shirt = pick(SHIRT_FARBEN, figur.shirt);
   const id = useId().replace(/:/g, '');
   const klammer = `pf-glas-${id}`;
+  // Das Bier (Füllstand, Schaum, Tropfen, Pfützen, Schluck) zeichnet eine eigene
+  // Schleife direkt in die Elemente unten – ohne dass dafür neu gerendert wird.
+  const el = usePressenAnimation(a, !(bewegt && (lebendig ?? !klein)));
 
   const bauch = Math.min(1, a.getrunken / GLAS_ML);
-  const mundVoll = Math.min(1, a.mund / MUND_KAPAZITAET_ML);
-  const schluckt = a.mund > 0.5;
   const sieger = stimmung === 'sieg';
   const schreck = stimmung === 'schreck';
   const freude = stimmung === 'freude' || sieger;
@@ -426,11 +442,12 @@ export function PressenFigur({
   const startX = glasX;
   const startY = glasY - randRy;
   const strahlBreite = Math.min(15, 2.5 + a.fluss / 7);
+  // Gegen Ende wird der Strahl dünn und reißt in Tropfen ab: eine Perlenkette.
+  const perlen = a.fluss < 9;
   const weite = Math.hypot(a.landeX - startX, a.landeY - startY);
   const bogen = 36 + weite * 0.28;
   const ctrlX = (startX + a.landeX) / 2;
   const ctrlY = Math.min(startY, a.landeY) - bogen;
-  const pfuetze = Math.min(150, 8 + Math.sqrt(a.verschuettet) * 8);
 
   // Arme: rechte Hand am Glas, die linke hilft, wenn getrunken wird.
   const griffX = glasX + 36;
@@ -455,7 +472,6 @@ export function PressenFigur({
     'pressen-figur',
     klein ? 'is-klein' : '',
     bewegt ? 'is-bewegt' : '',
-    schluckt ? 'is-schluckt' : '',
     freude ? 'is-freude' : '',
     schreck ? 'is-schreck' : '',
   ]
@@ -487,17 +503,21 @@ export function PressenFigur({
           <path d="M 200 0 L 120 600 M 400 0 L 360 600 M 600 0 L 640 600 M 800 0 L 880 600" />
         </g>
 
-        {/* Pfütze, wo das Bier danebenging */}
-        {a.verschuettet > 0.2 && (
-          <ellipse
-            cx={a.landeX}
-            cy={Math.min(FELD_TIEFE - 10, Math.max(10, a.landeY))}
-            rx={pfuetze}
-            ry={pfuetze * 0.55}
-            fill={BIER}
-            opacity="0.45"
-          />
-        )}
+        {/* Pfützen, wo das Bier danebenging – wachsen weich, bleiben, wo sie entstanden */}
+        <g fill={BIER} opacity="0.45">
+          {Array.from({ length: MAX_PFUETZEN * 2 }, (_, i) => (
+            <ellipse
+              key={i}
+              ref={(e) => {
+                el.pfuetzen[i] = e;
+              }}
+              cx="0"
+              cy="0"
+              rx="0"
+              ry="0"
+            />
+          ))}
+        </g>
 
         {/* Oberkörper, von oben: Schultern und Hemd */}
         <g className={bewegt ? 'pf-atmen' : undefined}>
@@ -525,22 +545,26 @@ export function PressenFigur({
           <circle cx={KOPF_X} cy={KOPF_Y} r={KOPF_R} fill={haut} stroke={STRICH} strokeWidth="6" />
           {/* Wangen: blähen sich, wenn der Mund voll ist */}
           <ellipse
+            ref={(e) => {
+              el.wangeL = e;
+            }}
             cx="424"
             cy="198"
-            rx={14 + 12 * mundVoll}
-            ry={11 + 9 * mundVoll}
+            rx="14"
+            ry="11"
             fill="#e8736b"
-            opacity={0.25 + 0.4 * mundVoll}
-            className={schluckt && bewegt ? 'pf-wange' : undefined}
+            opacity="0.25"
           />
           <ellipse
+            ref={(e) => {
+              el.wangeR = e;
+            }}
             cx="576"
             cy="198"
-            rx={14 + 12 * mundVoll}
-            ry={11 + 9 * mundVoll}
+            rx="14"
+            ry="11"
             fill="#e8736b"
-            opacity={0.25 + 0.4 * mundVoll}
-            className={schluckt && bewegt ? 'pf-wange' : undefined}
+            opacity="0.25"
           />
           <HaareVorn frisur={figur.frisur} farbe={haar} />
           {figur.frisur === 0 && (
@@ -647,16 +671,23 @@ export function PressenFigur({
             fill="#d9726a"
           />
           <ellipse
+            ref={(e) => {
+              el.mundBier = e;
+            }}
             cx={MUND_X}
             cy={MUND_Y}
-            rx={MUND_HALB_X * mundVoll}
-            ry={MUND_HALB_Y * mundVoll}
+            rx="0"
+            ry="0"
             fill={BIER}
-            className={schluckt && bewegt ? 'pf-schluck' : undefined}
           />
           {figur.bart === 2 && <BartZeichnung bart={2} farbe={haar} />}
           {/* Kehlkopf: wandert beim Schlucken */}
-          <g className={schluckt && bewegt ? 'pf-kehle' : undefined}>
+          <g
+            ref={(e) => {
+              el.kehle = e;
+            }}
+            transform="translate(0 0)"
+          >
             <ellipse
               cx={KOPF_X}
               cy="290"
@@ -693,17 +724,31 @@ export function PressenFigur({
           <path d={rechterArm} />
         </g>
 
-        {/* Strahl */}
+        {/* Strahl: Strang mit Glanz, gegen Ende eine Kette einzelner Tropfen */}
         {a.fluss > 0 && !abgestellt && (
           <g>
             <path
               d={`M ${startX} ${startY} Q ${ctrlX} ${ctrlY} ${a.landeX} ${a.landeY}`}
               fill="none"
               stroke={BIER}
-              strokeWidth={strahlBreite}
+              strokeWidth={perlen ? Math.max(3, strahlBreite * 1.1) : strahlBreite}
               strokeLinecap="round"
+              strokeDasharray={perlen ? '1 15' : undefined}
+              className={perlen && bewegt ? 'pf-perlen' : undefined}
               opacity="0.92"
             />
+            {!perlen && (
+              <path
+                d={`M ${startX} ${startY} Q ${ctrlX} ${ctrlY} ${a.landeX} ${a.landeY}`}
+                fill="none"
+                stroke={SCHAUM}
+                strokeWidth={Math.max(1.2, strahlBreite * 0.25)}
+                strokeLinecap="round"
+                strokeDasharray="14 22"
+                className={bewegt ? 'pf-strang' : undefined}
+                opacity="0.6"
+              />
+            )}
             <ellipse
               cx={a.landeX}
               cy={a.landeY}
@@ -723,12 +768,71 @@ export function PressenFigur({
           >
             <g clipPath={`url(#${klammer})`}>
               <rect x="-40" y="0" width="80" height={bodenY} fill="rgba(255,255,255,0.35)" />
-              {a.fuellung > 0 && (
-                <>
-                  <rect x="-40" y={bodenY * pegel} width="80" height={bodenY} fill={BIER} />
-                  <rect x="-40" y={bodenY * pegel - 6} width="80" height="8" fill={SCHAUM} />
-                </>
-              )}
+              {/* Bier und Schaum: Pegel, Schwappen und Wellen setzt die Schleife (usePressenAnimation) */}
+              <g
+                ref={(e) => {
+                  el.glasWelle = e;
+                }}
+                transform="rotate(0 0 0)"
+              >
+                <rect
+                  ref={(e) => {
+                    el.fluessig = e;
+                  }}
+                  x="-80"
+                  y="0"
+                  width="160"
+                  height="0"
+                  fill={BIER}
+                />
+                <rect
+                  ref={(e) => {
+                    el.schaum = e;
+                  }}
+                  x="-80"
+                  y="0"
+                  width="160"
+                  height="0"
+                  fill={SCHAUM}
+                />
+                <ellipse
+                  ref={(e) => {
+                    el.oberflaeche = e;
+                  }}
+                  cx="0"
+                  cy="0"
+                  rx="34"
+                  ry="0"
+                  fill={SCHAUM}
+                />
+              </g>
+              <g fill="rgba(255,255,255,0.6)">
+                {Array.from({ length: MAX_BLASEN }, (_, i) => (
+                  <circle
+                    key={i}
+                    ref={(e) => {
+                      el.blasen[i] = e;
+                    }}
+                    cx="0"
+                    cy="0"
+                    r="0"
+                  />
+                ))}
+              </g>
+              {/* Schaumreste und Tropfen an der Wand, solange das Glas nicht ganz sauber ist */}
+              <g fill={SCHAUM} opacity="0.9">
+                {Array.from({ length: MAX_RESTE }, (_, i) => (
+                  <circle
+                    key={i}
+                    ref={(e) => {
+                      el.reste[i] = e;
+                    }}
+                    cx="0"
+                    cy="0"
+                    r="0"
+                  />
+                ))}
+              </g>
             </g>
             <path
               d={`M -36 0 L -26 ${bodenY} Q 0 ${bodenY + 14} 26 ${bodenY} L 36 0`}
@@ -749,6 +853,16 @@ export function PressenFigur({
             {a.fuellung > 0 && grad <= 40 && (
               <ellipse cx="0" cy="0" rx="30" ry={Math.max(4, randRy - 6)} fill={SCHAUM} />
             )}
+            {/* Der letzte Tropfen, der am Rand hängt, bevor er fällt */}
+            <circle
+              ref={(e) => {
+                el.randTropfen = e;
+              }}
+              cx="8"
+              cy="0"
+              r="0"
+              fill={BIER}
+            />
             {/* Henkel */}
             <path
               d={`M 34 10 q 28 8 22 ${Math.round(bodenY * 0.5)} q -4 10 -24 8`}
@@ -761,6 +875,22 @@ export function PressenFigur({
         </g>
         {hand(rechteHand[0]!, rechteHand[1]!)}
         {hand(linkeHand[0]!, linkeHand[1]!)}
+
+        {/* Tropfen: vom Strahl, beim Aufprall, am Kinn, vom Tischrand */}
+        <g data-testid="pressen-tropfen">
+          {Array.from({ length: MAX_TROPFEN }, (_, i) => (
+            <circle
+              key={i}
+              ref={(e) => {
+                el.tropfen[i] = e;
+              }}
+              cx="0"
+              cy="0"
+              r="0"
+              fill={BIER}
+            />
+          ))}
+        </g>
 
         {sieger && (
           <text x="500" y="560" textAnchor="middle" fontSize="64" aria-hidden="true">
