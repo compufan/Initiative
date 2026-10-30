@@ -17,6 +17,11 @@
 # keine einzige lesen. Der private Schlüssel liegt beim Betreiber und nie auf
 # der Maschine.
 #
+# Was `ablage = 'fern'` ist (Hetzner Storage Box, KALT_TREIBER=sftp), liegt NUR
+# dort und ist in diesem Skript NICHT enthalten – die Box ist die einzige Kopie.
+# Dafür die Snapshots der Storage Box einschalten (docs/DEPLOYMENT.md,
+# „Grosse Dateien"). Abgebrochene Übertragungen heissen dort `*.teil`.
+#
 # Der MEDIA_KEY wird bewusst NICHT mitgesichert. Er liegt in der `.env`, und
 # die bleibt draussen – sonst läge der Schlüssel neben dem, was er schützt.
 set -euo pipefail

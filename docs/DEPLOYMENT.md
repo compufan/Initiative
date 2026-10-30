@@ -545,6 +545,71 @@ select ablage, count(*), pg_size_pretty(sum(size)) from attachments group by 1;
 Bleibt etwas dauerhaft auf `wandert` stehen, ist ein Umzug abgebrochen – die
 Datei ist weiterhin erreichbar, sie belegt nur doppelt Platz.
 
+#### Grosse Dateien (mehrere GB): wann wo was liegt
+
+Uploads in Stücken gehen bis `UPLOAD_MAX_BYTES` (4 GiB). Für solche Dateien
+gelten diese Regeln:
+
+| Wann                                   | Was passiert                                                                                                   |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Während des Hochladens                 | Die Stücke landen in einer Teildatei in `UPLOAD_TEILE_DIR` – **immer auf der warmen Platte**, in voller Grösse. |
+| Abschluss                              | `rename` in die warme Ablage (kostet keinen Platz, dauert keine Sekunde). Nie direkt auf die Box: Die Abschlussanfrage dauerte sonst Minuten. |
+| Platte reicht (Reserve + alle offenen Uploads) | Upload wird angenommen.                                                                                |
+| Platte knapp, Box da                   | Upload wird angenommen, **wenn** warm liegende fertige Anhänge zusammen gross genug sind, um Platz zu schaffen und die Box (falls sie `statvfs` meldet) genug frei hat. Der Auslagerungsdienst wird sofort geweckt – ohne die Klassen zu übergehen: erst `niedrig`, dann `normal`, zuletzt `hoch`, innerhalb der Klasse nach Gewicht. |
+| Platte knapp, Box nicht erreichbar / zu klein / nichts auszulagern | `507` mit Begründung, welche der beiden Seiten nicht reicht.                                   |
+| Platte läuft während des Hochladens voll | Das Stück wird mit `507` abgelehnt, der Dienst angestossen; der Client setzt später fort.                      |
+
+**Zweite Schwelle:** Neben `KALT_GRENZE_GB` (Summe der Anhänge) prüft der
+Dienst bei jedem Durchgang den *freien Platz*: `Reserve + noch ausstehende
+Upload-Bytes + 8 GiB`. Liegt der freie Platz darunter, wird so viel
+ausgelagert, wie fehlt – auch wenn die Anhänge unter der Grenze liegen. (Auf
+256 GB bleiben bei 100 GB Grenze 156 GB für Datenbank, Sicherungen und die
+Teildateien paralleler Uploads; vier, fünf 4-GiB-Uploads gleichzeitig plus
+Datenbank können das ausfüllen, ohne dass die Anhänge je 100 GB erreichen.)
+
+**Umzug einer grossen Datei:**
+
+- Wird im Strom von der Platte geschickt, ohne zweite lokale Kopie und ohne
+  die Datei im Arbeitsspeicher. (Nur eine *Objektspeicher*-Warmablage nimmt den
+  Weg über den Arbeitsspeicher und verweigert dort Dateien über 512 MiB.)
+- Auf der Box entsteht zuerst `<Schlüssel>.teil`; erst wenn die Grösse drüben
+  stimmt, wird zu `<Schlüssel>` umbenannt. Unter dem richtigen Namen liegt nie
+  eine halbe Datei.
+- Reisst die Verbindung, bleibt das `.teil` stehen. Der nächste Versuch
+  vergleicht dessen Anfang und Ende mit der Quelle und **schreibt dort weiter**
+  (ab der letzten vollen MiB davor); passt es nicht, wird von vorn geschrieben.
+  Die lokale Fassung wird erst nach dem Nachmessen und Umschreiben gelöscht.
+- Zwei Fehlschläge in Folge an der Box brechen den Durchgang ab; der Dienst
+  ruht dann 1, 2, 4 … bis 60 Minuten. Nichts geht verloren, die Dateien liegen
+  weiter warm.
+- Wird die Nachricht mitten im Umzug gelöscht, entfernt der Dienst die ferne
+  Fassung selbst; `.teil`-Reste älter als 3 Tage räumt er täglich weg.
+- Bei eingeschaltetem `MEDIA_KEY` wird der *Geheimtext* übertragen und
+  nachgemessen (er ist etwas grösser als die Klartext-Grösse in der
+  Datenbank).
+
+**Lesen von der Box:** Ein Video-Spulen (`Range`) springt per SFTP-Seek an die
+Stelle – es wird nicht von vorn gelesen. Je Lesevorgang wird ein Platz von 16
+belegt (getrennt von 4 Plätzen für Schreiben/Löschen), solange der Strom offen
+ist; Miniaturen und Poster von Videos liegen warm bzw. in der Datenbank. Eine
+Rückholung häufig gelesener Dateien nach warm gibt es **nicht**.
+
+**Probe auf der echten Box:** `GET /api/v1/admin/storage-check/kalt?mib=64`
+(als Admin) schreibt eine Datei von 64 MiB (höchstens 512) mehrteilig auf die
+Box, misst nach, liest Bereiche aus Anfang, Mitte und Ende, liest alles,
+löscht sie – und nennt die Übertragungsrate. Ohne die Platte zu füllen: die
+Probedatei liegt kurz im Teile-Verzeichnis und wird sofort wieder entfernt.
+**Einmal nach dem Einrichten ausführen.**
+
+**Sicherung und Wiederherstellung:** `backup.sh` sichert nur die *warme*
+Ablage und die Datenbank. Was `fern` ist, liegt **nur auf der Box** – es gibt
+keine zweite Kopie. Die Box gehört deshalb in die eigene Datensicherung
+(Hetzner-Snapshots der Storage Box einschalten). Zum Wiederherstellen eines
+neuen Servers gehören neben dem Datenbank-Abzug: `MEDIA_KEY`, die `KALT_*`
+Einstellungen samt SSH-Schlüsseldatei und `KALT_SFTP_PFAD` – dann findet der
+neue Server die fernen Dateien dort, wo die Datenbank sie vermerkt. Fehlt der
+`MEDIA_KEY`, sind die Dateien auf der Box unlesbar.
+
 ---
 
 ## c) Backend
