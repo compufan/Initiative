@@ -34,7 +34,7 @@ import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 import { miniaturSrc } from '../media/helpers.js';
 import { useLongPress } from '../messenger/useLongPress.js';
 import { pfadZu, useFiles } from './state.js';
-import { MAX_KANTE } from '../bild/doc.js';
+import { MAX_KANTE } from '../bild/kennwerte.js';
 
 const ART_TEXT: Record<AttachmentKind, string> = {
   image: 'Bilder',

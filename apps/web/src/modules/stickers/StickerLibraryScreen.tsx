@@ -9,7 +9,7 @@ import { toast } from '../../state/ui.js';
 import { herunterladen } from '../../lib/herunterladen.js';
 import { uploadBlob } from '../../lib/upload.js';
 import { errorMessage, stickerBytes, stickerFileName, stickerSrc } from './helpers.js';
-import { StickerStudio } from './StickerStudio.js';
+import { StickerStudio } from '../werkstaetten.js';
 import { TonWaehlen } from '../media/TonWaehlen.js';
 import type { TonErgebnis } from '../media/TonWerkstatt.js';
 import { formatClock, timestampName } from '../media/helpers.js';

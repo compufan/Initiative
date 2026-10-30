@@ -5,7 +5,6 @@ import { EmptyState, Spinner } from '../../components/Feedback.js';
 import { prepareImage, videoPreview } from '../../lib/upload.js';
 import { BildBearbeiten } from '../bild/BildBearbeiten.js';
 import { rezeptSenden } from './RezeptBubble.js';
-import { StapelAbbruch, stapelAnwenden } from '../bild/stapel.js';
 import type { Anpassung } from '../bild/ton.js';
 import type { ComposerActionProps } from '../types.js';
 import { toast } from '../../state/ui.js';
@@ -216,7 +215,16 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
     const steuerung = new AbortController();
     reihenAbbruch.current = steuerung;
     setReihe({ fertig: 0, gesamt: ziele.length });
+    /*
+     * Die Rechnung erst hier holen: Sie zieht die ganze Zeichenkette des
+     * Editors mit, und die braucht nur, wer wirklich überträgt. Die Klasse
+     * für den Abbruch kommt aus demselben Modul – deshalb steht sie neben
+     * dem `try`, damit der `catch` sie kennt.
+     */
+    let abbruchArt: (new (...args: never[]) => Error) | null = null;
     try {
+      const { StapelAbbruch, stapelAnwenden } = await import('../bild/stapel.js');
+      abbruchArt = StapelAbbruch;
       const ergebnis = await stapelAnwenden(
         ziele.map((item) => ({ id: item.id, quelle: item.original })),
         anpassung,
@@ -262,7 +270,8 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
         'success',
       );
     } catch (error) {
-      if (error instanceof StapelAbbruch) toast('Abgebrochen – nichts geändert.', 'info');
+      if (abbruchArt && error instanceof abbruchArt)
+        toast('Abgebrochen – nichts geändert.', 'info');
       else toast(errorMessage(error, 'Das Übertragen ist fehlgeschlagen'), 'error');
     } finally {
       reihenAbbruch.current = null;

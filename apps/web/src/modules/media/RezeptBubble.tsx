@@ -3,10 +3,12 @@ import type { AttachmentDto } from '@initiative/shared';
 import type { MessageRendererProps } from '../types.js';
 import { MediaCaption, PendingMedia } from './MediaFrame.js';
 import { buildAttachment, errorMessage, mediaBytes, mediaSrc, sendMedia } from './helpers.js';
-import { BildEditor } from '../bild/BildEditor.js';
-import { MAX_KANTE, type BildDoc } from '../bild/doc.js';
-import { REZEPT_DATEINAME, REZEPT_MIME, rezeptLesen } from '../bild/rezept.js';
-import { zeichneAusgabe } from '../bild/zeichnen.js';
+import { BildEditor } from '../werkstaetten.js';
+import type { BildDoc } from '../bild/doc.js';
+// Nur die festen Werte statisch: Lesen und Zeichnen eines Rezepts ziehen die
+// ganze Rechenkette des Editors mit (gut 80 kB) und kommen deshalb erst im
+// Effekt unten – die Blase hält ihren Platz solange über `aspectRatio`.
+import { MAX_KANTE, REZEPT_DATEINAME, REZEPT_MIME } from '../bild/kennwerte.js';
 import { schriftenBereit } from '../../lib/schriften.js';
 import { flaeche2d } from '../bild/farbraum.js';
 import { prepareImage } from '../../lib/upload.js';
@@ -115,7 +117,11 @@ export function RezeptBubble({ message, isMine }: MessageRendererProps) {
       try {
         const [bildBlob, rezeptBlob] = await Promise.all([mediaBytes(foto), mediaBytes(anweisung)]);
         if (weg) return;
-        const bild = await loadImageFromBlob(bildBlob);
+        const [bild, { rezeptLesen }, { zeichneAusgabe }] = await Promise.all([
+          loadImageFromBlob(bildBlob),
+          import('../bild/rezept.js'),
+          import('../bild/zeichnen.js'),
+        ]);
         if (weg) return;
         const doc = await rezeptLesen(rezeptBlob, bild.naturalWidth, bild.naturalHeight);
         if (weg) return;

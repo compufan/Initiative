@@ -9,7 +9,7 @@ import { useSession } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
 import { connectionInfo, errorMessage, memberSince, patchMe } from './helpers.js';
-import { BildEditor } from '../bild/BildEditor.js';
+import { BildEditor } from '../werkstaetten.js';
 
 type EditField = 'displayName' | 'bio' | null;
 

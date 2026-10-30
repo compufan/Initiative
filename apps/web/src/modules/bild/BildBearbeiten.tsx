@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { BildEditor } from './BildEditor.js';
+// Nachgeladen: Der Knopf steht sofort in der Kachel, der Editor kommt erst
+// beim Tippen – siehe werkstaetten.ts.
+import { BildEditor } from '../werkstaetten.js';
 import type { Anpassung } from './ton.js';
 
 interface BildBearbeitenProps {

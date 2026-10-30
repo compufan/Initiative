@@ -3,9 +3,9 @@ import { LIMITS, type AttachmentDto } from '@initiative/shared';
 
 import { toast } from '../../state/ui.js';
 import { errorMessage, mediaBytes } from '../media/helpers.js';
-import { VideoEditorSheet } from './VideoEditorSheet.js';
-import { VideoGifSheet } from './VideoGifSheet.js';
-import { SavePackSheet } from '../stickers/SavePackSheet.js';
+// Nachgeladen: Die Knöpfe stehen sofort auf der Blase (kein Springen), die
+// Blätter dahinter – zusammen gut 200 kB – kommen erst beim Tippen.
+import { SavePackSheet, VideoEditorSheet, VideoGifSheet } from '../werkstaetten.js';
 
 /**
  * Der Weg aus einem Video heraus – so, wie `FotoWerkstatt` ihn für ein Foto

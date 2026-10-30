@@ -7,7 +7,7 @@ import { buildAttachment, mediaSrc, sendMedia } from './helpers.js';
 import { rezeptSenden } from './RezeptBubble.js';
 import { prepareImage } from '../../lib/upload.js';
 import { toast } from '../../state/ui.js';
-import { MAX_KANTE } from '../bild/doc.js';
+import { MAX_KANTE } from '../bild/kennwerte.js';
 
 function ImageTile({
   attachment,

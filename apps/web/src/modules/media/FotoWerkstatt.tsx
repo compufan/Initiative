@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { AttachmentDto } from '@initiative/shared';
-import { BildEditor } from '../bild/BildEditor.js';
-import { StickerStudio } from '../stickers/StickerStudio.js';
+// Nachgeladen: Editor und Studio sind zusammen über 250 kB – siehe werkstaetten.ts.
+import { BildEditor, StickerStudio } from '../werkstaetten.js';
 import { toast } from '../../state/ui.js';
 import { errorMessage, mediaBytes } from './helpers.js';
 

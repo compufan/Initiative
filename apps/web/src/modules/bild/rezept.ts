@@ -102,11 +102,8 @@ import {
 /** Die Fassung des Formats. Steht in jeder Datei und wird beim Lesen geprüft. */
 export const REZEPT_FASSUNG = 1;
 
-/** Der Dateiname, unter dem ein Rezept an der Nachricht hängt. */
-export const REZEPT_DATEINAME = 'rezept.json.gz';
-
-/** Der Typ, unter dem es hochgeladen wird – `file` erlaubt jeden. */
-export const REZEPT_MIME = 'application/gzip';
+/** Dateiname und Typ eines Rezepts – stehen in `kennwerte.ts`. */
+export { REZEPT_DATEINAME, REZEPT_MIME } from './kennwerte.js';
 
 /**
  * Die Grenzen, an denen eine fremde Datei abprallt.

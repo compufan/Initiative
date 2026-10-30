@@ -8,7 +8,8 @@ import { useChat } from '../../state/chat.js';
 import { toast } from '../../state/ui.js';
 import type { ComposerActionProps } from '../types.js';
 import { errorMessage, readRecentStickers, rememberSticker, stickerSrc } from './helpers.js';
-import { StickerStudio } from './StickerStudio.js';
+// Nachgeladen: Das Studio ist allein gut 100 kB, die Tastatur braucht es erst beim Tippen auf „Neu".
+import { StickerStudio } from '../werkstaetten.js';
 
 const RECENT_TAB = 'recent';
 

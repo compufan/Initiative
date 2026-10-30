@@ -14,6 +14,7 @@
  * dazwischen übersetzen `nachAnsicht` und `nachOriginal`.
  */
 
+import { MAX_KANTE } from './kennwerte.js';
 import { FARB_NEUTRAL, NEUTRAL, istNeutral, type Anpassung, type Farbanpassung } from './ton.js';
 import { drehenUm, neigungImOriginal, rahmenEinpassen, zuschnittMitte } from './neigen.js';
 
@@ -351,8 +352,8 @@ export interface BildDoc {
   bereiche: Bereich[];
 }
 
-/** Die längste Kante, die beim Speichern herauskommt. */
-export const MAX_KANTE = 2560;
+/** Die längste Kante, die beim Speichern herauskommt – steht in `kennwerte.ts`. */
+export { MAX_KANTE };
 
 export function neuesDoc(width: number, height: number): BildDoc {
   return {

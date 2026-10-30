@@ -1,11 +1,30 @@
 import { createElement } from 'react';
 import { defineWebModule } from '../types.js';
+import { nachladbar } from '../../components/Nachladen.js';
 import { GameBubble } from './GameBubble.js';
-import { GameScreen } from './GameScreen.js';
 import { GameStartSheet } from './GameStartSheet.js';
 import { GamesScreen } from './GamesScreen.js';
-import { PressenLaufScreen } from './statistik/PressenLaeufeListe.js';
-import { PressenStatistikScreen } from './statistik/PressenStatistikScreen.js';
+
+/*
+ * Das Spielfeld und die Statistik erst holen, wenn jemand dorthin geht.
+ *
+ * WARUM nicht auch die Übersicht: Sie ist ein Ziel der unteren Leiste und
+ * soll beim Antippen sofort stehen. Die Spielseite dagegen öffnet man aus
+ * einer Blase oder der Übersicht heraus – ein Augenblick Laden fällt dort
+ * nicht auf, und die Statistik mit ihren Diagrammen braucht kaum jemand.
+ */
+const GameScreen = nachladbar(
+  () => import('./GameScreen.js').then((m) => m.GameScreen),
+  'bildschirm',
+);
+const PressenStatistikScreen = nachladbar(
+  () => import('./statistik/PressenStatistikScreen.js').then((m) => m.PressenStatistikScreen),
+  'bildschirm',
+);
+const PressenLaufScreen = nachladbar(
+  () => import('./statistik/PressenLaeufeListe.js').then((m) => m.PressenLaufScreen),
+  'bildschirm',
+);
 import './styles.css';
 
 /**

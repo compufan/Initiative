@@ -1,7 +1,14 @@
 import { createElement } from 'react';
+import { nachladbar } from '../../components/Nachladen.js';
 import { defineWebModule } from '../types.js';
 import { StickerBubble } from './StickerBubble.js';
-import { StickerLibraryScreen } from './StickerLibraryScreen.js';
+
+// Die Bibliothek erreicht man nur über Profil oder Tastatur – sie muss nicht
+// beim Start im Bündel liegen.
+const StickerLibraryScreen = nachladbar(
+  () => import('./StickerLibraryScreen.js').then((m) => m.StickerLibraryScreen),
+  'bildschirm',
+);
 import { StickerPickerSheet } from './StickerPickerSheet.js';
 import { SaveStickerSheet } from './SaveStickerSheet.js';
 import './styles.css';
