@@ -259,6 +259,14 @@ interface Werk {
   leinwand: HTMLCanvasElement;
   /** Wie viele Stützstellen dieses Gerät verträgt. */
   taps: number;
+  /**
+   * Die gebauten Programme dieses Kontexts, nach Fragmenttext; `null` heisst
+   * „liess sich nicht bauen“. WARUM aufheben: Je Lauf fünf Programme neu zu
+   * übersetzen kostet auf einem Telefon spürbar, und sie hängen nur an `taps`,
+   * das je Kontext fest ist. Sie leben so lange wie der Kontext – geht der
+   * verloren, wird das ganze Werk samt Programmen verworfen.
+   */
+  programme: Map<string, WebGLProgram | null>;
 }
 
 let werk: Werk | null | undefined;
@@ -267,6 +275,7 @@ let gpuVerboten = false;
 /** Von aussen abschalten – nur für Prüfungen, wie in `tonGpu.ts`. */
 export function entfaltungGpuAbschalten(an: boolean): void {
   gpuVerboten = an;
+  if (werk) for (const p of werk.programme.values()) if (p) werk.gl.deleteProgram(p);
   if (an) werk = null;
   else werk = undefined;
 }
@@ -284,21 +293,41 @@ function uebersetzen(gl: WebGL2RenderingContext, art: number, quelle: string): W
   return shader;
 }
 
+/**
+ * Ein Programm aus Eckpunkt- und Fragmentschattierer.
+ *
+ * Räumt bei jedem Scheitern hinter sich auf: Ein übersetzter Schattierer,
+ * dessen Partner scheitert, oder ein Programm, das nicht bindet, belegte
+ * sonst Treiberspeicher, bis der Kontext geht. Nach dem Binden werden die
+ * Schattierer gelöst und gelöscht – das Programm braucht sie nicht mehr.
+ */
 function programmBauen(gl: WebGL2RenderingContext, fragment: string): WebGLProgram | null {
   const ecken = uebersetzen(gl, gl.VERTEX_SHADER, ECKPUNKTE);
   const farben = uebersetzen(gl, gl.FRAGMENT_SHADER, fragment);
-  if (!ecken || !farben) return null;
-  const programm = gl.createProgram();
-  if (!programm) return null;
-  gl.attachShader(programm, ecken);
-  gl.attachShader(programm, farben);
-  gl.bindAttribLocation(programm, 0, 'aOrt');
-  gl.linkProgram(programm);
-  if (!gl.getProgramParameter(programm, gl.LINK_STATUS)) {
-    console.error('Entfaltung, Programm:', gl.getProgramInfoLog(programm));
-    return null;
+  const programm = ecken && farben ? gl.createProgram() : null;
+  let gebunden = false;
+  if (programm && ecken && farben) {
+    gl.attachShader(programm, ecken);
+    gl.attachShader(programm, farben);
+    gl.bindAttribLocation(programm, 0, 'aOrt');
+    gl.linkProgram(programm);
+    gebunden = Boolean(gl.getProgramParameter(programm, gl.LINK_STATUS));
+    if (!gebunden) console.error('Entfaltung, Programm:', gl.getProgramInfoLog(programm));
+    gl.detachShader(programm, ecken);
+    gl.detachShader(programm, farben);
   }
-  return programm;
+  if (ecken) gl.deleteShader(ecken);
+  if (farben) gl.deleteShader(farben);
+  if (programm && !gebunden) gl.deleteProgram(programm);
+  return gebunden ? programm : null;
+}
+
+/** Ein Programm dieses Werks – gebaut beim ersten Mal, danach aus dem Vorrat. */
+function programm(w: Werk, fragment: string): WebGLProgram | null {
+  if (w.programme.has(fragment)) return w.programme.get(fragment) ?? null;
+  const p = programmBauen(w.gl, fragment);
+  w.programme.set(fragment, p);
+  return p;
 }
 
 /**
@@ -309,6 +338,12 @@ function programmBauen(gl: WebGL2RenderingContext, fragment: string): WebGLProgr
  * WebGL2 bei jedem Bild neu scheitern.
  */
 function werkzeug(): Werk | null {
+  /*
+   * Ein verlorener Kontext kommt nicht von selbst zurück, und alles, was an
+   * ihm hing – Programme, Texturen –, ist ungültig. Statt jeden weiteren Lauf
+   * schwarz zurückzugeben, wird das Werk neu gebaut.
+   */
+  if (werk && werk.gl.isContextLost()) werk = undefined;
   if (werk !== undefined) return werk;
   werk = null;
   if (gpuVerboten) return null;
@@ -334,7 +369,7 @@ function werkzeug(): Werk | null {
     // Zwanzig Vektoren bleiben für alles andere im Schattierer übrig; der
     // Rest steht den Stützstellen zu.
     const taps = Math.max(16, Math.min(512, vektoren - 20));
-    werk = { gl, leinwand, taps };
+    werk = { gl, leinwand, taps, programme: new Map() };
     return werk;
   } catch {
     return null;
@@ -354,7 +389,12 @@ interface Ziel {
 function zielBauen(gl: WebGL2RenderingContext, b: number, h: number): Ziel | null {
   const textur = gl.createTexture();
   const rahmen = gl.createFramebuffer();
-  if (!textur || !rahmen) return null;
+  const weg = () => {
+    if (textur) gl.deleteTexture(textur);
+    if (rahmen) gl.deleteFramebuffer(rahmen);
+    return null;
+  };
+  if (!textur || !rahmen) return weg();
   gl.bindTexture(gl.TEXTURE_2D, textur);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, b, h, 0, gl.RGBA, gl.HALF_FLOAT, null);
   /*
@@ -381,7 +421,7 @@ function zielBauen(gl: WebGL2RenderingContext, b: number, h: number): Ziel | nul
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
   gl.bindFramebuffer(gl.FRAMEBUFFER, rahmen);
   gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, textur, 0);
-  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) return null;
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) return weg();
   return { textur, rahmen };
 }
 
@@ -432,11 +472,12 @@ export async function entfaltenAufGpu(
   w.leinwand.width = breite;
   w.leinwand.height = hoehe;
 
-  const start = programmBauen(gl, START);
-  const verhaeltnisP = programmBauen(gl, verhaeltnisQuelle(w.taps));
-  const schrittP = programmBauen(gl, schrittQuelle(w.taps));
-  const spanneP = programmBauen(gl, SPANNE);
-  const ausgabeP = programmBauen(gl, AUSGABE);
+  // Die Programme gehören dem Werk, nicht diesem Lauf – `aufraeumen` lässt sie stehen.
+  const start = programm(w, START);
+  const verhaeltnisP = programm(w, verhaeltnisQuelle(w.taps));
+  const schrittP = programm(w, schrittQuelle(w.taps));
+  const spanneP = programm(w, SPANNE);
+  const ausgabeP = programm(w, AUSGABE);
   if (!start || !verhaeltnisP || !schrittP || !spanneP || !ausgabeP) {
     throw new EntfaltungFehler('Die Schattierer liessen sich nicht bauen.');
   }
@@ -479,7 +520,6 @@ export async function entfaltenAufGpu(
     }
     gl.deleteTexture(quelltextur);
     gl.deleteBuffer(eck);
-    for (const p of [start, verhaeltnisP, schrittP, spanneP, ausgabeP]) gl.deleteProgram(p);
   };
 
   if (!beobachtet || !ersteSchaetzung || !zweiteSchaetzung || !verhaeltnis) {
@@ -623,6 +663,14 @@ export async function entfaltenAufGpu(
     gl.uniform1i(gl.getUniformLocation(ausgabeP, 'uBegrenzen'), braucheSaum ? 1 : 0);
     zeichnen(null);
 
+    /*
+     * Ging der Kontext unterwegs verloren (ein Häppchen wartet auf den
+     * nächsten Bildwechsel, der Treiber setzt zurück), liefert `readPixels`
+     * lauter Nullen – ein schwarzes Bild, das wie ein Ergebnis aussieht.
+     */
+    if (gl.isContextLost()) {
+      throw new EntfaltungFehler('Die Grafikeinheit wurde zurückgesetzt – bitte noch einmal.');
+    }
     const bytes = new Uint8ClampedArray(breite * hoehe * 4);
     gl.readPixels(0, 0, breite, hoehe, gl.RGBA, gl.UNSIGNED_BYTE, bytes);
     /*
