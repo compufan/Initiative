@@ -186,6 +186,7 @@ Für den Betrieb heisst das:
 | `KALT_TREIBER`         | `aus`             | `aus` \| `sftp` \| `lokal`. Zweite, grössere, langsamere Ablage für Anhänge. Siehe unten.                    |
 | `KALT_GRENZE_GB`       | `100`             | Ab wie viel app-eigenen Daten auf dem Server ausgelagert wird.                                              |
 | `KALT_GRENZE_HOCH_GB`  | `120`             | Ab wann auch Dateien mit Priorität „hoch" wandern.                                                          |
+| `KALT_NOTFALL_PUFFER_GB` | `8`             | Notfallpuffer in GiB (1 bis 512, sonst Startfehler): so viel Luft über Reserve und offene Uploads soll die warme Platte haben, sonst lagert der Dienst auch unter der Schwelle aus. Kleine Platte: 2 bis 4. |
 | `KALT_SFTP_WIRT`       | –                 | Pflicht bei `sftp`, z. B. `u670518.your-storagebox.de`.                                                     |
 | `KALT_SFTP_HAFEN`      | `23`              | Bei Hetzner **23**, nicht 22 – siehe unten.                                                                 |
 | `KALT_SFTP_BENUTZER`   | –                 | Pflicht bei `sftp`. Am besten ein Unterkonto.                                                               |

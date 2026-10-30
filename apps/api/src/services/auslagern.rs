@@ -650,9 +650,8 @@ pub async fn auslagerbar(pool: &PgPool) -> i64 {
     belegt(pool).await
 }
 
-/// Wie viel Luft über die Reserve hinaus frei sein soll, wenn Uploads laufen:
-/// Platz für noch einen grossen Upload, ohne dass der erst einen Umzug abwarten muss.
-const PLATZ_PUFFER: i64 = 8 * 1024 * 1024 * 1024;
+// Der Notfallpuffer (Luft über die Reserve hinaus, damit noch ein grosser
+// Upload ohne Umzug-Warten Platz hat) kommt aus `KALT_NOTFALL_PUFFER_GB`.
 
 /**
  * Wie viele Bytes die warme Platte JETZT zusätzlich frei haben müsste.
@@ -681,7 +680,7 @@ pub async fn platzbedarf(pool: &PgPool, config: &Config) -> i64 {
     let ziel = config
         .upload_platte_reserve_bytes
         .saturating_add(ausstehend)
-        .saturating_add(PLATZ_PUFFER);
+        .saturating_add(config.kalt_notfall_puffer_bytes);
     ziel.saturating_sub(frei as i64).max(0)
 }
 

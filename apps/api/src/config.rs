@@ -161,6 +161,14 @@ pub struct Config {
     pub kalt_grenze_gb: i64,
     /// Ab wie viel Gigabyte auch Wichtiges drankommt.
     pub kalt_grenze_hoch_gb: i64,
+    /**
+     * Notfallpuffer in Bytes (`KALT_NOTFALL_PUFFER_GB`, Vorgabe 8, erlaubt 1 bis
+     * 512): Wie viel die warme Platte ÜBER Reserve und offene Uploads hinaus
+     * frei haben soll, bevor der Auslagerungsdienst ausserhalb der Schwelle
+     * aktiv wird (siehe `auslagern::platzbedarf`). Bei einer kleinen Platte
+     * (z. B. 80 GB) sind 8 GiB zu viel, bei grossen Videos zu wenig.
+     */
+    pub kalt_notfall_puffer_bytes: i64,
     /// Wie oft der Erinnerungsdienst nach Fälligem sieht, in Sekunden; 0
     /// schaltet ihn aus. Der Dienst klemmt den Wert auf 30 bis 3600 (siehe
     /// `services::erinnern::takt`).
@@ -337,6 +345,33 @@ fn number<T: std::str::FromStr>(key: &str, fallback: T) -> T {
         .unwrap_or(fallback)
 }
 
+/// Vorgabe des Notfallpuffers in GiB.
+pub const NOTFALL_PUFFER_VORGABE_GB: i64 = 8;
+
+/**
+ * `KALT_NOTFALL_PUFFER_GB` auswerten.
+ *
+ * Ein unbrauchbarer Wert ist ein harter Startfehler und kein stiller
+ * Rückfall: 0 oder ein Tippfehler schaltete den Puffer unbemerkt ab, und
+ * die Platte liefe wieder voll, ohne dass es je aufgefallen wäre.
+ */
+pub fn notfall_puffer_bytes(roh: Option<String>) -> Result<i64, AppError> {
+    let Some(roh) = roh else {
+        return Ok(NOTFALL_PUFFER_VORGABE_GB << 30);
+    };
+    let gb: i64 = roh.trim().parse().map_err(|_| {
+        AppError::config(format!(
+            "KALT_NOTFALL_PUFFER_GB=\"{roh}\" ist keine ganze Zahl (erlaubt 1 bis 512)"
+        ))
+    })?;
+    if !(1..=512).contains(&gb) {
+        return Err(AppError::config(format!(
+            "KALT_NOTFALL_PUFFER_GB={gb} liegt ausserhalb von 1 bis 512"
+        )));
+    }
+    Ok(gb << 30)
+}
+
 fn list(key: &str) -> Vec<String> {
     var(key)
         .map(|value| {
@@ -510,6 +545,7 @@ impl Config {
             kalt_grenze_hoch_gb: var("KALT_GRENZE_HOCH_GB")
                 .and_then(|g| g.parse().ok())
                 .unwrap_or(120),
+            kalt_notfall_puffer_bytes: notfall_puffer_bytes(var("KALT_NOTFALL_PUFFER_GB"))?,
             erinnern_takt_s: number(
                 "ERINNERN_TAKT_S",
                 crate::services::erinnern::TAKT_VORGABE_S,
@@ -672,5 +708,22 @@ mod media_key_tests {
         // Beim Kopieren aus dem Terminal hängt schnell ein Zeilenumbruch dran.
         let roh = format!("  {}\n", STANDARD.encode([1u8; 32]));
         assert_eq!(media_key_lesen(&roh).expect("gültig"), [1u8; 32]);
+    }
+}
+
+#[cfg(test)]
+mod notfall_puffer_tests {
+    use super::*;
+
+    #[test]
+    fn der_notfallpuffer_hat_eine_vorgabe_und_grenzen() {
+        assert_eq!(notfall_puffer_bytes(None).unwrap(), 8i64 << 30);
+        assert_eq!(notfall_puffer_bytes(Some("20".into())).unwrap(), 20i64 << 30);
+        for schlecht in ["0", "-3", "513", "viel", ""] {
+            assert!(
+                notfall_puffer_bytes(Some(schlecht.into())).is_err(),
+                "{schlecht} wurde angenommen"
+            );
+        }
     }
 }
