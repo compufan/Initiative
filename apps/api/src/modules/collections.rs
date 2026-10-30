@@ -274,7 +274,13 @@ async fn update(
                         "Eine Sammlung kann nicht in einen ihrer eigenen Unterordner",
                     ));
                 }
-                if depth_of(&state, parent_id).await? + 1 > COLLECTION_DEPTH_MAX {
+                // Der ganze Zweig zieht mit um: Hängt er drei Ebenen tief und
+                // kommt unter Ebene 7, läge sein Ende auf Ebene 10. Nur den
+                // Ordner selbst zu zählen umginge die Grenze, die das Anlegen
+                // einhält.
+                if depth_of(&state, parent_id).await? + height_of(&state, id).await?
+                    > COLLECTION_DEPTH_MAX
+                {
                     return Err(AppError::bad_request(format!(
                         "Mehr als {COLLECTION_DEPTH_MAX} Ebenen sind nicht vorgesehen"
                     )));
@@ -357,6 +363,25 @@ select coalesce(max(tiefe), 0)::int from kette",
     .fetch_one(&state.pool)
     .await?;
     Ok(depth)
+}
+
+/// Wie viele Ebenen der Zweig ab dieser Sammlung hat (sie selbst zählt als 1).
+async fn height_of(state: &AppState, id: Uuid) -> AppResult<i32> {
+    let hoehe: i32 = sqlx::query_scalar(
+        "
+with recursive zweig as (
+  select id, 1 as hoehe from collections where id = $1 and deleted_at is null
+  union all
+  select c.id, z.hoehe + 1
+    from collections c join zweig z on c.parent_id = z.id
+   where c.deleted_at is null and z.hoehe < 64
+)
+select coalesce(max(hoehe), 0)::int from zweig",
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(hoehe)
 }
 
 /// Liegt `candidate` irgendwo unterhalb von `ancestor`?
@@ -748,6 +773,19 @@ async fn write_grant(
             "Entweder eine Person oder ein Chat – nicht beides",
         )
         .finish()?;
+
+    // Eine Kennung, die es nicht gibt, scheiterte sonst erst am Fremdschlüssel
+    // der Datenbank und kam als „Interner Serverfehler“ zurück.
+    if let Some(user_id) = input.user_id {
+        let vorhanden: bool =
+            sqlx::query_scalar("select exists (select 1 from users where id = $1)")
+                .bind(user_id)
+                .fetch_one(&state.pool)
+                .await?;
+        if !vorhanden {
+            return Err(AppError::not_found("Person nicht gefunden"));
+        }
+    }
 
     // Rechte an einen Chat vergeben darf nur, wer selbst darin ist. Sonst
     // liesse sich eine fremde Gruppe unbemerkt mit Dateien versorgen.

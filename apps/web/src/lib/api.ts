@@ -215,11 +215,23 @@ const REQUEST_TIMEOUT_MS = 20_000;
 export const UPLOAD_TIMEOUT_MS = 120_000;
 
 /** Verbindet das eigene Zeitlimit mit einem ggf. uebergebenen Abbruchsignal. */
-function withTimeout(signal?: AbortSignal, timeoutMs = REQUEST_TIMEOUT_MS): AbortSignal {
+export function withTimeout(signal?: AbortSignal, timeoutMs = REQUEST_TIMEOUT_MS): AbortSignal {
   const timeout = AbortSignal.timeout(timeoutMs);
   if (!signal) return timeout;
-  // `any` gibt es noch nicht ueberall; dann gilt das Zeitlimit allein.
-  return typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, timeout]) : timeout;
+  if (typeof AbortSignal.any === 'function') return AbortSignal.any([signal, timeout]);
+  // `any` gibt es noch nicht ueberall (Safari vor 17.4). Das Zeitlimit allein
+  // zu nehmen hiesse, den Abbruch des Aufrufers zu verschlucken: Die Ortssuche
+  // bricht jede ueberholte Anfrage ab, und ihre langsame Antwort kaeme sonst
+  // nach der neueren an und ueberschriebe deren Vorschlaege.
+  const gemeinsam = new AbortController();
+  for (const quelle of [signal, timeout]) {
+    if (quelle.aborted) {
+      gemeinsam.abort(quelle.reason);
+      break;
+    }
+    quelle.addEventListener('abort', () => gemeinsam.abort(quelle.reason), { once: true });
+  }
+  return gemeinsam.signal;
 }
 
 export interface RequestOptions {

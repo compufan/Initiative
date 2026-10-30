@@ -105,7 +105,7 @@ async fn suchen(
     if q.chars().count() > MAX_ANFRAGE {
         return Err(AppError::bad_request("Die Suche ist zu lang."));
     }
-    let schluessel = q.to_lowercase();
+    let schluessel = suchschluessel(&q);
     if let Some(treffer) = zwischenspeicher_lesen(&schluessel) {
         return Ok(Json(Antwort {
             items: treffer,
@@ -176,7 +176,7 @@ async fn beim_dienst_fragen(state: &AppState, suche: &str) -> AppResult<Value> {
 /// Der Ort zu einer Postleitzahl – aus dem Zwischenspeicher oder beim Dienst.
 /// Wer nichts findet oder wen der Dienst im Stich lässt, sucht ohne Ort weiter.
 async fn stadt_zur_plz(state: &AppState, plz: &str) -> Option<String> {
-    let schluessel = format!("plz:{plz}");
+    let schluessel = plz_schluessel(plz);
     if let Some(treffer) = zwischenspeicher_lesen(&schluessel) {
         return treffer.into_iter().next().map(|t| t.titel);
     }
@@ -228,6 +228,20 @@ pub fn stadt_aus_plz_antwort(roh: &Value, plz: &str, bevorzugt: &[String]) -> Op
 }
 
 /* ---------- Zwischenspeicher ---------- */
+
+/// Schlüssel für eine getippte Anfrage.
+///
+/// Die Ortsauflösung einer Postleitzahl liegt im selben Speicher. Ohne eigenes
+/// Präfix je Art wäre „plz:64283“ als Suchtext derselbe Schlüssel wie die
+/// Auflösung von 64283: Wer das tippt, schriebe seine Treffer dort hinein,
+/// und alle anderen bekämen daraus den „Ort“ zu dieser Postleitzahl.
+fn suchschluessel(q: &str) -> String {
+    format!("suche:{}", q.to_lowercase())
+}
+
+fn plz_schluessel(plz: &str) -> String {
+    format!("plz:{plz}")
+}
 
 type Speicher = Mutex<HashMap<String, (Instant, Vec<Treffer>)>>;
 
@@ -429,6 +443,12 @@ mod tests {
 
     fn merkmal(eigen: Value, lon: f64, lat: f64) -> Value {
         json!({"type": "Feature", "properties": eigen, "geometry": {"type": "Point", "coordinates": [lon, lat]}})
+    }
+
+    #[test]
+    fn eine_getippte_anfrage_trifft_nie_den_schluessel_einer_plz() {
+        assert_ne!(suchschluessel("plz:64283"), plz_schluessel("64283"));
+        assert_ne!(suchschluessel("64283"), plz_schluessel("64283"));
     }
 
     #[test]
