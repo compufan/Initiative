@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { ticTacToe, type GameSessionDto } from '@initiative/shared';
+import { pressen, ticTacToe, type GameSessionDto } from '@initiative/shared';
 import {
   applyMoveLocally,
   compareSessions,
   gameInfoFor,
   playersLabel,
+  pressenAufstellung,
   seatClass,
   statusInfo,
 } from './helpers.js';
@@ -147,5 +148,45 @@ describe('catalog fallback', () => {
   it('gives every seat its own colour class', () => {
     expect(seatClass(0)).not.toBe(seatClass(1));
     expect(seatClass(null)).toBe('game-seat-none');
+  });
+});
+
+describe('Pressen im Spielbetrieb', () => {
+  const solo = () =>
+    session({
+      gameKey: 'pressen',
+      players: [{ userId: ME, seat: 0, joinedAt: '2026-08-24T10:00:00.000Z' }],
+      state: pressen.createInitialState([{ seat: 0, userId: ME }]),
+    });
+  const lauf = {
+    typ: 'ergebnis',
+    runde: 1,
+    dauerMs: 12000,
+    verschuettetDezi: 40,
+    reaktionMs: 400,
+    vorzeitig: false,
+    verzoegerungMs: 0,
+  };
+
+  it('eine laufende Partie mit einer Person ist eine Übung gegen den Spiegel', () => {
+    expect(playersLabel(solo(), ME, nameOf)).toBe('Du gegen den Spiegel');
+    expect(statusInfo({ ...solo(), status: 'aborted' }, ME, nameOf).text).toBe('Übung beendet');
+  });
+
+  it('ein gemeldeter Lauf im Spiegel bleibt Atempo und die Partie läuft weiter', () => {
+    const result = applyMoveLocally(solo(), lauf, ME);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.session.status).toBe('active');
+    expect((result.session.state as { atempo: number; runde: number }).atempo).toBe(1);
+    expect((result.session.state as { runde: number }).runde).toBe(2);
+  });
+
+  it('beschreibt die Aufstellung je nach Zahl der Spielenden', () => {
+    expect(pressenAufstellung(1)).toMatch(/Spiegel/);
+    expect(pressenAufstellung(2)).toMatch(/Zu zweit/);
+    expect(pressenAufstellung(3)).toMatch(/Ampel/);
+    expect(pressenAufstellung(4)).toMatch(/Staffette/);
+    expect(pressenAufstellung(5)).toMatch(/Ampel/);
   });
 });

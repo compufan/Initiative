@@ -804,6 +804,13 @@ static REGISTRY: LazyLock<Vec<Box<dyn GameDefinition>>> = LazyLock::new(|| {
 });
 ```
 
+Echtzeitspiele (mehrere Sitze spielen gleichzeitig, kein „am Zug“) gehen
+denselben Weg, nur dass der Zug das Ergebnis eines Laufs ist; das Beispiel
+dafür ist Pressen, siehe [entwurf-pressen.md](entwurf-pressen.md). Die Regel
+kann `can_join` überschreiben, wenn die Rollen an der Zahl der Spielenden
+hängen, und das Spiel in TypeScript `echtzeit: true` setzen, damit der Client
+Züge nach einem Versionskonflikt erneut sendet.
+
 Damit erscheint das Spiel sofort in `GET /api/v1/games` und lässt sich über
 `POST /api/v1/games/sessions` starten.
 

@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react';
 import type { GameSessionDto } from '@initiative/shared';
 import { ConnectFourBoard, ConnectFourMini } from './ConnectFourBoard.js';
+import { PressenBoard } from './PressenBoard.js';
 import { TicTacToeBoard, TicTacToeMini } from './TicTacToeBoard.js';
 
 /**
@@ -36,6 +37,9 @@ export interface GameMiniBoardProps {
 export const gameBoards: Record<string, ComponentType<GameBoardProps>> = {
   'tic-tac-toe': TicTacToeBoard,
   'connect-four': ConnectFourBoard,
+  // Echtzeit: Das Brett rechnet den eigenen Lauf selbst und meldet nur das
+  // Ergebnis als Zug (siehe docs/entwurf-pressen.md).
+  pressen: PressenBoard,
 };
 
 /**

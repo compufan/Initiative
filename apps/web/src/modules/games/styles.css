@@ -627,3 +627,273 @@
   border-color: var(--accent);
   color: var(--accent-contrast);
 }
+
+/* ---------- Pressen ----------
+   Eine Bühne je Lauf: das Männchen steht in der Mitte (dort sitzt der Mund der
+   Simulation), das Glas fährt darüber. Fremde Bahnen sind klein. */
+
+.pressen {
+  --pressen-bier: #e8a317;
+}
+
+.pressen-feld {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 16px);
+  background: var(--surface);
+  overflow: hidden;
+  touch-action: none;
+}
+
+.pressen-buehne {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+
+/* Im Spiegelmodus steht das Spiegelbild klein darunter, nicht daneben. */
+.pressen-buehne .pressen-figur.is-klein {
+  width: 40%;
+  justify-self: end;
+  margin-top: -56px;
+  opacity: 0.85;
+}
+
+.pressen-figur {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.pf-boden {
+  stroke: var(--border);
+  stroke-width: 4;
+}
+
+.pressen-hud {
+  position: absolute;
+  inset: 6px 8px auto 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.pressen-hud strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.pressen-hud .is-warn strong {
+  color: var(--danger);
+}
+
+.pressen-zaehler {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 5rem;
+  font-weight: 800;
+  color: var(--accent);
+  pointer-events: none;
+}
+
+/* Der Knopf steht an wechselnder Stelle, aber nie am Rand abgeschnitten. */
+.pressen-abstellen {
+  position: absolute;
+  min-height: 56px;
+  min-width: 140px;
+  font-size: 1.05rem;
+  z-index: 2;
+}
+
+.pressen-steuerung {
+  display: flex;
+  justify-content: space-between;
+  align-items: stretch;
+  gap: var(--space-3);
+  width: 100%;
+  max-width: 560px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.pressen-pfeile {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.pressen-taste {
+  min-width: 72px;
+  min-height: 72px;
+  padding: 0 var(--space-4);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg, 16px);
+  background: var(--surface-2, var(--surface));
+  color: var(--text);
+  font-size: 1.4rem;
+  font-weight: 700;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.pressen-taste.is-gedrueckt {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent, #fff);
+}
+
+.pressen-neigen {
+  min-width: 140px;
+  font-size: 1.1rem;
+}
+
+.pressen-vorzeitig {
+  align-self: center;
+}
+
+.pressen-start {
+  width: 100%;
+  max-width: 560px;
+}
+
+.pressen-atempo {
+  margin: 0;
+  padding: var(--space-3);
+  border-radius: var(--radius, 12px);
+  background: var(--warning-soft, var(--surface-2, var(--surface)));
+  font-weight: 650;
+  text-align: center;
+}
+
+.pressen-bahnen {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: var(--space-2);
+  width: 100%;
+  max-width: 560px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pressen-bahn {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-2);
+  border: 2px solid var(--seat, var(--border));
+  border-radius: var(--radius, 12px);
+  background: var(--surface);
+  font-size: 0.8rem;
+}
+
+.pressen-bahn .pressen-figur {
+  max-height: 90px;
+}
+
+.pressen-bahn-name {
+  font-weight: 650;
+}
+
+.pressen-bahn-stand {
+  color: var(--text-muted);
+}
+
+.pressen-malus {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  max-width: 560px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.pressen-malus-balken {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.pressen-malus-balken span {
+  display: block;
+  height: 100%;
+  background: var(--danger);
+  transition: width 0.4s linear;
+}
+
+.pressen-malus-wert {
+  min-width: 5.5em;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.pressen-wertung {
+  width: 100%;
+  max-width: 560px;
+}
+
+.pressen-wertung h3 {
+  margin: 0 0 var(--space-2);
+  font-size: 1rem;
+}
+
+.pressen-wertung ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.pressen-wertung li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: 0.9rem;
+}
+
+.pressen-wertung li.ist-sieger {
+  font-weight: 700;
+}
+
+/* Bewegung nur als Zugabe: Wackeln des Glases und Schlucken. Die Physik des
+   Spiels selbst bleibt – sie IST das Spiel. */
+.pressen-figur.is-bewegt .pf-schluck {
+  animation: pf-schluck 0.5s ease-in-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes pf-schluck {
+  50% {
+    transform: scale(1.25, 0.8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pressen-figur .pf-schluck {
+    animation: none;
+  }
+  .pressen-malus-balken span {
+    transition: none;
+  }
+}
+
+.game-check-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+}

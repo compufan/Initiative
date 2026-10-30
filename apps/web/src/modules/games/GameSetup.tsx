@@ -8,7 +8,7 @@ import { api } from '../../lib/api.js';
 import { useChat } from '../../state/chat.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
-import { conversationLabel, errorMessage, useGameCatalog } from './helpers.js';
+import { conversationLabel, errorMessage, pressenAufstellung, useGameCatalog } from './helpers.js';
 
 interface GameSetupProps {
   open: boolean;
@@ -120,8 +120,16 @@ export function GameSetup({
   }, [chat, myId]);
 
   const maxOpponents = Math.max(1, (info?.maxPlayers ?? 2) - 1);
-  const minOpponents = Math.max(1, (info?.minPlayers ?? 2) - 1);
-  const ready = Boolean(chat && info) && opponents.length >= minOpponents;
+  const minOpponents = Math.max(0, (info?.minPlayers ?? 2) - 1);
+  /*
+   * Spiele, die auch allein gehen (Pressen: "gegen den Spiegel"), brauchen
+   * keinen Gegner. Im Einzelchat ist der Gegner sonst gesetzt – dort entscheidet
+   * dieser Schalter; in Gruppen genügt es, niemanden zu wählen.
+   */
+  const alleinMoeglich = minOpponents === 0;
+  const [allein, setAllein] = useState(false);
+  const mitspielende = alleinMoeglich && allein ? [] : opponents;
+  const ready = Boolean(chat && info) && mitspielende.length >= minOpponents;
 
   /*
    * Bei genau einem freien Platz ERSETZT der neue Tipp den alten.
@@ -146,7 +154,7 @@ export function GameSetup({
 
   async function create() {
     if (!chat || !info || saving) return;
-    if (opponents.length < minOpponents) {
+    if (mitspielende.length < minOpponents) {
       toast('Wähle mindestens eine Person aus', 'error');
       return;
     }
@@ -155,7 +163,7 @@ export function GameSetup({
       const session = await api.games.create({
         conversationId: chat.id,
         gameKey: info.key,
-        opponentIds: opponents,
+        opponentIds: mitspielende,
       });
       toast(`${info.name} gestartet`, 'success');
       onClose();
@@ -203,6 +211,11 @@ export function GameSetup({
       )}
 
       {info && <p className="game-note">{info.description}</p>}
+      {info && info.key === 'pressen' && chat && (
+        <p className="game-note" data-testid="pressen-aufstellung">
+          {pressenAufstellung(mitspielende.length + 1)}
+        </p>
+      )}
 
       {chats.length === 0 ? (
         <EmptyState
@@ -245,8 +258,22 @@ export function GameSetup({
             </p>
           )}
 
+          {chat && chat.type === 'direct' && alleinMoeglich && (
+            <label className="game-check-row">
+              <input
+                type="checkbox"
+                checked={allein}
+                onChange={(event) => setAllein(event.target.checked)}
+              />
+              <span>Allein üben – gegen den Spiegel</span>
+            </label>
+          )}
+
           {chat && chat.type === 'group' && (
             <div className="stack">
+              {alleinMoeglich && (
+                <p className="game-note">Ohne Auswahl übst du allein gegen den Spiegel.</p>
+              )}
               <span className="game-label">
                 Wer spielt mit?{' '}
                 <span className="muted">

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   getGame,
   listGames,
+  planFuer,
   seatOf,
   userOfSeat,
   type ConversationDto,
@@ -139,6 +140,10 @@ export function statusInfo(
     return { text: `Sieg für ${session.winnerUserIds.map(nameOf).join(', ')}`, tone: 'done' };
   }
   if (session.status === 'aborted') {
+    // Allein gegen den Spiegel gibt es keinen, der "aufgegeben" hätte.
+    if (session.players.length === 1 && getGame(session.gameKey)?.minPlayers === 1) {
+      return { text: 'Übung beendet', tone: 'done' };
+    }
     const quitter = session.players.find(
       (player) => !session.winnerUserIds.includes(player.userId),
     );
@@ -164,14 +169,36 @@ export function playersLabel(
   const players = session.players.slice().sort((a, b) => a.seat - b.seat);
   if (players.length === 0) return 'Noch keine Mitspieler';
   const first = players[0];
+  // Eine laufende Partie mit nur einer Person ist eine Übung (Pressen: "gegen den Spiegel").
+  if (players.length === 1 && getGame(session.gameKey)?.minPlayers === 1) {
+    return first.userId === myId
+      ? 'Du gegen den Spiegel'
+      : `${nameOf(first.userId)} gegen den Spiegel`;
+  }
   if (players.length === 1) {
     return first.userId === myId
       ? 'Du wartest auf Mitspieler'
       : `${nameOf(first.userId)} wartet auf Mitspieler`;
   }
-  return players
-    .map((player) => (player.userId === myId ? 'Du' : nameOf(player.userId)))
-    .join(' gegen ');
+  const namen = players.map((player) => (player.userId === myId ? 'Du' : nameOf(player.userId)));
+  // "A gegen B gegen C" liest sich schlecht – ab drei Personen eine Aufzählung.
+  return namen.join(players.length > 2 ? ', ' : ' gegen ');
+}
+
+/** Wer bei Pressen wie spielt, in einem Satz – für das Startblatt. */
+export function pressenAufstellung(spieler: number): string {
+  const plan = planFuer(spieler);
+  if (plan.modus === 'spiegel') {
+    return 'Gegen den Spiegel: Das zweite Männchen trinkt synchron zu deinem – es gibt immer Atempo, bis du abbrichst. Dein Reaktions-Malus wächst dabei nicht.';
+  }
+  if (plan.modus === 'duell')
+    return 'Zu zweit: ihr trinkt gleichzeitig, die bessere Wertung gewinnt.';
+  if (plan.modus === 'ampel') {
+    return 'Zu dritt macht die dritte Person die Ampel: Sie trinkt und stellt ab, erst dann dürfen die beiden anderen los.';
+  }
+  const ampel =
+    plan.ampel != null ? ' Bei ungerader Zahl macht die letzte Person zuerst die Ampel.' : '';
+  return `Staffette: zwei Teams, je ein Läufer gleichzeitig; der Nächste darf, sobald sein Teamkollege abgestellt hat.${ampel}`;
 }
 
 /* ---------- optimistic moves ---------- */

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { getGame } from '@initiative/shared';
 import { Avatar } from '../../components/Avatar.js';
 import { EmptyState, Spinner } from '../../components/Feedback.js';
 import { Screen } from '../../components/Screen.js';
@@ -63,20 +64,46 @@ export function GameScreen() {
 
   async function submitMove(move: unknown) {
     if (!session || busy) return;
-    const base = session;
-    const local = applyMoveLocally(base, move, myId);
-    if (!local.ok) {
-      toast(local.error, 'error');
-      return;
-    }
+    let base = session;
+    const echtzeit = getGame(session.gameKey)?.echtzeit === true;
     setBusy(true);
-    predict(local.session, base.version);
     try {
-      apply(await api.games.move(base.id, move, base.version));
+      /*
+       * Bei Echtzeitspielen melden mehrere Sitze fast gleichzeitig. Wer den
+       * Wettlauf um die Version verliert, wurde bisher mit "bitte neu laden"
+       * abgespeist – bei Pressen hiesse das: ein fertiger Lauf geht verloren.
+       * Der Zug ist je Sitz und Runde einmalig und von der Reihenfolge
+       * unabhängig, also lädt der Client frisch und sendet ihn erneut. Ist er
+       * dann nicht mehr zulässig (die Runde ist weiter), bleibt es beim
+       * frischen Stand.
+       */
+      for (let versuch = 0; ; versuch += 1) {
+        const local = applyMoveLocally(base, move, myId);
+        if (!local.ok) {
+          if (versuch === 0) toast(local.error, 'error');
+          else apply(base);
+          return;
+        }
+        predict(local.session, base.version);
+        try {
+          apply(await api.games.move(base.id, move, base.version));
+          return;
+        } catch (error) {
+          rollback(base);
+          const konflikt =
+            error instanceof Error && error.message.includes('Spielstand hat sich geändert');
+          if (echtzeit && konflikt && versuch < 4) {
+            base = await api.games.byId(base.id);
+            apply(base);
+            continue;
+          }
+          toast(errorMessage(error, 'Zug konnte nicht gesendet werden'), 'error');
+          void reload();
+          return;
+        }
+      }
     } catch (error) {
-      rollback(base);
       toast(errorMessage(error, 'Zug konnte nicht gesendet werden'), 'error');
-      void reload();
     } finally {
       setBusy(false);
     }
@@ -163,6 +190,7 @@ export function GameScreen() {
   const status = statusInfo(session, myId, nameOf);
   const players = session.players.slice().sort((a, b) => a.seat - b.seat);
   const finished = isFinished(session);
+  const echtzeit = getGame(session.gameKey)?.echtzeit === true;
   const canJoin =
     session.status === 'open' && mySeat == null && session.players.length < info.maxPlayers;
 
@@ -211,7 +239,7 @@ export function GameScreen() {
               <Avatar name={name} id={player.userId} url={user?.avatarUrl ?? null} size={44} />
               <span className="game-player-name truncate">{name}</span>
               <span className="game-player-state">
-                {won ? '👑 Sieg' : turn ? 'am Zug' : finished ? '–' : 'wartet'}
+                {won ? '👑 Sieg' : turn ? 'am Zug' : finished ? '–' : echtzeit ? 'dabei' : 'wartet'}
               </span>
             </li>
           );
@@ -288,7 +316,11 @@ export function GameScreen() {
       </div>
 
       <p className="game-note faint">
-        {finished ? status.text : 'Züge prüft der Server – dein Gegenüber sieht sie sofort.'}
+        {finished
+          ? status.text
+          : echtzeit
+            ? 'Ergebnisse prüft der Server – alle sehen sie sofort.'
+            : 'Züge prüft der Server – dein Gegenüber sieht sie sofort.'}
       </p>
 
       <Sheet

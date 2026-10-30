@@ -5,6 +5,7 @@
 //! transport and the database stay untouched.
 
 pub mod connect_four;
+pub mod pressen;
 pub mod tic_tac_toe;
 
 use std::sync::LazyLock;
@@ -41,6 +42,11 @@ pub trait GameDefinition: Send + Sync {
     fn max_players(&self) -> usize;
 
     fn initial_state(&self, players: &[GameSeat]) -> Value;
+    /// Darf noch jemand beitreten? Spiele, deren Rollen an der Zahl der
+    /// Spielenden hängen, lehnen das ab (Standard: ja).
+    fn can_join(&self, _state: &Value) -> Result<(), String> {
+        Ok(())
+    }
     /// Validates and applies one move. `Err` carries a message for the player.
     fn apply_move(&self, state: &Value, mv: &Value, ctx: &MoveContext<'_>)
         -> Result<Value, String>;
@@ -55,6 +61,7 @@ static REGISTRY: LazyLock<Vec<Box<dyn GameDefinition>>> = LazyLock::new(|| {
     vec![
         Box::new(tic_tac_toe::TicTacToe) as Box<dyn GameDefinition>,
         Box::new(connect_four::ConnectFour) as Box<dyn GameDefinition>,
+        Box::new(pressen::Pressen) as Box<dyn GameDefinition>,
     ]
 });
 
