@@ -811,6 +811,20 @@ kann `can_join` überschreiben, wenn die Rollen an der Zahl der Spielenden
 hängen, und das Spiel in TypeScript `echtzeit: true` setzen, damit der Client
 Züge nach einem Versionskonflikt erneut sendet.
 
+**Verdeckte Züge:** Soll ein Spiel vor Rundenende nicht alles zeigen (Pressen:
+fremde Zeiten), überschreibt die Regel `fuer_betrachter(state, sitz)` und
+schwärzt dort. Der Server ruft sie auf jedem Weg nach draußen auf
+(`services::games::sicht_fuer`: Abfrage, Liste, Chat-Karte, `game.updated` je
+Mitglied) – eine zweite Stelle, die den rohen Stand ausliefert, wäre ein Leck.
+Der Standard liefert alles.
+
+**Eigener Auslöser aus dem Chat:** Pressen startet auch aus Textnachrichten
+(„Bierjunge“ / „hängt“). Das ist kein Teil des Spielekerns, sondern ein Dienst
+(`services/bierjunge.rs`), den `create_message` nach dem Ausspielen aufruft;
+er legt die Partie über `create_session` an wie jede andere Spielkarte. Ein
+weiteres Spiel mit Chat-Auslöser folgt demselben Muster: eigener Dienst,
+eigene Tabellen (idempotente Migration), Fehler nur protokollieren.
+
 Damit erscheint das Spiel sofort in `GET /api/v1/games` und lässt sich über
 `POST /api/v1/games/sessions` starten.
 

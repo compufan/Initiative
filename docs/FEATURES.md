@@ -1042,40 +1042,85 @@ weiter als Alarm enthält:
 - Kennt deine App-Version ein Spiel noch nicht, zeigt sie das freundlich an,
   statt abzustürzen.
 
-### Pressen (Echtzeit)
+### Pressen (Echtzeit oder asynchron)
 
-Zwei animierte Strichmännchen müssen je ein Glas Bier (0,3 l) trinken. Man
-steuert das Glas selbst: **Pfeiltasten links/rechts** (auf dem Handy die
-Knöpfe ◀ ▶) bewegen es über den Mund, **Leertaste bzw. der Knopf rechts**
-(gedrückt halten) neigt es – je schiefer, desto mehr fließt. Der Mund nimmt nur
-begrenzt auf (rund 30 ml/s, 25 ml auf einmal); was danebengeht oder zu viel auf
-einmal kommt, ist **verschüttet**. Wird das Glas leer, erscheint an wechselnder
-Stelle der Knopf **„Abstellen!“**; wer ihn besonders schnell trifft (höchstens
-450 ms), bekommt die Auszeichnung **„getrümmert“** (lokal auf dem Gerät
-gezählt, der Lauf wird allen angezeigt). Mit **Esc** (oder dem Knopf darunter)
-stellt man vorzeitig ab – der Rest im Glas zählt als verschüttet.
+Animierte Strichmännchen müssen je ein Glas Bier (0,3 l) trinken. Man schaut
+**von oben auf den Tisch**, leicht geneigt, und steuert das Glas selbst:
+**Pfeiltasten** bewegen es links/rechts **und vor/zurück** (auf dem Handy ein
+Steuerkreuz aus vier Knöpfen), **Leertaste bzw. der Knopf „Neigen“** (gedrückt
+halten) neigt es. Der Strahl fliegt in einer Parabel: je schiefer das Glas, desto
+weiter nach vorn – man muss das Glas also auch in der Tiefe zum Mund passend
+halten. **Nur was im Mund landet, ist getrunken**; der Mund nimmt höchstens
+30 ml/s auf (25 ml auf einmal), alles andere ist **verschüttet**. Wird das Glas
+leer, erscheint an wechselnder Stelle der Knopf **„Abstellen!“**; wer ihn
+besonders schnell trifft (höchstens 450 ms), bekommt die Auszeichnung
+**„getrümmert“** (lokal auf dem Gerät gezählt, der Lauf wird allen angezeigt).
+Mit **Esc** (oder dem Knopf darunter) stellt man vorzeitig ab – der Rest im Glas
+zählt als verschüttet.
 
+- **Die Tasten haben Gewicht:** Das Glas **driftet immer leicht ab**, beschleunigt
+  statt zu springen und **bleibt nach dem Loslassen nicht stehen, sondern gleitet
+  gedämpft aus**. Die Bewegung ist **nicht linear**: kurz drücken = sehr langsam,
+  lange halten = deutlich schneller (Neigen genauso).
+- **Malus (Ermüdung):** Mit jedem gespielten Lauf wächst der Malus um 40 (höchstens
+  250), nach zwei Minuten ist die Hälfte abgebaut. Er verzögert die Tasten **und**
+  macht alles träger: das Glas gleitet weiter, die Haltekurve wird steiler, die
+  Abdrift stärker. Eine beschriftete Anzeige „Malus (Ermüdung)“ zeigt den Wert;
+  im Spiegelmodus wächst er nicht.
 - **Wertung** = Zeit + Strafzeit für Verschüttetes (100 ms je ml plus ein
   quadratischer Anteil). Weder „schnell und schlampig“ noch „langsam und genau“
   gewinnt; die Tests fahren Spielerprofile durch die echte Simulation.
 - **Atempo:** liegen die Wertungen unter 250 ms auseinander, wird wiederholt.
-- **Modi:** *Gegen den Spiegel* (allein üben, das zweite Männchen trinkt
-  synchron – immer Atempo, bis man abbricht); **zu zweit**; **zu dritt** (der
-  Dritte macht die **Ampel**: trinkt und stellt ab, erst dann starten die
+- **Modi:** _Gegen den Spiegel_ (allein üben, das zweite Männchen trinkt
+  synchron – **es kommt immer Atempo heraus, und die nächste Runde beginnt von
+  selbst**, bis man abbricht oder „Anhalten“ wählt); **zu zweit**; **zu dritt**
+  (der Dritte macht die **Ampel**: trinkt und stellt ab, erst dann starten die
   anderen); **ab vier eine Staffette** – zwei Teams, aus jedem läuft einer, der
   Nächste darf, sobald sein Teamkollege abgestellt hat; bei ungerader Zahl
   macht der Letzte zuerst die Ampel. Bis zu acht Personen.
-- **Reaktions-Malus:** mit jedem gespielten Lauf werden Tastendruck **und**
-  Loslassen (Position und Neigung) um 40 ms später registriert (höchstens
-  250 ms); nach zwei Minuten ist davon die Hälfte abgebaut. Eine Anzeige unter
-  dem Feld zeigt den aktuellen Wert. Im Spiegelmodus wächst er nicht.
+- **Anstoßen:** Der Knopf heißt „Anstoßen“ und startet den Lauf **sofort**.
+- **Echtzeit oder asynchron – beides geht.** Vor dem Start wählt jeder
+  _Zusammen (Echtzeit)_ oder _Wann ich will (asynchron)_. Bei Echtzeit
+  bestätigen alle innerhalb von **10 Sekunden** (sichtbarer Countdown), dann
+  zählt ein gemeinsamer Countdown 3-2-1, und die Zeit läuft für alle ab dem
+  gemeinsamen Beginn: **Wer 2 s später „Anstoßen“ drückt, ist 2 s langsamer.**
+  Ist der andere nach 10 s nicht bereit, spielt man unabhängig (mit Hinweis).
+  Wählt auch nur einer „asynchron“, spielen alle zeitlich unabhängig, und die Zeit
+  zählt ab dem eigenen „Anstoßen“. Bei Ampel und Staffette gilt der gemeinsame
+  Start nur für die, die gleichzeitig loslaufen; wer auf einen Vorgänger wartet,
+  stößt nach ihm an und zählt ab da.
+- **Du siehst nur dein eigenes Ergebnis, bis alle fertig sind.** Bei den anderen
+  steht nur „fertig“ oder „noch nicht“ – auch im Chat, in der Liste und für
+  Zuschauer; der Server liefert fremde Zeiten vorher gar nicht aus.
+- **Dein Strichmännchen:** Frisur, Haar- und Hautfarbe, Shirt, Bart, Brille und
+  Hut, mit Vorschau („Strichmännchen anpassen“). Es wird in deinem Konto
+  gespeichert, gilt auf allen Geräten und in allen Spielen, und die anderen sehen
+  es im Spiel. Die Figuren sind lebendig: atmen, blinzeln, schlucken, blähen die
+  Wangen, erschrecken beim Verschütten, jubeln beim Sieg.
 - **Echtzeit, aber vom Server gewertet:** Jeder rechnet seinen Lauf selbst (so
   lagfrei wie möglich) und meldet das Ergebnis; der Server prüft es auf
   Plausibilität und entscheidet Atempo, Sieg und wer als Nächster laufen darf.
   Der Entwurf steht in [entwurf-pressen.md](entwurf-pressen.md).
 - Bedienung ohne Maus: alle Tasten per Tastatur, Zustandsansagen für
-  Vorlesehilfen; bei „Bewegung reduzieren“ entfallen Schluck- und
-  Zählanimationen (die Simulation selbst bleibt).
+  Vorlesehilfen; bei „Bewegung reduzieren“ stehen die Figuren still (die
+  Simulation selbst bleibt).
+
+### „Bierjunge“ und „hängt“ im Chat
+
+Schreibt jemand **„Bierjunge“** in einen Chat und ein anderes Mitglied antwortet
+innerhalb von **10 Minuten** mit **„hängt“** (Groß-/Kleinschreibung egal, ganze
+Wörter), startet automatisch ein **Pressen-Spiel** zwischen beiden – als
+Spielkarte im selben Chat. Die Nachrichten selbst bleiben normale Nachrichten.
+
+- **Einzelchat:** A „Bierjunge“, B „hängt“ → Spiel A gegen B.
+- **Gruppe mit Namen** („Bierjunge Max“, Anzeige- oder Benutzername, auch mit
+  `@`): Nur das „hängt“ des Angesprochenen startet das Spiel.
+- **Gruppe ohne Namen:** Das erste „hängt“ eines anderen Mitglieds startet das
+  Spiel mit dem Ausrufer; danach ist der Aufruf verbraucht.
+- **„Generalbierjunge“:** Jedes andere Mitglied kann mit „hängt“ ein Spiel mit
+  dem Ausrufer starten, jedes höchstens einmal, bis die 10 Minuten um sind.
+- Der Ausrufer selbst zählt nie, gelöschte Aufrufe auch nicht; und wenn zwei
+  „hängt“ gleichzeitig ankommen, startet nur ein Spiel.
 
 ## Benachrichtigungen
 
