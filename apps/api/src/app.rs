@@ -9,6 +9,7 @@ use serde_json::json;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
+use crate::auth::AuthUser;
 use crate::constants::API_PREFIX;
 use crate::state::AppState;
 
@@ -101,8 +102,12 @@ async fn index() -> Json<serde_json::Value> {
 ///
 /// Die strenge Antwort gibt es unter `/readyz` – für Deploy-Abläufe und zum
 /// Nachsehen, nicht für die Zustellung.
-async fn health(State(state): State<AppState>) -> impl IntoResponse {
-    (StatusCode::OK, Json(zustand(&state).await.0))
+async fn health(State(state): State<AppState>, user: Option<AuthUser>) -> impl IntoResponse {
+    let (bericht, _) = zustand(&state).await;
+    (
+        StatusCode::OK,
+        Json(fuer_betrachter(&state, user, bericht).await),
+    )
 }
 
 /// Betriebsbereit? – die strenge Fassung.
@@ -111,14 +116,55 @@ async fn health(State(state): State<AppState>) -> impl IntoResponse {
 /// Problem beim Hochfahren. Danach richten sich die Deploy-Abläufe; ein Deploy,
 /// nach dem etwas fehlt, darf nicht grün sein. Fly fragt das bewusst **nicht**
 /// ab – siehe `health`.
-async fn ready(State(state): State<AppState>) -> impl IntoResponse {
+async fn ready(State(state): State<AppState>, user: Option<AuthUser>) -> impl IntoResponse {
     let (bericht, gesund) = zustand(&state).await;
     let code = if gesund {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
-    (code, Json(bericht))
+    (code, Json(fuer_betrachter(&state, user, bericht).await))
+}
+
+/**
+ * Was der Befund öffentlich verrät.
+ *
+ * Beide Endpunkte sind ohne Anmeldung erreichbar, und sie nannten jedem den
+ * rohen Fehlertext der Datenbank (Hostnamen, Rollen, Ports), das
+ * Startproblem, die Zahl offener Verbindungen und welche Dienste
+ * eingerichtet sind. Öffentlich bleibt, was Überwachung und App brauchen:
+ * `status` – danach richten sich Fly, Docker und die Deploy-Abläufe – und
+ * `version`, die die App unter „Über“ anzeigt (der Commit ist im
+ * öffentlichen Quelltext ohnehin nachzulesen).
+ *
+ * Den ganzen Befund sieht ein Admin (`users.is_admin`, angemeldet mit
+ * Zugriffstoken) – oder jeder, wenn `HEALTH_DETAILS=1` gesetzt ist, etwa für
+ * eine Instanz im eigenen Netz oder zum Fehlersuchen nach einem Deploy.
+ */
+async fn fuer_betrachter(
+    state: &AppState,
+    user: Option<AuthUser>,
+    bericht: serde_json::Value,
+) -> serde_json::Value {
+    if state.config.health_details {
+        return bericht;
+    }
+    if let Some(user) = user {
+        let admin = sqlx::query_scalar::<_, bool>("select is_admin from users where id = $1")
+            .bind(user.id())
+            .fetch_optional(&state.pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(false);
+        if admin {
+            return bericht;
+        }
+    }
+    json!({
+        "status": bericht["status"],
+        "version": bericht["version"],
+    })
 }
 
 /// Der gemeinsame Befund beider Endpunkte: einmal erhoben, zweimal verwendet.

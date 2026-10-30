@@ -162,6 +162,12 @@ besteht deshalb aus zwei Anfragen.
 | POST    | `/passkeys/login/start`     | –      | `{ username }`                      | `200` `{ requestId, options }` |
 | POST    | `/passkeys/login/finish`    | –      | `{ requestId, credential }`         | `200` `AuthSession`            |
 
+`login/start` antwortet für **jeden** Namen gleich – auch für einen ohne
+Passkey oder einen, den es nicht gibt. Dort steht in `allowCredentials` eine
+aus dem Namen abgeleitete Schein-Kennung (bei jeder Anfrage dieselbe); das
+Gerät findet dazu keinen Schlüssel, und `login/finish` endet mit `401`. Sonst
+ließe sich abfragen, welche Namen es gibt und wer Passkeys nutzt.
+
 `options` ist unverändert das, was `navigator.credentials` erwartet
 (`PublicKeyCredentialCreationOptions` bzw. `…RequestOptions`); `credential` ist
 unverändert das, was das Gerät zurückgibt. `requestId` verknüpft beide Hälften.
@@ -991,18 +997,21 @@ bestehenden Eintrag.
 
 ## Dienst-Endpunkte
 
-| Methode | Pfad           | Auth | Antwort                                                                   |
-| ------- | -------------- | ---- | ------------------------------------------------------------------------- |
-| GET     | `/healthz`     | –    | `200` `{ status, storage, bus, push, connections }`, `503` bei `degraded` |
-| GET     | `/readyz`      | –    | derselbe Befund, `503` wenn der Dienst noch nicht bereit ist              |
-| GET     | `/`            | –    | `200` `{ name, version, runtime, modules[], docs }`                       |
-| GET     | `/datenschutz` | –    | `200` `text/html` – Datenschutzerklärung                                  |
-| GET     | `/impressum`   | –    | `200` `text/html` – Impressum                                             |
+| Methode | Pfad           | Auth | Antwort                                                                    |
+| ------- | -------------- | ---- | -------------------------------------------------------------------------- |
+| GET     | `/healthz`     | –    | `200` `{ status, version }` – immer 200, `status` ist `ok` oder `degraded` |
+| GET     | `/readyz`      | –    | derselbe Befund, `503` wenn der Dienst noch nicht bereit ist               |
+| GET     | `/`            | –    | `200` `{ name, version, runtime, modules[], docs }`                        |
+| GET     | `/datenschutz` | –    | `200` `text/html` – Datenschutzerklärung                                   |
+| GET     | `/impressum`   | –    | `200` `text/html` – Impressum                                              |
 
 Alle liegen **außerhalb** von `/api/v1`.
 
 `/healthz` und `/readyz` erheben denselben Befund und ziehen nur eine andere
-Schlussfolgerung daraus. Der Datenbank-Ping darin läuft in ein
+Schlussfolgerung daraus. Öffentlich nennen sie nur `status` und `version`; den
+ganzen Befund (`error`, `database`, `startupProblem`, `storage`, `bus`,
+`busConnected`, `push`, `connections`) bekommt ein angemeldeter Admin
+(`Bearer`) – oder jeder, wenn `HEALTH_DETAILS=1` gesetzt ist. Der Datenbank-Ping darin läuft in ein
 Fünf-Sekunden-Zeitlimit – ein Lebenszeichen, das selbst hängen bleibt, ist
 keins.
 

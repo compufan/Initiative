@@ -47,6 +47,7 @@ Gelesen in `apps/api/src/config.rs`. Was hier nicht steht, wird nicht gelesen.
 | `TRUST_PROXY`       | `false`       | Nur einschalten, wenn **wirklich** ein Proxy davorsteht. Siehe die Warnung unten.                                                   |
 | `RATE_LIMIT`        | `true`        | Ob die Ratenbremse greift. Im Betrieb **nicht** abschalten – der einzige gute Grund sind die Browser-Tests.                         |
 | `GIT_SHA`           | `unbekannt`   | Welcher Stand läuft. Wird auf sieben Zeichen gekürzt und im Profil unter „Über" angezeigt.                                          |
+| `HEALTH_DETAILS`    | `false`       | `/healthz` und `/readyz` zeigen auch ohne Anmeldung den ganzen Befund (`error`, `bus`, `push`, …).                                  |
 
 > **`TRUST_PROXY` ist keine Bequemlichkeitseinstellung.** Ist er an, liest die
 > API die Absenderadresse aus `X-Forwarded-For` – und wer direkt an der API
@@ -247,7 +248,8 @@ Abschnitte bleiben für den Fall, dass die Datenbank schon dort liegt.
 > ab (sie entfernt `-pooler` aus dem Hostnamen) und benutzt sie nur für den
 > Listener. Bei anderen Anbietern – etwa Supabase mit Port `6543` – muss
 > `REALTIME_DATABASE_URL` von Hand auf die **direkte** Verbindung gesetzt
-> werden. Ob es klappt, zeigt `/healthz` im Feld `busConnected`.
+> werden. Ob es klappt, zeigt `/healthz` im Feld `busConnected` – für Admins
+> oder mit `HEALTH_DETAILS=1` (siehe „Was `/healthz` öffentlich zeigt“).
 
 #### Supabase
 
@@ -550,6 +552,16 @@ docker compose up -d --build
 docker compose logs -f api
 curl http://localhost:8080/healthz
 ```
+
+**Was `/healthz` öffentlich zeigt.** Ohne Anmeldung nur `{ status, version }`
+– `status` ist `ok` oder `degraded`, danach richten sich Fly, Docker und die
+Deploy-Abläufe, und `version` zeigt die App unter „Über“. Den ganzen Befund
+(`error` mit dem Grund, `database`, `startupProblem`, `storage`, `bus`,
+`busConnected`, `push`, `connections`) sieht, wer als Admin angemeldet ist
+(`Authorization: Bearer …`), oder jeder, wenn `HEALTH_DETAILS=1` gesetzt ist.
+Früher stand dort öffentlich der rohe Fehlertext der Datenbank. Den Grund für
+`degraded` schreibt die API außerdem immer ins Protokoll – die Deploy-Abläufe
+melden ohne den Schalter nur noch „kein Grund genannt“.
 
 Davor gehört ein Reverse Proxy mit echtem Zertifikat, z. B. Caddy:
 
@@ -1194,7 +1206,7 @@ Bestehende Sitzungen bleiben davon unberührt.
 | `push: false` im Healthcheck                                                | VAPID unvollständig                                                                                 | beide Schlüssel setzen und neu starten                                                                                                                                                          |
 | API startet nicht, Log nennt `Konfigurationsfehler`                         | Pflichtvariable fehlt                                                                               | Meldung lesen – sie nennt die Variable im Klartext                                                                                                                                              |
 | `status: degraded`                                                          | Datenbank nicht erreichbar                                                                          | `DATABASE_URL`, TLS und IP-Freigabe prüfen                                                                                                                                                      |
-| `status: degraded`, `error` nennt eine Migration                            | Eine bereits ausgeführte Migrationsdatei wurde nachträglich verändert                               | `MIGRATIONS_REPAIR=1` für genau einen Neustart (siehe [Wenn Migrationen blockieren](#wenn-migrationen-blockieren))                                                                              |
+| `status: degraded`, Log oder `error` nennt eine Migration                   | Eine bereits ausgeführte Migrationsdatei wurde nachträglich verändert                               | `MIGRATIONS_REPAIR=1` für genau einen Neustart (siehe [Wenn Migrationen blockieren](#wenn-migrationen-blockieren))                                                                              |
 | URL lädt ewig, Log zeigt `VersionMismatch(n)` und `max restart count of 10` | Derselbe Fall, nur mit einer älteren API-Version, die sich dabei noch beendet hat                   | Neu deployen (die Version danach läuft weiter statt abzustürzen), dann `MIGRATIONS_REPAIR=1`                                                                                                    |
 | URL lädt ewig, Log zeigt nur `Main child exited normally with code: 0`      | Die Binary im Image ist die leere Platzhalter-Version aus der Cache-Stufe des Dockerfiles           | Im `apps/api/Dockerfile` muss vor dem zweiten `cargo build` ein `find src migrations -type f -exec touch {} +` stehen – sonst hält Cargo den echten Code für unverändert (siehe Kommentar dort) |
 

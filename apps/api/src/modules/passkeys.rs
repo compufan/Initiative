@@ -332,14 +332,6 @@ async fn login_start(
     .fetch_all(&state.pool)
     .await?;
 
-    // Kein Hinweis darauf, ob es das Konto gibt – sonst liesse sich damit die
-    // Mitgliederliste abfragen.
-    if rows.is_empty() {
-        return Err(AppError::unauthorized(
-            "Für diesen Namen ist kein Schlüssel hinterlegt.",
-        ));
-    }
-
     let passkeys: Vec<Passkey> = rows
         .into_iter()
         .filter_map(|value| serde_json::from_value(value).ok())
@@ -348,6 +340,32 @@ async fn login_start(
     let (options, authentication) = webauthn
         .start_passkey_authentication(&passkeys)
         .map_err(|error| AppError::internal(format!("WebAuthn: {error}")))?;
+    let mut options = serde_json::to_value(&options)
+        .map_err(|error| AppError::internal(format!("WebAuthn-Optionen: {error}")))?;
+
+    /*
+     * Eine einheitliche Antwort, ob der Name Schlüssel hat oder nicht.
+     *
+     * Hier stand vorher ein 401 „Für diesen Namen ist kein Schlüssel
+     * hinterlegt“ – und damit eine Abfrage, welche Namen es gibt und wer
+     * Passkeys nutzt (das Ziel, bei dem sich Phishing lohnt). Jetzt bekommt
+     * jeder Name eine echte Anfrage mit frischer Herausforderung; wo es keinen
+     * Schlüssel gibt, steht darin eine Schein-Kennung.
+     *
+     * Sie ist aus dem Namen und dem Server-Geheimnis abgeleitet, also bei
+     * jeder Anfrage dieselbe – wie eine echte. Eine zufällige verriete sich
+     * beim zweiten Fragen. Ohne `transports`, weil auch die echten keine
+     * tragen (die Oberfläche meldet sie beim Anlegen nicht mit). Der Browser
+     * findet zu ihr keinen Schlüssel, und `login/finish` scheitert am
+     * gespeicherten Zustand, der keine Schlüssel kennt – mit demselben 401 wie
+     * jede andere abgelehnte Anmeldung.
+     */
+    if passkeys.is_empty() {
+        options["publicKey"]["allowCredentials"] = json!([{
+            "type": "public-key",
+            "id": schein_kennung(&state.config.jwt_secret, &username),
+        }]);
+    }
 
     let request_id = store_state(
         &state,
@@ -360,9 +378,20 @@ async fn login_start(
 
     Ok(Json(StartResponse {
         request_id,
-        options: serde_json::to_value(&options)
-            .map_err(|error| AppError::internal(format!("WebAuthn-Optionen: {error}")))?,
+        options,
     }))
+}
+
+/// Die Schein-Kennung für einen Namen ohne Schlüssel – siehe `login_start`.
+///
+/// 16 Byte wie die Kennungen der verbreitetsten Passkey-Verwalter.
+fn schein_kennung(geheimnis: &str, username: &str) -> String {
+    use hmac::{Hmac, Mac};
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(geheimnis.as_bytes())
+        .expect("HMAC nimmt jede Schlüssellänge");
+    mac.update(b"passkey-schein:");
+    mac.update(username.as_bytes());
+    URL_SAFE_NO_PAD.encode(&mac.finalize().into_bytes()[..16])
 }
 
 #[derive(Deserialize)]

@@ -144,7 +144,8 @@ async fn full_api_scenario() {
     let (status, body) = app.call("GET", "/healthz", None, None).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["status"], "ok");
-    assert_eq!(body["storage"], "local");
+    // Einzelheiten nur für Admins oder mit `HEALTH_DETAILS=1`.
+    assert!(body.get("storage").is_none(), "{body}");
 
     // ---- registration -----------------------------------------------------
     let (status, session) = app

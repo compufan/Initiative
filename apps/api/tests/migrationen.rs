@@ -170,9 +170,16 @@ async fn healthz_bleibt_erreichbar_readyz_sagt_die_wahrheit() {
     std::env::set_var("STORAGE_DRIVER", "local");
     std::env::set_var("LOCAL_STORAGE_DIR", "./.data/test-uploads");
 
-    let state = AppState::new(Config::from_env().expect("config"))
-        .await
-        .expect("state");
+    let config = Config::from_env().expect("config");
+    let state = AppState::new(config.clone()).await.expect("state");
+    // Dieselbe Instanz mit `HEALTH_DETAILS=1`: Erst dann steht der Grund im
+    // Rumpf, auch ohne Anmeldung.
+    let offen = AppState::new(Config {
+        health_details: true,
+        ..config
+    })
+    .await
+    .expect("state");
 
     let frage = |pfad: &str| Request::builder().uri(pfad).body(Body::empty()).unwrap();
     let lies = |antwort: axum::response::Response| async move {
@@ -196,10 +203,12 @@ async fn healthz_bleibt_erreichbar_readyz_sagt_die_wahrheit() {
     assert_eq!(koerper["status"], "ok");
 
     // --- Mit Startproblem ----------------------------------------------
-    state.set_startup_problem(
-        "Migration 1 (0001_init.sql) wurde nach dem Ausführen verändert. \
-         Aufgabe „migration-reparieren“ starten.",
-    );
+    for zustand in [&state, &offen] {
+        zustand.set_startup_problem(
+            "Migration 1 (0001_init.sql) wurde nach dem Ausführen verändert. \
+             Aufgabe „migration-reparieren“ starten.",
+        );
+    }
 
     // Das Lebenszeichen bleibt 200 – sonst nimmt Fly die Maschine aus dem
     // Verkehr, und aus einem Teilproblem wird wieder ein Totalausfall.
@@ -210,8 +219,20 @@ async fn healthz_bleibt_erreichbar_readyz_sagt_die_wahrheit() {
         StatusCode::OK,
         "Fly prueft /healthz und entscheidet danach ueber die Zustellung: {koerper}"
     );
-    // Verschwiegen wird trotzdem nichts.
+    // Verschwiegen wird trotzdem nichts – aber öffentlich nur der Status:
+    // Der Grund kann rohe Fehlertexte der Datenbank enthalten.
     assert_eq!(koerper["status"], "degraded");
+    assert!(koerper.get("error").is_none(), "{koerper}");
+    assert!(koerper.get("connections").is_none(), "{koerper}");
+    assert!(
+        koerper.get("version").is_some(),
+        "die App zeigt sie an: {koerper}"
+    );
+
+    // Mit `HEALTH_DETAILS=1` steht der Grund darin.
+    let router = initiative_api::app::build(offen.clone());
+    let (status, koerper) = lies(router.oneshot(frage("/healthz")).await.unwrap()).await;
+    assert_eq!(status, StatusCode::OK);
     assert!(
         koerper["error"]
             .as_str()

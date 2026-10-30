@@ -259,6 +259,11 @@ pub struct Config {
     pub repair_migrations: bool,
     /// Commit, aus dem dieses Abbild gebaut wurde. Wird in der App angezeigt.
     pub git_sha: String,
+    /// `HEALTH_DETAILS=1`: `/healthz` und `/readyz` nennen auch ohne
+    /// Anmeldung Datenbankfehler, Startproblem, Speicher, Bus und Zahl der
+    /// Verbindungen. Ohne den Schalter sieht das nur ein Admin – öffentlich
+    /// gibt es Status und Version (siehe `app::zustand`).
+    pub health_details: bool,
     /// Photon-kompatible Ortssuche (`GEO_URL`), siehe `modules/orte.rs`. Leer: aus.
     pub geo_url: String,
     /// Länder, deren Treffer bei der Ortssuche vorn stehen (`GEO_BEVORZUGT`, ISO-Codes).
@@ -497,6 +502,7 @@ impl Config {
                 }),
             run_migrations: var("RUN_MIGRATIONS").as_deref() != Some("false"),
             repair_migrations: flag("MIGRATIONS_REPAIR", false),
+            health_details: flag("HEALTH_DETAILS", false),
             git_sha: var("GIT_SHA")
                 .map(|value| value.chars().take(7).collect())
                 .unwrap_or_else(|| "unbekannt".to_string()),

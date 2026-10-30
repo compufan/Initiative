@@ -876,3 +876,95 @@ async fn die_wellenform_hat_eine_grenze() {
         "{body}"
     );
 }
+
+/* ---------- Offenlegung ---------- */
+
+/// `/healthz` nannte jedem den rohen Datenbankfehler, die Zahl der
+/// Verbindungen und die eingerichteten Dienste. Öffentlich bleiben Status und
+/// Version (die App zeigt sie an); alles andere sieht ein Admin.
+#[tokio::test]
+async fn das_lebenszeichen_verraet_nur_status_und_version() {
+    let probe = probe!();
+    for pfad in ["/healthz", "/readyz"] {
+        let (status, body) = probe.call("GET", pfad, None, None).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let mut felder: Vec<&str> = body
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        felder.sort();
+        assert_eq!(felder, ["status", "version"], "{pfad}: {body}");
+    }
+
+    let (gast, _) = probe.konto("gast").await;
+    let (status, body) = probe.call("GET", "/healthz", Some(&gast), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.get("connections").is_none(), "{body}");
+
+    let (chef, chef_id) = probe.konto("chef").await;
+    sqlx::query("update users set is_admin = true where id = $1")
+        .bind(Uuid::parse_str(&chef_id).unwrap())
+        .execute(&probe.state.pool)
+        .await
+        .unwrap();
+    let (status, body) = probe.call("GET", "/healthz", Some(&chef), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.get("connections").is_some(), "{body}");
+    assert!(body.get("busConnected").is_some(), "{body}");
+}
+
+/// `passkeys/login/start` antwortete für Namen ohne Schlüssel mit 401 – eine
+/// Abfrage, wer Passkeys nutzt (und welche Namen es gibt).
+#[tokio::test]
+async fn der_passkey_start_verraet_keine_namen() {
+    let probe = probe!();
+    let start = |name: &str| {
+        probe.call(
+            "POST",
+            "/api/v1/passkeys/login/start",
+            None,
+            Some(json!({ "username": name })),
+        )
+    };
+    let (_, _) = probe.konto("ohne").await;
+    let unbekannt = format!("niemand{}", Uuid::now_v7().simple());
+
+    let (status, erste) = start(&unbekannt).await;
+    assert_eq!(status, StatusCode::OK, "{erste}");
+    let (status, zweite) = start(&unbekannt).await;
+    assert_eq!(status, StatusCode::OK, "{zweite}");
+
+    // Dieselbe Gestalt wie eine echte Anfrage: genau ein Schlüssel, frische
+    // Herausforderung, aber bei jeder Anfrage dieselbe Kennung.
+    let erlaubt = |antwort: &Value| antwort["options"]["publicKey"]["allowCredentials"].clone();
+    assert_eq!(erlaubt(&erste).as_array().map(Vec::len), Some(1), "{erste}");
+    assert_eq!(erlaubt(&erste), erlaubt(&zweite));
+    assert!(erlaubt(&erste)[0].get("transports").is_none());
+    assert_ne!(
+        erste["options"]["publicKey"]["challenge"],
+        zweite["options"]["publicKey"]["challenge"]
+    );
+
+    // Ein Abschluss dazu scheitert wie jede andere abgelehnte Anmeldung.
+    let (status, body) = probe
+        .call(
+            "POST",
+            "/api/v1/passkeys/login/finish",
+            None,
+            Some(json!({
+                "requestId": erste["requestId"],
+                "credential": {
+                    "id": "AAAA", "rawId": "AAAA", "type": "public-key",
+                    "response": {
+                        "authenticatorData": "AAAA", "clientDataJSON": "AAAA",
+                        "signature": "AAAA", "userHandle": null,
+                    },
+                    "extensions": {},
+                },
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+}
