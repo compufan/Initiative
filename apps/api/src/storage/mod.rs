@@ -11,6 +11,7 @@ pub mod sftp;
 pub mod tresor;
 pub mod weiche;
 
+use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
@@ -67,6 +68,56 @@ pub trait Storage: Send + Sync {
     fn download_url(&self, key: &str, options: &DownloadOptions) -> AppResult<Option<String>>;
 
     async fn put(&self, key: &str, body: Bytes, mime: &str) -> AppResult<()>;
+
+    /**
+     * Legt eine fertige Datei von der Platte ab – ohne sie in den
+     * Arbeitsspeicher zu holen. Die Quelle bleibt unangetastet.
+     *
+     * # Warum ein zweiter Weg neben `put`
+     *
+     * `put` nimmt `Bytes`, also die ganze Datei am Stück. Bei 25 MB war das
+     * egal, bei einem Video von 4 GiB ist es der Speicherfresser des Systems.
+     * Jeder Treiber, der hier mit grossen Dateien zu tun bekommt, hat deshalb
+     * einen eigenen Strom-Weg (Platte: kopieren, S3: Multipart, SFTP:
+     * schreiben im Strom, Tresor: blockweise verschlüsseln).
+     *
+     * Der Rückfall hier liest doch alles ein. Er ist für einen künftigen
+     * Treiber gedacht, der den Weg noch nicht kennt – lieber langsam und
+     * gefrässig als gar nicht; die vorhandenen überschreiben ihn alle.
+     */
+    async fn put_datei(&self, key: &str, pfad: &Path, mime: &str) -> AppResult<()> {
+        let bytes = tokio::fs::read(pfad).await?;
+        self.put(key, Bytes::from(bytes), mime).await
+    }
+
+    /**
+     * Wie [`Storage::put_datei`], aber die Quelle darf verbraucht werden.
+     *
+     * Für den Abschluss eines Uploads in Stücken: Die Teildatei wird danach
+     * nicht mehr gebraucht. Auf der lokalen Platte ist das ein `rename` – ein
+     * Video von Gigabytes ist in einer Millisekunde an seinem Platz, statt
+     * eine Minute kopiert zu werden und dabei kurz doppelt Platz zu belegen.
+     *
+     * Nach der Rückkehr gibt es die Quelle nicht mehr – ob verschoben oder
+     * kopiert und gelöscht, ist Sache des Treibers.
+     */
+    async fn uebernehmen(&self, key: &str, pfad: &Path, mime: &str) -> AppResult<()> {
+        self.put_datei(key, pfad, mime).await?;
+        let _ = tokio::fs::remove_file(pfad).await;
+        Ok(())
+    }
+
+    /**
+     * Wo die Datei zu einem Schlüssel auf DIESER Maschine liegt – falls sie
+     * das tut.
+     *
+     * Nur der lokale Treiber antwortet. Der Auslagerungsdienst nutzt es, um
+     * eine Datei im Strom von warm nach kalt zu schicken, statt sie dafür
+     * ganz einzulesen.
+     */
+    fn lokaler_pfad(&self, _key: &str) -> Option<std::path::PathBuf> {
+        None
+    }
     async fn read(&self, key: &str, range: Option<ByteRange>) -> AppResult<Option<ObjectStream>>;
     async fn delete(&self, key: &str) -> AppResult<()>;
 }

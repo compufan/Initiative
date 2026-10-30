@@ -22,6 +22,7 @@ pub mod polls;
 pub mod push;
 pub mod stickers;
 pub mod storage_check;
+pub mod stuecke;
 pub mod users;
 
 use axum::Router;
@@ -40,6 +41,7 @@ pub fn router() -> Router<AppState> {
         .merge(messages::router())
         .merge(orte::router())
         .merge(media::router())
+        .merge(stuecke::router())
         .merge(stickers::router())
         .merge(collections::router())
         .merge(fernsehen::router())

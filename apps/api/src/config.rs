@@ -221,6 +221,36 @@ pub struct Config {
 
     pub storage_driver: StorageDriver,
     pub local_storage_dir: String,
+    /**
+     * Hochladen in Stücken (`modules/stuecke.rs`).
+     *
+     * `upload_max_bytes`: Grenze je Datei/Video (`UPLOAD_MAX_BYTES`, Vorgabe
+     * 4 GiB = `GROSS_UPLOAD_MAX`). Bild und Ton behalten ihre festen Grenzen.
+     *
+     * `upload_offen_max_bytes`: Wie viel EIN Konto gleichzeitig in offenen
+     * Sitzungen halten darf (`UPLOAD_OFFEN_MAX_BYTES`, Vorgabe 8 GiB). Ohne
+     * diese Bremse legt jemand zehn Sitzungen à 4 GiB an und die Platte ist
+     * reserviert, ohne dass ein Byte geflossen ist.
+     *
+     * `upload_teile_dir`: Wo die halbfertigen Dateien liegen
+     * (`UPLOAD_TEILE_DIR`). Vorgabe beim lokalen Speicher `<LOCAL_STORAGE_DIR>/.teile`
+     * – dasselbe Dateisystem, damit der Abschluss ein `rename` ist und kein
+     * Kopieren von Gigabytes. Sonst das Temp-Verzeichnis des Systems; im
+     * Container ist `/tmp` aber ein kleines tmpfs (64 MB), dort also
+     * unbedingt ein Volume angeben.
+     *
+     * `upload_platte_reserve_bytes`: Was auf der Platte nach allen offenen
+     * Sitzungen mindestens frei bleiben muss (`UPLOAD_PLATTE_RESERVE_BYTES`,
+     * Vorgabe 1 GiB). Eine volle Platte reisst Postgres mit.
+     *
+     * `upload_sitzung_stunden`: Nach so vielen Stunden ohne Bewegung gilt eine
+     * Sitzung als verwaist (`UPLOAD_SITZUNG_STUNDEN`, Vorgabe 24).
+     */
+    pub upload_max_bytes: i64,
+    pub upload_offen_max_bytes: i64,
+    pub upload_teile_dir: String,
+    pub upload_platte_reserve_bytes: i64,
+    pub upload_sitzung_stunden: i64,
     pub s3: Option<S3Config>,
     pub signed_url_ttl: Duration,
 
@@ -511,6 +541,25 @@ impl Config {
 
             storage_driver,
             local_storage_dir: var_or("LOCAL_STORAGE_DIR", "./.data/uploads"),
+            upload_max_bytes: number("UPLOAD_MAX_BYTES", crate::constants::GROSS_UPLOAD_MAX)
+                .max(1),
+            upload_offen_max_bytes: number("UPLOAD_OFFEN_MAX_BYTES", 8i64 * 1024 * 1024 * 1024)
+                .max(1),
+            upload_teile_dir: var("UPLOAD_TEILE_DIR").unwrap_or_else(|| {
+                if storage_driver == StorageDriver::Local {
+                    format!(
+                        "{}/.teile",
+                        trim_slash(var_or("LOCAL_STORAGE_DIR", "./.data/uploads"))
+                    )
+                } else {
+                    std::env::temp_dir()
+                        .join("initiative-teile")
+                        .to_string_lossy()
+                        .into_owned()
+                }
+            }),
+            upload_platte_reserve_bytes: number("UPLOAD_PLATTE_RESERVE_BYTES", 1i64 << 30).max(0),
+            upload_sitzung_stunden: number("UPLOAD_SITZUNG_STUNDEN", 24i64).clamp(1, 24 * 14),
             media_key: match var("MEDIA_KEY") {
                 None => None,
                 Some(roh) => Some(media_key_lesen(&roh)?),

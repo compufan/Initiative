@@ -177,6 +177,81 @@ pub(crate) fn verschluesseln(
     Ok(aus)
 }
 
+/**
+ * Verschlüsselt eine Datei von der Platte in eine andere – Block für Block.
+ *
+ * Dasselbe Format wie [`verschluesseln`], nur ohne die ganze Datei im
+ * Arbeitsspeicher: Gehalten wird je ein Block von 64 KiB. Für Uploads in
+ * Stücken, die Gigabytes gross sein dürfen. Blockierend (std::fs), deshalb
+ * nur aus `spawn_blocking` rufen.
+ */
+pub(crate) fn verschluesseln_datei(
+    schluessel: &Aes256Gcm,
+    salz: &[u8; 16],
+    quelle: &std::path::Path,
+    ziel: &std::path::Path,
+) -> AppResult<()> {
+    use std::io::{Read, Write};
+
+    let mut ein = std::fs::File::open(quelle)?;
+    let laenge = ein.metadata()?.len();
+
+    let mut kopf = Vec::with_capacity(KOPF_LAENGE);
+    kopf.extend_from_slice(MAGIE);
+    kopf.push(FASSUNG);
+    kopf.push(0);
+    kopf.extend_from_slice(&(BLOCK as u32).to_be_bytes());
+    kopf.extend_from_slice(&laenge.to_be_bytes());
+    kopf.extend_from_slice(salz);
+
+    let mut aus = std::io::BufWriter::with_capacity(1024 * 1024, std::fs::File::create(ziel)?);
+    aus.write_all(&kopf)?;
+
+    let mut puffer = vec![0u8; BLOCK];
+    let mut index: u64 = 0;
+    let mut gelesen_gesamt: u64 = 0;
+    loop {
+        // Einen ganzen Block füllen – `read` darf weniger liefern.
+        let mut gefuellt = 0;
+        while gefuellt < BLOCK {
+            let n = ein.read(&mut puffer[gefuellt..])?;
+            if n == 0 {
+                break;
+            }
+            gefuellt += n;
+        }
+        if gefuellt == 0 {
+            break;
+        }
+        gelesen_gesamt += gefuellt as u64;
+        let geheim = schluessel
+            .encrypt(
+                &nonce_fuer(index),
+                Payload {
+                    msg: &puffer[..gefuellt],
+                    aad: &kopf,
+                },
+            )
+            .map_err(|_| AppError::internal("Verschlüsseln fehlgeschlagen"))?;
+        aus.write_all(&geheim)?;
+        index += 1;
+        if gefuellt < BLOCK {
+            break;
+        }
+    }
+    // Die Länge steht schon im (mitgeprüften) Kopf. Hat sich die Datei
+    // unterwegs verändert, wäre das Ergebnis unlesbar – also lieber hier
+    // scheitern als später beim Abspielen.
+    if gelesen_gesamt != laenge {
+        return Err(AppError::internal(
+            "Die Datei hat sich beim Verschlüsseln verändert",
+        ));
+    }
+    aus.flush()?;
+    aus.get_ref().sync_all()?;
+    Ok(())
+}
+
 /// Baut aus dem Geheimtext-Strom einen Klartext-Strom.
 ///
 /// `ueberspringen` und `rest` schneiden den angeforderten Bereich aus den
@@ -313,6 +388,41 @@ impl Storage for Tresor {
         let schluessel = self.dateischluessel(&salz)?;
         let geheim = verschluesseln(&schluessel, &salz, &body)?;
         self.innen.put(key, Bytes::from(geheim), mime).await
+    }
+
+    /**
+     * Im Strom verschlüsseln: in eine Geheimtext-Datei neben der Quelle, die
+     * dann dem Treiber darunter übergeben (bei der Platte: umbenannt) wird.
+     *
+     * Neben der Quelle, weil die beim Upload in Stücken im Teile-Verzeichnis
+     * liegt – und das liegt vorgabemässig auf demselben Dateisystem wie die
+     * Ablage. Kurz liegt die Datei so zweimal auf der Platte; die Prüfung
+     * des freien Platzes beim Anlegen rechnet das mit ein.
+     */
+    async fn put_datei(&self, key: &str, pfad: &std::path::Path, mime: &str) -> AppResult<()> {
+        let mut salz = [0u8; 16];
+        salz.copy_from_slice(&crate::auth::password::random_bytes(16));
+        let schluessel = self.dateischluessel(&salz)?;
+        let quelle = pfad.to_path_buf();
+        let mut name = quelle
+            .file_name()
+            .map(|n| n.to_os_string())
+            .unwrap_or_default();
+        name.push(format!(".{}.vlt", uuid::Uuid::now_v7().simple()));
+        let ziel = quelle.with_file_name(name);
+        let ziel_im_faden = ziel.clone();
+        let ergebnis = tokio::task::spawn_blocking(move || {
+            verschluesseln_datei(&schluessel, &salz, &quelle, &ziel_im_faden)
+        })
+        .await
+        .map_err(|_| AppError::internal("Verschlüsseln ist abgestürzt"))?;
+        if let Err(fehler) = ergebnis {
+            let _ = tokio::fs::remove_file(&ziel).await;
+            return Err(fehler);
+        }
+        let uebergabe = self.innen.uebernehmen(key, &ziel, mime).await;
+        let _ = tokio::fs::remove_file(&ziel).await;
+        uebergabe
     }
 
     async fn read(&self, key: &str, range: Option<ByteRange>) -> AppResult<Option<ObjectStream>> {

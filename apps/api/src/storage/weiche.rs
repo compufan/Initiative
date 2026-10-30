@@ -170,6 +170,15 @@ impl Storage for Weiche {
         self.warm.put(key, body, mime).await
     }
 
+    // Geschrieben wird immer warm – auch im Strom.
+    async fn put_datei(&self, key: &str, pfad: &std::path::Path, mime: &str) -> AppResult<()> {
+        self.warm.put_datei(key, pfad, mime).await
+    }
+
+    async fn uebernehmen(&self, key: &str, pfad: &std::path::Path, mime: &str) -> AppResult<()> {
+        self.warm.uebernehmen(key, pfad, mime).await
+    }
+
     async fn read(&self, key: &str, range: Option<ByteRange>) -> AppResult<Option<ObjectStream>> {
         let gewaehlt = self.fuer(key).await;
         match gewaehlt.read(key, range).await? {

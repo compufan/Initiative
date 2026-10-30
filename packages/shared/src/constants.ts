@@ -109,12 +109,20 @@ export const LIMITS = {
   messagePageSizeMax: 100,
   /** Inline preview (tiny JPEG data URL) shipped with image/video attachments. */
   previewDataUrlMax: 32_000,
-  /** Hard upload ceilings enforced by the API before a presigned URL is issued. */
+  /**
+   * Obergrenzen je Art – die der Server beim Anlegen eines Uploads prüft.
+   *
+   * Datei und Video dürfen 4 GiB haben (`GROSS_UPLOAD_MAX` in
+   * `apps/api/src/constants.rs`, dort per `UPLOAD_MAX_BYTES` einstellbar; ein
+   * Rust-Test vergleicht beide Seiten). So gross geht es nur in Stücken
+   * (`stueckGroesse`, `lib/stueckUpload.ts`); der Weg in einer Anfrage hat
+   * weiter die kleinen Grenzen aus `direktUploadMax`.
+   */
   maxUploadBytes: {
     image: 25 * 1024 * 1024,
-    video: 200 * 1024 * 1024,
+    video: 4 * 1024 * 1024 * 1024,
     audio: 50 * 1024 * 1024,
-    file: 100 * 1024 * 1024,
+    file: 4 * 1024 * 1024 * 1024,
     /*
      * Vier statt zwei Megabyte: Bewegung kostet Bytes, und ein bewegter
      * Sticker mit zwanzig Teilbildern sprengt zwei Megabyte mühelos. Vier
@@ -123,6 +131,27 @@ export const LIMITS = {
      */
     sticker: 4 * 1024 * 1024,
   } as Record<AttachmentKind, number>,
+  /**
+   * Die alten Grenzen des Weges in EINER Anfrage (`max_upload_bytes` im
+   * Server). Der puffert die ganze Datei im Arbeitsspeicher des Servers und
+   * bleibt deshalb klein; alles darüber geht in Stücken.
+   */
+  direktUploadMax: {
+    image: 25 * 1024 * 1024,
+    video: 200 * 1024 * 1024,
+    audio: 50 * 1024 * 1024,
+    file: 100 * 1024 * 1024,
+    sticker: 4 * 1024 * 1024,
+  } as Record<AttachmentKind, number>,
+  /** Wie gross ein Stück beim Hochladen in Stücken ist – `STUECK_GROESSE` im Server. */
+  stueckGroesse: 8 * 1024 * 1024,
+  /**
+   * Ab welcher Grösse in Stücken hochgeladen wird.
+   *
+   * Darunter ist eine Anfrage schneller als drei (anlegen, Stück, abschliessen)
+   * und ein Abriss kostet wenig. Darüber lohnt das Fortsetzen.
+   */
+  stueckUploadAb: 32 * 1024 * 1024,
 } as const;
 
 export const ALLOWED_MIME: Record<AttachmentKind, string[]> = {

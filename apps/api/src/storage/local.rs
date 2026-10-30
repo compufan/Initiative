@@ -69,6 +69,50 @@ impl Storage for LocalStorage {
         Ok(())
     }
 
+    /// Kopieren im Strom, erst unter einem Zwischennamen und dann umbenannt:
+    /// Wer mittendrin liest, bekommt die alte Fassung oder keine – nie eine
+    /// halbe.
+    async fn put_datei(&self, key: &str, quelle: &Path, _mime: &str) -> AppResult<()> {
+        let path = self.path_for(key)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        let zwischen = zwischenname(&path);
+        if let Err(fehler) = fs::copy(quelle, &zwischen).await {
+            let _ = fs::remove_file(&zwischen).await;
+            return Err(fehler.into());
+        }
+        fs::rename(&zwischen, &path).await?;
+        Ok(())
+    }
+
+    /**
+     * Umbenennen statt kopieren – das ist der ganze Grund, warum die
+     * Teildateien eines Uploads in Stücken vorgabemässig UNTER dem
+     * Speicherverzeichnis liegen (`UPLOAD_TEILE_DIR`): Auf demselben
+     * Dateisystem ist ein Video von Gigabytes in einer Millisekunde an seinem
+     * Platz und belegt nie doppelt Platz.
+     *
+     * Liegt die Quelle doch auf einem anderen Dateisystem (`EXDEV`), wird
+     * kopiert und danach gelöscht.
+     */
+    async fn uebernehmen(&self, key: &str, quelle: &Path, mime: &str) -> AppResult<()> {
+        let path = self.path_for(key)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        if fs::rename(quelle, &path).await.is_ok() {
+            return Ok(());
+        }
+        self.put_datei(key, quelle, mime).await?;
+        let _ = fs::remove_file(quelle).await;
+        Ok(())
+    }
+
+    fn lokaler_pfad(&self, key: &str) -> Option<PathBuf> {
+        self.path_for(key).ok()
+    }
+
     async fn read(&self, key: &str, range: Option<ByteRange>) -> AppResult<Option<ObjectStream>> {
         let path = self.path_for(key)?;
         let metadata = match fs::metadata(&path).await {
@@ -112,6 +156,16 @@ impl Storage for LocalStorage {
         let _ = fs::remove_file(path).await;
         Ok(())
     }
+}
+
+/// Ein Name neben dem Ziel, den kein Schlüssel je trägt.
+fn zwischenname(ziel: &Path) -> PathBuf {
+    let mut name = ziel
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(format!(".{}.zwischen", uuid::Uuid::now_v7().simple()));
+    ziel.with_file_name(name)
 }
 
 fn guess_mime(path: &Path) -> Option<String> {

@@ -122,6 +122,15 @@ pub const TYPING_TTL_MS: i64 = 6000;
 pub const HEARTBEAT_INTERVAL_SECS: u64 = 25;
 
 /// Upload ceilings per attachment kind, in bytes.
+/**
+ * Die Grenze für den Weg in EINER Anfrage (`/media/uploads/{id}/data` bzw. die
+ * signierte Adresse) – je Art.
+ *
+ * Dieser Weg puffert die ganze Datei im Arbeitsspeicher (siehe
+ * `UPLOAD_BODY_LIMIT` in `modules/media.rs`), deshalb bleibt er klein. Was
+ * grösser ist, geht in Stücken (`modules/stuecke.rs`) und hat seine Grenze in
+ * [`max_stueck_upload_bytes`].
+ */
 pub fn max_upload_bytes(kind: &str) -> i64 {
     match kind {
         "image" => 25 * 1024 * 1024,
@@ -132,6 +141,40 @@ pub fn max_upload_bytes(kind: &str) -> i64 {
         // übereinstimmen – der Client prüft vorab, der Server entscheidet.
         "sticker" => 4 * 1024 * 1024,
         _ => 100 * 1024 * 1024,
+    }
+}
+
+/**
+ * Wie gross eine Datei oder ein Video beim Hochladen in Stücken werden darf:
+ * 4 GiB.
+ *
+ * Vorgabe für `UPLOAD_MAX_BYTES` – die Einstellung gewinnt. Muss mit
+ * `LIMITS.maxUploadBytes.file`/`.video` im gemeinsamen Paket übereinstimmen
+ * (ein Test unten vergleicht beide Seiten): Der Client prüft vorab, damit
+ * niemand eine halbe Stunde hochlädt, um dann abgewiesen zu werden.
+ *
+ * Warum 4 GiB und nicht mehr: Das ist die Grenze, bis zu der jedes Telefon
+ * eine Datei noch sicher aus der Galerie herausreicht (FAT32-Erbe, iOS-
+ * Dateiauswahl), und ein Film in Handyqualität passt hinein. Bild und Ton
+ * bleiben bei ihren alten Grenzen – ein Foto von 4 GiB gibt es nicht.
+ */
+pub const GROSS_UPLOAD_MAX: i64 = 4 * 1024 * 1024 * 1024;
+
+/**
+ * Wie gross ein Stück ist: 8 MiB.
+ *
+ * Klein genug, dass ein abgerissenes Stück auf Mobilfunk nur Sekunden kostet
+ * und der Server je Anfrage nichts Nennenswertes hält; gross genug, dass ein
+ * Video von 4 GiB nicht 4000 Anfragen braucht (es sind 512). Gespiegelt in
+ * `LIMITS.stueckGroesse`.
+ */
+pub const STUECK_GROESSE: i64 = 8 * 1024 * 1024;
+
+/// Die Grenze beim Hochladen in Stücken. `gross` ist `UPLOAD_MAX_BYTES`.
+pub fn max_stueck_upload_bytes(kind: &str, gross: i64) -> i64 {
+    match kind {
+        "video" | "file" => gross,
+        anderes => max_upload_bytes(anderes),
     }
 }
 
@@ -211,4 +254,29 @@ pub fn truncate(value: &str, max: usize) -> String {
     let mut result: String = value.chars().take(max.saturating_sub(1)).collect();
     result.push('…');
     result
+}
+
+#[cfg(test)]
+mod gemeinsam_tests {
+    /*
+     * Die Upload-Grenzen stehen zweimal: hier und im gemeinsamen Paket. Der
+     * Client prüft vorab – liefe er mit einer anderen Zahl, lüde jemand eine
+     * halbe Stunde lang hoch, um am Ende abgewiesen zu werden (oder bekäme
+     * eine Datei verboten, die der Server nähme).
+     */
+    #[test]
+    fn grosse_grenzen_stimmen_mit_dem_gemeinsamen_paket_ueberein() {
+        let quelle = include_str!("../../../packages/shared/src/constants.ts");
+        assert_eq!(super::GROSS_UPLOAD_MAX, 4 * 1024 * 1024 * 1024);
+        assert!(
+            quelle.contains("video: 4 * 1024 * 1024 * 1024")
+                && quelle.contains("file: 4 * 1024 * 1024 * 1024"),
+            "LIMITS.maxUploadBytes.video/.file müssen 4 GiB sein wie GROSS_UPLOAD_MAX"
+        );
+        assert_eq!(super::STUECK_GROESSE, 8 * 1024 * 1024);
+        assert!(
+            quelle.contains("stueckGroesse: 8 * 1024 * 1024"),
+            "LIMITS.stueckGroesse muss STUECK_GROESSE sein"
+        );
+    }
 }

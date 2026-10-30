@@ -1859,6 +1859,7 @@ dependencies = [
  "hmac 0.12.1",
  "http-body-util",
  "image",
+ "libc",
  "mime_guess",
  "p256 0.13.2",
  "rand 0.9.5",

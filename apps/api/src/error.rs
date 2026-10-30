@@ -89,6 +89,19 @@ impl AppError {
         )
     }
 
+    /// 507 – auf der Platte ist nicht genug Platz für das, was kommen soll.
+    ///
+    /// Eigener Code statt 500: Der Client soll „Speicher des Servers voll"
+    /// sagen können und nicht „etwas ist schiefgegangen" – und vor allem
+    /// nicht stur wiederholen, als wäre es ein Netzfehler.
+    pub fn platte_voll(message: impl Into<String>) -> Self {
+        Self::api(
+            StatusCode::INSUFFICIENT_STORAGE,
+            "insufficient_storage",
+            message,
+        )
+    }
+
     /// 422 with per-field details, mirroring the client side validation.
     pub fn validation(issues: Vec<(&str, String)>) -> Self {
         let details = json!(issues

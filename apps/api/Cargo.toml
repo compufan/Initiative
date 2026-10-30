@@ -31,6 +31,10 @@ futures-util = "0.3.34"
 hex = "0.4.3"
 hkdf = "0.12.4"
 hmac = "0.12.1"
+# Nur für `statvfs` (freier Platz vor dem Anlegen eines grossen Uploads –
+# `std` kennt keinen Weg dorthin). Steht ohnehin schon als Abhängigkeit von
+# tokio im Baum, kostet also nichts Neues.
+libc = "0.2"
 image = { version = "0.25.6", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 mime_guess = "2.0.5"
 p256 = { version = "0.13.2", features = ["ecdh", "ecdsa", "pkcs8"] }

@@ -108,6 +108,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     /*
+     * Der Aufräumdienst für Uploads in Stücken.
+     *
+     * Eine Sitzung, die einen Tag lang nichts mehr bekommt, ist verlassen –
+     * die App wurde gelöscht, die Datei war doch zu gross. Ihre Teildatei
+     * kann Gigabytes belegen, deshalb kommt der Dienst stündlich und nicht
+     * erst, wenn jemand den nächsten Upload anlegt.
+     */
+    initiative_api::modules::stuecke::aufraeumer_starten(
+        state.pool.clone(),
+        state.config.upload_teile_dir.clone(),
+        state.config.upload_sitzung_stunden,
+        std::time::Duration::from_secs(3600),
+    );
+
+    /*
      * Der Auslagerungsdienst.
      *
      * Er läuft nur, wenn eine kalte Ablage eingerichtet ist – ohne

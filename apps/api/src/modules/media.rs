@@ -76,9 +76,10 @@ const UPLOAD_BODY_LIMIT: usize = 210 * 1024 * 1024;
  * wartet – und das ist deutlich besser, als wenn der Dienst stirbt und
  * ausgerechnet die Datenbank mitreisst.
  *
- * Die saubere Lösung wäre, im Strom auf die Platte zu schreiben, statt zu
- * puffern. Das braucht einen zweiten Weg im Speicher-Trait und ist hier
- * bewusst nicht getan – die Grenze wirkt sofort und kostet nichts.
+ * Grosse Dateien gehen seit Migration 0033 einen anderen Weg: in Stücken, im
+ * Strom auf die Platte und fortsetzbar (`modules/stuecke.rs`). Dieser hier
+ * bleibt für kleine Dateien und ältere Clients – deshalb bleiben auch seine
+ * Grenzen (`max_upload_bytes`) klein.
  */
 static UPLOAD_PLAETZE: std::sync::LazyLock<tokio::sync::Semaphore> =
     std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(2));
@@ -151,10 +152,16 @@ async fn create_upload(
     // Opportunistic housekeeping keeps abandoned uploads from piling up.
     let pool = state.pool.clone();
     tokio::spawn(async move {
+        // Ohne die mit einer laufenden Sitzung in Stücken: Ein Video von
+        // Gigabytes darf länger als einen Tag brauchen, solange es sich
+        // bewegt. Die verwaisten räumt `stuecke::aufraeumen` ab.
         let _ = sqlx::query(
             "delete from attachments
              where status = 'pending' and message_id is null
-               and created_at < now() - interval '24 hours'",
+               and created_at < now() - interval '24 hours'
+               and not exists (
+                 select 1 from upload_sitzungen s where s.attachment_id = attachments.id
+               )",
         )
         .execute(&pool)
         .await;
@@ -287,9 +294,9 @@ async fn upload_data(
 /// `completeUploadSchema` (gemeinsames Paket).
 const WELLENFORM_MAX: usize = 512;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CompleteUploadInput {
+pub(crate) struct CompleteUploadInput {
     width: Option<i32>,
     height: Option<i32>,
     duration_ms: Option<i32>,
@@ -304,7 +311,12 @@ async fn complete_upload(
     Json(input): Json<CompleteUploadInput>,
 ) -> AppResult<Json<AttachmentDto>> {
     require_own(&state, id, user.id()).await?;
+    metadaten_pruefen(&input)?;
+    Ok(Json(fertig_melden(&state, id, input).await?))
+}
 
+/// Wellenform und Vorschau prüfen – für beide Upload-Wege dieselbe Regel.
+pub(crate) fn metadaten_pruefen(input: &CompleteUploadInput) -> AppResult<()> {
     // Die Wellenform steht bei jeder Sprachnachricht im Anhang und geht an
     // jedes Mitglied. Die Oberfläche schickt 64 Werte zwischen 0 und 1; ohne
     // Grenze nahm der Server hier Megabytes an (und `NaN`, das als JSON nicht
@@ -328,6 +340,15 @@ async fn complete_upload(
         }
     }
 
+    Ok(())
+}
+
+/// Den Anhang auf `ready` setzen und die Masse nachtragen.
+pub(crate) async fn fertig_melden(
+    state: &AppState,
+    id: Uuid,
+    input: CompleteUploadInput,
+) -> AppResult<AttachmentDto> {
     let row = sqlx::query_as::<_, AttachmentRow>(
         "update attachments set
            status = 'ready',
@@ -348,7 +369,7 @@ async fn complete_upload(
     .fetch_one(&state.pool)
     .await?;
 
-    Ok(Json(to_attachment_dto(&row, &state.config)))
+    Ok(to_attachment_dto(&row, &state.config))
 }
 
 fn parse_range(header: Option<&str>, total: Option<u64>) -> Option<ByteRange> {

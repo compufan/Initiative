@@ -372,6 +372,34 @@ impl Storage for SftpSpeicher {
         Ok(())
     }
 
+    /// Wie `put`, aber im Strom von der Platte – ein ausgelagertes Video von
+    /// Gigabytes geht so hinüber, ohne je ganz im Arbeitsspeicher zu liegen.
+    async fn put_datei(&self, key: &str, quelle: &std::path::Path, _mime: &str) -> AppResult<()> {
+        let _platz = self
+            .plaetze
+            .acquire()
+            .await
+            .map_err(|_| AppError::internal("Die kalte Ablage nimmt gerade nichts entgegen"))?;
+        let mut ein = tokio::fs::File::open(quelle).await?;
+        let pfad = self.pfad_fuer(key)?;
+        let v = self.sitzung().await?;
+        self.ordner_sichern(&v.sftp, &pfad).await?;
+        let mut datei = v
+            .sftp
+            .create(pfad.clone())
+            .await
+            .map_err(|fehler| AppError::internal(format!("Ablegen gescheitert: {fehler}")))?;
+        tokio::io::copy(&mut ein, &mut datei)
+            .await
+            .map_err(|fehler| AppError::internal(format!("Schreiben gescheitert: {fehler}")))?;
+        // Siehe `put`: erst `shutdown` sagt, dass alles drüben ist.
+        datei
+            .shutdown()
+            .await
+            .map_err(|fehler| AppError::internal(format!("Abschluss gescheitert: {fehler}")))?;
+        Ok(())
+    }
+
     async fn read(&self, key: &str, range: Option<ByteRange>) -> AppResult<Option<ObjectStream>> {
         /*
          * Der Platz wird hier genommen und NICHT beim Verlassen dieser

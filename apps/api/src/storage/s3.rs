@@ -14,6 +14,11 @@ use super::{ByteRange, DownloadOptions, ObjectStream, PresignedUpload, Storage};
 use crate::config::{Config, StorageDriver};
 use crate::error::{AppError, AppResult};
 
+/// Grösse eines Teils beim Multipart-Upload. S3 verlangt mindestens 5 MiB
+/// (ausser beim letzten) und höchstens 10 000 Teile: 16 MiB tragen also bis
+/// 160 GB – weit über `UPLOAD_MAX_BYTES`.
+const S3_TEIL: usize = 16 * 1024 * 1024;
+
 pub struct S3Storage {
     bucket: Bucket,
     credentials: Credentials,
@@ -132,6 +137,139 @@ impl Storage for S3Storage {
                 "Upload zu S3 fehlgeschlagen: HTTP {}",
                 response.status()
             )));
+        }
+        Ok(())
+    }
+
+    /**
+     * Eine Datei von der Platte in den Eimer – als Multipart-Upload.
+     *
+     * Ein einzelnes `PUT` müsste die Länge vorab nennen und den Körper am
+     * Stück schicken; mit `reqwest` hiesse das, die Datei einzulesen. Teile zu
+     * je [`S3_TEIL`] halten höchstens ein Teil im Arbeitsspeicher, und ein
+     * gescheitertes Teil kostet einen neuen Versuch für 16 MiB statt für
+     * Gigabytes. Kleine Dateien (ein Teil) gehen weiter als schlichtes `put`.
+     *
+     * Scheitert etwas, wird der Multipart-Upload abgebrochen – sonst
+     * berechnet der Anbieter die liegengebliebenen Teile weiter.
+     */
+    async fn put_datei(&self, key: &str, pfad: &std::path::Path, mime: &str) -> AppResult<()> {
+        use tokio::io::AsyncReadExt;
+
+        let mut datei = tokio::fs::File::open(pfad).await?;
+        let laenge = datei.metadata().await?.len();
+        if laenge <= S3_TEIL as u64 {
+            let mut puffer = Vec::with_capacity(laenge as usize);
+            datei.read_to_end(&mut puffer).await?;
+            return self.put(key, Bytes::from(puffer), mime).await;
+        }
+
+        let fehler =
+            |was: &str, e: String| AppError::internal(format!("S3-Multipart ({was}): {e}"));
+        let anlegen = self
+            .bucket
+            .create_multipart_upload(Some(&self.credentials), key);
+        let antwort = self
+            .http
+            .post(anlegen.sign(Duration::from_secs(300)))
+            .header("content-type", mime)
+            .send()
+            .await
+            .map_err(|e| fehler("anlegen", e.to_string()))?;
+        if !antwort.status().is_success() {
+            return Err(fehler("anlegen", format!("HTTP {}", antwort.status())));
+        }
+        let text = antwort
+            .text()
+            .await
+            .map_err(|e| fehler("anlegen", e.to_string()))?;
+        let upload_id = rusty_s3::actions::CreateMultipartUpload::parse_response(&text)
+            .map_err(|e| fehler("anlegen", e.to_string()))?
+            .upload_id()
+            .to_string();
+
+        let ergebnis: AppResult<Vec<String>> = async {
+            let mut etags = Vec::new();
+            let mut nummer: u16 = 1;
+            loop {
+                let mut puffer = Vec::with_capacity(S3_TEIL);
+                (&mut datei)
+                    .take(S3_TEIL as u64)
+                    .read_to_end(&mut puffer)
+                    .await?;
+                if puffer.is_empty() {
+                    break;
+                }
+                let teil = Bytes::from(puffer);
+                let mut versuch = 0;
+                let etag = loop {
+                    versuch += 1;
+                    let url = self
+                        .bucket
+                        .upload_part(Some(&self.credentials), key, nummer, &upload_id)
+                        .sign(Duration::from_secs(900));
+                    let gesendet = self
+                        .http
+                        .put(url)
+                        .timeout(Duration::from_secs(300))
+                        .body(teil.clone())
+                        .send()
+                        .await;
+                    match gesendet {
+                        Ok(antwort) if antwort.status().is_success() => {
+                            let etag = antwort
+                                .headers()
+                                .get(reqwest::header::ETAG)
+                                .and_then(|w| w.to_str().ok())
+                                .map(str::to_string)
+                                .ok_or_else(|| fehler("Teil", "ETag fehlt".into()))?;
+                            break etag;
+                        }
+                        Ok(antwort) if versuch >= 3 => {
+                            return Err(fehler("Teil", format!("HTTP {}", antwort.status())));
+                        }
+                        Err(e) if versuch >= 3 => return Err(fehler("Teil", e.to_string())),
+                        _ => tokio::time::sleep(Duration::from_millis(500 * versuch)).await,
+                    }
+                };
+                etags.push(etag);
+                nummer = nummer
+                    .checked_add(1)
+                    .ok_or_else(|| fehler("Teil", "mehr als 65535 Teile".into()))?;
+            }
+            Ok(etags)
+        }
+        .await;
+
+        let etags = match ergebnis {
+            Ok(etags) => etags,
+            Err(e) => {
+                let abbruch = self
+                    .bucket
+                    .abort_multipart_upload(Some(&self.credentials), key, &upload_id)
+                    .sign(Duration::from_secs(300));
+                let _ = self.http.delete(abbruch).send().await;
+                return Err(e);
+            }
+        };
+
+        let abschluss = self.bucket.complete_multipart_upload(
+            Some(&self.credentials),
+            key,
+            &upload_id,
+            etags.iter().map(String::as_str),
+        );
+        let url = abschluss.sign(Duration::from_secs(300));
+        let antwort = self
+            .http
+            .post(url)
+            .timeout(Duration::from_secs(300))
+            .body(abschluss.body())
+            .send()
+            .await
+            .map_err(|e| fehler("abschliessen", e.to_string()))?;
+        if !antwort.status().is_success() {
+            return Err(fehler("abschliessen", format!("HTTP {}", antwort.status())));
         }
         Ok(())
     }

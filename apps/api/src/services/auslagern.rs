@@ -605,14 +605,13 @@ async fn kandidaten(pool: &PgPool, erlaubt: Erlaubt) -> Vec<Kandidat> {
  * Verlust ist Platz – eine Datei, die bei einem Absturz zwischen 4 und 5 an
  * beiden Orten liegt. Das ist die richtige Richtung: lieber doppelt als weg.
  *
- * # Warum die ganze Datei in den Arbeitsspeicher
+ * # Im Strom, wo es geht
  *
- * Weil `Storage::put` Bytes nimmt, keinen Strom. Bei einem Video von 200 MB
- * ist das eine Spitze von 200 MB – dieselbe Grössenordnung, die der
- * Upload-Weg ohnehin hat (`UPLOAD_BODY_LIMIT`), und es läuft immer nur eine
- * Datei zugleich. Ein Strom-Weg wäre besser und wäre ein zweiter Eintrag im
- * Speicher-Trait; er lohnt sich, wenn der Dienst einmal mehrere Dateien
- * nebeneinander bewegen soll.
+ * Liegt die warme Fassung auf der Platte dieser Maschine (der Normalfall),
+ * geht sie mit `Storage::put_datei` im Strom hinüber – seit Uploads in Stücken
+ * Gigabytes gross sein dürfen, wäre das Einlesen ein Speicherfresser. Nur ein
+ * warmer Speicher ohne lokalen Pfad (Objektspeicher als warme Ablage) nimmt
+ * weiter den alten Weg über den Arbeitsspeicher.
  */
 async fn umziehen(
     pool: &PgPool,
@@ -661,6 +660,19 @@ async fn umziehen(
         .await;
     };
 
+    if let Some(pfad) = warm.lokaler_pfad(&schluessel) {
+        if tokio::fs::metadata(&pfad).await.is_err() {
+            zurueck().await;
+            return Err(format!("{schluessel}: liegt gar nicht da"));
+        }
+        if let Err(fehler) = kalt.put_datei(&schluessel, &pfad, &mime).await {
+            zurueck().await;
+            return Err(format!("{schluessel}: Schreiben gescheitert – {fehler}"));
+        }
+        let erwartet = tokio::fs::metadata(&pfad).await.map(|m| m.len()).ok();
+        return abschliessen(pool, warm, kalt, &schluessel, erwartet, groesse, zurueck).await;
+    }
+
     let Some(objekt) = warm
         .read(&schluessel, None)
         .await
@@ -682,14 +694,31 @@ async fn umziehen(
         }
     }
 
+    let erwartet = Some(bytes.len() as u64);
     if let Err(fehler) = kalt
-        .put(&schluessel, axum::body::Bytes::from(bytes.clone()), &mime)
+        .put(&schluessel, axum::body::Bytes::from(bytes), &mime)
         .await
     {
         zurueck().await;
         return Err(format!("{schluessel}: Schreiben gescheitert – {fehler}"));
     }
+    abschliessen(pool, warm, kalt, &schluessel, erwartet, groesse, zurueck).await
+}
 
+/// Nachmessen, umschreiben, warm löschen – der gemeinsame Rest beider Wege.
+async fn abschliessen<F, Fut>(
+    pool: &PgPool,
+    warm: &Arc<dyn Storage>,
+    kalt: &Arc<dyn Storage>,
+    schluessel: &str,
+    erwartet: Option<u64>,
+    groesse: i64,
+    zurueck: F,
+) -> Result<i64, String>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     /*
      * Nachmessen, bevor die lokale Fassung fällt.
      *
@@ -699,16 +728,15 @@ async fn umziehen(
      * geschrieben zu haben.
      */
     let drueben = kalt
-        .read(&schluessel, None)
+        .read(schluessel, None)
         .await
         .ok()
         .flatten()
         .and_then(|o| o.total_size);
-    if drueben != Some(bytes.len() as u64) {
+    if erwartet.is_none() || drueben != erwartet {
         zurueck().await;
         return Err(format!(
-            "{schluessel}: drüben liegen {drueben:?} statt {} Bytes",
-            bytes.len()
+            "{schluessel}: drüben liegen {drueben:?} statt {erwartet:?} Bytes"
         ));
     }
 
@@ -716,7 +744,7 @@ async fn umziehen(
         "update attachments set ablage = 'fern', ausgelagert_at = now()
           where storage_key = $1",
     )
-    .bind(&schluessel)
+    .bind(schluessel)
     .execute(pool)
     .await
     .map_err(|f| f.to_string())?;
@@ -727,7 +755,7 @@ async fn umziehen(
      * Durchgang wählt sie nicht noch einmal (sie steht auf `fern`), also
      * bleibt dieser Rest liegen – sichtbar im Protokoll.
      */
-    if let Err(fehler) = warm.delete(&schluessel).await {
+    if let Err(fehler) = warm.delete(schluessel).await {
         tracing::warn!(%schluessel, %fehler, "Ausgelagert, aber die lokale Fassung blieb liegen");
     }
     Ok(groesse)
