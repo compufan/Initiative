@@ -77,9 +77,13 @@ export function OrtFeld({
   }, [wert]);
 
   const uebernehmen = (t: OrtTreffer) => {
-    uebernommen.current = t.text;
-    setGewaehlt(t.text.slice(0, maxLaenge));
-    onChange(t.text.slice(0, maxLaenge));
+    // Gemerkt wird der GEKÜRZTE Text – genau der kommt als `wert` zurück. Mit
+    // dem ungekürzten verglichen, suchte ein überlanger Treffer gleich wieder
+    // und klappte die Liste über der eben getroffenen Wahl erneut auf.
+    const text = t.text.slice(0, maxLaenge);
+    uebernommen.current = text;
+    setGewaehlt(text);
+    onChange(text);
     setOffen(false);
     setTreffer([]);
   };
@@ -136,7 +140,13 @@ export function OrtFeld({
           if (treffer.length > 0) setOffen(true);
         }}
       />
-      <ul id={listeId} role="listbox" aria-label="Ortsvorschläge" className="ort-liste" hidden={!offen}>
+      <ul
+        id={listeId}
+        role="listbox"
+        aria-label="Ortsvorschläge"
+        className="ort-liste"
+        hidden={!offen}
+      >
         {treffer.map((t, i) => (
           <li
             key={`${t.text}-${t.lat}`}
