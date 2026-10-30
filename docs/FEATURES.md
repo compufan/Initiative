@@ -141,17 +141,34 @@ Startbildschirm legen und funktioniert auch ohne Netz weiter.
 
 ### Dateien
 
-- Beliebige Dateien bis 100 MB, mit Name, Größe und Symbol nach Dateityp.
-- **Herunterladen** mit einem Tipp.
+- Beliebige Dateien bis **4 GB**, mit Name, Größe und Symbol nach Dateityp.
+- **Herunterladen** mit einem Tipp – grosse Dateien lassen sich fortsetzen,
+  Videos jederzeit vorspulen, ohne erst alles zu laden.
+
+### Grosse Dateien und Videos
+
+- Alles über 32 MB geht **in Stücken** hoch. Die Blase zeigt **Prozent, Menge
+  und Restzeit** und hat einen **Abbrechen**-Knopf.
+- **Reisst das Netz ab**, wartet die App kurz und macht weiter – ohne schon
+  Gesendetes noch einmal zu schicken. Kommt das Netz erst später wieder, geht
+  es dann an derselben Stelle weiter.
+- **Die App muss offen bleiben.** Ein Telefon lädt im Hintergrund nicht weiter
+  (iOS gar nicht); die App sagt das bei grossen Dateien offen. Wird sie
+  geschlossen, geht es beim nächsten Öffnen weiter – bei Dateien über 200 MB
+  bittet die Blase dann einmal darum, die Datei noch einmal auszuwählen (sie
+  wird absichtlich nicht ein zweites Mal im Telefon abgelegt).
+- Während ein grosses Video hochlädt, gehen **Textnachrichten trotzdem raus**.
+- Ein unfertiger Upload, der einen Tag lang nicht weitergeht, wird auf dem
+  Server weggeräumt.
 
 ### Grenzen
 
 | Art                     | Maximale Größe |
 | ----------------------- | -------------- |
 | Bild                    | 25 MB          |
-| Video                   | 200 MB         |
+| Video                   | 4 GB           |
 | Sprachnachricht / Audio | 50 MB          |
-| Datei                   | 100 MB         |
+| Datei                   | 4 GB           |
 | Sticker                 | 4 MB           |
 
 Bis zu 10 Anhänge pro Nachricht.
@@ -233,7 +250,10 @@ Rückgängig und Wiederherstellen gelten für alles; ein Zug ist ein Schritt.
 ## Videos bearbeiten
 
 Derselbe Editor wie beim Foto, mit einer **Zeitleiste** darunter – schneiden
-und bearbeiten an einem Ort, alles im Gerät.
+und bearbeiten an einem Ort, alles im Gerät. Angeboten für Videos bis 200 MB:
+Der Editor braucht das ganze Video im Speicher des Telefons, ein Film von
+Gigabytes liesse die App abstürzen. Grössere Videos werden unverändert
+gesendet und abgespielt.
 
 - **Abschnitte**: an der Wiedergabestelle teilen, Anfang und Ende ziehen,
   umstellen, entfernen, einen weiteren anhängen. Jeder Abschnitt trägt seine

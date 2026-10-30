@@ -6,9 +6,12 @@
 :8080 {
 	encode zstd gzip
 
-	# API und WebSocket an den Rust-Dienst weiterreichen.
+	# API und WebSocket an den Rust-Dienst weiterreichen. `flush_interval -1`
+	# wie im äusseren Caddy: grosse Downloads im Strom, nicht gepuffert.
 	handle /api/* {
-		reverse_proxy api:8080
+		reverse_proxy api:8080 {
+			flush_interval -1
+		}
 	}
 	handle /ws* {
 		reverse_proxy api:8080

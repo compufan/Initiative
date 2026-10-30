@@ -150,6 +150,37 @@ wertloser Wert.
 | `S3_FORCE_PATH_STYLE`  | `true`            | R2, MinIO: `true`. AWS S3: `false`.                                                                        |
 | `S3_PUBLIC_BASE_URL`   | leer              | Öffentliche Bucket-Domain. Gesetzt → keine signierten Download-URLs mehr.                                  |
 | `SIGNED_URL_TTL`       | `3600`            | Gültigkeit signierter URLs in Sekunden.                                                                    |
+| `UPLOAD_MAX_BYTES`     | `4294967296`      | Grösste Datei bzw. grösstes Video beim Hochladen in Stücken (4 GiB). Bild/Ton behalten ihre Grenzen.       |
+| `UPLOAD_OFFEN_MAX_BYTES` | `8589934592`    | Was ein Konto gleichzeitig in unfertigen Uploads halten darf (8 GiB).                                      |
+| `UPLOAD_TEILE_DIR`     | `<LOCAL_STORAGE_DIR>/.teile` | Halbfertige Uploads. Bei `local` auf demselben Volume lassen (Abschluss = `rename`). Bei `r2`/`s3` sonst das Temp-Verzeichnis – im Container ist `/tmp` ein 64-MB-tmpfs, dort also ein Volume angeben. |
+| `UPLOAD_PLATTE_RESERVE_BYTES` | `1073741824` | So viel bleibt nach allen offenen Uploads mindestens frei; sonst `507` statt voller Platte.               |
+| `UPLOAD_SITZUNG_STUNDEN` | `24`            | Nach so vielen Stunden ohne Bewegung wird ein unfertiger Upload weggeräumt.                                 |
+
+#### Grosse Dateien (bis 4 GiB)
+
+Dateien und Videos über 32 MiB gehen in Stücken zu 8 MiB hoch
+(`/media/stuecke`, siehe [API.md](API.md#hochladen-in-stücken--mediastuecke)).
+Für den Betrieb heisst das:
+
+- **Kein Proxy-Limit nötig.** Jede Anfrage trägt höchstens ein Stück; Caddy hat
+  von sich aus weder eine Körpergrenze noch eine Lesefrist. Wer einen anderen
+  Proxy davor hat (nginx: `client_max_body_size` ≥ 10m, `proxy_request_buffering
+  off`, `proxy_buffering off` für Downloads), muss das selbst einstellen. Der
+  alte Weg in einer Anfrage braucht weiter bis 210 MB.
+- **Platz.** Unfertige Uploads liegen als dünn besetzte Dateien in
+  `UPLOAD_TEILE_DIR` und wachsen mit jedem Stück. Mit `MEDIA_KEY` liegt eine
+  Datei beim Abschluss kurz zweimal da (Klartext und Geheimtext); die Prüfung
+  des freien Platzes rechnet das ein. `deploy/vps/backup.sh` lässt `.teile`
+  aus.
+- **Speicher.** Der Server hält nie eine ganze Datei im Arbeitsspeicher –
+  gemessen wuchs die Spitze bei 512 MiB um 10 MiB. Mit `r2`/`s3` geht die
+  fertige Datei als Multipart-Upload (16-MiB-Teile) in den Eimer; grosse
+  Uploads laufen dann also einmal durch den Server statt direkt in den Eimer.
+- **Im Hintergrund lädt kein Telefon.** Die App sagt das bei grossen Dateien
+  offen: Sie muss im Vordergrund bleiben. Bricht es ab, geht es beim nächsten
+  Öffnen an derselben Stelle weiter; nach einem Neustart der App über 200 MB
+  muss die Datei einmal neu gewählt werden (sie liegt bewusst nicht in
+  IndexedDB – das wäre eine zweite Kopie auf dem Telefon).
 | `MEDIA_KEY`            | leer              | 32 Bytes base64. Gesetzt → alles Neue wird verschlüsselt abgelegt (`initiative-api --generate-media-key`). |
 | `MEDIA_AUTH`           | `true`            | Medienrouten verlangen eine angemeldete Person (Medien-Keks). `false` gibt jede Datei heraus, deren Kennung man kennt. |
 | `KALT_TREIBER`         | `aus`             | `aus` \| `sftp` \| `lokal`. Zweite, grössere, langsamere Ablage für Anhänge. Siehe unten.                    |
@@ -594,7 +625,9 @@ initiative.example.com {
 ```
 
 Caddy holt das Let's-Encrypt-Zertifikat selbst und reicht WebSocket-Upgrades
-ohne Zusatzkonfiguration durch.
+ohne Zusatzkonfiguration durch. Für grosse Dateien braucht es nichts weiter:
+Uploads gehen in Stücken zu 8 MiB, und Caddy kennt von sich aus weder eine
+Grenze für den Anfragekörper noch eine Frist für lange Downloads.
 
 Nach jedem `git pull`:
 

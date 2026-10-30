@@ -397,6 +397,11 @@ Gelöschte Nachrichten verschwinden nicht aus der Liste: `deletedAt` ist gesetzt
 | POST    | `/media/uploads`               | Bearer         | `{ kind, mime, size, fileName? }`                              | `201` `CreateUploadResult`                               |
 | POST    | `/media/uploads/{id}/data`     | Bearer         | `multipart/form-data`, Feld `file`                             | `200` `Attachment`                                       |
 | POST    | `/media/uploads/{id}/complete` | Bearer         | `{ width?, height?, durationMs?, waveform?, previewDataUrl? }` | `200` `Attachment`                                       |
+| POST    | `/media/stuecke`               | Bearer         | `{ kind, mime, size, fileName?, sha256? }`                     | `201` Stand (siehe unten)                                |
+| GET     | `/media/stuecke/{id}`          | Bearer         | –                                                              | `200` Stand – welche Stücke schon da sind                |
+| PUT     | `/media/stuecke/{id}`          | Bearer         | Rumpf roh, Header `Content-Range: bytes a-b/size`              | `200` Stand                                              |
+| POST    | `/media/stuecke/{id}/abschliessen` | Bearer     | `{ width?, height?, durationMs?, waveform?, previewDataUrl? }` | `200` `Attachment`                                       |
+| DELETE  | `/media/stuecke/{id}`          | Bearer         | –                                                              | `204` – Sitzung, Teildatei und Anhang weg                |
 | GET     | `/media/{id}`                  | – (Capability) | Header `Range` erlaubt                                         | `200`/`206` Binärdaten oder `302` auf eine signierte URL |
 | GET     | `/media/{id}/bytes`            | – (Capability) | Header `Range` erlaubt                                         | wie oben, aber **nie** als Weiterleitung                 |
 | GET     | `/media/{id}/download`         | – (Capability) | –                                                              | wie oben, mit `Content-Disposition: attachment`          |
@@ -449,13 +454,61 @@ Abschluss gleich mit – Schritt 3 ist dann nur für Metadaten nötig.
 
 **Arten und Grenzen**
 
-| `kind`    | Max. Größe | Erlaubte MIME-Typen                                                              |
-| --------- | ---------- | -------------------------------------------------------------------------------- |
-| `image`   | 25 MB      | `image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/avif`, `image/heic` |
-| `video`   | 200 MB     | `video/mp4`, `video/webm`, `video/quicktime`, `video/x-matroska`                 |
-| `audio`   | 50 MB      | `audio/webm`, `audio/ogg`, `audio/mpeg`, `audio/mp4`, `audio/aac`, `audio/wav`   |
-| `file`    | 100 MB     | alle                                                                             |
-| `sticker` | 2 MB       | `image/webp`, `image/png`                                                        |
+| `kind`    | in einer Anfrage | in Stücken                       | Erlaubte MIME-Typen                                                              |
+| --------- | ---------------- | -------------------------------- | -------------------------------------------------------------------------------- |
+| `image`   | 25 MB            | 25 MB                            | `image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/avif`, `image/heic` |
+| `video`   | 200 MB           | 4 GiB (`UPLOAD_MAX_BYTES`)       | `video/mp4`, `video/webm`, `video/quicktime`, `video/x-matroska`                 |
+| `audio`   | 50 MB            | 50 MB                            | `audio/webm`, `audio/ogg`, `audio/mpeg`, `audio/mp4`, `audio/aac`, `audio/wav`   |
+| `file`    | 100 MB           | 4 GiB (`UPLOAD_MAX_BYTES`)       | alle                                                                             |
+| `sticker` | 4 MB             | – (nur in einer Anfrage)         | `image/webp`, `image/png`, `image/gif`                                           |
+
+### Hochladen in Stücken – `/media/stuecke`
+
+Für alles über 32 MiB (`LIMITS.stueckUploadAb`) nimmt die App diesen Weg; der
+in einer Anfrage bleibt für kleine Dateien und ältere Clients bestehen. Der
+Server hält dabei nie die Datei im Speicher: Jedes Stück geht im Strom an seine
+Stelle einer dünn besetzten Teildatei (`UPLOAD_TEILE_DIR`), gemessen wuchs die
+Speicherspitze bei 512 MiB um 10 MiB.
+
+```
+1. POST /media/stuecke { kind, mime, size, fileName?, sha256? }
+     → 201 { sitzungId, attachmentId, groesse, stueckGroesse, anzahl,
+             empfangen: [], empfangenBytes, status: "offen", ablaufAt }
+2. je fehlendem Stück nr (0 … anzahl-1), gern 2–3 gleichzeitig, in jeder Reihenfolge:
+     PUT /media/stuecke/{sitzungId}
+       Content-Range: bytes {nr*stueckGroesse}-{ende}/{size}
+       Rumpf: genau dieses Stück (das letzte ist kürzer)
+     → 200 Stand
+3. nach Abbruch / Neustart: GET /media/stuecke/{sitzungId} → `empfangen` sagt, was fehlt
+4. POST /media/stuecke/{sitzungId}/abschliessen { width?, … } → Attachment (status "ready")
+5. attachmentId wie gewohnt in attachmentIds der Nachricht
+```
+
+- **Stückgrösse** 8 MiB (`stueckGroesse` aus der Antwort benutzen, nicht
+  festschreiben). Ein Stück muss auf einer Grenze anfangen und genau ein Stück
+  lang sein, sonst `400`. Mehr Bytes als angesagt: `413`.
+- **Doppelt** ist harmlos: Ein schon gebuchtes Stück wird angenommen und
+  verworfen. Gebucht wird erst, wenn es vollständig auf der Platte ist – ein
+  abgerissenes Stück fehlt einfach und wird wiederholt.
+- **Abschliessen** prüft: alle Stücke da (sonst `409`, Sitzung bleibt offen),
+  die ersten Bytes passen zur Art (Video/Ton/Bild; sonst `415`), die Prüfsumme
+  stimmt (sonst `422` – die Sitzung ist dann verworfen, die Datei muss neu).
+  Ein wiederholter Abschluss liefert denselben Anhang; läuft gerade einer,
+  kommt `409` („gleich noch einmal fragen“).
+- **Rechte:** Nur wer die Sitzung angelegt hat, sieht sie – für alle anderen
+  `404`. Der unfertige Anhang ist wie bisher nur für den Hochladenden abrufbar.
+- **Bremsen:** `413`, wenn die offenen Sitzungen eines Kontos zusammen über
+  `UPLOAD_OFFEN_MAX_BYTES` lägen (Vorgabe 8 GiB); `429` ab 20 offenen
+  Sitzungen; `507 insufficient_storage`, wenn auf der Platte nach allen offenen
+  Sitzungen weniger als `UPLOAD_PLATTE_RESERVE_BYTES` frei bliebe.
+- **Ablauf:** Nach `UPLOAD_SITZUNG_STUNDEN` (24) ohne Bewegung räumt ein
+  stündlicher Dienst Sitzung, Teildatei und unfertigen Anhang weg (`ablaufAt`).
+
+**Ausliefern grosser Dateien.** `GET /media/{id}` und `/download` streamen
+immer (auch verschlüsselt nur die berührten Blöcke) und beantworten `Range`
+mit `206` – `bytes=a-b`, `bytes=a-` (fortsetzbarer Download) und `bytes=-n`;
+ein Anfang hinter dem Ende gibt `416`. Der Service Worker legt Antworten über
+50 MB nicht in seinem Medienspeicher ab.
 
 **Wie sich `<img src>` ausweist.** `<img>`, `<video>`, ein Download-Anker und
 der Service Worker können keinen `Authorization`-Header setzen. Deshalb setzt

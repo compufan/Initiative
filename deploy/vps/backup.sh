@@ -66,7 +66,10 @@ find "$ZIEL" -name 'db-*.dump.age' -mmin +2880 -delete
 # doppelt verschlüsselt sind, ist kein Versehen: Die beiden Schichten schützen
 # zwei verschiedene Orte – die Platte hier und das Ziel dort.
 if [ "${1:-}" = "--auswaerts" ] && [ -n "${RESTIC_REPOSITORY:-}" ]; then
-	restic backup "$ZIEL" "${UPLOADS_DIR:-/var/lib/docker/volumes/initiative_uploads/_data}"
+	# Ohne `.teile`: Dort liegen halbfertige Uploads in Stücken – dünn
+	# besetzte Dateien von bis zu Gigabytes, die beim Lesen voll ausgerollt
+	# würden und nach einem Tag ohnehin weggeräumt sind.
+	restic backup --exclude '.teile' "$ZIEL" "${UPLOADS_DIR:-/var/lib/docker/volumes/initiative_uploads/_data}"
 	restic forget --keep-hourly 24 --keep-daily 7 --keep-weekly 5 --keep-monthly 12 --prune
 fi
 

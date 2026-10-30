@@ -22,8 +22,17 @@
 	# API und WebSocket direkt an den Rust-Dienst. Alles andere geht an das
 	# Web-Abbild – dort stehen die Sicherheits- und Cache-Kopfzeilen, und der
 	# innere Caddy reicht /datenschutz, /healthz und /readyz selbst weiter.
+	# Grosse Dateien: Caddy setzt von sich aus weder eine Grenze für den
+	# Anfragekörper noch eine Lese- oder Schreibfrist – ein Upload in Stücken
+	# (8 MiB je Anfrage) und ein Download von Gigabytes mit `Range` gehen also
+	# ohne Zutun durch. `flush_interval -1` reicht die Antwort sofort weiter,
+	# statt sie zu puffern: Ein Video beginnt zu spielen, bevor es ganz da
+	# ist. Wer hier je `request_body { max_size … }` einträgt, muss über
+	# 8 MiB bleiben (UPLOAD_BODY_LIMIT des alten Weges: 210 MB).
 	handle /api/* {
-		reverse_proxy api:8080
+		reverse_proxy api:8080 {
+			flush_interval -1
+		}
 	}
 	handle /ws* {
 		reverse_proxy api:8080
