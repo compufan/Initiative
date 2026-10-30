@@ -308,36 +308,20 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   async flushOutbox() {
-    if (flushing) return;
+    if (flushing) {
+      // Was während eines laufenden Durchgangs dazukommt, steht nicht in dessen
+      // Liste (sie wurde vorher gelesen). Bisher blieb es liegen, bis zufällig
+      // der nächste Anlass kam – eine zweite Nachricht, abgeschickt während die
+      // erste noch ihr Foto hochlud, hing als „wird gesendet“ fest.
+      flushNochmal = true;
+      return;
+    }
     flushing = true;
     try {
-      const entries = await readOutbox();
-      for (const entry of entries) {
-        try {
-          const attachmentIds = [...entry.attachmentIds];
-          for (const attachment of entry.pendingAttachments) {
-            const uploaded = await uploadBlob(attachment);
-            attachmentIds.push(uploaded.id);
-          }
-          const message = await api.messages.send(entry.conversationId, {
-            type: entry.type,
-            body: entry.body,
-            replyToId: entry.replyToId,
-            metadata: entry.metadata,
-            attachmentIds,
-            clientId: entry.clientId,
-          });
-          await removeOutbox(entry.clientId);
-          get().applyMessage(message);
-        } catch (error) {
-          const offline = error instanceof ApiError && error.isOffline;
-          entry.attempts += 1;
-          entry.lastError = error instanceof Error ? error.message : 'Senden fehlgeschlagen';
-          await updateOutbox(entry);
-          if (offline) break;
-          if (entry.attempts >= 3) markFailed(set, entry);
-        }
-      }
+      do {
+        flushNochmal = false;
+        if (!(await outboxDurchgang())) break;
+      } while (flushNochmal);
     } finally {
       flushing = false;
     }
@@ -429,6 +413,43 @@ export const useChat = create<ChatState>((set, get) => ({
 }));
 
 let flushing = false;
+/** Während eines Durchgangs kam etwas in die Outbox – danach noch einmal. */
+let flushNochmal = false;
+
+/**
+ * Ein Durchgang durch die Outbox. `false`, wenn er wegen fehlender Verbindung
+ * abgebrochen wurde – dann lohnt kein weiterer, bis die Leitung wieder steht.
+ */
+async function outboxDurchgang(): Promise<boolean> {
+  const entries = await readOutbox();
+  for (const entry of entries) {
+    try {
+      const attachmentIds = [...entry.attachmentIds];
+      for (const attachment of entry.pendingAttachments) {
+        const uploaded = await uploadBlob(attachment);
+        attachmentIds.push(uploaded.id);
+      }
+      const message = await api.messages.send(entry.conversationId, {
+        type: entry.type,
+        body: entry.body,
+        replyToId: entry.replyToId,
+        metadata: entry.metadata,
+        attachmentIds,
+        clientId: entry.clientId,
+      });
+      await removeOutbox(entry.clientId);
+      useChat.getState().applyMessage(message);
+    } catch (error) {
+      const offline = error instanceof ApiError && error.isOffline;
+      entry.attempts += 1;
+      entry.lastError = error instanceof Error ? error.message : 'Senden fehlgeschlagen';
+      await updateOutbox(entry);
+      if (offline) return false;
+      if (entry.attempts >= 3) markFailed(useChat.setState, entry);
+    }
+  }
+  return true;
+}
 
 function mergeList(existing: ChatMessage[] | undefined, incoming: MessageDto[]): ChatMessage[] {
   const map = new Map<string, ChatMessage>();
