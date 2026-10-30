@@ -16,6 +16,8 @@ export interface GameMoveContext {
   seat: number;
   userId: string;
   players: GameSeat[];
+  /** Uhrzeit des Zuges (ms seit 1970); nur Echtzeitspiele lesen sie. Fehlt sie, gilt die Uhr des Geräts. */
+  nowMs?: number;
 }
 
 export type GameMoveResult<S> = { ok: true; state: S } | { ok: false; error: string };
@@ -34,6 +36,12 @@ export interface GameDefinition<S = unknown, M = unknown> {
   emoji: string;
   minPlayers: number;
   maxPlayers: number;
+  /**
+   * Echtzeitspiel: Mehrere Sitze melden gleichzeitig, und ein Zug hängt nicht
+   * von der Reihenfolge ab. Der Client sendet ihn deshalb nach einem
+   * Versionskonflikt mit frischem Stand erneut, statt ihn zu verwerfen.
+   */
+  echtzeit?: boolean;
   createInitialState(players: GameSeat[]): S;
   /** Narrow untrusted input coming from the network; return null when invalid. */
   parseMove(raw: unknown): M | null;

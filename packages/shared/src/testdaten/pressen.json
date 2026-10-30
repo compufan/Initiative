@@ -1,0 +1,476 @@
+{
+  "hinweis": "Gemeinsame Testfälle für Pressen. Die TypeScript-Fassung (src/games/pressen.ts, geprüft in pressen.test.ts) und die Rust-Fassung (apps/api/src/games/pressen.rs, geprüft in apps/api/tests/pressen.rs) müssen für jeden Fall dasselbe ergeben. Die Physik (pressen-sim.ts) läuft nur im Client und steht hier nicht drin.",
+  "wertung": [
+    { "dauerMs": 10000, "verschuettetDezi": 0, "erwartet": 10000 },
+    { "dauerMs": 12000, "verschuettetDezi": 100, "erwartet": 13200 },
+    { "dauerMs": 12000, "verschuettetDezi": 20, "erwartet": 12208 },
+    { "dauerMs": 5760, "verschuettetDezi": 1628, "erwartet": 75048 },
+    { "dauerMs": 10000, "verschuettetDezi": 3, "erwartet": 10030 }
+  ],
+  "malus": [
+    { "wertMs": 200, "stand": 1000, "jetzt": 1000, "erwartet": 200 },
+    { "wertMs": 200, "stand": 1000, "jetzt": 121000, "erwartet": 100 },
+    { "wertMs": 200, "stand": 1000, "jetzt": 241000, "erwartet": 50 },
+    { "wertMs": 200, "stand": 1000, "jetzt": 61000, "erwartet": 141 },
+    { "wertMs": 200, "stand": 1000, "jetzt": 0, "erwartet": 200 }
+  ],
+  "plan": [
+    { "n": 1, "modus": "spiegel", "ampel": null, "teams": [[0]] },
+    { "n": 2, "modus": "duell", "ampel": null, "teams": [[0], [1]] },
+    { "n": 3, "modus": "ampel", "ampel": 2, "teams": [[0], [1]] },
+    {
+      "n": 4,
+      "modus": "staffette",
+      "ampel": null,
+      "teams": [
+        [0, 2],
+        [1, 3]
+      ]
+    },
+    {
+      "n": 5,
+      "modus": "staffette",
+      "ampel": 4,
+      "teams": [
+        [0, 2],
+        [1, 3]
+      ]
+    },
+    {
+      "n": 6,
+      "modus": "staffette",
+      "ampel": null,
+      "teams": [
+        [0, 2, 4],
+        [1, 3, 5]
+      ]
+    },
+    {
+      "n": 7,
+      "modus": "staffette",
+      "ampel": 6,
+      "teams": [
+        [0, 2, 4],
+        [1, 3, 5]
+      ]
+    },
+    {
+      "n": 8,
+      "modus": "staffette",
+      "ampel": null,
+      "teams": [
+        [0, 2, 4, 6],
+        [1, 3, 5, 7]
+      ]
+    }
+  ],
+  "ablaeufe": [
+    {
+      "name": "Spiegel: immer Atempo, der Malus wächst nicht",
+      "spieler": 1,
+      "zuege": [
+        {
+          "sitz": 0,
+          "jetzt": 1000000,
+          "runde": 1,
+          "dauerMs": 12000,
+          "verschuettetDezi": 50,
+          "reaktionMs": 400,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": { "runde": 2, "atempo": 1, "fertig": false, "dran": [0], "malusWerte": [0] }
+        },
+        {
+          "sitz": 0,
+          "jetzt": 1001000,
+          "runde": 1,
+          "dauerMs": 12000,
+          "verschuettetDezi": 50,
+          "reaktionMs": 400,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "fehler": true
+        },
+        {
+          "sitz": 0,
+          "jetzt": 1030000,
+          "runde": 2,
+          "dauerMs": 20000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": { "runde": 3, "atempo": 2, "fertig": false, "dran": [0], "malusWerte": [0] }
+        }
+      ]
+    },
+    {
+      "name": "Duell: Sieger nach Wertung, danach ist Schluss",
+      "spieler": 2,
+      "zuege": [
+        {
+          "sitz": 0,
+          "jetzt": 1000000,
+          "runde": 1,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": { "runde": 1, "fertig": false, "dran": [1] }
+        },
+        {
+          "sitz": 0,
+          "jetzt": 1001000,
+          "runde": 1,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "fehler": true
+        },
+        {
+          "sitz": 1,
+          "jetzt": 1002000,
+          "runde": 1,
+          "dauerMs": 12000,
+          "verschuettetDezi": 20,
+          "reaktionMs": 500,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": { "fertig": true, "sieger": [0], "teamWertung": [10000, 12208] }
+        },
+        {
+          "sitz": 1,
+          "jetzt": 1003000,
+          "runde": 1,
+          "dauerMs": 12000,
+          "verschuettetDezi": 20,
+          "reaktionMs": 500,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "fehler": true
+        }
+      ]
+    },
+    {
+      "name": "Duell: Gleichstand unter der Toleranz ist Atempo; der Malus wirkt, klingt ab und wird begrenzt",
+      "spieler": 2,
+      "zuege": [
+        {
+          "sitz": 1,
+          "jetzt": 1000000,
+          "runde": 1,
+          "dauerMs": 10120,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": { "runde": 1, "dran": [0] }
+        },
+        {
+          "sitz": 0,
+          "jetzt": 1000500,
+          "runde": 1,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 440,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": {
+            "runde": 2,
+            "atempo": 1,
+            "fertig": false,
+            "dran": [0, 1],
+            "malusWerte": [40, 40],
+            "abstandMs": 120
+          }
+        },
+        {
+          "sitz": 1,
+          "jetzt": 1030000,
+          "runde": 2,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": {
+            "runde": 2,
+            "dran": [0],
+            "verzoegerung": { "sitz": 1, "wert": 32 },
+            "malusWerte": [40, 74]
+          }
+        },
+        {
+          "sitz": 0,
+          "jetzt": 1031000,
+          "runde": 2,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 250,
+          "danach": {
+            "runde": 3,
+            "atempo": 2,
+            "dran": [0, 1],
+            "verzoegerung": { "sitz": 0, "wert": 42 }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Drei: der Dritte macht die Ampel und wird nicht gewertet",
+      "spieler": 3,
+      "zuege": [
+        {
+          "sitz": 0,
+          "jetzt": 1000000,
+          "runde": 1,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "fehler": true
+        },
+        {
+          "sitz": 2,
+          "jetzt": 1001000,
+          "runde": 1,
+          "dauerMs": 40000,
+          "verschuettetDezi": 2500,
+          "reaktionMs": null,
+          "vorzeitig": true,
+          "verzoegerungMs": 0,
+          "danach": { "runde": 1, "fertig": false, "dran": [0, 1] }
+        },
+        {
+          "sitz": 0,
+          "jetzt": 1011000,
+          "runde": 1,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": { "dran": [1] }
+        },
+        {
+          "sitz": 1,
+          "jetzt": 1015000,
+          "runde": 1,
+          "dauerMs": 14000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": { "fertig": true, "sieger": [0], "teamWertung": [10000, 14000] }
+        }
+      ]
+    },
+    {
+      "name": "Vier: Staffette, der Nächste darf erst nach seinem Teamkollegen",
+      "spieler": 4,
+      "zuege": [
+        {
+          "sitz": 2,
+          "jetzt": 1000000,
+          "runde": 1,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "fehler": true
+        },
+        {
+          "sitz": 0,
+          "jetzt": 1010000,
+          "runde": 1,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": { "dran": [1, 2] }
+        },
+        {
+          "sitz": 1,
+          "jetzt": 1011000,
+          "runde": 1,
+          "dauerMs": 11000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": { "dran": [2, 3] }
+        },
+        {
+          "sitz": 3,
+          "jetzt": 1022000,
+          "runde": 1,
+          "dauerMs": 10500,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": { "dran": [2], "fertig": false }
+        },
+        {
+          "sitz": 2,
+          "jetzt": 1030000,
+          "runde": 1,
+          "dauerMs": 10200,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": { "fertig": true, "sieger": [0, 2], "teamWertung": [20200, 21500] }
+        }
+      ]
+    },
+    {
+      "name": "Fünf: Ampel zuerst, Teamsumme unter der doppelten Toleranz ist Atempo",
+      "spieler": 5,
+      "zuege": [
+        {
+          "sitz": 4,
+          "jetzt": 1000000,
+          "runde": 1,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": { "dran": [0, 1] }
+        },
+        {
+          "sitz": 0,
+          "jetzt": 1010000,
+          "runde": 1,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0
+        },
+        {
+          "sitz": 1,
+          "jetzt": 1011000,
+          "runde": 1,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0
+        },
+        {
+          "sitz": 2,
+          "jetzt": 1021000,
+          "runde": 1,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0
+        },
+        {
+          "sitz": 3,
+          "jetzt": 1022000,
+          "runde": 1,
+          "dauerMs": 10400,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "danach": { "runde": 2, "atempo": 1, "fertig": false, "dran": [4], "abstandMs": 400 }
+        }
+      ]
+    },
+    {
+      "name": "Unmögliche Läufe werden abgelehnt",
+      "spieler": 2,
+      "zuege": [
+        {
+          "sitz": 0,
+          "jetzt": 1000000,
+          "runde": 1,
+          "dauerMs": 9000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "fehler": true
+        },
+        {
+          "sitz": 0,
+          "jetzt": 1000000,
+          "runde": 1,
+          "dauerMs": 1000,
+          "verschuettetDezi": 3000,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "fehler": true
+        },
+        {
+          "sitz": 0,
+          "jetzt": 1000000,
+          "runde": 1,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 30,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "fehler": true
+        },
+        {
+          "sitz": 0,
+          "jetzt": 1000000,
+          "runde": 1,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": null,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "fehler": true
+        },
+        {
+          "sitz": 0,
+          "jetzt": 1000000,
+          "runde": 1,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 999,
+          "fehler": true
+        },
+        {
+          "sitz": 0,
+          "jetzt": 1000000,
+          "runde": 1,
+          "dauerMs": 10000,
+          "verschuettetDezi": -5,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0,
+          "fehler": true
+        },
+        {
+          "sitz": 0,
+          "jetzt": 1000000,
+          "runde": 1,
+          "dauerMs": 10000,
+          "verschuettetDezi": 0,
+          "reaktionMs": 300,
+          "vorzeitig": false,
+          "verzoegerungMs": 0
+        }
+      ]
+    }
+  ]
+}

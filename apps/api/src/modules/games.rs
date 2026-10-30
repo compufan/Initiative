@@ -152,6 +152,9 @@ async fn join(
     if players.len() >= definition.max_players() {
         return Err(AppError::bad_request("Das Spiel ist schon voll"));
     }
+    definition
+        .can_join(&row.state)
+        .map_err(AppError::bad_request)?;
 
     players.push(crate::dto::GamePlayerDto {
         user_id: user.id(),

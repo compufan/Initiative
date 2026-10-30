@@ -10,6 +10,7 @@
 import type { GameDefinition } from './types.js';
 import { ticTacToe } from './tic-tac-toe.js';
 import { connectFour } from './connect-four.js';
+import { pressen } from './pressen.js';
 
 const registry = new Map<string, GameDefinition<any, any>>();
 
@@ -28,3 +29,4 @@ export function listGames(): GameDefinition<any, any>[] {
 
 registerGame(ticTacToe);
 registerGame(connectFour);
+registerGame(pressen);

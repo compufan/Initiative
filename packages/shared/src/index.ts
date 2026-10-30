@@ -29,6 +29,8 @@ export * from './games/types.js';
 export * from './games/registry.js';
 export * from './games/tic-tac-toe.js';
 export * from './games/connect-four.js';
+export * from './games/pressen-sim.js';
+export * from './games/pressen.js';
 
 export * from './util/poll.js';
 export * from './util/recurrence.js';

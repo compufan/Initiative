@@ -993,7 +993,8 @@ Was nicht geht, ehrlich:
 
 ## Mini-Spiele
 
-- **Tic Tac Toe** und **Vier gewinnt**, direkt aus dem Chat gestartet.
+- **Tic Tac Toe**, **Vier gewinnt** und **Pressen** (siehe unten), direkt aus dem
+  Chat gestartet.
 - Die Partie erscheint als Karte im Chat und lässt sich von dort öffnen.
 - Züge sind sofort bei allen sichtbar; wer am Zug ist, steht unter dem Brett.
 - **Der Server prüft jeden Zug** – Schummeln über die Entwicklerkonsole geht nicht.
@@ -1002,6 +1003,41 @@ Was nicht geht, ehrlich:
 - Unter **Spiele** stehen alle laufenden Partien und der Spielekatalog.
 - Kennt deine App-Version ein Spiel noch nicht, zeigt sie das freundlich an,
   statt abzustürzen.
+
+### Pressen (Echtzeit)
+
+Zwei animierte Strichmännchen müssen je ein Glas Bier (0,3 l) trinken. Man
+steuert das Glas selbst: **Pfeiltasten links/rechts** (auf dem Handy die
+Knöpfe ◀ ▶) bewegen es über den Mund, **Leertaste bzw. der Knopf rechts**
+(gedrückt halten) neigt es – je schiefer, desto mehr fließt. Der Mund nimmt nur
+begrenzt auf (rund 30 ml/s, 25 ml auf einmal); was danebengeht oder zu viel auf
+einmal kommt, ist **verschüttet**. Wird das Glas leer, erscheint an wechselnder
+Stelle der Knopf **„Abstellen!“**; wer ihn besonders schnell trifft (höchstens
+450 ms), bekommt die Auszeichnung **„getrümmert“** (lokal auf dem Gerät
+gezählt, der Lauf wird allen angezeigt). Mit **Esc** (oder dem Knopf darunter)
+stellt man vorzeitig ab – der Rest im Glas zählt als verschüttet.
+
+- **Wertung** = Zeit + Strafzeit für Verschüttetes (100 ms je ml plus ein
+  quadratischer Anteil). Weder „schnell und schlampig“ noch „langsam und genau“
+  gewinnt; die Tests fahren Spielerprofile durch die echte Simulation.
+- **Atempo:** liegen die Wertungen unter 250 ms auseinander, wird wiederholt.
+- **Modi:** *Gegen den Spiegel* (allein üben, das zweite Männchen trinkt
+  synchron – immer Atempo, bis man abbricht); **zu zweit**; **zu dritt** (der
+  Dritte macht die **Ampel**: trinkt und stellt ab, erst dann starten die
+  anderen); **ab vier eine Staffette** – zwei Teams, aus jedem läuft einer, der
+  Nächste darf, sobald sein Teamkollege abgestellt hat; bei ungerader Zahl
+  macht der Letzte zuerst die Ampel. Bis zu acht Personen.
+- **Reaktions-Malus:** mit jedem gespielten Lauf werden Tastendruck **und**
+  Loslassen (Position und Neigung) um 40 ms später registriert (höchstens
+  250 ms); nach zwei Minuten ist davon die Hälfte abgebaut. Eine Anzeige unter
+  dem Feld zeigt den aktuellen Wert. Im Spiegelmodus wächst er nicht.
+- **Echtzeit, aber vom Server gewertet:** Jeder rechnet seinen Lauf selbst (so
+  lagfrei wie möglich) und meldet das Ergebnis; der Server prüft es auf
+  Plausibilität und entscheidet Atempo, Sieg und wer als Nächster laufen darf.
+  Der Entwurf steht in [entwurf-pressen.md](entwurf-pressen.md).
+- Bedienung ohne Maus: alle Tasten per Tastatur, Zustandsansagen für
+  Vorlesehilfen; bei „Bewegung reduzieren“ entfallen Schluck- und
+  Zählanimationen (die Simulation selbst bleibt).
 
 ## Benachrichtigungen
 
