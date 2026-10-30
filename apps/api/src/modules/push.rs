@@ -21,9 +21,12 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn public_key(State(state): State<AppState>) -> Json<serde_json::Value> {
+    // Holt das Paar notfalls hier nach: War die Datenbank beim Start noch
+    // nicht da, soll das erste Gerät, das fragt, nicht „aus“ hören.
+    let enabled = state.push.bereit(&state.pool).await;
     Json(json!({
         "publicKey": state.push.public_key(),
-        "enabled": state.push.enabled(),
+        "enabled": enabled,
     }))
 }
 
@@ -54,6 +57,10 @@ async fn subscribe(
     if input.keys.p256dh.len() > 200 || input.keys.auth.len() > 100 {
         return Err(AppError::bad_request("Push-Schlüssel ist zu lang"));
     }
+    // Ein Abo, das sich nicht verschlüsseln lässt, scheiterte bisher erst beim
+    // Senden – still. Die App hielt sich für angemeldet, und es kam nie etwas.
+    crate::push::ece::abo_schluessel_pruefen(&input.keys.p256dh, &input.keys.auth)
+        .map_err(AppError::bad_request)?;
     // Nach Zeichen kürzen, nicht nach Bytes: Ein Schnitt mitten in einem
     // Umlaut liess die Anfrage abstürzen.
     let user_agent: Option<String> = input

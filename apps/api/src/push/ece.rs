@@ -5,7 +5,7 @@
 
 use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes128Gcm, KeyInit, Nonce};
-use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use hkdf::Hkdf;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
@@ -19,11 +19,54 @@ const RECORD_SIZE: u32 = 4096;
 /// A body must stay below this so push services do not reject it.
 pub const MAX_PAYLOAD_BYTES: usize = 3800;
 
+/**
+ * Liest einen Schlüssel aus einem Push-Abo – in jeder Schreibweise, die
+ * Browser tatsächlich liefern.
+ *
+ * Die Spezifikation sagt base64url ohne Auffüllung, und so liefern es Chrome,
+ * Firefox und Safari heute. Ältere Fassungen (und manche Hilfsbibliotheken)
+ * hängen `=` an; das scheiterte vorher an BEIDEN Versuchen – url-sicher ohne
+ * Auffüllung lehnt das `=` ab, Standard-base64 das `-`/`_`. Also erst auf
+ * eine Schreibweise bringen, dann lesen.
+ */
+pub fn schluessel_lesen(value: &str) -> Option<Vec<u8>> {
+    let einheitlich: String = value
+        .trim()
+        .trim_end_matches('=')
+        .chars()
+        .map(|zeichen| match zeichen {
+            '+' => '-',
+            '/' => '_',
+            anderes => anderes,
+        })
+        .collect();
+    URL_SAFE_NO_PAD.decode(einheitlich).ok()
+}
+
 fn decode_base64(value: &str) -> AppResult<Vec<u8>> {
-    URL_SAFE_NO_PAD
-        .decode(value.trim())
-        .or_else(|_| STANDARD.decode(value.trim()))
-        .map_err(|_| AppError::bad_request("Ungültiger base64-Schlüssel im Push-Abo"))
+    schluessel_lesen(value)
+        .ok_or_else(|| AppError::bad_request("Ungültiger base64-Schlüssel im Push-Abo"))
+}
+
+/**
+ * Taugt dieses Schlüsselpaar eines Abos zum Verschlüsseln?
+ *
+ * `p256dh` ist ein unkomprimierter P-256-Punkt (65 Byte, 87 Zeichen),
+ * `auth` ein 16-Byte-Geheimnis (22 Zeichen). Ein Abo mit etwas anderem
+ * scheiterte erst beim Senden – still, mit einer Zeile im Protokoll –, und
+ * die App hielte sich für angemeldet. Beim Anlegen geprüft, bekommt sie eine
+ * Antwort, mit der sie etwas anfangen kann.
+ */
+pub fn abo_schluessel_pruefen(p256dh: &str, auth: &str) -> Result<(), &'static str> {
+    let punkt = schluessel_lesen(p256dh).ok_or("p256dh ist kein base64url")?;
+    if punkt.len() != 65 || PublicKey::from_sec1_bytes(&punkt).is_err() {
+        return Err("p256dh ist kein P-256-Schlüssel");
+    }
+    let geheimnis = schluessel_lesen(auth).ok_or("auth ist kein base64url")?;
+    if geheimnis.len() != 16 {
+        return Err("auth muss 16 Byte lang sein");
+    }
+    Ok(())
 }
 
 fn random_secret() -> SecretKey {
@@ -172,5 +215,39 @@ mod tests {
             &vec![b'x'; MAX_PAYLOAD_BYTES + 1],
         );
         assert!(result.is_err());
+    }
+
+    /// Die Schreibweisen, die Browser liefern: ohne Auffüllung (Spezifikation,
+    /// Chrome/Firefox/Safari), mit `=` (ältere Fassungen), Standard-base64.
+    #[test]
+    fn abo_schluessel_in_jeder_schreibweise() {
+        use base64::engine::general_purpose::{STANDARD, URL_SAFE};
+        let secret = random_secret();
+        let punkt = secret.public_key().to_encoded_point(false);
+        let geheimnis = crate::auth::password::random_bytes(16);
+        let ohne = (
+            URL_SAFE_NO_PAD.encode(punkt.as_bytes()),
+            URL_SAFE_NO_PAD.encode(&geheimnis),
+        );
+        assert_eq!((ohne.0.len(), ohne.1.len()), (87, 22));
+        for (p256dh, auth) in [
+            ohne.clone(),
+            (
+                URL_SAFE.encode(punkt.as_bytes()),
+                URL_SAFE.encode(&geheimnis),
+            ),
+            (
+                STANDARD.encode(punkt.as_bytes()),
+                STANDARD.encode(&geheimnis),
+            ),
+        ] {
+            assert_eq!(abo_schluessel_pruefen(&p256dh, &auth), Ok(()), "{p256dh}");
+            assert!(encrypt(&p256dh, &auth, b"x").is_ok());
+        }
+        assert!(abo_schluessel_pruefen("annas", &ohne.1).is_err());
+        assert!(abo_schluessel_pruefen(&ohne.0, "c2VjcmV0").is_err());
+        // 65 Byte, aber kein Punkt auf der Kurve.
+        let kein_punkt = URL_SAFE_NO_PAD.encode([4u8; 65]);
+        assert!(abo_schluessel_pruefen(&kein_punkt, &ohne.1).is_err());
     }
 }

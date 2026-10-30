@@ -244,7 +244,17 @@ pub struct Config {
      */
     pub media_key: Option<[u8; 32]>,
 
+    /// Das VAPID-Paar aus der Umgebung. Fehlt es, holt `PushService` beim
+    /// Start eines aus der Datenbank (oder legt eines an) – Push ist damit
+    /// ohne Handarbeit an; die Umgebung hat nur Vorrang.
     pub vapid: Option<VapidConfig>,
+    /// Kontakt für die Push-Dienste (`sub` im VAPID-Token), auch für ein
+    /// selbst erzeugtes Paar.
+    pub vapid_subject: String,
+    /// Nur einer der beiden Schlüssel gesetzt: ein Fehler beim Einrichten,
+    /// den der Server beim Start laut meldet, statt still ein eigenes Paar zu
+    /// nehmen, ohne dass es jemand merkt.
+    pub vapid_unvollstaendig: bool,
     pub realtime_bus: RealtimeBus,
     /// Wer die App betreibt – für die Datenschutzerklärung.
     ///
@@ -379,11 +389,32 @@ impl Config {
             })
         };
 
-        let vapid = match (var("VAPID_PUBLIC_KEY"), var("VAPID_PRIVATE_KEY")) {
+        /*
+         * Wer die Push-Dienste im Zweifel anschreiben sollen.
+         *
+         * Vorrang hat `VAPID_SUBJECT`. Sonst die Adresse des Betreibers, sonst
+         * die öffentliche Adresse der App, wenn sie HTTPS ist – beides echte
+         * Kontakte. `mailto:admin@example.com` nur als letzter Rückfall: Apple
+         * nimmt Tokens mit einem Kontakt, der offensichtlich keiner ist,
+         * nicht immer an (`BadJwtToken`), und dann kommt auf iPhones nichts an.
+         */
+        let vapid_subject = var("VAPID_SUBJECT").unwrap_or_else(|| {
+            if let Some(email) = var("OPERATOR_EMAIL") {
+                return format!("mailto:{email}");
+            }
+            let app = trim_slash(var_or("PUBLIC_APP_URL", "http://localhost:5173"));
+            if app.starts_with("https://") {
+                return app;
+            }
+            "mailto:admin@example.com".to_string()
+        });
+        let (vapid_oeffentlich, vapid_privat) = (var("VAPID_PUBLIC_KEY"), var("VAPID_PRIVATE_KEY"));
+        let vapid_unvollstaendig = vapid_oeffentlich.is_some() != vapid_privat.is_some();
+        let vapid = match (vapid_oeffentlich, vapid_privat) {
             (Some(public_key), Some(private_key)) => Some(VapidConfig {
                 public_key,
                 private_key,
-                subject: var_or("VAPID_SUBJECT", "mailto:admin@example.com"),
+                subject: vapid_subject.clone(),
             }),
             _ => None,
         };
@@ -488,6 +519,8 @@ impl Config {
             signed_url_ttl: Duration::from_secs(number("SIGNED_URL_TTL", 3600u64)),
 
             vapid,
+            vapid_subject,
+            vapid_unvollstaendig,
             realtime_bus: match var_or("REALTIME_BUS", "postgres").as_str() {
                 "memory" => RealtimeBus::Memory,
                 _ => RealtimeBus::Postgres,
@@ -522,6 +555,8 @@ impl Config {
         self.environment == "production"
     }
 
+    /// Ob die UMGEBUNG ein Paar vorgibt. Ob Push wirklich an ist, weiss nur
+    /// `PushService::enabled` – ohne Vorgabe kommt das Paar aus der Datenbank.
     pub fn push_enabled(&self) -> bool {
         self.vapid.is_some()
     }

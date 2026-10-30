@@ -204,7 +204,7 @@ async fn datenschutz(State(state): State<AppState>) -> Response {
          sie ansehen. (Die Verschlüsselung ist eingebaut und wird eingeschaltet, sobald \
          <code>MEDIA_KEY</code> gesetzt ist.)"
     };
-    let push = if state.config.push_enabled() {
+    let push = if state.push.bereit(&state.pool).await {
         "eingerichtet"
     } else {
         "auf diesem Server nicht eingerichtet – es werden keine Benachrichtigungen verschickt"

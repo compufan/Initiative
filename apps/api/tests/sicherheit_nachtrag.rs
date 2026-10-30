@@ -581,10 +581,14 @@ async fn ein_fremdes_push_abo_bleibt_wo_es_ist() {
         "https://updates.push.services.mozilla.com/wpush/v2/{}",
         Uuid::now_v7().simple()
     );
+    // Echte P-256-Punkte: Der Server prüft die Schlüssel beim Anlegen.
+    let annas = initiative_api::push::vapid::generate_keys().public_key;
+    let berts = initiative_api::push::vapid::generate_keys().public_key;
+    let neu = initiative_api::push::vapid::generate_keys().public_key;
     let abo = |schluessel: &str| {
         json!({
             "endpoint": endpunkt,
-            "keys": { "p256dh": schluessel, "auth": "c2VjcmV0" },
+            "keys": { "p256dh": schluessel, "auth": "AAECAwQFBgcICQoLDA0ODw" },
         })
     };
 
@@ -593,7 +597,7 @@ async fn ein_fremdes_push_abo_bleibt_wo_es_ist() {
             "POST",
             "/api/v1/push/subscriptions",
             Some(&anna),
-            Some(abo("annas")),
+            Some(abo(&annas)),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
@@ -603,7 +607,7 @@ async fn ein_fremdes_push_abo_bleibt_wo_es_ist() {
             "POST",
             "/api/v1/push/subscriptions",
             Some(&bert),
-            Some(abo("berts")),
+            Some(abo(&berts)),
         )
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
@@ -615,7 +619,7 @@ async fn ein_fremdes_push_abo_bleibt_wo_es_ist() {
             .await
             .unwrap();
     assert_eq!(besitzer.to_string(), anna_id);
-    assert_eq!(schluessel, "annas");
+    assert_eq!(schluessel, annas);
 
     // Das eigene Abo zu erneuern (neue Schlüssel) geht weiter.
     let (status, body) = probe
@@ -623,7 +627,7 @@ async fn ein_fremdes_push_abo_bleibt_wo_es_ist() {
             "POST",
             "/api/v1/push/subscriptions",
             Some(&anna),
-            Some(abo("neu")),
+            Some(abo(&neu)),
         )
         .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");

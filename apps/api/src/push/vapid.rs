@@ -30,12 +30,30 @@ pub fn generate_keys() -> VapidKeys {
 }
 
 fn decode_secret(private_key: &str) -> AppResult<SecretKey> {
-    let bytes = URL_SAFE_NO_PAD
-        .decode(private_key.trim())
-        .or_else(|_| base64::engine::general_purpose::STANDARD.decode(private_key.trim()))
-        .map_err(|_| AppError::config("VAPID_PRIVATE_KEY ist kein gültiges base64url"))?;
+    let bytes = super::ece::schluessel_lesen(private_key)
+        .ok_or_else(|| AppError::config("VAPID_PRIVATE_KEY ist kein gültiges base64url"))?;
     SecretKey::from_slice(&bytes)
         .map_err(|_| AppError::config("VAPID_PRIVATE_KEY ist kein gültiger P-256-Schlüssel"))
+}
+
+/**
+ * Gehören diese beiden Schlüssel zusammen?
+ *
+ * Ein vertauschtes oder halb erneuertes Paar in der Umgebung fiel bisher erst
+ * beim Senden auf – als `403` vom Push-Dienst, im Protokoll auf Stufe
+ * `debug`, also gar nicht. Die Geräte meldeten sich mit dem öffentlichen
+ * Schlüssel an, und es kam nie etwas. Beim Start geprüft, steht es laut im
+ * Protokoll.
+ */
+pub fn paar_pruefen(public_key: &str, private_key: &str) -> Result<(), &'static str> {
+    let secret = decode_secret(private_key).map_err(|_| "VAPID_PRIVATE_KEY ist ungültig")?;
+    let erwartet = secret.public_key().to_encoded_point(false);
+    let angegeben =
+        super::ece::schluessel_lesen(public_key).ok_or("VAPID_PUBLIC_KEY ist kein base64url")?;
+    if angegeben != erwartet.as_bytes() {
+        return Err("VAPID_PUBLIC_KEY gehört nicht zu VAPID_PRIVATE_KEY");
+    }
+    Ok(())
 }
 
 /// `aud` must be the origin of the push endpoint, nothing else.
@@ -121,5 +139,16 @@ mod tests {
         verifying
             .verify(format!("{}.{}", parts[0], parts[1]).as_bytes(), &signature)
             .expect("signature verifies");
+    }
+
+    #[test]
+    fn erkennt_ein_falsches_paar() {
+        let eins = generate_keys();
+        let zwei = generate_keys();
+        assert_eq!(paar_pruefen(&eins.public_key, &eins.private_key), Ok(()));
+        assert_eq!(eins.public_key.len(), 87, "65 Byte, unkomprimierter Punkt");
+        assert!(paar_pruefen(&zwei.public_key, &eins.private_key).is_err());
+        assert!(paar_pruefen("quatsch", &eins.private_key).is_err());
+        assert!(paar_pruefen(&eins.public_key, "quatsch").is_err());
     }
 }

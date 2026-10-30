@@ -6,13 +6,13 @@
 pub mod ece;
 pub mod vapid;
 
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::config::Config;
+use crate::config::{Config, VapidConfig};
 use crate::db::PushSubscriptionRow;
 use crate::dto::PushPayload;
 
@@ -33,11 +33,36 @@ pub struct PushService {
     /// die Zielbestimmung (eine Mitteilung je Person, Stummschaltung) am
     /// Ausgang zu prüfen statt am Bildschirm eines Geräts.
     mitschnitt: OnceLock<Mitschnitt>,
+    /// Das Paar, mit dem gerade signiert wird: aus der Umgebung, sonst aus
+    /// der Datenbank (siehe [`PushService::bereit`]). Leer, bis eines da ist.
+    schluessel: RwLock<Option<Arc<VapidConfig>>>,
+    /// Damit gleichzeitige Anfragen nicht jede für sich ein Paar anlegen.
+    laden: tokio::sync::Mutex<()>,
 }
 
 impl PushService {
     pub fn new(config: std::sync::Arc<Config>) -> Self {
+        let aus_umgebung = config.vapid.clone().filter(|vapid| {
+            match vapid::paar_pruefen(&vapid.public_key, &vapid.private_key) {
+                Ok(()) => true,
+                Err(grund) => {
+                    // Lieber ein eigenes, funktionierendes Paar aus der
+                    // Datenbank als ein kaputtes, mit dem jeder Versand an
+                    // einer 403 scheitert.
+                    tracing::error!("{grund} – das Paar aus der Umgebung wird nicht benutzt");
+                    false
+                }
+            }
+        });
+        if config.vapid_unvollstaendig {
+            tracing::error!(
+                "Nur einer von VAPID_PUBLIC_KEY/VAPID_PRIVATE_KEY ist gesetzt – \
+                 beide setzen oder beide weglassen (dann erzeugt der Server ein Paar)"
+            );
+        }
         Self {
+            schluessel: RwLock::new(aus_umgebung.map(Arc::new)),
+            laden: tokio::sync::Mutex::new(()),
             config,
             // Kein `unwrap_or_default`: Ein Standard-Client hätte weder die
             // Namensauflösung mit Filter noch das Umleitungsverbot – und beides
@@ -53,7 +78,70 @@ impl PushService {
     }
 
     pub fn enabled(&self) -> bool {
-        self.mitschnitt.get().is_some() || self.config.push_enabled()
+        self.mitschnitt.get().is_some() || self.schluessel().is_some()
+    }
+
+    fn schluessel(&self) -> Option<Arc<VapidConfig>> {
+        self.schluessel.read().ok().and_then(|slot| slot.clone())
+    }
+
+    /**
+     * Sorgt dafür, dass ein Schlüsselpaar da ist, und sagt, ob Push an ist.
+     *
+     * WARUM: Ohne `VAPID_*` in der Umgebung war Push bisher aus, und jedes
+     * Gerät hörte „Dieser Server verschickt gerade keine Benachrichtigungen“ –
+     * obwohl der Browser längst erlaubt hatte. Ein Paar von Hand zu erzeugen
+     * und zu hinterlegen ist ein Schritt, den man beim Einrichten leicht
+     * übersieht. Jetzt nimmt der Server das Paar aus der Datenbank oder legt
+     * es dort an. Die Umgebung hat Vorrang, wenn sie eines vorgibt.
+     *
+     * Scheitert die Datenbank (sie ist beim Start noch nicht da), bleibt Push
+     * aus und der nächste Aufruf versucht es wieder.
+     */
+    pub async fn bereit(&self, pool: &PgPool) -> bool {
+        if self.enabled() {
+            return true;
+        }
+        let _sperre = self.laden.lock().await;
+        if self.enabled() {
+            return true;
+        }
+        match schluessel_aus_datenbank(pool).await {
+            Ok((public_key, private_key)) => {
+                if let Err(grund) = vapid::paar_pruefen(&public_key, &private_key) {
+                    tracing::error!("VAPID-Paar in der Datenbank ist kaputt: {grund}");
+                    return false;
+                }
+                if let Ok(mut slot) = self.schluessel.write() {
+                    *slot = Some(Arc::new(VapidConfig {
+                        public_key,
+                        private_key,
+                        subject: self.config.vapid_subject.clone(),
+                    }));
+                }
+                tracing::info!("Push: VAPID-Paar aus der Datenbank geladen");
+                true
+            }
+            Err(error) => {
+                tracing::warn!(%error, "VAPID-Paar konnte nicht geladen werden");
+                false
+            }
+        }
+    }
+
+    /// Wie [`Self::bereit`], im Hintergrund und so lange, bis es klappt.
+    ///
+    /// Beim Start, nach den Migrationen: Die vielen Stellen, die vor dem
+    /// Versand `enabled()` fragen, sollen nicht auf den ersten Aufruf von
+    /// `/push/public-key` warten müssen. Ist die Datenbank gerade weg, wird
+    /// alle dreissig Sekunden wieder versucht.
+    pub fn vorbereiten(self: &Arc<Self>, pool: PgPool) {
+        let dienst = self.clone();
+        tokio::spawn(async move {
+            while !dienst.bereit(&pool).await {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            }
+        });
     }
 
     /// Schaltet den Mitschnitt ein (nur für Tests) und liefert die Liste,
@@ -64,11 +152,8 @@ impl PushService {
             .clone()
     }
 
-    pub fn public_key(&self) -> Option<&str> {
-        self.config
-            .vapid
-            .as_ref()
-            .map(|vapid| vapid.public_key.as_str())
+    pub fn public_key(&self) -> Option<String> {
+        self.schluessel().map(|vapid| vapid.public_key.clone())
     }
 
     /// Sendet mehrere Mitteilungen, ohne die Anfrage warten zu lassen.
@@ -108,9 +193,13 @@ impl PushService {
             }
             return user_ids.len();
         }
-        let Some(vapid) = self.config.vapid.as_ref() else {
+        if !self.bereit(pool).await {
+            return 0;
+        }
+        let Some(vapid) = self.schluessel() else {
             return 0;
         };
+        let vapid = vapid.as_ref();
         if user_ids.is_empty() {
             return 0;
         }
@@ -161,7 +250,11 @@ impl PushService {
             match ausgang {
                 Ok(true) => delivered += 1,
                 Ok(false) => dead.push(id),
-                Err(error) => tracing::debug!(%error, "push delivery failed"),
+                // `warn` statt `debug`: Eine 403 (falscher Schlüssel, Apple
+                // lehnt `sub` ab) oder ein gesperrter Name war bisher
+                // unsichtbar – und genau das sind die Fälle, in denen auf
+                // einem Gerät „nichts ankommt“.
+                Err(error) => tracing::warn!(%error, "push delivery failed"),
             }
         }
 
@@ -214,9 +307,56 @@ impl PushService {
         match status {
             200..=299 => Ok(true),
             404 | 410 => Ok(false),
-            _ => Err(format!("push service antwortete mit {status}")),
+            _ => {
+                // Der Grund steht im Körper (Apple: `{"reason":"BadJwtToken"}`,
+                // FCM: Klartext). Ohne ihn ist eine 403 nicht zu deuten.
+                let grund: String = response
+                    .text()
+                    .await
+                    .unwrap_or_default()
+                    .chars()
+                    .take(200)
+                    .collect();
+                let dienst = vapid::audience_of(&subscription.endpoint).unwrap_or_default();
+                Err(format!("{dienst} antwortete mit {status}: {grund}"))
+            }
         }
     }
+}
+
+/**
+ * Das gespeicherte Paar lesen – oder eines anlegen, wenn noch keines da ist.
+ *
+ * Erst anlegen mit `on conflict do nothing`, dann lesen: Starten zwei
+ * Instanzen zugleich, gewinnt die erste Zeile, und beide lesen dieselbe.
+ * Ein Paar je Instanz hiesse, dass jedes zweite Gerät seine Mitteilungen von
+ * einem Absender bekäme, an den sein Abo nicht gebunden ist.
+ */
+pub async fn schluessel_aus_datenbank(pool: &PgPool) -> Result<(String, String), sqlx::Error> {
+    let vorhanden: Option<(String, String)> =
+        sqlx::query_as("select public_key, private_key from vapid_schluessel where id = 1")
+            .fetch_optional(pool)
+            .await?;
+    if let Some(paar) = vorhanden {
+        return Ok(paar);
+    }
+    let neu = vapid::generate_keys();
+    sqlx::query(
+        "insert into vapid_schluessel (id, public_key, private_key) values (1, $1, $2)
+         on conflict (id) do nothing",
+    )
+    .bind(&neu.public_key)
+    .bind(&neu.private_key)
+    .execute(pool)
+    .await?;
+    let paar: (String, String) =
+        sqlx::query_as("select public_key, private_key from vapid_schluessel where id = 1")
+            .fetch_one(pool)
+            .await?;
+    if paar.0 == neu.public_key {
+        tracing::info!("Push: neues VAPID-Paar erzeugt und in der Datenbank abgelegt");
+    }
+    Ok(paar)
 }
 
 /* ---------- Wohin eine Mitteilung gehen darf ---------- */
@@ -294,16 +434,28 @@ pub fn ist_oeffentlich(ip: std::net::IpAddr) -> bool {
             if let Some(v4) = v6.to_ipv4_mapped() {
                 return ist_oeffentlich(IpAddr::V4(v4));
             }
-            let erstes = v6.segments()[0];
+            /*
+             * NAT64 (64:ff9b::/96): Die IPv4-Adresse steckt in den letzten
+             * 32 Bit, und nur DIE entscheidet. Pauschal gesperrt, ging auf
+             * einem Server, der nur IPv6 hat und IPv4-Ziele über DNS64
+             * erreicht, gar keine Mitteilung mehr hinaus – auch nicht an
+             * FCM oder Apple.
+             */
+            let teile = v6.segments();
+            if teile[..6] == [0x0064, 0xff9b, 0, 0, 0, 0] {
+                let [.., hoch, tief] = teile;
+                let v4 = std::net::Ipv4Addr::from((u32::from(hoch) << 16) | u32::from(tief));
+                return ist_oeffentlich(IpAddr::V4(v4));
+            }
+            let erstes = teile[0];
             !(v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_multicast()
                 // Eindeutig lokal (fc00::/7) und verbindungslokal (fe80::/10).
                 || (erstes & 0xfe00) == 0xfc00
                 || (erstes & 0xffc0) == 0xfe80
-                // Dokumentation (2001:db8::/32) und NAT64 (64:ff9b::/96).
-                || (erstes == 0x2001 && v6.segments()[1] == 0x0db8)
-                || (erstes == 0x0064 && v6.segments()[1] == 0xff9b))
+                // Dokumentation (2001:db8::/32).
+                || (erstes == 0x2001 && v6.segments()[1] == 0x0db8))
         }
     }
 }
@@ -338,14 +490,37 @@ impl reqwest::dns::Resolve for NurOeffentlich {
 mod endpunkt_tests {
     use super::*;
 
+    /// Adressen in der Form, in der Browser sie tatsächlich liefern (Länge,
+    /// Zeichen, Pfade und Abfrageteile wie im Feld beobachtet).
     #[test]
     fn echte_push_dienste_gehen_durch() {
+        let fcm_token = format!("dQw4w9WgXcQ:APA91b{}", "H-_x".repeat(36));
+        let fcm = format!("https://fcm.googleapis.com/fcm/send/{fcm_token}");
+        let fcm_neu = format!("https://fcm.googleapis.com/wp/{fcm_token}");
+        let mozilla = format!(
+            "https://updates.push.services.mozilla.com/wpush/v2/gAAAAABl{}",
+            "Zk3_-a".repeat(40)
+        );
+        let apple = format!("https://web.push.apple.com/QGx1{}", "Yz-_9".repeat(30));
         for adresse in [
             "https://fcm.googleapis.com/fcm/send/abc:def",
+            fcm.as_str(),
+            fcm_neu.as_str(),
+            "https://android.googleapis.com/gcm/send/abc:def",
+            "https://jmt17.google.com/fcm/send/abc",
             "https://updates.push.services.mozilla.com/wpush/v2/gAAAA",
+            "https://updates.push.services.mozilla.com/wpush/v1/gAAAA",
+            mozilla.as_str(),
             "https://web.push.apple.com/QGx1",
-            "https://wns2-par02p.notify.windows.com/w/?token=AwYAAA",
+            apple.as_str(),
+            "https://web.push.apple.com:443/QGx1",
+            "https://api.push.apple.com/3/device/abc",
+            "https://wns2-par02p.notify.windows.com/w/?token=AwYAAA%2bb%3d",
+            "https://db5p.notify.windows.com/w/?token=BQYAAA",
+            "https://web.pushmessaging.samsungosp.com/wpush/v1/abc",
+            "https://FCM.GoogleAPIs.com./fcm/send/abc",
         ] {
+            assert!(adresse.len() <= ENDPUNKT_MAX, "{adresse}");
             assert_eq!(endpunkt_pruefen(adresse), Ok(()), "{adresse}");
         }
     }
@@ -387,11 +562,49 @@ mod endpunkt_tests {
         ] {
             assert!(!ist_oeffentlich(privat.parse().unwrap()), "{privat}");
         }
-        for oeffentlich in ["142.250.185.74", "2a00:1450:4001:82b::200a"] {
+        assert!(
+            !ist_oeffentlich("64:ff9b::a00:1".parse().unwrap()),
+            "NAT64 → 10.0.0.1"
+        );
+        for oeffentlich in [
+            // FCM, Apple (17.0.0.0/8), Mozilla (Fastly), Microsoft – v4 und v6.
+            "142.250.185.74",
+            "2a00:1450:4001:82b::200a",
+            "17.188.172.33",
+            "2620:149:a44::10",
+            "151.101.193.91",
+            "2a04:4e42::347",
+            "20.42.65.85",
+            // NAT64 auf eine öffentliche Adresse (DNS64 auf reinen v6-Servern).
+            "64:ff9b::8efa:b94a",
+        ] {
             assert!(
                 ist_oeffentlich(oeffentlich.parse().unwrap()),
                 "{oeffentlich}"
             );
+        }
+    }
+
+    /// Die echten Namen über den echten Filter auflösen. Ohne Netz (oder in
+    /// einer Umgebung, die nach aussen nichts auflöst) gibt es nichts zu
+    /// prüfen – dann wird übersprungen statt rot.
+    #[tokio::test]
+    async fn echte_namen_loesen_oeffentlich_auf() {
+        use reqwest::dns::Resolve;
+        for name in [
+            "fcm.googleapis.com",
+            "updates.push.services.mozilla.com",
+            "web.push.apple.com",
+        ] {
+            if tokio::net::lookup_host((name, 443)).await.is_err() {
+                eprintln!("{name}: keine Namensauflösung hier – übersprungen");
+                continue;
+            }
+            let adressen = NurOeffentlich
+                .resolve(name.parse().unwrap())
+                .await
+                .unwrap_or_else(|fehler| panic!("{name}: {fehler}"));
+            assert!(adressen.count() > 0, "{name}");
         }
     }
 }

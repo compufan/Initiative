@@ -86,6 +86,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     state.spawn_realtime_listener();
+    // Das VAPID-Paar aus der Umgebung oder der Datenbank (dort notfalls neu
+    // angelegt) – erst nach den Migrationen, die die Tabelle anlegen.
+    state.push.vorbereiten(state.pool.clone());
 
     /*
      * Der Aufräumdienst für gelöschte Dateien.

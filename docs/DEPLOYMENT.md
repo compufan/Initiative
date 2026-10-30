@@ -2,8 +2,9 @@
 
 Initiative besteht aus zwei Teilen:
 
-- **API** – eine einzelne Rust-Binary (Axum). Braucht Postgres, optional S3/R2 und
-  VAPID-Schlüssel. Migrationen sind einkompiliert und laufen beim Start.
+- **API** – eine einzelne Rust-Binary (Axum). Braucht Postgres, optional S3/R2.
+  Migrationen sind einkompiliert und laufen beim Start; das Schlüsselpaar für
+  Web Push legt sie beim ersten Start selbst an.
 - **PWA** – statische Dateien (HTML, JS, CSS). Braucht nur einen Hoster, der
   alle Pfade auf `index.html` zurückfallen lässt.
 
@@ -152,9 +153,9 @@ nicht im normalen Safari-Tab.
 | Variable            | Standard                   | Bedeutung                                                                       |
 | ------------------- | -------------------------- | ------------------------------------------------------------------------------- |
 | `REALTIME_BUS`      | `postgres`                 | `postgres` (LISTEN/NOTIFY, mehrere Instanzen) \| `memory` (genau eine Instanz). |
-| `VAPID_PUBLIC_KEY`  | leer                       | Web-Push-Schlüsselpaar. Fehlt eines von beiden, ist Push schlicht aus.          |
-| `VAPID_PRIVATE_KEY` | leer                       | siehe oben.                                                                     |
-| `VAPID_SUBJECT`     | `mailto:admin@example.com` | Kontakt für die Push-Dienste.                                                   |
+| `VAPID_PUBLIC_KEY`  | leer                       | Web-Push-Schlüsselpaar. Leer: Der Server erzeugt beim ersten Start ein Paar und legt es in der Datenbank ab (Tabelle `vapid_schluessel`). Gesetzt: hat Vorrang. |
+| `VAPID_PRIVATE_KEY` | leer                       | siehe oben. Nur einer von beiden gesetzt ist ein Fehler (steht im Log), dann gilt das Paar aus der Datenbank. |
+| `VAPID_SUBJECT`     | `mailto:$OPERATOR_EMAIL`, sonst `PUBLIC_APP_URL` (wenn https), sonst `mailto:admin@example.com` | Kontakt für die Push-Dienste. Apple lehnt offensichtliche Platzhalter teils ab – eine echte Adresse eintragen. |
 
 ### Impressum und Datenschutzerklärung
 
@@ -869,7 +870,17 @@ in `CORS_ORIGINS`.
 
 ## e) Web Push
 
-### 1. Schlüsselpaar erzeugen
+**Ohne Handarbeit:** Ist nichts gesetzt, erzeugt die API beim ersten Start ein
+P-256-Paar und speichert es in der Datenbank (Tabelle `vapid_schluessel`,
+Migration 0030). Es überlebt Neustarts und gilt für alle Instanzen. Damit ist
+Push sofort an; die Schritte unten sind nur nötig, wenn das Paar ausserhalb der
+Datenbank liegen soll (etwa um es getrennt zu sichern). Die Umgebung hat immer
+Vorrang. **Achtung beim Wechsel:** Wer ein bisher automatisch erzeugtes Paar
+durch eines aus der Umgebung ersetzt, macht alle bestehenden Abos ungültig –
+dann das gespeicherte übernehmen:
+`select public_key, private_key from vapid_schluessel;`
+
+### 1. Schlüsselpaar erzeugen (optional)
 
 ```bash
 pnpm keys:vapid
@@ -895,9 +906,13 @@ fly secrets set --app initiative-api VAPID_PUBLIC_KEY="BEl…" VAPID_PRIVATE_KEY
 ```
 
 Die PWA holt den öffentlichen Schlüssel zur Laufzeit über
-`GET /api/v1/push/public-key` – ein Neubau des Frontends ist nicht nötig. Fehlt
-einer der beiden Schlüssel, meldet der Endpunkt `enabled: false` und die
-Oberfläche blendet den Schalter aus, statt einen Fehler zu zeigen.
+`GET /api/v1/push/public-key` – ein Neubau des Frontends ist nicht nötig. Ist
+kein Paar zu bekommen (Datenbank nicht erreichbar), meldet der Endpunkt
+`enabled: false`, und die App sagt beim Einschalten genau das. Gehören die
+beiden Schlüssel aus der Umgebung nicht zusammen, steht das beim Start als
+Fehler im Log, und es gilt das Paar aus der Datenbank. Antwortet ein
+Push-Dienst mit einem Fehler (etwa Apple mit `403 BadJwtToken`), steht er mit
+Grund als Warnung im Log.
 
 ### 3. Testen
 
@@ -952,7 +967,8 @@ curl.exe https://initiative-api.fly.dev/healthz
 ```
 
 Kurz gelesen: `storage` sollte `r2` sein (nicht `local`), `bus` bei mehreren
-Instanzen `postgres`, `push` `true`, sobald VAPID gesetzt ist. Bei
+Instanzen `postgres`, `push` `true` (ohne VAPID-Vorgabe, sobald das Paar aus
+der Datenbank geladen ist – Sekunden nach dem Start). Bei
 `"status": "degraded"` steht der Grund im Feld `error` – entweder ist die
 Datenbank nicht erreichbar, oder der Start hat ein Problem gemeldet (etwa
 blockierte Migrationen, siehe unten).
@@ -1173,8 +1189,9 @@ Bestehende Sitzungen bleiben davon unberührt.
 - [ ] **`MEDIA_KEY` und `JWT_SECRET` liegen in der Sicherung**, aber nicht im
       Repository. Ohne `MEDIA_KEY` ist jede damit abgelegte Datei verloren,
       ohne `JWT_SECRET` sind alle abgemeldet.
-- [ ] **VAPID-Schlüssel** gesichert – gehen sie verloren, muss jedes Gerät
-      Benachrichtigungen neu erlauben.
+- [ ] **VAPID-Schlüssel** gesichert – aus der Umgebung oder, ohne Vorgabe,
+      in der Datenbank (`vapid_schluessel`, kommt mit jeder DB-Sicherung mit).
+      Gehen sie verloren, muss jedes Gerät Benachrichtigungen neu erlauben.
 - [ ] **`REGISTRATION_MODE`** steht auf `invite` oder `closed`.
 - [ ] **`ADMIN_PASSWORD`** hat mindestens 8 Zeichen – darunter wird es
       stillschweigend verworfen und die Verwaltung bleibt aus.
@@ -1203,7 +1220,7 @@ Bestehende Sitzungen bleiben davon unberührt.
 | Upload bricht mit CORS-Fehler ab                                            | R2-CORS-Regel                                                                                       | `AllowedOrigins`, `AllowedMethods` `PUT`/`GET`, `AllowedHeaders` `content-type`                                                                                                                 |
 | Bilder bleiben grau                                                         | `PUBLIC_API_URL` falsch                                                                             | auf die echte API-URL setzen, Medien-URLs entstehen daraus                                                                                                                                      |
 | Kein Push auf dem iPhone                                                    | Nicht installiert oder iOS < 16.4                                                                   | über Safari zum Home-Bildschirm hinzufügen                                                                                                                                                      |
-| `push: false` im Healthcheck                                                | VAPID unvollständig                                                                                 | beide Schlüssel setzen und neu starten                                                                                                                                                          |
+| `push: false` im Healthcheck                                                | Paar noch nicht geladen (Datenbank nicht erreichbar) oder Tabelle fehlt (Migrationen aus)           | Datenbank prüfen; der Server versucht es alle 30 s erneut. Log nach `VAPID` durchsuchen                                                                                                          |
 | API startet nicht, Log nennt `Konfigurationsfehler`                         | Pflichtvariable fehlt                                                                               | Meldung lesen – sie nennt die Variable im Klartext                                                                                                                                              |
 | `status: degraded`                                                          | Datenbank nicht erreichbar                                                                          | `DATABASE_URL`, TLS und IP-Freigabe prüfen                                                                                                                                                      |
 | `status: degraded`, Log oder `error` nennt eine Migration                   | Eine bereits ausgeführte Migrationsdatei wurde nachträglich verändert                               | `MIGRATIONS_REPAIR=1` für genau einen Neustart (siehe [Wenn Migrationen blockieren](#wenn-migrationen-blockieren))                                                                              |

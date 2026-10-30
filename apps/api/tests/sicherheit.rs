@@ -215,10 +215,12 @@ async fn eine_wiederholung_ist_eine_regel_und_sonst_nichts() {
 async fn push_geht_nur_an_oeffentliche_dienste() {
     let probe = probe!();
     let (token, _) = probe.konto("push").await;
+    // Ein echter P-256-Punkt: Der Server prüft die Schlüssel beim Anlegen.
+    let p256dh = initiative_api::push::vapid::generate_keys().public_key;
     let abo = |endpunkt: &str, geraet: &str| {
         json!({
             "endpoint": endpunkt,
-            "keys": { "p256dh": "BOr8jK3", "auth": "c2VjcmV0" },
+            "keys": { "p256dh": p256dh, "auth": "AAECAwQFBgcICQoLDA0ODw" },
             "userAgent": geraet,
         })
     };
