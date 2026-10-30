@@ -2,6 +2,12 @@
 import { cleanupOutdatedCaches, matchPrecache, precacheAndRoute } from 'workbox-precaching';
 import type { PushPayload } from '@initiative/shared';
 import { bereichLesen } from './lib/bereich.js';
+import {
+  MEDIEN_AUFRAEUMEN_ABSTAND_MS,
+  gedrosselt,
+  verdraengen,
+  type VorratEintrag,
+} from './lib/medienVorrat.js';
 
 declare const self: ServiceWorkerGlobalScope & {
   __WB_MANIFEST: { url: string; revision: string | null }[];
@@ -110,7 +116,23 @@ self.addEventListener('fetch', (event) => {
 
   // Media is immutable once uploaded – cache first, then network.
   if (isMediaRequest(url)) {
-    event.respondWith(cacheFirst(request, MEDIA_CACHE));
+    /*
+     * `waitUntil` hier, synchron im Ereignis – nicht erst aus `cacheFirst`
+     * heraus. Später gerufen wirft Chromium „event handler is already
+     * finished", und das risse die Antwort mit: Das Bild bliebe leer.
+     */
+    const stand: { ablage: Promise<void> | null } = { ablage: null };
+    const antwort = cacheFirst(request, MEDIA_CACHE, (abgelegt) => {
+      medienZugriffe.set(request.url, Date.now());
+      stand.ablage = abgelegt ?? null;
+    });
+    event.respondWith(antwort);
+    event.waitUntil(
+      antwort.then(
+        () => (stand.ablage ? stand.ablage.then(() => medienAufraeumen()) : undefined),
+        () => {},
+      ),
+    );
     return;
   }
 
@@ -184,11 +206,22 @@ async function teilAntwort(gespeichert: Response, kopf: string | null): Promise<
   });
 }
 
-async function cacheFirst(request: Request, cacheName: string): Promise<Response> {
+async function cacheFirst(
+  request: Request,
+  cacheName: string,
+  /**
+   * Nur der Medienspeicher führt Buch (Grenze, siehe `medienAufraeumen`).
+   * Bei einem Treffer ohne Argument, beim Ablegen mit dem Ablegen selbst.
+   * Aufgeräumt wird nur danach – nur dann kann der Speicher wachsen, und
+   * `waitUntil` im Abruf hält den Arbeiter bis zum gedrosselten Lauf wach.
+   */
+  gebraucht?: (abgelegt?: Promise<void>) => void,
+): Promise<Response> {
   const cache = await caches.open(cacheName);
   const bereichKopf = request.headers.get('range');
   const cached = await cache.match(request, { ignoreVary: true });
   if (cached) {
+    gebraucht?.();
     if (!bereichKopf) return cached;
     // Eine abgelegte 206 gibt es nicht (unten wird nur bei 200 abgelegt), also
     // ist das Geschnittene immer aus der vollen Datei.
@@ -202,7 +235,10 @@ async function cacheFirst(request: Request, cacheName: string): Promise<Response
       // einem iPhone mit knappem Speicherkontingent lehnt der Browser die
       // Ablage ab. Dann wird eben beim naechsten Mal wieder geladen – das ist
       // besser, als das Freistellen an einer vollen Ablage scheitern zu lassen.
-      cache.put(request, response.clone()).catch(() => {});
+      // Erst ablegen, dann melden – getrennt, weil `gebraucht?.(…)` sein
+      // Argument gar nicht auswertet, wenn niemand Buch führt (Modelle).
+      const abgelegt = cache.put(request, response.clone()).catch(() => {});
+      gebraucht?.(abgelegt);
     }
     return response;
   } catch (error) {
@@ -215,6 +251,66 @@ async function cacheFirst(request: Request, cacheName: string): Promise<Response
     throw error;
   }
 }
+
+/*
+ * ---------- Grenze des Medienspeichers ----------
+ *
+ * Was ausgewählt wird, steht in `lib/medienVorrat.ts`; hier nur die
+ * Buchführung. Die Cache-API kennt weder Grösse noch letzten Zugriff eines
+ * Eintrags. Beides steht deshalb in einem kleinen Verzeichnis IM selben
+ * Speicher (`MEDIEN_VERZEICHNIS`) – so verschwindet es mit ihm, und es gibt
+ * keinen zweiten Ort, der aus dem Takt geraten kann.
+ *
+ * Zugriffe landen erst im Arbeitsspeicher (`medienZugriffe`) und werden beim
+ * nächsten Aufräumen eingetragen. Geht der Arbeiter vorher schlafen, fehlen
+ * ein paar Zeitstempel – dann ist die Reihenfolge eben etwas ungenauer. Das
+ * ist billiger als ein Schreibvorgang bei jedem angezeigten Bild.
+ */
+const MEDIEN_VERZEICHNIS = new URL('/__medienvorrat.json', self.location.origin).href;
+
+type MedienVerzeichnis = Record<string, { bytes: number; zuletzt: number }>;
+
+const medienZugriffe = new Map<string, number>();
+
+const medienAufraeumen = gedrosselt(async () => {
+  const cache = await caches.open(MEDIA_CACHE);
+  const gelesen = await cache.match(MEDIEN_VERZEICHNIS);
+  const verzeichnis: MedienVerzeichnis = gelesen
+    ? ((await gelesen.json().catch(() => ({}))) as MedienVerzeichnis)
+    : {};
+  const zugriffe = new Map(medienZugriffe);
+  medienZugriffe.clear();
+
+  const eintraege: VorratEintrag[] = [];
+  const neu: MedienVerzeichnis = {};
+  for (const anfrage of await cache.keys()) {
+    const url = anfrage.url;
+    if (url === MEDIEN_VERZEICHNIS) continue;
+    let bekannt = verzeichnis[url];
+    if (!bekannt) {
+      // Altbestand von vor dieser Grenze, oder ein Eintrag, dessen Buchung
+      // verloren ging: Grösse einmal nachmessen, Zeit unbekannt (0) – damit
+      // geht er als einer der ersten.
+      const antwort = await cache.match(anfrage, { ignoreVary: true });
+      const laenge = Number(antwort?.headers.get('content-length'));
+      const bytes =
+        Number.isFinite(laenge) && laenge > 0 ? laenge : ((await antwort?.blob())?.size ?? 0);
+      bekannt = { bytes, zuletzt: 0 };
+    }
+    const zuletzt = Math.max(bekannt.zuletzt, zugriffe.get(url) ?? 0);
+    neu[url] = { bytes: bekannt.bytes, zuletzt };
+    eintraege.push({ url, bytes: bekannt.bytes, zuletzt });
+  }
+
+  for (const url of verdraengen(eintraege)) {
+    await cache.delete(url, { ignoreVary: true });
+    delete neu[url];
+  }
+  await cache.put(
+    MEDIEN_VERZEICHNIS,
+    new Response(JSON.stringify(neu), { headers: { 'content-type': 'application/json' } }),
+  );
+}, MEDIEN_AUFRAEUMEN_ABSTAND_MS);
 
 const shareCache = new Map<string, { title: string; text: string; url: string; files: File[] }>();
 
