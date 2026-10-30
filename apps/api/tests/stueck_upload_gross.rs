@@ -193,8 +193,7 @@ async fn eine_grosse_datei_geht_durch_ohne_den_speicher_zu_fuellen() {
     };
     // Rückwärts, damit auch hier keine Reihenfolge vorausgesetzt wird.
     let mut reihe: Vec<usize> = (0..anzahl).rev().collect();
-    while !reihe.is_empty() {
-        let a = reihe.pop().unwrap();
+    while let Some(a) = reihe.pop() {
         match reihe.pop() {
             Some(b) => {
                 tokio::join!(senden(a), senden(b));
