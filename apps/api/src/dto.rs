@@ -426,6 +426,13 @@ pub struct GameSessionDto {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub version: i32,
+    /// Uhr des Servers beim Ausliefern: Echtzeitspiele (Pressen) messen den
+    /// gemeinsamen Beginn daran und schätzen daraus die Abweichung der eigenen Uhr.
+    pub server_time: DateTime<Utc>,
+    /// Pressen: die Strichmännchen der Spielenden (Benutzer-Kennung → Figur),
+    /// wie sie sie in ihrem Konto eingestellt haben. Fehlt bei anderen Spielen.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub figuren: Option<serde_json::Map<String, Value>>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -327,6 +327,20 @@ async fn update_me(
 
     let settings = match input.settings {
         Some(patch) => {
+            // Das Strichmännchen für Pressen liegt in den Modul-Einstellungen,
+            // die sonst frei sind. Es geht an alle Mitspielenden hinaus und wird
+            // dort gezeichnet – deshalb nur geprüft und nur in den Grenzen.
+            let mut patch = patch;
+            if let Some(figur) = patch
+                .get_mut("modules")
+                .and_then(Value::as_object_mut)
+                .and_then(|m| m.get_mut("pressenFigur"))
+            {
+                if !figur.is_null() {
+                    *figur = crate::games::pressen_figur::pruefen(figur)
+                        .map_err(|meldung| AppError::bad_request(&meldung))?;
+                }
+            }
             let mut merged = merge_settings(&current.settings);
             if let (Some(target), Some(source)) = (merged.as_object_mut(), patch.as_object()) {
                 for (key, value) in source {

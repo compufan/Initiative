@@ -1,5 +1,6 @@
 pub mod attachments;
 pub mod auslagern;
+pub mod bierjunge;
 pub mod calendar;
 pub mod conversations;
 pub mod einladen;

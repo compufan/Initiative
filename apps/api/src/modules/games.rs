@@ -15,7 +15,7 @@ use crate::error::{AppError, AppResult};
 use crate::games::{get_game, list_games, seat_of, user_of_seat, MoveContext};
 use crate::services::conversations::assert_membership;
 use crate::services::games::{
-    create_session, persist_session, players_of, require_session, seats_of, to_session_dto,
+    create_session, dto_fuer, dtos_fuer, persist_session, players_of, require_session, seats_of,
     SessionUpdate,
 };
 use crate::services::notify::notify_users;
@@ -88,7 +88,7 @@ async fn list_sessions(
     .await?;
 
     Ok(Json(ListResult::new(
-        rows.iter().map(to_session_dto).collect(),
+        dtos_fuer(&state, &rows, user.id()).await?,
     )))
 }
 
@@ -129,7 +129,7 @@ async fn by_id(
 ) -> AppResult<Json<GameSessionDto>> {
     let row = require_session(&state, id).await?;
     crate::services::games::assert_session_access(&state.pool, &row, user.id()).await?;
-    Ok(Json(to_session_dto(&row)))
+    Ok(Json(dto_fuer(&state, &row, user.id()).await?))
 }
 
 async fn join(
@@ -147,7 +147,7 @@ async fn join(
     }
     let mut players = players_of(&row);
     if players.iter().any(|player| player.user_id == user.id()) {
-        return Ok(Json(to_session_dto(&row)));
+        return Ok(Json(dto_fuer(&state, &row, user.id()).await?));
     }
     if players.len() >= definition.max_players() {
         return Err(AppError::bad_request("Das Spiel ist schon voll"));
@@ -189,6 +189,7 @@ async fn join(
                 winner_user_ids: Vec::new(),
                 players: Some(players),
             },
+            user.id(),
         )
         .await?,
     ))
@@ -262,6 +263,7 @@ async fn make_move(
             state: next_state,
             players: None,
         },
+        user.id(),
     )
     .await?;
 
@@ -303,7 +305,7 @@ async fn abort(
         ));
     }
     if row.status == "finished" || row.status == "aborted" {
-        return Ok(Json(to_session_dto(&row)));
+        return Ok(Json(dto_fuer(&state, &row, user.id()).await?));
     }
 
     Ok(Json(
@@ -321,6 +323,7 @@ async fn abort(
                     .collect(),
                 players: None,
             },
+            user.id(),
         )
         .await?,
     ))

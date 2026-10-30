@@ -456,6 +456,11 @@ pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<Me
     if !input.silent {
         super::notify::notify_new_message(state, &message, &members).await;
     }
+    // „Bierjunge“ / „hängt“ im Text startet ein Pressen-Spiel (erst NACH dem
+    // Ausspielen: Die Nachricht steht im Chat, bevor die Spielkarte folgt).
+    if message.r#type == "text" {
+        super::bierjunge::nach_nachricht(state, &message).await;
+    }
     Ok(message)
 }
 
@@ -519,6 +524,15 @@ async fn ausspielen(
                 .collect()
         });
 
+    // Eine Spielkarte trägt den Spielstand – und der unterscheidet sich je
+    // Empfänger (Pressen: niemand sieht fremde Zeiten vor Rundenende). Die
+    // Fassung des Absenders ginge hier an alle; deshalb kommt die Karte je
+    // Person frisch aus der Partie.
+    let spielkarten = match message.game.as_ref() {
+        Some(spiel) => Some(super::games::sichten_fuer(state, spiel.id, &empfaenger).await?),
+        None => None,
+    };
+
     // Zwei Merkmale, höchstens vier Fassungen: einmal laden, dann kürzen –
     // nicht je Empfänger neu hydrieren.
     let mut gruppen: std::collections::HashMap<(bool, bool), Vec<Uuid>> =
@@ -529,10 +543,6 @@ async fn ausspielen(
         gruppen.entry((zitat, termin)).or_default().push(*id);
     }
     for ((zitat, termin), ids) in gruppen {
-        if zitat && termin {
-            state.hub.publish(ids, ereignis(message)).await;
-            continue;
-        }
         let mut gekuerzt = message.clone();
         if !zitat {
             gekuerzt.reply_to = None;
@@ -541,7 +551,16 @@ async fn ausspielen(
             gekuerzt.event = None;
             gekuerzt.metadata = json!({});
         }
-        state.hub.publish(ids, ereignis(&gekuerzt)).await;
+        match &spielkarten {
+            Some(sichten) => {
+                for id in ids {
+                    let mut eigene = gekuerzt.clone();
+                    eigene.game = sichten.get(&id).cloned();
+                    state.hub.publish(vec![id], ereignis(&eigene)).await;
+                }
+            }
+            None => state.hub.publish(ids, ereignis(&gekuerzt)).await,
+        }
     }
     Ok(empfaenger)
 }

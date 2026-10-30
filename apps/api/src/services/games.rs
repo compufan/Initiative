@@ -29,22 +29,132 @@ pub fn seats_of(row: &GameSessionRow) -> Vec<GameSeat> {
         .collect()
 }
 
-pub fn to_session_dto(row: &GameSessionRow) -> GameSessionDto {
+/// Die Partie, wie `betrachter` sie sehen darf (`None` = Zuschauer ohne Sitz).
+///
+/// WARUM es keinen Weg ohne Betrachter gibt: Bei Spielen mit verdeckten Zügen
+/// (Pressen: fremde Zeiten bis zum Rundenende) darf der rohe Stand nirgends
+/// hinausgehen. Jede Stelle, die eine Partie ausliefert – Abfrage, Liste,
+/// Echtzeitereignis, Karte im Chat –, geht durch diese Funktion.
+pub fn sicht_fuer(
+    row: &GameSessionRow,
+    betrachter: Option<Uuid>,
+    figuren: &HashMap<Uuid, Value>,
+) -> GameSessionDto {
+    let players = players_of(row);
+    let state = match get_game(&row.game_key) {
+        Some(spiel) => {
+            let sitz = betrachter.and_then(|id| crate::games::seat_of(&seats_of(row), id));
+            spiel.fuer_betrachter(&row.state, sitz)
+        }
+        None => row.state.clone(),
+    };
+    let figuren_dto: Option<serde_json::Map<String, Value>> = if row.game_key == "pressen" {
+        Some(
+            players
+                .iter()
+                .filter_map(|p| {
+                    figuren
+                        .get(&p.user_id)
+                        .map(|f| (p.user_id.to_string(), f.clone()))
+                })
+                .collect(),
+        )
+    } else {
+        None
+    };
     GameSessionDto {
         id: row.id,
         conversation_id: row.conversation_id,
         message_id: row.message_id,
         game_key: row.game_key.clone(),
         status: row.status.clone(),
-        players: players_of(row),
-        state: row.state.clone(),
+        players,
+        state,
         turn_user_id: row.turn_user_id,
         winner_user_ids: json_to_uuid_vec(&row.winner_user_ids),
         created_by: row.created_by,
         created_at: row.created_at,
         updated_at: row.updated_at,
         version: row.version,
+        server_time: chrono::Utc::now(),
+        figuren: figuren_dto,
     }
+}
+
+/// Die Strichmännchen der Spielenden aus ihren Konten (nur für Spiele, die sie zeigen).
+pub async fn figuren_laden(
+    pool: &sqlx::PgPool,
+    rows: &[&GameSessionRow],
+) -> AppResult<HashMap<Uuid, Value>> {
+    let mut ids: Vec<Uuid> = rows
+        .iter()
+        .filter(|row| row.game_key == "pressen")
+        .flat_map(|row| players_of(row).into_iter().map(|p| p.user_id))
+        .collect();
+    ids.sort();
+    ids.dedup();
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let zeilen: Vec<(Uuid, Option<Value>)> = sqlx::query_as(
+        "select id, settings #> '{modules,pressenFigur}' from users where id = any($1)",
+    )
+    .bind(&ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(zeilen
+        .into_iter()
+        .filter_map(|(id, figur)| {
+            figur
+                .and_then(|f| crate::games::pressen_figur::lesen(&f))
+                .map(|f| (id, f))
+        })
+        .collect())
+}
+
+/// Eine Partie für `betrachter`, samt Figuren der Spielenden.
+pub async fn dto_fuer(
+    state: &AppState,
+    row: &GameSessionRow,
+    betrachter: Uuid,
+) -> AppResult<GameSessionDto> {
+    let figuren = figuren_laden(&state.pool, &[row]).await?;
+    Ok(sicht_fuer(row, Some(betrachter), &figuren))
+}
+
+/// Mehrere Partien für `betrachter` mit einer einzigen Abfrage der Figuren.
+pub async fn dtos_fuer(
+    state: &AppState,
+    rows: &[GameSessionRow],
+    betrachter: Uuid,
+) -> AppResult<Vec<GameSessionDto>> {
+    let refs: Vec<&GameSessionRow> = rows.iter().collect();
+    let figuren = figuren_laden(&state.pool, &refs).await?;
+    Ok(rows
+        .iter()
+        .map(|row| sicht_fuer(row, Some(betrachter), &figuren))
+        .collect())
+}
+
+/// Die Karte im Chat in der Fassung jeder Person (für das Ausspielen).
+pub async fn sichten_fuer(
+    state: &AppState,
+    session_id: Uuid,
+    empfaenger: &[Uuid],
+) -> AppResult<HashMap<Uuid, GameSessionDto>> {
+    let Some(row) =
+        sqlx::query_as::<_, GameSessionRow>("select * from game_sessions where id = $1")
+            .bind(session_id)
+            .fetch_optional(&state.pool)
+            .await?
+    else {
+        return Ok(HashMap::new());
+    };
+    let figuren = figuren_laden(&state.pool, &[&row]).await?;
+    Ok(empfaenger
+        .iter()
+        .map(|id| (*id, sicht_fuer(&row, Some(*id), &figuren)))
+        .collect())
 }
 
 pub async fn require_session(state: &AppState, session_id: Uuid) -> AppResult<GameSessionRow> {
@@ -136,9 +246,9 @@ pub async fn create_session(
         .execute(&state.pool)
         .await?;
 
-    let session = to_session_dto(&require_session(state, session_id).await?);
-    broadcast_session(state, &session).await?;
-    Ok(session)
+    let row = require_session(state, session_id).await?;
+    broadcast_session(state, &row).await?;
+    dto_fuer(state, &row, created_by).await
 }
 
 pub struct SessionUpdate {
@@ -154,6 +264,7 @@ pub async fn persist_session(
     state: &AppState,
     row: &GameSessionRow,
     update: SessionUpdate,
+    betrachter: Uuid,
 ) -> AppResult<GameSessionDto> {
     let players = match update.players {
         Some(players) => serde_json::to_value(players).unwrap_or(Value::Array(vec![])),
@@ -178,9 +289,8 @@ pub async fn persist_session(
     .await?
     .ok_or_else(|| AppError::bad_request("Der Spielstand hat sich geändert – bitte neu laden."))?;
 
-    let session = to_session_dto(&updated);
-    broadcast_session(state, &session).await?;
-    Ok(session)
+    broadcast_session(state, &updated).await?;
+    dto_fuer(state, &updated, betrachter).await
 }
 
 /// Wer die Partie sehen darf – abgeleitet aus ihrer Karte im Chat.
@@ -224,23 +334,22 @@ pub async fn assert_session_access(
     Err(AppError::forbidden("Diese Partie gehört nicht zu dir"))
 }
 
-pub async fn broadcast_session(state: &AppState, session: &GameSessionDto) -> AppResult<()> {
-    let row = sqlx::query_as::<_, GameSessionRow>("select * from game_sessions where id = $1")
-        .bind(session.id)
-        .fetch_optional(&state.pool)
-        .await?;
-    let members = match row {
-        Some(row) => sichtbar_fuer(&state.pool, &row).await?,
-        None => Vec::new(),
-    };
-    state
-        .hub
-        .publish(members, Event::game_updated(session))
-        .await;
+/// Schickt den neuen Stand an alle, die die Partie sehen dürfen – jedem in
+/// SEINER Fassung (bei Pressen sieht niemand fremde Zeiten vor Rundenende).
+pub async fn broadcast_session(state: &AppState, row: &GameSessionRow) -> AppResult<()> {
+    let members = sichtbar_fuer(&state.pool, row).await?;
+    let figuren = figuren_laden(&state.pool, &[row]).await?;
+    for member in members {
+        let session = sicht_fuer(row, Some(member), &figuren);
+        state
+            .hub
+            .publish(vec![member], Event::game_updated(&session))
+            .await;
+    }
     super::messages::republish_message(
         state,
-        session.message_id,
-        session.created_by.unwrap_or_else(Uuid::nil),
+        row.message_id,
+        row.created_by.unwrap_or_else(Uuid::nil),
     )
     .await
 }
@@ -257,7 +366,7 @@ impl MessageExpander for GameExpander {
     async fn expand(
         &self,
         state: &AppState,
-        _viewer_id: Uuid,
+        viewer_id: Uuid,
         messages: &[MessageRow],
     ) -> AppResult<HashMap<Uuid, Expansion>> {
         let ids = referenced_ids(messages, "gameSessionId");
@@ -269,9 +378,11 @@ impl MessageExpander for GameExpander {
                 .bind(&ids)
                 .fetch_all(&state.pool)
                 .await?;
+        let refs: Vec<&GameSessionRow> = rows.iter().collect();
+        let figuren = figuren_laden(&state.pool, &refs).await?;
         let sessions: HashMap<Uuid, GameSessionDto> = rows
-            .into_iter()
-            .map(|row| (row.id, to_session_dto(&row)))
+            .iter()
+            .map(|row| (row.id, sicht_fuer(row, Some(viewer_id), &figuren)))
             .collect();
 
         let mut result = HashMap::new();
