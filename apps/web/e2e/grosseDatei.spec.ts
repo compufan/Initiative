@@ -223,7 +223,9 @@ test('300 MB in Stücken: Abriss, Neuladen, Fortsetzen – und beim Empfänger d
 
   // Jedes Stück trug seine SHA-256, und die Grenzen kamen einmal vom Server.
   expect(ohneSumme, 'Stücke ohne X-Stueck-Sha256').toEqual([]);
-  expect(grenzenAbgerufen, 'GET /media/grenzen je Sitzung').toBe(1);
+  // Einmal je Seitenladen (die Seite wurde mittendrin neu geladen), nicht je Upload.
+  expect(grenzenAbgerufen, 'GET /media/grenzen').toBeGreaterThanOrEqual(1);
+  expect(grenzenAbgerufen, 'GET /media/grenzen').toBeLessThanOrEqual(2);
 
   // Spulen im Browser des Empfängers: ein Bereich mitten aus der Datei,
   // durch den Service Worker – und die Datei landet nicht in dessen Speicher.
