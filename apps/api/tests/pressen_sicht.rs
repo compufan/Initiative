@@ -336,7 +336,7 @@ async fn sichten(
 }
 
 /// Liest alles, was beim Hörer bisher angekommen ist.
-fn gehoert(empfang: &mut tokio::sync::mpsc::UnboundedReceiver<String>) -> Vec<Value> {
+fn gehoert(empfang: &mut tokio::sync::mpsc::Receiver<String>) -> Vec<Value> {
     let mut frames = Vec::new();
     while let Ok(frame) = empfang.try_recv() {
         frames.push(serde_json::from_str(&frame).unwrap_or(Value::Null));
@@ -364,15 +364,15 @@ async fn fremde_ergebnisse_stehen_vor_rundenende_in_keinem_ausgelieferten_stand(
 
     let (_, mut anna_hoert, _) = {
         let h = probe.state.hub.register(w.a.uuid());
-        (h.0, h.1, h.2)
+        (h.0, h.1.empfang, h.2)
     };
     let (_, mut bodo_hoert, _) = {
         let h = probe.state.hub.register(w.b.uuid());
-        (h.0, h.1, h.2)
+        (h.0, h.1.empfang, h.2)
     };
     let (_, mut cleo_hoert, _) = {
         let h = probe.state.hub.register(w.c.uuid());
-        (h.0, h.1, h.2)
+        (h.0, h.1.empfang, h.2)
     };
 
     // Anna meldet ihren Lauf. Die Antwort auf IHREN Zug enthält ihn …

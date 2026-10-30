@@ -386,7 +386,7 @@ async fn nur_der_besitzer_liest_und_spielt_die_uebung() {
 
     let (_, mut bodo_hoert, _) = {
         let h = probe.state.hub.register(w.b.uuid());
-        (h.0, h.1, h.2)
+        (h.0, h.1.empfang, h.2)
     };
 
     // Bodo teilt einen Einzelchat mit Anna – das öffnet ihm nichts.

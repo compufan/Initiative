@@ -24,7 +24,7 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::Receiver;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -285,8 +285,10 @@ impl Probe {
 
     /// Ab jetzt mithören, was dieses Konto über den Rundruf bekommt.
     fn hoeren(&self, wer: &Konto) -> Hoerer {
-        let (_, empfaenger, _) = self.state.hub.register(wer.uuid());
-        Hoerer { empfaenger }
+        let (_, ausgang, _) = self.state.hub.register(wer.uuid());
+        Hoerer {
+            empfaenger: ausgang.empfang,
+        }
     }
 
     fn push_leeren(&self) {
@@ -310,7 +312,7 @@ impl Probe {
 }
 
 struct Hoerer {
-    empfaenger: UnboundedReceiver<String>,
+    empfaenger: Receiver<String>,
 }
 
 impl Hoerer {

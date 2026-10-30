@@ -40,7 +40,7 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use http_body_util::BodyExt;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::Receiver;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -92,7 +92,7 @@ impl Konto {
 }
 
 struct Hoerer {
-    empfaenger: UnboundedReceiver<String>,
+    empfaenger: Receiver<String>,
 }
 
 impl Hoerer {
@@ -451,8 +451,10 @@ impl Probe {
     }
 
     fn hoeren(&self, wer: &Konto) -> Hoerer {
-        let (_, empfaenger, _) = self.state.hub.register(wer.uuid());
-        Hoerer { empfaenger }
+        let (_, ausgang, _) = self.state.hub.register(wer.uuid());
+        Hoerer {
+            empfaenger: ausgang.empfang,
+        }
     }
 
     fn push_leeren(&self) {

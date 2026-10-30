@@ -20,7 +20,7 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::Receiver;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -167,14 +167,14 @@ impl Probe {
     }
 
     /// Eine Leitung anmelden und alles abholen, was seither aufgelaufen ist.
-    fn horchen(&self, wer: &str) -> UnboundedReceiver<String> {
-        let (_id, empfang, _) = self.state.hub.register(Uuid::parse_str(wer).unwrap());
-        empfang
+    fn horchen(&self, wer: &str) -> Receiver<String> {
+        let (_id, ausgang, _) = self.state.hub.register(Uuid::parse_str(wer).unwrap());
+        ausgang.empfang
     }
 }
 
 /// Alles einsammeln, was bis jetzt angekommen ist.
-fn eingang(empfang: &mut UnboundedReceiver<String>) -> Vec<Value> {
+fn eingang(empfang: &mut Receiver<String>) -> Vec<Value> {
     let mut alles = Vec::new();
     while let Ok(rahmen) = empfang.try_recv() {
         if let Ok(wert) = serde_json::from_str::<Value>(&rahmen) {

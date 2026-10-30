@@ -217,7 +217,7 @@ async fn viele_eingeladene_bleiben_im_zeitrahmen_und_phase_eins_waechst_nicht() 
         let leute = probe.konten(anzahl, &format!("g{n}a{anzahl}x")).await;
         let ids: Vec<String> = leute.iter().map(|id| id.to_string()).collect();
         let hoerer = probe.state.hub.register(leute[0]);
-        let mut empfaenger = hoerer.1;
+        let mut empfaenger = hoerer.1.empfang;
 
         zaehler.leeren();
         let zeit = Instant::now();
