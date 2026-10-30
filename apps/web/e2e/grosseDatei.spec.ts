@@ -53,7 +53,7 @@ test.beforeAll(async () => {
     // Wie ein MP4 anfangen – dann ist auch der Typ beim Ausliefern echt.
     if (geschrieben === 0) stueck.set(Buffer.from('ftypisom'), 4);
     hasher.update(stueck);
-    if (!aus.write(stueck)) await new Promise((r) => aus.once('drain', r));
+    if (!aus.write(stueck)) await new Promise<void>((r) => aus.once('drain', () => r()));
     geschrieben += stueck.length;
   }
   await new Promise<void>((fertig, fehler) =>
