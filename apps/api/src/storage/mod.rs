@@ -54,6 +54,15 @@ pub struct DownloadOptions {
     pub download: bool,
 }
 
+/// Ein Objekt in einer Ablage, wie `auflisten` es meldet.
+#[derive(Debug, Clone)]
+pub struct ObjektInfo {
+    /// Der Schlüssel (relativ zur Wurzel der Ablage, mit `/`).
+    pub key: String,
+    /// Die Grösse der gespeicherten Bytes (bei Tresor: des Geheimtexts).
+    pub size: u64,
+}
+
 #[async_trait]
 pub trait Storage: Send + Sync {
     fn kind(&self) -> &'static str;
@@ -143,6 +152,15 @@ pub trait Storage: Send + Sync {
      */
     async fn kapazitaet(&self) -> Option<(u64, u64)> {
         None
+    }
+
+    /**
+     * Alle Objekte der Ablage mit ihrer Grösse – für den Konsistenzcheck
+     * (`/admin/storage-check/konsistenz`). `None`: Diese Ablage kann es nicht.
+     * Liest keine Dateiinhalte, nur Verzeichnisse.
+     */
+    async fn auflisten(&self) -> AppResult<Option<Vec<ObjektInfo>>> {
+        Ok(None)
     }
 
     /**

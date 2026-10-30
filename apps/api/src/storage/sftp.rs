@@ -857,6 +857,61 @@ impl Storage for SftpSpeicher {
         a.and(b)
     }
 
+    /**
+     * Alle Objekte unterhalb der Wurzel mit Grösse – nur Verzeichnisse
+     * lesen, keine Dateiinhalte. Ebenenweise, bis zu acht Verzeichnisse
+     * gleichzeitig auf der Lese-Verbindung: Ein Baum mit zehntausend
+     * Verzeichnissen (Art/Jahr/Monat/Konto) wäre sonst eine Kette von
+     * zehntausend Umläufen hintereinander.
+     */
+    async fn auflisten(&self) -> AppResult<Option<Vec<super::ObjektInfo>>> {
+        use futures_util::StreamExt;
+        let v = self.sitzung(Rolle::Lesen).await?;
+        let wurzel = self.pfad_fuer("")?;
+        let praefix = format!("{}/", wurzel.trim_end_matches('/'));
+        let mut aus = Vec::new();
+        let mut ebene = vec![wurzel.clone()];
+        while !ebene.is_empty() {
+            let ergebnisse: Vec<_> = futures_util::stream::iter(ebene.drain(..))
+                .map(|ordner| {
+                    let sftp = &v.sftp;
+                    async move { (ordner.clone(), sftp.read_dir(ordner).await) }
+                })
+                .buffer_unordered(8)
+                .collect()
+                .await;
+            for (ordner, ergebnis) in ergebnisse {
+                let eintraege = match ergebnis {
+                    Ok(e) => e,
+                    // Die Wurzel gibt es noch nicht (nie etwas ausgelagert): leer.
+                    Err(_) if ordner == wurzel => return Ok(Some(aus)),
+                    Err(fehler) => {
+                        return Err(AppError::internal(format!(
+                            "Verzeichnis {ordner} nicht lesbar: {fehler}"
+                        )))
+                    }
+                };
+                for e in eintraege {
+                    let name = e.file_name();
+                    if name == "." || name == ".." {
+                        continue;
+                    }
+                    let m = e.metadata();
+                    let pfad = format!("{}/{}", ordner.trim_end_matches('/'), name);
+                    if m.is_dir() || m.file_type().is_dir() {
+                        ebene.push(pfad);
+                    } else if let Some(rel) = pfad.strip_prefix(&praefix) {
+                        aus.push(super::ObjektInfo {
+                            key: rel.to_string(),
+                            size: m.size.unwrap_or(0),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(Some(aus))
+    }
+
     /// Schliesst die SSH-Verbindungen sauber (Beenden des Dienstes).
     async fn beenden(&self) {
         self.schliessen().await;

@@ -912,3 +912,36 @@ async fn eine_tote_lese_verbindung_trifft_die_andere_nicht() {
     let q2 = quelle(&p, "w2.bin", &inhalt);
     p.treiber.put_datei("file/x/w2.bin", &q2, "x/y").await.unwrap();
 }
+
+#[tokio::test]
+async fn auflisten_liefert_alle_objekte_mit_groesse_ohne_inhalte_zu_lesen() {
+    let p = probe().await;
+    // Noch nichts ausgelagert: die Wurzel gibt es nicht oder ist leer – kein Fehler.
+    assert!(p.treiber.auflisten().await.unwrap().unwrap().is_empty());
+
+    for (name, n) in [
+        ("file/2026/10/u1/a.bin", 1000usize),
+        ("file/2026/10/u2/b.bin", 2 * MIB),
+        ("video/2026/09/u1/c.mp4", 5),
+    ] {
+        let q = quelle(&p, "q.bin", &muster(n));
+        p.treiber.put_datei(name, &q, "x/y").await.unwrap();
+    }
+    let gelesen_vorher = *p.z.gelesen.lock().unwrap();
+    let mut liste = p.treiber.auflisten().await.unwrap().unwrap();
+    liste.sort_by(|a, b| a.key.cmp(&b.key));
+    let paare: Vec<(String, u64)> = liste.into_iter().map(|o| (o.key, o.size)).collect();
+    assert_eq!(
+        paare,
+        vec![
+            ("file/2026/10/u1/a.bin".to_string(), 1000),
+            ("file/2026/10/u2/b.bin".to_string(), (2 * MIB) as u64),
+            ("video/2026/09/u1/c.mp4".to_string(), 5),
+        ]
+    );
+    assert_eq!(
+        *p.z.gelesen.lock().unwrap(),
+        gelesen_vorher,
+        "beim Auflisten wurde Dateiinhalt gelesen"
+    );
+}

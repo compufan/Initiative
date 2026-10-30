@@ -116,9 +116,18 @@ test('300 MB in Stücken: Abriss, Neuladen, Fortsetzen – und beim Empfänger d
 
   // Jede erfolgreich angenommene Stück-Anfrage, nach Bereich gezählt.
   const angenommen = new Map<string, number>();
+  // Jedes Stück muss seine SHA-256 mitschicken (Ende-zu-Ende-Prüfung am Server).
+  const ohneSumme: string[] = [];
+  let grenzenAbgerufen = 0;
   const zaehlen = (p: Page) =>
     p.on('response', (antwort) => {
       const anfrage = antwort.request();
+      if (anfrage.url().endsWith('/media/grenzen')) grenzenAbgerufen += 1;
+      if (anfrage.method() === 'PUT' && anfrage.url().includes('/media/stuecke/')) {
+        if (!/^[0-9a-f]{64}$/.test(anfrage.headers()['x-stueck-sha256'] ?? '')) {
+          ohneSumme.push(anfrage.headers()['content-range'] ?? '?');
+        }
+      }
       if (anfrage.method() !== 'PUT' || !anfrage.url().includes('/media/stuecke/')) return;
       if (antwort.status() !== 200) return;
       const bereich = anfrage.headers()['content-range'] ?? '?';
@@ -211,6 +220,10 @@ test('300 MB in Stücken: Abriss, Neuladen, Fortsetzen – und beim Empfänger d
   }
   expect(bytes).toBe(GROESSE);
   expect(hasher.digest('hex')).toBe(pruefsumme);
+
+  // Jedes Stück trug seine SHA-256, und die Grenzen kamen einmal vom Server.
+  expect(ohneSumme, 'Stücke ohne X-Stueck-Sha256').toEqual([]);
+  expect(grenzenAbgerufen, 'GET /media/grenzen je Sitzung').toBe(1);
 
   // Spulen im Browser des Empfängers: ein Bereich mitten aus der Datei,
   // durch den Service Worker – und die Datei landet nicht in dessen Speicher.

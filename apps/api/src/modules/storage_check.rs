@@ -20,6 +20,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/admin/storage-check", get(storage_check))
         .route("/admin/storage-check/kalt", get(kalt_check))
+        .route("/admin/storage-check/konsistenz", get(konsistenz_check))
 }
 
 #[derive(Serialize)]
@@ -613,6 +614,171 @@ async fn kalt_check(
         },
         steps,
     }))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KonsistenzFrage {
+    /// Wie viele Dateien ganz gelesen und per SHA-256 geprüft werden (Vorgabe 3, höchstens 20).
+    stichprobe: Option<usize>,
+    /// Grösste Datei der Stichprobe in MiB (Vorgabe 256, höchstens 1024).
+    max_mib: Option<u64>,
+}
+
+/**
+ * `GET /admin/storage-check/konsistenz` – Datenbank gegen Box.
+ *
+ * Vergleicht die Anhangszeilen mit `ablage = 'fern'` mit den Objekten auf der
+ * Box (fehlend, verwaist, falsche Grösse) und liest eine kleine Stichprobe
+ * ganz, um deren SHA-256 gegen `attachments.sha256` zu halten. Liest sonst
+ * nur Verzeichnisse. Siehe `services::konsistenz`.
+ */
+async fn konsistenz_check(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+    Query(frage): Query<KonsistenzFrage>,
+) -> AppResult<Json<serde_json::Value>> {
+    use crate::services::konsistenz::{self, Optionen};
+    let origin = state.config.public_app_url.clone();
+    let Some(kalt) = state.speicher.kalt.clone() else {
+        return Ok(Json(serde_json::json!({
+            "driver": "keine", "endpoint": null, "bucket": null, "pathStyle": null,
+            "browserOrigin": origin,
+            "steps": [schritt("Kalte Ablage", false, "KALT_TREIBER steht auf aus".into(),
+                Some("Setze KALT_TREIBER=sftp (oder lokal zum Ausprobieren)."))],
+            "verdict": "Keine kalte Ablage eingerichtet",
+        })));
+    };
+    let opt = Optionen {
+        stichprobe: frage.stichprobe.unwrap_or(3).min(20),
+        stichprobe_max_bytes: frage.max_mib.unwrap_or(256).clamp(1, 1024) * 1_048_576,
+        mit_tresor: state.config.media_key.is_some(),
+    };
+    let t = std::time::Instant::now();
+    let bericht = match konsistenz::pruefen(&state.pool, &kalt, &state.storage, opt).await {
+        Ok(Some(b)) => b,
+        Ok(None) => {
+            return Ok(Json(serde_json::json!({
+                "driver": kalt.kind(), "endpoint": null, "bucket": null, "pathStyle": null,
+                "browserOrigin": origin,
+                "steps": [schritt("Auflisten", false,
+                    "Diese Ablage kann ihren Inhalt nicht auflisten".into(), None)],
+                "verdict": "Der Abgleich ist für diese Ablage nicht möglich",
+            })))
+        }
+        Err(fehler) => {
+            return Ok(Json(serde_json::json!({
+                "driver": kalt.kind(), "endpoint": null, "bucket": null, "pathStyle": null,
+                "browserOrigin": origin,
+                "steps": [schritt("Auflisten", false, fehler.to_string(),
+                    Some("Die Box antwortet nicht oder der Pfad stimmt nicht. Probiere erst /admin/storage-check/kalt."))],
+                "verdict": "Es hakt. Die Hinweise nennen die Ursache.",
+            })))
+        }
+    };
+
+    let befund = |name: &str, b: &konsistenz::Befund, fehler: bool, hint: &str| {
+        let beispiele = if b.beispiele.is_empty() {
+            String::new()
+        } else {
+            format!(" – z. B. {}", b.beispiele.join("; "))
+        };
+        schritt(
+            name,
+            b.anzahl == 0 || !fehler,
+            if b.anzahl == 0 {
+                "keine".to_string()
+            } else {
+                format!("{}{beispiele}", b.anzahl)
+            },
+            (b.anzahl > 0).then_some(hint),
+        )
+    };
+    let mut steps = vec![
+        schritt(
+            "Auflisten",
+            true,
+            format!(
+                "{} Objekte auf der Box, {} Zeilen mit ablage=fern, in {} ms",
+                bericht.objekte_box, bericht.zeilen_fern, bericht.auflisten_ms
+            ),
+            None,
+        ),
+        befund(
+            "Fehlende Dateien",
+            &bericht.fehlend,
+            true,
+            "Die Datenbank sagt „fern“, auf der Box liegt nichts. Liegt die Datei nicht mehr warm, ist sie verloren: aus der Sicherung (Snapshot der Box, zweite Kopie) zurückholen.",
+        ),
+        befund(
+            "Falsche Grösse",
+            &bericht.falsche_groesse,
+            true,
+            "Drüben liegt etwas anderes als vermerkt (abgebrochene Übertragung, anderer Schlüssel?). Aus der Sicherung ersetzen.",
+        ),
+        befund(
+            "Verwaiste Objekte",
+            &bericht.verwaist,
+            true,
+            "Auf der Box liegt etwas ohne Datenbankzeile – kostet Platz, schadet sonst nicht. Prüfe, ob die Datenbank zu einem älteren Stand zurückgespielt wurde.",
+        ),
+        befund(
+            "Reste eines Umzugs",
+            &bericht.rest_von_umzug,
+            false,
+            "Ein Umzug brach nach dem Hinüberschreiben ab; die Datei liegt an beiden Orten. Harmlos, der nächste Durchgang bereinigt es.",
+        ),
+        befund(
+            "Teilreste (*.teil)",
+            &bericht.teilreste,
+            false,
+            "Abgebrochene Übertragungen; der Auslagerungsdienst räumt sie nach drei Tagen weg.",
+        ),
+    ];
+    if opt.stichprobe > 0 {
+        let mb_s = if bericht.stichprobe_ms > 0 {
+            bericht.stichprobe_bytes as f64 / 1_048_576.0 / (bericht.stichprobe_ms as f64 / 1000.0)
+        } else {
+            0.0
+        };
+        let ok = bericht.stichprobe_abweichend.anzahl == 0
+            && bericht.stichprobe_nicht_lesbar.anzahl == 0;
+        let mut detail = format!(
+            "{} Dateien ganz gelesen ({:.1} MB in {} ms, {:.1} MB/s)",
+            bericht.stichprobe_geprueft,
+            bericht.stichprobe_bytes as f64 / 1_048_576.0,
+            bericht.stichprobe_ms,
+            mb_s
+        );
+        for b in [&bericht.stichprobe_abweichend, &bericht.stichprobe_nicht_lesbar] {
+            if b.anzahl > 0 {
+                detail.push_str(&format!("; {} Auffälligkeiten: {}", b.anzahl, b.beispiele.join("; ")));
+            }
+        }
+        if bericht.stichprobe_geprueft == 0 && ok {
+            detail.push_str(" – keine Datei mit gespeicherter Prüfsumme in dieser Grösse (nur Uploads in Stücken haben eine)");
+        }
+        steps.push(schritt(
+            "Prüfsummen-Stichprobe",
+            ok,
+            detail,
+            (!ok).then_some("Der Inhalt auf der Box weicht von dem ab, was hochgeladen wurde (Bitfehler?). Betroffene Datei aus der Sicherung ersetzen."),
+        ));
+    }
+    let alles = bericht.in_ordnung();
+    Ok(Json(serde_json::json!({
+        "driver": kalt.kind(),
+        "endpoint": state.config.kalt_sftp.as_ref().map(|s| s.wirt.clone()),
+        "bucket": null, "pathStyle": null,
+        "browserOrigin": origin,
+        "steps": steps,
+        "verdict": if alles {
+            format!("Datenbank und Box stimmen überein ({} ms gesamt).", t.elapsed().as_millis())
+        } else {
+            "Es gibt Abweichungen. Die Hinweise nennen die Ursache.".to_string()
+        },
+        "bericht": bericht,
+    })))
 }
 
 #[cfg(test)]

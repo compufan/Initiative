@@ -1148,6 +1148,15 @@ export const api = {
     members: () => get<AdminMemberDto[]>('/admin/members'),
     removeMember: (id: string) => del<{ removed: boolean }>(`/admin/members/${id}`),
     storageCheck: () => get<StorageCheck>('/admin/storage-check'),
+    /**
+     * Probe der kalten Ablage (Storage Box): schreibt `mib` MiB, liest zurück,
+     * löscht. Dauert je nach Leitung eine Minute – deshalb eine lange Frist.
+     */
+    kaltCheck: (mib = 64) =>
+      get<StorageCheck>(`/admin/storage-check/kalt?mib=${mib}`, { timeoutMs: 10 * 60_000 }),
+    /** Datenbank gegen Box: fehlend, verwaist, falsche Grösse, SHA-256-Stichprobe. */
+    konsistenzCheck: () =>
+      get<StorageCheck>('/admin/storage-check/konsistenz', { timeoutMs: 15 * 60_000 }),
   },
   realtime: {
     /**

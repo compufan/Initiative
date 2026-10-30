@@ -7,6 +7,7 @@ import { useListenfilter } from '../../components/Listenfilter.js';
 import { useSession } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
+import { KaltablageCheck } from './KaltablageCheck.js';
 import { errorMessage } from './helpers.js';
 
 /**
@@ -234,6 +235,8 @@ export function AdminScreen() {
           </div>
         )}
       </section>
+
+      <KaltablageCheck />
 
       <section className="card stack" aria-labelledby="adm-invite-title">
         <h2 className="prf-block-title" id="adm-invite-title">

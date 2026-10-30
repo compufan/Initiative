@@ -10,6 +10,7 @@ pub mod expanders;
 pub mod expenses;
 pub mod games;
 pub mod messages;
+pub mod konsistenz;
 pub mod miniatur;
 pub mod notify;
 pub mod permissions;

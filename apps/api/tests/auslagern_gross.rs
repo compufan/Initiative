@@ -878,3 +878,127 @@ async fn eine_richtige_pruefsumme_laesst_den_umzug_durch_und_grosse_dateien_werd
     assert_eq!(bilanz.bewegt, 1, "{bilanz:?}");
     assert_eq!(probe.ablage(id_klein).await.0, "fern");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn der_konsistenzcheck_findet_fehlendes_falsche_groessen_verwaistes_und_bitfehler() {
+    use initiative_api::services::konsistenz::{self, Optionen};
+    let _r = REIHE.lock().await;
+    let Some(probe) = aufbauen_mit("konsist", "lokal", None, false).await else {
+        return;
+    };
+    let token = probe.konto("gkons").await;
+    let mut ids = Vec::new();
+    let mut inhalte = Vec::new();
+    for i in 0..4usize {
+        let daten = video(MIB + 100 + i);
+        let id = probe.hochladen(&token, &daten).await;
+        probe.prioritaet_setzen(id, "niedrig").await;
+        sqlx::query("update attachments set sha256 = $2 where id = $1")
+            .bind(id)
+            .bind(sha_hex(&daten))
+            .execute(&probe.state.pool)
+            .await
+            .unwrap();
+        ids.push(id);
+        inhalte.push(daten);
+    }
+    let kalt = probe.state.speicher.kalt.clone().unwrap();
+    let bilanz = probe.durchgang_mit(&kalt, 0).await;
+    assert_eq!(bilanz.bewegt, 4, "{bilanz:?}");
+
+    let opt = Optionen {
+        stichprobe: 10,
+        stichprobe_max_bytes: 64 * MIB as u64,
+        mit_tresor: false,
+    };
+    let aussen = probe.state.storage.clone();
+
+    // Heil: alles in Ordnung, die Stichprobe liest alle vier ganz.
+    let b = konsistenz::pruefen(&probe.state.pool, &kalt, &aussen, opt)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(b.in_ordnung(), "{b:?}");
+    assert_eq!(b.zeilen_fern, 4);
+    assert_eq!(b.objekte_box, 4);
+    assert_eq!(b.stichprobe_geprueft, 4);
+
+    // Schlüssel der vier Dateien.
+    let mut keys = Vec::new();
+    for id in &ids {
+        let k: String = sqlx::query_scalar("select storage_key from attachments where id = $1")
+            .bind(id)
+            .fetch_one(&probe.state.pool)
+            .await
+            .unwrap();
+        keys.push(k);
+    }
+    let drueben = |k: &str| std::path::Path::new(&probe.kalt).join(k);
+    // 1: fehlt. 2: zu kurz. 3: gleich lang, aber ein Byte anders.
+    std::fs::remove_file(drueben(&keys[1])).unwrap();
+    let f = std::fs::OpenOptions::new().write(true).open(drueben(&keys[2])).unwrap();
+    f.set_len(1000).unwrap();
+    let mut roh = std::fs::read(drueben(&keys[3])).unwrap();
+    roh[500] ^= 0x55;
+    std::fs::write(drueben(&keys[3]), roh).unwrap();
+    // Verwaist, ein Teilrest und ein Rest eines Umzugs (Zeile lokal).
+    std::fs::create_dir_all(drueben("file/2026/01/x")).unwrap();
+    std::fs::write(drueben("file/2026/01/x/waise.bin"), b"waise").unwrap();
+    std::fs::write(drueben("file/2026/01/x/halb.bin.teil"), b"halb").unwrap();
+    let lokal_id = probe.hochladen(&token, &video(2000)).await;
+    let lokal_key: String = sqlx::query_scalar("select storage_key from attachments where id = $1")
+        .bind(lokal_id)
+        .fetch_one(&probe.state.pool)
+        .await
+        .unwrap();
+    std::fs::create_dir_all(drueben(&lokal_key).parent().unwrap()).unwrap();
+    std::fs::write(drueben(&lokal_key), video(2000)).unwrap();
+
+    let b = konsistenz::pruefen(&probe.state.pool, &kalt, &aussen, opt)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!b.in_ordnung());
+    assert_eq!(b.fehlend.anzahl, 1, "{b:?}");
+    assert_eq!(b.fehlend.beispiele, vec![keys[1].clone()]);
+    assert_eq!(b.falsche_groesse.anzahl, 1, "{b:?}");
+    assert!(b.falsche_groesse.beispiele[0].contains(&keys[2]));
+    assert_eq!(b.verwaist.anzahl, 1, "{b:?}");
+    assert_eq!(b.verwaist.beispiele, vec!["file/2026/01/x/waise.bin".to_string()]);
+    assert_eq!(b.rest_von_umzug.anzahl, 1, "{b:?}");
+    assert_eq!(b.teilreste.anzahl, 1, "{b:?}");
+    // Der Bitfehler (gleiche Länge) fällt NUR durch die Stichprobe auf; die
+    // zu kurze Datei zusätzlich auch dort. Die fehlende wird nicht doppelt gemeldet.
+    assert_eq!(b.stichprobe_abweichend.anzahl, 2, "{b:?}");
+    assert!(b
+        .stichprobe_abweichend
+        .beispiele
+        .iter()
+        .any(|t| t.contains(&keys[3])));
+
+    // Über HTTP: nur für Admins, mit lesbarem Ergebnis.
+    let (status, _) = probe
+        .call("GET", "/api/v1/admin/storage-check/konsistenz", Some(&token), None)
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    sqlx::query("update users set is_admin = true")
+        .execute(&probe.state.pool)
+        .await
+        .unwrap();
+    let (status, antwort) = probe
+        .call(
+            "GET",
+            "/api/v1/admin/storage-check/konsistenz?stichprobe=10",
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{antwort}");
+    let schritte = antwort["steps"].as_array().unwrap();
+    let schritt = |name: &str| schritte.iter().find(|s| s["name"] == name).unwrap().clone();
+    assert_eq!(schritt("Fehlende Dateien")["ok"], false);
+    assert_eq!(schritt("Reste eines Umzugs")["ok"], true);
+    assert_eq!(schritt("Prüfsummen-Stichprobe")["ok"], false);
+    assert_eq!(antwort["bericht"]["fehlend"]["anzahl"], 1);
+    assert!(antwort["verdict"].as_str().unwrap().contains("Abweichungen"));
+}

@@ -815,10 +815,13 @@ async fn umziehen(
             )));
         }
         let erwartet = tokio::fs::metadata(&pfad).await.map(|m| m.len()).ok();
-        return abschliessen(
-            pool, warm, kalt, &schluessel, erwartet, groesse, sha_soll, regeln, zurueck,
-        )
-        .await;
+        let soll = Soll {
+            erwartet,
+            groesse,
+            sha256: sha_soll,
+            regeln,
+        };
+        return abschliessen(pool, warm, kalt, &schluessel, soll, zurueck).await;
     }
 
     if groesse > SPEICHER_WEG_MAX {
@@ -861,10 +864,24 @@ async fn umziehen(
             "{schluessel}: Schreiben gescheitert – {fehler}"
         )));
     }
-    abschliessen(
-        pool, warm, kalt, &schluessel, erwartet, groesse, sha_soll, regeln, zurueck,
-    )
-    .await
+    let soll = Soll {
+        erwartet,
+        groesse,
+        sha256: sha_soll,
+        regeln,
+    };
+    abschliessen(pool, warm, kalt, &schluessel, soll, zurueck).await
+}
+
+/// Was nach dem Hinüberschreiben drüben vorgefunden werden soll.
+struct Soll {
+    /// Länge der Bytes, die wirklich über die Leitung gingen (bei Tresor: Geheimtext).
+    erwartet: Option<u64>,
+    /// `attachments.size`, der Klartext.
+    groesse: i64,
+    /// `attachments.sha256`, falls bekannt.
+    sha256: Option<String>,
+    regeln: Regeln,
 }
 
 /// Nachmessen, umschreiben, warm löschen – der gemeinsame Rest beider Wege.
@@ -873,16 +890,19 @@ async fn abschliessen<F, Fut>(
     warm: &Arc<dyn Storage>,
     kalt: &Arc<dyn Storage>,
     schluessel: &str,
-    erwartet: Option<u64>,
-    groesse: i64,
-    sha_soll: Option<String>,
-    regeln: Regeln,
+    soll: Soll,
     zurueck: F,
 ) -> Result<i64, Fehlschlag>
 where
     F: Fn() -> Fut,
     Fut: std::future::Future<Output = ()>,
 {
+    let Soll {
+        erwartet,
+        groesse,
+        sha256: sha_soll,
+        regeln,
+    } = soll;
     /*
      * Nachmessen, bevor die lokale Fassung fällt.
      *

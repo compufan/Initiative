@@ -157,6 +157,29 @@ impl Storage for LocalStorage {
         Ok(())
     }
 
+    async fn auflisten(&self) -> AppResult<Option<Vec<super::ObjektInfo>>> {
+        let mut aus = Vec::new();
+        let mut offen = vec![self.root.clone()];
+        while let Some(ordner) = offen.pop() {
+            let mut lesen = match fs::read_dir(&ordner).await {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+            while let Some(eintrag) = lesen.next_entry().await? {
+                let m = eintrag.metadata().await?;
+                if m.is_dir() {
+                    offen.push(eintrag.path());
+                } else if let Ok(rel) = eintrag.path().strip_prefix(&self.root) {
+                    aus.push(super::ObjektInfo {
+                        key: rel.to_string_lossy().replace('\\', "/"),
+                        size: m.len(),
+                    });
+                }
+            }
+        }
+        Ok(Some(aus))
+    }
+
     async fn kapazitaet(&self) -> Option<(u64, u64)> {
         let _ = fs::create_dir_all(&self.root).await;
         let frei = crate::modules::stuecke::frei_auf_platte(&self.root)?;

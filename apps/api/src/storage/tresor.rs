@@ -98,6 +98,13 @@ impl Tresor {
     }
 }
 
+/// Wie gross die verschlüsselte Fassung einer Datei von `klartext` Bytes ist:
+/// Kopf + Klartext + 16 Byte Prüfsumme je angefangenem 64-KiB-Block. Der
+/// Konsistenzcheck der Box vergleicht damit die Grösse drüben.
+pub fn geheimtext_laenge(klartext: u64) -> u64 {
+    KOPF_LAENGE as u64 + klartext + klartext.div_ceil(BLOCK as u64) * PRUEFSUMME as u64
+}
+
 fn nonce_fuer(index: u64) -> Nonce<aes_gcm::aes::cipher::consts::U12> {
     let mut bytes = [0u8; 12];
     bytes[4..].copy_from_slice(&index.to_be_bytes());
@@ -553,6 +560,17 @@ mod tests {
 
     fn muster(laenge: usize) -> Vec<u8> {
         (0..laenge).map(|i| (i % 251) as u8).collect()
+    }
+
+    #[test]
+    fn die_geheimtext_laenge_stimmt_mit_dem_verschluesseln_ueberein() {
+        let t = tresor();
+        let salz = [3u8; 16];
+        let schluessel = t.dateischluessel(&salz).unwrap();
+        for laenge in [0usize, 1, BLOCK - 1, BLOCK, BLOCK + 1, 3 * BLOCK + 77] {
+            let geheim = verschluesseln(&schluessel, &salz, &muster(laenge)).unwrap();
+            assert_eq!(geheim.len() as u64, geheimtext_laenge(laenge as u64), "bei {laenge}");
+        }
     }
 
     #[tokio::test]
