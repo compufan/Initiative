@@ -443,8 +443,19 @@ export function VideoEditorSheet({
                   bildDocAn(doc, masken, spuren, bildIndex(zeitMs, schrittMs), 'bild', rahmen).doc
               : undefined,
         });
+        /*
+         * Ist die Ansicht genau beim Fertigwerden abgebaut worden, gibt es
+         * niemanden mehr, der die Adresse freigäbe: `setErgebnis` wirkt dann
+         * nicht, der Effekt unten läuft nie – und der Blob (Megabytes) hinge
+         * bis zum Schliessen des Reiters im Speicher. Also gar nicht erst
+         * anlegen. `ergebnisAdresse` deckt den zweiten Fall: angelegt, aber
+         * abgebaut, bevor das Ergebnis je gezeigt wurde.
+         */
+        if (!lebt.current) return;
+        const adresse = URL.createObjectURL(fertig.blob);
+        ergebnisAdresse.current = adresse;
         setErgebnis({
-          url: URL.createObjectURL(fertig.blob),
+          url: adresse,
           blob: fertig.blob,
           text: `${fertig.bilder} Bilder · ${fertig.breite} × ${fertig.hoehe} · ${(
             fertig.blob.size / 1_000_000
@@ -501,6 +512,18 @@ export function VideoEditorSheet({
     },
     [wachePruefen],
   );
+
+  // Ob die Ansicht noch steht – siehe `setErgebnis` in `starten`.
+  const lebt = useRef(true);
+  const ergebnisAdresse = useRef<string | null>(null);
+  useEffect(() => {
+    lebt.current = true;
+    return () => {
+      lebt.current = false;
+      if (ergebnisAdresse.current) URL.revokeObjectURL(ergebnisAdresse.current);
+      ergebnisAdresse.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (!ergebnis) return undefined;
