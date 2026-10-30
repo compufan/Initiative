@@ -614,9 +614,18 @@ Datenbank können das ausfüllen, ohne dass die Anhänge je 100 GB erreichen.)
   Datenbank).
 
 **Lesen von der Box:** Ein Video-Spulen (`Range`) springt per SFTP-Seek an die
-Stelle – es wird nicht von vorn gelesen. Je Lesevorgang wird ein Platz von 16
-belegt (getrennt von 4 Plätzen für Schreiben/Löschen), solange der Strom offen
-ist; Miniaturen und Poster von Videos liegen warm bzw. in der Datenbank.
+Stelle – es wird nicht von vorn gelesen. Der Server hält dafür einen kleinen
+**Verbindungsvorrat** zur Box: 1 Bulk-Verbindung (Umzug, Löschen, Aufräumen) und
+2 Lese-Verbindungen (Videostrom), zusammen 3 – weit unter den 10 gleichzeitigen
+Verbindungen, die eine Storage Box standardmässig erlaubt (`KALT_SFTP_BULK_VERBINDUNGEN`,
+`KALT_SFTP_LESE_VERBINDUNGEN`; höchstens 8 zusammen). Ein Zuschauer, der
+vorspult, wartet so nicht hinter dem Hinüberschreiben eines 4-GiB-Videos
+(gemessen im Test mit Attrappen-Server: 48 ms gegen 4,9 s auf einer geteilten
+Verbindung). Je Lese-Verbindung gibt es 8 Lese-Plätze (16 bei Vorgabe), solange
+der Strom offen ist, getrennt von 2 Schreib-Plätzen je Bulk-Verbindung. Eine
+tote Verbindung wird einzeln neu aufgebaut, die Zustände stehen in der
+Admin-Probe, und beim Beenden werden alle sauber geschlossen. Miniaturen und
+Poster von Videos liegen warm bzw. in der Datenbank.
 
 **Rückholung häufiger Dateien.** Wer eine ferne Datei oft liest, hat gezeigt,
 dass sie warm gehört. Der Auslagerungsdienst holt sie dann im Strom zurück
