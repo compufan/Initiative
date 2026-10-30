@@ -399,11 +399,15 @@ describe('Malus', () => {
 
   it('macht denselben Spieler messbar schlechter', () => {
     // Ein Bot, der die Trägheit kennt und dagegenhält, verliert trotzdem Zeit …
-    const w = (verz: number) => {
-      const r = botLauf(AUSGEWOGEN, verz).ergebnis!;
-      return wertungMs(r.dauerMs, r.verschuettetDezi);
-    };
-    expect(w(60)).toBeGreaterThan(w(0) + 1000);
+    // Über vier Läufe gemittelt: Ein einzelner Lauf kann Glück haben, seit das
+    // Glas nach dem Loslassen langsam zurückkippt und Fehler sich verwischen.
+    const w = (verz: number) =>
+      [1, 2, 3, 4].reduce((summe, seed) => {
+        const r = botLauf(AUSGEWOGEN, verz, seed).ergebnis!;
+        return summe + wertungMs(r.dauerMs, r.verschuettetDezi);
+      }, 0) / 4;
+    expect(w(60)).toBeGreaterThan(w(0) + 300);
+    expect(w(120)).toBeGreaterThan(w(0) + 1500);
     // … und dieselben Handgriffe mit voller Verzögerung kommen später ans Ziel.
     const { eingaben } = botLauf(AUSGEWOGEN, 0);
     const leer = simBis(neuerZustand(), eingaben, 0, MAX_TICKS).leerTick!;
@@ -495,8 +499,10 @@ describe('Balance: weder „schnell und schlampig“ noch „langsam und genau�
     expect(werte[stufen.length - 1]!).toBeGreaterThan(bester * 2);
     // Auch die Nachbarschaft ist ein Tal, keine Rampe: spürbar mehr Vorsicht
     // oder spürbar mehr Eile kostet jeweils.
-    expect(werte[stufen.indexOf(16)]!).toBeGreaterThan(bester * 1.3);
-    expect(werte[stufen.indexOf(30)]!).toBeGreaterThan(bester * 1.3);
+    // Das Tal ist schief, seit das Glas langsam zurückkippt: Mehr Eile wird
+    // schnell teuer (der Strahl läuft nach), mehr Vorsicht nur allmählich.
+    expect(werte[stufen.indexOf(12)]!).toBeGreaterThan(bester * 1.3);
+    expect(werte[stufen.indexOf(25)]!).toBeGreaterThan(bester * 1.3);
   });
 
   it('ein ausgewogener Spieler trifft den Mund zuverlässig – mit Mühe, aber ohne Pfützen', () => {

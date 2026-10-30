@@ -65,6 +65,13 @@ statt `sin`/`cos`).
 - **Gleiten:** Wer loslässt, bremst nicht abrupt – die Geschwindigkeit klingt mit
   einer Dämpfungsrate von 2,4/s ab (Halbwertszeit ca. 0,3 s, das Glas rutscht noch
   ein Stück). Gegenhalten bremst mit der Beschleunigung.
+- **Zurückkippen:** Ohne Neigen-Taste kippt das Glas langsam zurück – höchstens
+  24 °/s und erst allmählich in Fahrt (90 °/s², mit Malus bis 35 % zäher). Wer
+  kurz loslässt, hat das Glas also nicht sofort aufrecht; der Strahl versiegt
+  erst nach und nach. Vorher schnappte es mit 50 °/s zurück wie eine Feder.
+  Gemessen am ausgewogenen Bot (Seed 1): Bestwert bei 18° über der Schwelle
+  (12,7 s), 4° → 61,7 s, 100° → 80,0 s; Malus 0/60/120/250 → im Mittel 12,8 /
+  13,4 / 15,2 / 30,8 s.
 - **Abdrift:** Eine langsam wechselnde Beschleunigung (46 Einheiten/s², alle 3 s
   eine neue Richtung, dazwischen übergeblendet) schiebt das Glas immer leicht weg.
   Sie hängt **nur von der Runde** ab (`driftSeedFuer(runde)`, ganze Zahlen),

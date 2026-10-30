@@ -78,9 +78,18 @@ export const NEIGUNG_MAX = 110;
 export const NEIGUNG_V_MIN = 7;
 export const NEIGUNG_V_MAX = 46;
 export const NEIGUNG_HALTE_VOLL_S = 1.4;
-/** Zurückkippen ohne Taste (Grad je s) und Trägheit der Drehung (Grad je s²). */
-export const NEIGUNG_RUECK = 50;
+/**
+ * Zurückkippen ohne Taste (Grad je s) und Trägheit der Drehung (Grad je s²).
+ *
+ * Das Zurückkippen ist bewusst langsamer als das Neigen und kommt erst
+ * allmählich in Fahrt (`NEIGUNG_RUECK_BESCHLEUNIGUNG`): Wer kurz loslässt,
+ * soll das Glas nicht sofort aufrecht haben – erst nach einer Weile versiegt
+ * der Strahl. Vorher schnappte es mit 50 °/s zurück, das fühlte sich an wie
+ * eine Feder statt wie eine Hand.
+ */
+export const NEIGUNG_RUECK = 24;
 export const NEIGUNG_BESCHLEUNIGUNG = 380;
+export const NEIGUNG_RUECK_BESCHLEUNIGUNG = 90;
 
 /** Fluss je Grad über der Kippschwelle (ml/s). */
 export const FLUSS_PRO_GRAD = 2;
@@ -249,6 +258,8 @@ export interface Physik {
   daempfung: number;
   drift: number;
   winkelBeschleunigung: number;
+  /** Wie schnell das Zurückkippen in Fahrt kommt – mit Malus noch zäher. */
+  rueckBeschleunigung: number;
 }
 
 export function physikFuer(verzoegerungMs: number): Physik {
@@ -261,6 +272,7 @@ export function physikFuer(verzoegerungMs: number): Physik {
     daempfung: GLAS_DAEMPFUNG * (1 - 0.5 * q),
     drift: DRIFT_BESCHLEUNIGUNG * (1 + 0.4 * q),
     winkelBeschleunigung: NEIGUNG_BESCHLEUNIGUNG * (1 - 0.35 * q),
+    rueckBeschleunigung: NEIGUNG_RUECK_BESCHLEUNIGUNG * (1 - 0.35 * q),
   };
 }
 
@@ -411,7 +423,8 @@ export function simBis(
         ? NEIGUNG_V_MIN +
           (NEIGUNG_V_MAX - NEIGUNG_V_MIN) * haltekurve(z.halteNeigen, NEIGUNG_HALTE_VOLL_S, p.q)
         : -NEIGUNG_RUECK;
-      z.neigungV = naeher(z.neigungV, winkelZiel, p.winkelBeschleunigung * DT);
+      const winkelBeschleunigung = z.neigen ? p.winkelBeschleunigung : p.rueckBeschleunigung;
+      z.neigungV = naeher(z.neigungV, winkelZiel, winkelBeschleunigung * DT);
       z.neigung = Math.min(NEIGUNG_MAX, Math.max(0, z.neigung + z.neigungV * DT));
       if (z.neigung <= 0 || z.neigung >= NEIGUNG_MAX) z.neigungV = 0;
 
