@@ -16,12 +16,13 @@ import { VideoGifSheet } from '../video/VideoGifSheet.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 import { useDialogAnmeldung } from '../../lib/dialogAnmeldung.js';
 import { bildlage } from './bewegt.js';
-import { TEILBILDER_MAX, lesenMoeglich, teilbilderLesen } from './bewegtLesen.js';
+import { TEILBILDER_MAX, lesenMoeglich, teilbilderFolge } from './bewegtLesen.js';
 import { gifSchreiben, type Teilbild } from './gif.js';
 import {
   MAX_SCALE,
   MIN_SCALE,
   motivFuellen,
+  quellLage,
   STICKER_SIZE,
   texteMitbewegen,
   cloneDoc,
@@ -1928,50 +1929,65 @@ export function StickerStudio({ onClose, onSaved, startBild }: StickerStudioProp
   async function bewegtBauen(): Promise<{ blob: Blob; mime: string } | null> {
     if (!bewegteQuelle || !lesenMoeglich()) return null;
     const typ = bewegteQuelle.format === 'gif' ? 'image/gif' : 'image/webp';
-    const gelesen = await teilbilderLesen(bewegteQuelle.datei, typ);
-    if (!gelesen) return null;
-    // Bis zu vierzig Bitmaps in Originalgrösse: Was die Schleife nicht mehr
-    // erreicht – früher Ausstieg, ein Wurf in `renderSticker` –, wird hier
-    // geschlossen. Ein zweites `close()` auf einem schon geschlossenen ist harmlos.
+    const doc = docRef.current;
+    /*
+     * Teilbilder nur so gross entpacken, wie die Fläche sie zeigt: `g` ist
+     * Flächenpunkte je Quellpunkt. Ein GIF von 4000 Punkten, auf 512
+     * gezeichnet, braucht keine 4000 – die Bitmap wird kleiner, die
+     * Koordinaten bleiben in Quellpunkten (`breite`/`hoehe` der Datei), so
+     * dass Striche, Masken und Lage aus dem Dokument weiter passen.
+     */
+    const massstab = (breite: number, hoehe: number) =>
+      Math.min(1, quellLage({ width: breite, height: hoehe }, doc).g);
+
+    const flaeche = document.createElement('canvas');
+    flaeche.width = STICKER_SIZE;
+    flaeche.height = STICKER_SIZE;
+    const ctx = flaeche.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return null;
+
+    const teilbilder: Teilbild[] = [];
     try {
-      if (gelesen.length < 2) return null;
-
-      const flaeche = document.createElement('canvas');
-      flaeche.width = STICKER_SIZE;
-      flaeche.height = STICKER_SIZE;
-      const ctx = flaeche.getContext('2d', { willReadFrequently: true });
-      if (!ctx) return null;
-
-      const teilbilder: Teilbild[] = [];
-      for (let i = 0; i < gelesen.length; i += 1) {
-        const { bild, dauerMs } = gelesen[i];
-        renderSticker(
-          flaeche,
-          { kind: 'image', image: bild, width: bild.width, height: bild.height },
-          docRef.current,
-          { fast: false },
-        );
-        teilbilder.push({
-          daten: ctx.getImageData(0, 0, flaeche.width, flaeche.height),
-          dauerMs,
-        });
-        bild.close();
+      // Eines nach dem anderen: Gehalten wird immer nur das gerade gezeichnete
+      // Teilbild, nie alle vierzig zugleich.
+      for await (const { bild, breite, hoehe, dauerMs } of teilbilderFolge(
+        bewegteQuelle.datei,
+        typ,
+        massstab,
+      )) {
+        try {
+          renderSticker(
+            flaeche,
+            { kind: 'image', image: bild, width: breite, height: hoehe },
+            doc,
+            { fast: false },
+          );
+          teilbilder.push({
+            daten: ctx.getImageData(0, 0, flaeche.width, flaeche.height),
+            dauerMs,
+          });
+        } finally {
+          bild.close();
+        }
         /*
          * Zwischendurch Luft holen. Vierzig Durchgänge durch die ganze Kette
          * sind auf einem Telefon mehrere Sekunden – ohne das steht die
          * Oberfläche währenddessen still und sieht abgestürzt aus.
          */
-        if (i % 4 === 3) await new Promise((auf) => setTimeout(auf, 0));
+        if (teilbilder.length % 4 === 0) await new Promise((auf) => setTimeout(auf, 0));
       }
-
-      const roh = gifSchreiben(teilbilder);
-      return {
-        blob: new Blob([roh as unknown as BlobPart], { type: 'image/gif' }),
-        mime: 'image/gif',
-      };
-    } finally {
-      for (const { bild } of gelesen) bild.close();
+    } catch {
+      // Ein Teilbild, das sich nicht lesen lässt, macht ein Standbild daraus –
+      // wie vorher, als `teilbilderLesen` dann `null` gab.
+      return null;
     }
+    if (teilbilder.length < 2) return null;
+
+    const roh = gifSchreiben(teilbilder);
+    return {
+      blob: new Blob([roh as unknown as BlobPart], { type: 'image/gif' }),
+      mime: 'image/gif',
+    };
   }
 
   async function openSave() {

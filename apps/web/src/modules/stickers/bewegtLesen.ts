@@ -29,9 +29,23 @@
 
 /** Ein Teilbild mit seiner Standzeit. */
 export interface GelesenesBild {
+  /** Das Teilbild – womöglich kleiner als in der Datei, siehe `massstab`. */
   bild: ImageBitmap;
+  /**
+   * Die Grösse des Teilbilds IN DER DATEI. Darauf beziehen sich die
+   * Koordinaten im Sticker-Dokument (Striche, Masken, Lage), nicht auf die
+   * Grösse von `bild`.
+   */
+  breite: number;
+  hoehe: number;
   dauerMs: number;
 }
+
+/**
+ * Wie klein ein Teilbild entpackt werden darf: Zielpunkte je Bildpunkt der
+ * Datei (0 … 1), aus dessen Grösse. Fehlt sie, bleibt die Originalgrösse.
+ */
+export type Massstab = (breite: number, hoehe: number) => number;
 
 interface DecoderKlasse {
   new (init: { data: ArrayBuffer | Uint8Array; type: string }): DecoderInstanz;
@@ -45,7 +59,12 @@ interface DecoderInstanz {
     selectedTrack?: { frameCount: number; animated: boolean } | null;
   };
   decode(optionen: { frameIndex: number }): Promise<{
-    image: { duration?: number | null; close?: () => void } & CanvasImageSource;
+    image: {
+      duration?: number | null;
+      displayWidth?: number;
+      displayHeight?: number;
+      close?: () => void;
+    } & CanvasImageSource;
   }>;
   close(): void;
 }
@@ -67,63 +86,110 @@ export function lesenMoeglich(): boolean {
 export const TEILBILDER_MAX = 40;
 
 /**
- * Die Teilbilder einer Datei – oder `null`, wenn es hier nicht geht.
+ * Die Teilbilder einer Datei, eines nach dem anderen.
+ *
+ * WARUM einzeln: Vierzig Teilbilder eines GIF von 4000 × 4000 Punkten sind als
+ * Bitmaps 2,5 GB – auf einem Telefon ist der Reiter weg, bevor das erste
+ * gezeichnet wird. Wer ein Teilbild nach dem anderen holt, verarbeitet und
+ * schliesst, hält höchstens eines; mit `massstab` ist auch das nur so gross,
+ * wie die Sticker-Fläche es braucht.
+ *
+ * Jedes gelieferte `bild` gehört dem Aufrufer, er schliesst es. Bricht er ab
+ * (`break`, Wurf), schliesst die Folge den Entschlüssler selbst.
+ *
+ * Liefert gar nichts, wenn es hier nicht geht oder die Datei weniger als zwei
+ * Teilbilder hat. Scheitert ein Teilbild mittendrin, wirft sie.
+ */
+export async function* teilbilderFolge(
+  datei: Blob,
+  typ: string,
+  massstab?: Massstab,
+): AsyncGenerator<GelesenesBild, void, void> {
+  const Decoder = (globalThis as { ImageDecoder?: DecoderKlasse }).ImageDecoder;
+  if (!Decoder) return;
+  if (Decoder.isTypeSupported && !(await Decoder.isTypeSupported(typ))) return;
+  const decoder = new Decoder({ data: await datei.arrayBuffer(), type: typ });
+  try {
+    await decoder.tracks.ready;
+    /*
+     * Auf `completed` warten, bevor gezählt wird.
+     *
+     * `frameCount` wächst, während der Browser liest. Wer sofort fragt,
+     * bekommt oft eine Eins – und schneidet damit ein Bild von dreissig
+     * Teilbildern auf eines zusammen, ohne dass irgendwo ein Fehler
+     * auftaucht.
+     */
+    await decoder.completed;
+    const spur = decoder.tracks.selectedTrack;
+    const anzahl = Math.min(TEILBILDER_MAX, spur?.frameCount ?? 0);
+    if (anzahl < 2) return;
+
+    for (let i = 0; i < anzahl; i += 1) {
+      const { image } = await decoder.decode({ frameIndex: i });
+      let gelesen: GelesenesBild;
+      try {
+        /*
+         * `duration` steht in MIKROsekunden. In Millisekunden gelesen liefe
+         * ein Sticker tausendmal zu schnell, und das sähe aus wie ein
+         * Flackern, nicht wie ein Fehler in einer Einheit.
+         */
+        const dauerMs = image.duration != null ? image.duration / 1000 : 100;
+        const masse = image as {
+          displayWidth?: number;
+          displayHeight?: number;
+          width?: number;
+          height?: number;
+        };
+        const breite = masse.displayWidth ?? masse.width ?? 0;
+        const hoehe = masse.displayHeight ?? masse.height ?? 0;
+        const m = massstab && breite > 0 && hoehe > 0 ? massstab(breite, hoehe) : 1;
+        const bild =
+          m > 0 && m < 1
+            ? await createImageBitmap(image, {
+                resizeWidth: Math.max(1, Math.ceil(breite * m)),
+                resizeHeight: Math.max(1, Math.ceil(hoehe * m)),
+                resizeQuality: 'high',
+              })
+            : await createImageBitmap(image);
+        gelesen = {
+          bild,
+          breite: breite || bild.width,
+          hoehe: hoehe || bild.height,
+          dauerMs: dauerMs > 0 ? dauerMs : 100,
+        };
+      } finally {
+        // Auch wenn `createImageBitmap` wirft: Ein offenes `VideoFrame`
+        // hält Decoderspeicher, an den der Einsammler nicht herankommt.
+        image.close?.();
+      }
+      yield gelesen;
+    }
+  } finally {
+    decoder.close();
+  }
+}
+
+/**
+ * Alle Teilbilder einer Datei auf einmal – oder `null`, wenn es hier nicht geht.
  *
  * Wirft nicht: Ein bewegtes Bild, das sich nicht auseinandernehmen lässt, ist
  * ein Standbild mehr und kein Fehler. Der Aufrufer sieht `null` und geht den
- * Weg, den er vorher ging.
+ * Weg, den er vorher ging. Hält alle Bitmaps zugleich – wer sie nur
+ * nacheinander braucht, nimmt `teilbilderFolge`.
  */
-export async function teilbilderLesen(datei: Blob, typ: string): Promise<GelesenesBild[] | null> {
-  const Decoder = (globalThis as { ImageDecoder?: DecoderKlasse }).ImageDecoder;
-  if (!Decoder) return null;
+export async function teilbilderLesen(
+  datei: Blob,
+  typ: string,
+  massstab?: Massstab,
+): Promise<GelesenesBild[] | null> {
+  const raus: GelesenesBild[] = [];
   try {
-    if (Decoder.isTypeSupported && !(await Decoder.isTypeSupported(typ))) return null;
-    const decoder = new Decoder({ data: await datei.arrayBuffer(), type: typ });
-    try {
-      await decoder.tracks.ready;
-      /*
-       * Auf `completed` warten, bevor gezählt wird.
-       *
-       * `frameCount` wächst, während der Browser liest. Wer sofort fragt,
-       * bekommt oft eine Eins – und schneidet damit ein Bild von dreissig
-       * Teilbildern auf eines zusammen, ohne dass irgendwo ein Fehler
-       * auftaucht.
-       */
-      await decoder.completed;
-      const spur = decoder.tracks.selectedTrack;
-      const anzahl = Math.min(TEILBILDER_MAX, spur?.frameCount ?? 0);
-      if (anzahl < 2) return null;
-
-      const raus: GelesenesBild[] = [];
-      try {
-        for (let i = 0; i < anzahl; i += 1) {
-          const { image } = await decoder.decode({ frameIndex: i });
-          try {
-            /*
-             * `duration` steht in MIKROsekunden. In Millisekunden gelesen liefe
-             * ein Sticker tausendmal zu schnell, und das sähe aus wie ein
-             * Flackern, nicht wie ein Fehler in einer Einheit.
-             */
-            const dauerMs = image.duration != null ? image.duration / 1000 : 100;
-            const bild = await createImageBitmap(image);
-            raus.push({ bild, dauerMs: dauerMs > 0 ? dauerMs : 100 });
-          } finally {
-            // Auch wenn `createImageBitmap` wirft: Ein offenes `VideoFrame`
-            // hält Decoderspeicher, an den der Einsammler nicht herankommt.
-            image.close?.();
-          }
-        }
-      } catch (fehler) {
-        // Scheitert Teilbild zwölf, sind elf schon entpackt – und mit `null`
-        // erfährt der Aufrufer nie von ihnen. Also hier freigeben.
-        for (const { bild } of raus) bild.close();
-        throw fehler;
-      }
-      return raus;
-    } finally {
-      decoder.close();
-    }
+    for await (const gelesen of teilbilderFolge(datei, typ, massstab)) raus.push(gelesen);
   } catch {
+    // Scheitert Teilbild zwölf, sind elf schon entpackt – und mit `null`
+    // erfährt der Aufrufer nie von ihnen. Also hier freigeben.
+    for (const { bild } of raus) bild.close();
     return null;
   }
+  return raus.length >= 2 ? raus : null;
 }
