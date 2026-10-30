@@ -154,17 +154,79 @@ if (typeof window !== 'undefined') {
 
 let refreshInFlight: Promise<StoredTokens | null> | null = null;
 
+/** Name der Sperre, unter der genau EIN Tab zur Zeit erneuert. */
+const ERNEUERN_SPERRE = 'initiative.tokens.erneuern';
+
+/**
+ * Antworten auf `/auth/refresh`, die wirklich „diese Sitzung gibt es nicht
+ * mehr“ heissen. Alles andere – 429 von der Drossel, 5xx bei einem Neustart des
+ * Servers – ist vorübergehend.
+ *
+ * Bisher beendete JEDE Ablehnung die Sitzung. Die Drossel erlaubt 30
+ * Erneuerungen in zehn Minuten je Absender; ein Haushalt hinter einer Adresse
+ * mit mehreren Geräten und Tabs kam dort hin, und jeder kassierte statt eines
+ * „warte kurz“ eine Abmeldung. Ebenso jeder, der während eines Updates der API
+ * zurück in die App kam.
+ */
+function sitzungAbgelehnt(status: number): boolean {
+  return status === 400 || status === 401 || status === 403;
+}
+
+/**
+ * Führt `arbeit` unter einer Sperre aus, die für alle Tabs dieser Herkunft gilt.
+ *
+ * Der Server verbrennt beim Erneuern den alten Token, und wer einen schon
+ * verbrannten noch einmal vorlegt, beendet damit ALLE Sitzungen des Kontos
+ * (Wiederverwendungserkennung in `apps/api/src/modules/auth.rs`). Zwei Tabs,
+ * die gleichzeitig aus dem Hintergrund kommen, lasen bisher denselben Token aus
+ * dem Speicher und schickten ihn beide los – der zweite meldete damit jedes
+ * Gerät des Kontos ab. `refreshInFlight` bündelt nur innerhalb EINES Tabs.
+ *
+ * Ohne Web Locks (sehr alte Browser) läuft die Arbeit wie bisher ohne Sperre.
+ */
+async function tabuebergreifend<T>(arbeit: () => Promise<T>): Promise<T> {
+  const sperren =
+    typeof navigator !== 'undefined'
+      ? (navigator as Navigator & { locks?: LockManager }).locks
+      : undefined;
+  if (!sperren?.request) return arbeit();
+  let gestartet = false;
+  try {
+    return await sperren.request(ERNEUERN_SPERRE, () => {
+      gestartet = true;
+      return arbeit();
+    });
+  } catch (error) {
+    // Die Sperre selbst kann scheitern (etwa in einem undurchsichtigen
+    // Rahmen). Dann lieber ohne Sperre als gar nicht – aber nie zweimal.
+    if (gestartet) throw error;
+    return arbeit();
+  }
+}
+
 async function refreshTokens(): Promise<StoredTokens | null> {
   // Erst nachsehen, ob ein anderer Tab schon erneuert hat.
-  const current = adoptStoredTokens();
-  if (!current) return null;
+  const vorher = adoptStoredTokens();
+  if (!vorher) return null;
   if (!refreshInFlight) {
-    refreshInFlight = (async () => {
+    refreshInFlight = tabuebergreifend(async () => {
+      // Unter der Sperre noch einmal lesen: Wer vor uns dran war, hat den
+      // Token, den wir losschicken wollten, gerade verbrannt.
+      const gespeichert = readTokens();
+      if (gespeichert && gespeichert.refreshToken !== vorher.refreshToken) {
+        tokens = gespeichert;
+        for (const listener of listeners) listener(tokens);
+        return tokens;
+      }
+      const current = tokens ?? vorher;
       try {
         const response = await fetch(`${API_BASE}${API_PREFIX}/auth/refresh`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ refreshToken: current.refreshToken }),
+          // Ohne Zeitlimit hielte eine hängende Erneuerung die Sperre – und
+          // damit jede Anfrage aller Tabs – unbegrenzt fest.
+          signal: withTimeout(),
         });
         if (!response.ok) {
           // Abgelehnt heißt nicht zwangsläufig „abgemeldet“: Zwischen Lesen und
@@ -176,6 +238,7 @@ async function refreshTokens(): Promise<StoredTokens | null> {
             for (const listener of listeners) listener(tokens);
             return tokens;
           }
+          if (!sitzungAbgelehnt(response.status)) return current;
           setTokens(null);
           return null;
         }
@@ -184,10 +247,10 @@ async function refreshTokens(): Promise<StoredTokens | null> {
       } catch {
         // Netzwerkfehler: Die Sitzung bleibt bestehen, es wird später erneut versucht.
         return current;
-      } finally {
-        refreshInFlight = null;
       }
-    })();
+    }).finally(() => {
+      refreshInFlight = null;
+    });
   }
   return refreshInFlight;
 }
