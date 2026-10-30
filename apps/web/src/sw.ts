@@ -411,7 +411,10 @@ self.addEventListener('push', (event) => {
 
       const imChat = fenster.some(
         (client) =>
-          client.focused &&
+          // Nur „sichtbar“, nicht „fokussiert“: Der Server schickt für einen
+          // sichtbaren Chat ohnehin nichts mehr (`chat.sichtbar`); das hier ist
+          // der Rückfall für einen Push, der der Meldung zuvorkam. Auf dem
+          // iPhone ist `focused` in der installierten App nicht verlässlich.
           client.visibilityState === 'visible' &&
           Boolean(payload.conversationId) &&
           client.url.includes(payload.conversationId as string),

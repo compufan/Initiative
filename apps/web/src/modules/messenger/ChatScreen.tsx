@@ -11,6 +11,7 @@ import { MessageActionsSheet } from './MessageActionsSheet.js';
 import { MessageBubble } from './MessageBubble.js';
 import { VerlaufsAntraege, VerlaufsGrenze, useVerlaufsantraege } from './VerlaufBand.js';
 import { praesenzVon } from './praesenz.js';
+import { chatOffenSetzen, untenSetzen } from '../../state/sichtbarkeit.js';
 import {
   conversationAvatar,
   conversationTitle,
@@ -106,6 +107,14 @@ export function ChatScreen() {
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [actionsFor, setActionsFor] = useState<ChatMessage | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
+
+  // Dieser Chat liegt jetzt vor Augen: Der Server schickt dafür keine
+  // Mitteilungen, und die Liste zählt hier nichts hoch (`state/sichtbarkeit.ts`).
+  useEffect(() => {
+    if (!conversationId) return undefined;
+    chatOffenSetzen(conversationId);
+    return () => chatOffenSetzen(null);
+  }, [conversationId]);
 
   useEffect(() => {
     if (!conversationId) return;
@@ -211,6 +220,7 @@ export function ChatScreen() {
     const bottom = distance < 80;
     if (bottom !== atBottom.current) {
       atBottom.current = bottom;
+      untenSetzen(bottom);
       setShowJump(!bottom);
       if (bottom) useChat.getState().markRead(conversationId);
     }

@@ -14,6 +14,12 @@ import {
 import { ApiError, api, getTokens } from '../lib/api.js';
 import { aboAuffrischen } from '../lib/push.js';
 import { realtime } from '../lib/realtime.js';
+import {
+  beiSichtbarkeitsaenderung,
+  chatVorAugen,
+  neuesSofortGesehen,
+  sichtbarkeitVerdrahten,
+} from './sichtbarkeit.js';
 import { beiRueckkehr, gedrosselt } from '../lib/wiederaufnahme.js';
 import {
   auf as aufTerminEreignisse,
@@ -191,8 +197,9 @@ export const useChat = create<ChatState>((set, get) => ({
   async loadConversations() {
     try {
       const { items } = await api.conversations.list();
-      set({ conversations: items, conversationsLoaded: true, conversationsFailed: false });
-      void cacheConversations(items);
+      const abgeglichen = items.map(ungelesenAbgleichen);
+      set({ conversations: abgeglichen, conversationsLoaded: true, conversationsFailed: false });
+      void cacheConversations(abgeglichen);
     } catch (error) {
       set({ conversationsFailed: true });
       if (!(error instanceof ApiError && error.isOffline)) throw error;
@@ -416,26 +423,48 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   markRead(conversationId) {
+    // Nur was man sieht, gilt als gelesen: Eine App im Hintergrund (Bildschirm
+    // aus) hat die Nachricht nicht gesehen. `beiSichtbarkeitsaenderung` ruft
+    // hier wieder an, sobald sie vorn ist.
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
     const list = get().messages[conversationId] ?? [];
     const last = [...list].reverse().find((message) => !message.pending);
     if (!last) return;
     const conversation = get().conversations.find((item) => item.id === conversationId);
-    if (conversation && conversation.unreadCount === 0) return;
-    set((state) => ({
-      conversations: state.conversations.map((item) =>
-        item.id === conversationId ? { ...item, unreadCount: 0 } : item,
-      ),
-    }));
-    if (!realtime.send({ type: 'read', payload: { conversationId, messageId: last.id } })) {
-      void api.conversations.markRead(conversationId, last.id).catch(() => {});
+    const ungelesen = conversation?.unreadCount ?? 0;
+    // Der Zähler allein sagt nicht, ob der Server das Lesen kennt: Kam die
+    // Nachricht in den offenen Chat, wurde nie hochgezählt (siehe
+    // `ungelesenMitzaehlen`) – gemeldet werden muss sie trotzdem. Eigene
+    // Nachrichten als letzte brauchen keine Meldung, der Server zählt sie nie.
+    const bekannt = gemeldet.get(conversationId);
+    const neuerAlsGemeldet = !bekannt || bekannt < last.id;
+    const fremd = last.senderId !== eigeneKennung();
+    if (ungelesen === 0 && !(neuerAlsGemeldet && fremd)) return;
+    if (ungelesen > 0) {
+      set((state) => ({
+        conversations: state.conversations.map((item) =>
+          item.id === conversationId ? { ...item, unreadCount: 0 } : item,
+        ),
+      }));
     }
+    if (!neuerAlsGemeldet) return;
+    gemeldet.set(conversationId, last.id);
+    schliesseMitteilungen(conversationId);
+    // Über REST statt Socket: Der Socket quittiert nichts, und eine halboffene
+    // Leitung (iPhone) verschluckte die Lesemarke – die Liste zeigte die
+    // Nachricht beim nächsten Laden wieder als neu. Scheitert die Anfrage,
+    // wird beim nächsten Mal erneut gemeldet.
+    void api.conversations.markRead(conversationId, last.id).catch(() => {
+      if (gemeldet.get(conversationId) === last.id) gemeldet.delete(conversationId);
+    });
   },
 
   setTyping(conversationId, typing) {
     realtime.send({ type: 'typing', payload: { conversationId, typing } });
   },
 
-  upsertConversation(conversation) {
+  upsertConversation(roh) {
+    const conversation = ungelesenAbgleichen(roh);
     set((state) => {
       const index = state.conversations.findIndex((item) => item.id === conversation.id);
       const conversations =
@@ -939,6 +968,47 @@ function eigeneKennung(): string | null {
 }
 
 /**
+ * Bis zu welcher Nachricht hat DIESES Gerät das Lesen gemeldet – je Chat.
+ *
+ * Die Antwort des Servers auf die Chatliste kann der Meldung zuvorkommen
+ * (Nachholen, Rückkehr in den Vordergrund): Sie zählte dann Nachrichten als
+ * neu, die man längst auf dem Schirm hatte. `ungelesenAbgleichen` nimmt sie
+ * deshalb zurück.
+ */
+const gemeldet = new Map<string, string>();
+
+/** Mitteilungen dieses Chats vom Gerät nehmen: gelesen, also erledigt. */
+function schliesseMitteilungen(conversationId: string): void {
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+  void navigator.serviceWorker.ready
+    .then((registration) =>
+      registration.getNotifications({ tag: `conversation:${conversationId}` }),
+    )
+    .then((liste) => {
+      for (const mitteilung of liste) mitteilung.close();
+    })
+    .catch(() => {});
+}
+
+/**
+ * Die Zählregel für Chats, die der Server schon gezählt hat – eine Stelle für
+ * Liste, `conversation.updated` und Lesemarken.
+ *
+ * Gleich wie der Server (`load_conversation_dtos`): Eigene, gelöschte und
+ * Nachrichten vor dem Beitritt zählen nicht. Dazu gilt hier, was nur der
+ * Client weiss: Was er schon als gelesen gemeldet hat oder gerade vor Augen
+ * hat, ist 0 – auch wenn die Antwort des Servers der Meldung zuvorkam.
+ */
+export function ungelesenAbgleichen(item: ConversationDto): ConversationDto {
+  if (item.unreadCount === 0) return item;
+  const letzte = item.lastMessage;
+  const bekannt = gemeldet.get(item.id);
+  const gesehen =
+    !letzte || (bekannt !== undefined && bekannt >= letzte.id) || neuesSofortGesehen(item.id);
+  return gesehen ? { ...item, unreadCount: 0 } : item;
+}
+
+/**
  * Zählt eine live eingetroffene fremde Nachricht als ungelesen.
  *
  * Vorher setzte `applyMessage` nur die Vorschau; der Zähler kam allein aus der
@@ -958,6 +1028,10 @@ function ungelesenMitzaehlen(message: MessageDto): void {
   // UUIDv7: lexikalisch = zeitlich. Schon Bekanntes zählt nicht doppelt.
   if (gespraech.lastMessage && gespraech.lastMessage.id >= message.id) return;
   if ((messages[message.conversationId] ?? []).some((item) => item.id === message.id)) return;
+  // Chat offen, sichtbar und unten: die Nachricht ist schon gelesen. Kein
+  // Hochzählen (die Liste hinter dem Chat soll gar nicht erst aufblitzen);
+  // gemeldet wird sie von `markRead`, sobald der Chat sie zeigt.
+  if (neuesSofortGesehen(message.conversationId)) return;
   useChat.setState((state) => ({
     conversations: state.conversations.map((item) =>
       item.id === message.conversationId ? { ...item, unreadCount: item.unreadCount + 1 } : item,
@@ -994,6 +1068,13 @@ export function connectChatRealtime(): void {
   // Termin-Karten stehen in vielen Chats, auch in nie geöffneten: Jede Änderung
   // des Termins führt sie alle nach – nicht nur die Karte, die gerade offen ist.
   connectTerminEreignisse();
+  sichtbarkeitVerdrahten();
+  // Zurück im Vordergrund oder Chat gewechselt: Was jetzt vor Augen liegt, gilt
+  // als gelesen (`markRead` prüft selbst, ob die App sichtbar ist).
+  beiSichtbarkeitsaenderung(() => {
+    const offen = chatVorAugen();
+    if (offen && neuesSofortGesehen(offen)) useChat.getState().markRead(offen);
+  });
   aufTerminEreignisse({
     aktualisiert: terminAbgleichen,
     entfernt: terminEntfernt,
@@ -1058,18 +1139,40 @@ export function connectChatRealtime(): void {
     }));
   });
   realtime.on('read.updated', ({ conversationId, userId, lastReadMessageId }) => {
+    const ich = eigeneKennung();
+    // Ich selbst habe gelesen – auf diesem oder einem anderen Gerät: Dann ist
+    // hier alles bis dahin erledigt, der Zähler fällt, und die Mitteilung zu
+    // diesem Chat verschwindet.
+    const selbst = ich !== null && userId === ich;
     useChat.setState((state) => ({
-      conversations: state.conversations.map((conversation) =>
-        conversation.id === conversationId
-          ? {
-              ...conversation,
-              members: conversation.members.map((member) =>
-                member.userId === userId ? { ...member, lastReadMessageId } : member,
-              ),
-            }
-          : conversation,
-      ),
+      conversations: state.conversations.map((conversation) => {
+        if (conversation.id !== conversationId) return conversation;
+        const naechste = {
+          ...conversation,
+          members: conversation.members.map((member) =>
+            member.userId === userId ? { ...member, lastReadMessageId } : member,
+          ),
+        };
+        if (
+          selbst &&
+          (!conversation.lastMessage || conversation.lastMessage.id <= lastReadMessageId)
+        ) {
+          return { ...naechste, unreadCount: 0 };
+        }
+        return naechste;
+      }),
     }));
+    if (selbst) {
+      const bekannt = gemeldet.get(conversationId);
+      if (!bekannt || bekannt < lastReadMessageId) gemeldet.set(conversationId, lastReadMessageId);
+      const gespraech = useChat.getState().conversations.find((item) => item.id === conversationId);
+      if (!gespraech?.lastMessage || gespraech.lastMessage.id <= lastReadMessageId) {
+        schliesseMitteilungen(conversationId);
+      } else if (gespraech.unreadCount > 0) {
+        // Gelesen bis mitten im Chat: wie viel noch offen ist, weiss der Server.
+        nachholen();
+      }
+    }
   });
   realtime.on('sync.hint', ({ conversationId, eventId }) => {
     if (conversationId) void useChat.getState().loadMessages(conversationId, { force: true });

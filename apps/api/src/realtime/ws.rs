@@ -280,7 +280,9 @@ async fn handle(socket: WebSocket, state: AppState, user_id: Uuid) {
         while let Some(message) = naechstes(&mut receiver, LESEFRIST).await {
             match message {
                 Message::Text(text) => {
-                    if let Err(error) = handle_client_event(&state, user_id, &text).await {
+                    if let Err(error) =
+                        handle_client_event(&state, user_id, connection_id, &text).await
+                    {
                         tracing::debug!(%error, "realtime event failed");
                     }
                 }
@@ -306,6 +308,7 @@ async fn handle(socket: WebSocket, state: AppState, user_id: Uuid) {
     }
 
     writer.abort();
+    crate::services::notify::chat_zu_melden(&state.pool, connection_id).await;
     if state.hub.unregister(user_id, connection_id) == PresenceChange::WentOffline {
         touch_last_seen(&state.pool, user_id).await;
         broadcast_presence(&state, user_id, false).await;
@@ -328,6 +331,7 @@ async fn broadcast_presence(state: &AppState, user_id: Uuid, online: bool) {
 async fn handle_client_event(
     state: &AppState,
     user_id: Uuid,
+    connection_id: Uuid,
     raw: &str,
 ) -> Result<(), crate::error::AppError> {
     let Ok(envelope) = serde_json::from_str::<Value>(raw) else {
@@ -378,6 +382,26 @@ async fn handle_client_event(
                 )
                 .await;
         }
+        // Welcher Chat liegt dieser Leitung gerade vor Augen? Ohne
+        // `conversationId` (oder mit `null`) keiner – App im Hintergrund oder
+        // Chatliste. Der Push-Versand fragt das ab, siehe `notify`.
+        "chat.sichtbar" => match uuid_field(&payload, "conversationId") {
+            Some(conversation_id) => {
+                if get_membership(&state.pool, conversation_id, user_id)
+                    .await?
+                    .is_some()
+                {
+                    crate::services::notify::chat_offen_melden(
+                        &state.pool,
+                        connection_id,
+                        user_id,
+                        conversation_id,
+                    )
+                    .await;
+                }
+            }
+            None => crate::services::notify::chat_zu_melden(&state.pool, connection_id).await,
+        },
         "read" => {
             let (Some(conversation_id), Some(message_id)) = (
                 uuid_field(&payload, "conversationId"),

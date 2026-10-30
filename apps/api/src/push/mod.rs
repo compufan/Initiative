@@ -6,6 +6,7 @@
 pub mod ece;
 pub mod vapid;
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
 
@@ -20,6 +21,15 @@ use crate::dto::PushPayload;
 const PUSH_PARALLEL: usize = 8;
 
 /// Was ein Mitschnitt festhält: an wen welche Mitteilung gegangen wäre.
+/// Wie lange eine Mitteilung zu einer neuen Nachricht wartet.
+///
+/// Wer den Chat offen hat, liest die Nachricht Sekundenbruchteile nach dem
+/// Eintreffen und meldet es (`POST …/read`). Ohne die Frist ging der Push
+/// gleichzeitig mit der Nachricht ab und kam als Mitteilung für etwas, das
+/// längst gelesen war. Unmittelbar vor dem Versand wird deshalb noch einmal
+/// geprüft (`notify::noch_ungelesen`).
+pub const VERZOEGERUNG_MS: u64 = 2_500;
+
 pub type Mitschnitt = Arc<Mutex<Vec<(Uuid, PushPayload)>>>;
 
 pub struct PushService {
@@ -33,6 +43,9 @@ pub struct PushService {
     /// die Zielbestimmung (eine Mitteilung je Person, Stummschaltung) am
     /// Ausgang zu prüfen statt am Bildschirm eines Geräts.
     mitschnitt: OnceLock<Mitschnitt>,
+    /// Wie lange eine Nachrichten-Mitteilung wartet, bevor sie abgeht
+    /// (Millisekunden). Siehe [`VERZOEGERUNG_MS`].
+    verzoegerung_ms: AtomicU64,
     /// Das Paar, mit dem gerade signiert wird: aus der Umgebung, sonst aus
     /// der Datenbank (siehe [`PushService::bereit`]). Leer, bis eines da ist.
     schluessel: RwLock<Option<Arc<VapidConfig>>>,
@@ -74,6 +87,7 @@ impl PushService {
                 .build()
                 .expect("HTTP-Client für Push lässt sich bauen"),
             mitschnitt: OnceLock::new(),
+            verzoegerung_ms: AtomicU64::new(VERZOEGERUNG_MS),
         }
     }
 
@@ -147,9 +161,23 @@ impl PushService {
     /// Schaltet den Mitschnitt ein (nur für Tests) und liefert die Liste,
     /// in die geschrieben wird. Ab jetzt sendet dieser Dienst nichts mehr.
     pub fn mitschneiden(&self) -> Mitschnitt {
+        // Tests lesen den Mitschnitt gleich nach der Anfrage; die Frist vor
+        // Nachrichten-Mitteilungen (`VERZOEGERUNG_MS`) gilt dort nicht, es sei
+        // denn, ein Test setzt sie mit `verzoegerung_setzen` ausdrücklich.
+        self.verzoegerung_setzen(Duration::ZERO);
         self.mitschnitt
             .get_or_init(|| Arc::new(Mutex::new(Vec::new())))
             .clone()
+    }
+
+    /// Wartezeit vor Nachrichten-Mitteilungen. Für Tests kürzer (oder null).
+    pub fn verzoegerung(&self) -> Duration {
+        Duration::from_millis(self.verzoegerung_ms.load(Ordering::Relaxed))
+    }
+
+    pub fn verzoegerung_setzen(&self, dauer: Duration) {
+        self.verzoegerung_ms
+            .store(dauer.as_millis() as u64, Ordering::Relaxed);
     }
 
     pub fn public_key(&self) -> Option<String> {

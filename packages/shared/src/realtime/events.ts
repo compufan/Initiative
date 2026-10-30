@@ -105,6 +105,8 @@ export type ClientEvent =
   | { type: 'ping'; payload: Record<string, never> }
   | { type: 'typing'; payload: { conversationId: string; typing: boolean } }
   | { type: 'read'; payload: { conversationId: string; messageId: string } }
+  /** Welchen Chat diese Leitung gerade vor Augen hat; `null`: keinen. */
+  | { type: 'chat.sichtbar'; payload: { conversationId: string | null } }
   | { type: 'subscribe'; payload: { conversationIds: string[] } };
 
 export type ClientEventType = ClientEvent['type'];

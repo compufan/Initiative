@@ -48,11 +48,26 @@ pub async fn notify_new_message(state: &AppState, message: &MessageDto, member_i
         }
     };
 
+    // Wer den Chat gerade offen hat oder die Nachricht schon las, bekommt keine
+    // Mitteilung – hier gleich, und unten noch einmal kurz vor dem Versand.
+    let noch: HashSet<Uuid> = noch_ungelesen(
+        &state.pool,
+        message.conversation_id,
+        message.id,
+        &recipients,
+    )
+    .await
+    .into_iter()
+    .collect();
+
     let now = chrono::Utc::now();
     let mut with_preview: Vec<Uuid> = Vec::new();
     let mut without_preview: Vec<Uuid> = Vec::new();
 
     for target in targets {
+        if !noch.contains(&target.id) {
+            continue;
+        }
         if target.muted_until.is_some_and(|until| until > now) {
             continue;
         }
@@ -142,7 +157,128 @@ pub async fn notify_new_message(state: &AppState, message: &MessageDto, member_i
         };
         ziele.push((without_preview, payload));
     }
-    state.push.im_hintergrund(state.pool.clone(), ziele);
+    // Mit Frist: In den ersten Sekunden meldet ein offener Chat die Nachricht
+    // als gelesen. Danach wird noch einmal geprüft, wer sie wirklich noch nicht
+    // gesehen hat – nur die bekommen die Mitteilung.
+    let frist = state.push.verzoegerung();
+    if frist.is_zero() {
+        state.push.im_hintergrund(state.pool.clone(), ziele);
+        return;
+    }
+    let push = state.push.clone();
+    let pool = state.pool.clone();
+    let chat = message.conversation_id;
+    let nachricht = message.id;
+    tokio::spawn(async move {
+        tokio::time::sleep(frist).await;
+        let alle: Vec<Uuid> = ziele
+            .iter()
+            .flat_map(|(ids, _)| ids.iter().copied())
+            .collect();
+        let uebrig: HashSet<Uuid> = noch_ungelesen(&pool, chat, nachricht, &alle)
+            .await
+            .into_iter()
+            .collect();
+        let ziele: Vec<(Vec<Uuid>, PushPayload)> = ziele
+            .into_iter()
+            .map(|(ids, payload)| {
+                (
+                    ids.into_iter()
+                        .filter(|id| uebrig.contains(id))
+                        .collect::<Vec<Uuid>>(),
+                    payload,
+                )
+            })
+            .filter(|(ids, _)| !ids.is_empty())
+            .collect();
+        if !ziele.is_empty() {
+            push.im_hintergrund(pool, ziele);
+        }
+    });
+}
+
+/// Wie lange eine Meldung „Chat sichtbar“ gilt, ohne erneuert zu werden.
+///
+/// Der Client wiederholt sie alle `CHAT_SICHTBAR_ERNEUERN_MS` (15 s). Friert
+/// ein iPhone die App ein, ohne dass der Abschied ankommt, verfällt die
+/// Meldung nach dieser Frist von selbst – ab dann kommen wieder Mitteilungen.
+pub const CHAT_OFFEN_SEKUNDEN: i64 = 35;
+
+/// Diese Leitung hat `chat` gerade vor Augen.
+pub async fn chat_offen_melden(pool: &sqlx::PgPool, verbindung: Uuid, user_id: Uuid, chat: Uuid) {
+    let ergebnis = sqlx::query(
+        "insert into chat_offen (verbindung, user_id, conversation_id, bis)
+         values ($1, $2, $3, now() + make_interval(secs => $4))
+         on conflict (verbindung) do update
+           set conversation_id = excluded.conversation_id, bis = excluded.bis",
+    )
+    .bind(verbindung)
+    .bind(user_id)
+    .bind(chat)
+    .bind(CHAT_OFFEN_SEKUNDEN as f64)
+    .execute(pool)
+    .await;
+    if let Err(fehler) = ergebnis {
+        tracing::warn!(%fehler, "Chat-offen-Meldung nicht gespeichert");
+        return;
+    }
+    // Abgelaufenes räumt die nächste Meldung mit ab; die Tabelle bleibt klein.
+    let _ = sqlx::query("delete from chat_offen where bis < now() - interval '1 minute'")
+        .execute(pool)
+        .await;
+}
+
+/// Diese Leitung hat keinen Chat mehr vor Augen (Hintergrund, Chatliste, zu).
+pub async fn chat_zu_melden(pool: &sqlx::PgPool, verbindung: Uuid) {
+    if let Err(fehler) = sqlx::query("delete from chat_offen where verbindung = $1")
+        .bind(verbindung)
+        .execute(pool)
+        .await
+    {
+        tracing::warn!(%fehler, "Chat-offen-Meldung nicht entfernt");
+    }
+}
+
+/// Von `kandidaten` die, die eine Mitteilung zu `nachricht` noch brauchen:
+/// Mitglied, Lesemarke noch davor und der Chat nicht gerade offen.
+///
+/// Wer die Nachricht gelesen hat (`last_read_message_id` ≥ Kennung, UUIDv7 ist
+/// zeitlich geordnet) oder den Chat in diesem Augenblick offen hat, bekommt
+/// nichts – bei Fehlern der Abfrage dagegen alle, denn eine überzählige
+/// Mitteilung ist besser als eine verlorene.
+pub async fn noch_ungelesen(
+    pool: &sqlx::PgPool,
+    chat: Uuid,
+    nachricht: Uuid,
+    kandidaten: &[Uuid],
+) -> Vec<Uuid> {
+    if kandidaten.is_empty() {
+        return Vec::new();
+    }
+    match sqlx::query_scalar::<_, Uuid>(
+        "select cm.user_id
+           from conversation_members cm
+          where cm.conversation_id = $1
+            and cm.user_id = any($2)
+            and (cm.last_read_message_id is null or cm.last_read_message_id < $3)
+            and not exists (
+              select 1 from chat_offen o
+               where o.user_id = cm.user_id
+                 and o.conversation_id = cm.conversation_id
+                 and o.bis > now())",
+    )
+    .bind(chat)
+    .bind(kandidaten)
+    .bind(nachricht)
+    .fetch_all(pool)
+    .await
+    {
+        Ok(zeilen) => zeilen,
+        Err(fehler) => {
+            tracing::warn!(%fehler, "Lesestand für die Mitteilung nicht geprüft");
+            kandidaten.to_vec()
+        }
+    }
 }
 
 /// Generic helper for modules (your turn, poll closed, event reminder …).
