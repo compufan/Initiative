@@ -8,9 +8,23 @@ import {
   type ServerEventType,
 } from '@initiative/shared';
 import { API_BASE, forceRefresh, getTokens, onTokenChange, validAccessToken } from './api.js';
+import { beiRueckkehr } from './wiederaufnahme.js';
 
 /** Der Server schließt mit diesem Code, wenn das Token abgelaufen ist. */
 const CLOSE_TOKEN_EXPIRED = 4401;
+/**
+ * So lange darf nach dem Zurückkommen die Antwort auf ein `ping` brauchen.
+ * Eine lebende Leitung antwortet in Millisekunden; vier Sekunden lassen einem
+ * schwachen Mobilnetz Luft und sind trotzdem kurz genug, dass niemand vor
+ * einer veralteten Chatliste sitzt.
+ */
+const PONG_FRIST_MS = 4_000;
+/**
+ * War so lange nichts auf der Leitung, gilt sie beim Zurückkommen als tot,
+ * ohne erst zu fragen: Der Server schickt mindestens auf jedes `ping` (alle
+ * 25 s) ein `pong`. Länger Stille heisst, die App war eingefroren.
+ */
+const STILLE_MS = HEARTBEAT_INTERVAL_MS + 5_000;
 
 type Handler = (payload: never) => void;
 type AnyServerEvent = ServerEvent;
@@ -39,6 +53,8 @@ export class RealtimeClient {
    * keine zweite Leitung mehr auf.
    */
   private lauf = 0;
+  /** Läuft, solange nach dem Zurückkommen auf ein Lebenszeichen gewartet wird. */
+  private pongFrist: ReturnType<typeof setTimeout> | null = null;
 
   get state(): ConnectionState {
     return this.currentState;
@@ -180,13 +196,63 @@ export class RealtimeClient {
    * Prüft beim Zurückkehren in den Vordergrund, ob die Verbindung wirklich noch
    * lebt. Ein im Hintergrund gestorbener Socket meldet sich oft nicht mit
    * `close`; er steht dann formal auf OPEN, überträgt aber nichts mehr.
+   *
+   * Hier stand: „Kommt der Ping nicht durch, neu aufbauen“ – geprüft am
+   * Rückgabewert von `send`. Der ist aber immer wahr, solange `readyState`
+   * OPEN sagt; ein toter Socket nimmt Daten klaglos in seinen Puffer. Die
+   * Prüfung griff also nie, und auf dem iPhone blieb die Leitung nach dem
+   * Aufwachen stumm, bis der Wachhund 25 bis 60 Sekunden später zuschlug.
+   * Jetzt zählt nur, was ANKOMMT: lange Stille → sofort neu; sonst ein `ping`
+   * mit kurzer Frist für die Antwort.
    */
   ensureFresh(): void {
-    if (this.socket?.readyState === WebSocket.OPEN) {
-      // Kommt der Ping nicht durch, ist die Leitung tot – neu aufbauen.
-      if (!this.send({ type: 'ping', payload: {} })) this.reconnect();
+    const socket = this.socket;
+    if (socket?.readyState === WebSocket.OPEN) {
+      if (Date.now() - this.lastFrameAt > STILLE_MS) {
+        this.leitungTot();
+        return;
+      }
+      if (this.pongFrist) return;
+      const stand = this.lastFrameAt;
+      this.send({ type: 'ping', payload: {} });
+      this.pongFrist = setTimeout(() => {
+        this.pongFrist = null;
+        if (this.socket === socket && this.lastFrameAt === stand) this.leitungTot();
+      }, PONG_FRIST_MS);
       return;
     }
+    if (socket?.readyState === WebSocket.CONNECTING) return;
+    // Ein geplanter Neuversuch kann im Hintergrund auf 30 s angewachsen sein –
+    // wer zurückkommt, soll nicht so lange warten.
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.connect();
+  }
+
+  /**
+   * Die Leitung ist tot, ohne dass sie es gemeldet hätte: neu aufbauen.
+   *
+   * Anders als `reconnect` meldet das den Zustand `offline` und nicht `idle` –
+   * nur so wissen die Abnehmer (`connectChatRealtime`, `terminEreignisse`),
+   * dass etwas verloren gegangen sein kann, und holen nach dem Wiederverbinden
+   * nach. Vorher lief der Wachhund über `reconnect`, die Chats sahen nur
+   * `idle → connecting → online` und holten nichts nach.
+   */
+  private leitungTot(): void {
+    const alt = this.socket;
+    this.lauf += 1;
+    this.stopHeartbeat();
+    this.socket = null;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    try {
+      alt?.close();
+    } catch {
+      /* ist ohnehin tot */
+    }
+    this.setState('offline');
     this.connect();
   }
 
@@ -214,7 +280,7 @@ export class RealtimeClient {
     this.lastFrameAt = Date.now();
     this.heartbeatTimer = setInterval(() => {
       if (Date.now() - this.lastFrameAt > HEARTBEAT_INTERVAL_MS * 2.5) {
-        this.reconnect();
+        this.leitungTot();
         return;
       }
       this.send({ type: 'ping', payload: {} });
@@ -224,6 +290,8 @@ export class RealtimeClient {
   private stopHeartbeat(): void {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = null;
+    if (this.pongFrist) clearTimeout(this.pongFrist);
+    this.pongFrist = null;
   }
 
   send(event: ClientEvent): boolean {
@@ -266,11 +334,14 @@ export class RealtimeClient {
 export const realtime = new RealtimeClient();
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('online', () => realtime.connect());
-  document.addEventListener('visibilitychange', () => {
-    // Beim Zurückkehren aus dem Hintergrund ist die Verbindung meist tot, ohne
-    // dass ein `close` angekommen wäre – deshalb hier aktiv nachfassen.
-    if (document.visibilityState === 'visible') realtime.ensureFresh();
+  // Beim Zurückkehren aus dem Hintergrund ist die Verbindung oft tot, ohne
+  // dass ein `close` angekommen wäre – deshalb hier aktiv nachfassen. Alle
+  // Signale des Zurückkommens (siehe `wiederaufnahme.ts`), nicht nur
+  // `visibilitychange`: WebKit meldet die Rückkehr aus dem bfcache nur mit
+  // `pageshow`.
+  beiRueckkehr(() => {
+    // Ohne Anmeldung gibt es nichts zu verbinden – auch nicht nach `online`.
+    if (getTokens()) realtime.ensureFresh();
   });
 
   // Nach einem Tokenwechsel (Anmeldung, Rotation, auch in einem anderen Tab)

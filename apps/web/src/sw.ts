@@ -2,6 +2,12 @@
 import { cleanupOutdatedCaches, matchPrecache, precacheAndRoute } from 'workbox-precaching';
 import type { PushPayload } from '@initiative/shared';
 import { bereichLesen } from './lib/bereich.js';
+import {
+  MEDIEN_AUFRAEUMEN_ABSTAND_MS,
+  gedrosselt,
+  verdraengen,
+  type VorratEintrag,
+} from './lib/medienVorrat.js';
 
 declare const self: ServiceWorkerGlobalScope & {
   __WB_MANIFEST: { url: string; revision: string | null }[];
@@ -110,7 +116,23 @@ self.addEventListener('fetch', (event) => {
 
   // Media is immutable once uploaded – cache first, then network.
   if (isMediaRequest(url)) {
-    event.respondWith(cacheFirst(request, MEDIA_CACHE));
+    /*
+     * `waitUntil` hier, synchron im Ereignis – nicht erst aus `cacheFirst`
+     * heraus. Später gerufen wirft Chromium „event handler is already
+     * finished", und das risse die Antwort mit: Das Bild bliebe leer.
+     */
+    const stand: { ablage: Promise<void> | null } = { ablage: null };
+    const antwort = cacheFirst(request, MEDIA_CACHE, (abgelegt) => {
+      medienZugriffe.set(request.url, Date.now());
+      stand.ablage = abgelegt ?? null;
+    });
+    event.respondWith(antwort);
+    event.waitUntil(
+      antwort.then(
+        () => (stand.ablage ? stand.ablage.then(() => medienAufraeumen()) : undefined),
+        () => {},
+      ),
+    );
     return;
   }
 
@@ -184,11 +206,22 @@ async function teilAntwort(gespeichert: Response, kopf: string | null): Promise<
   });
 }
 
-async function cacheFirst(request: Request, cacheName: string): Promise<Response> {
+async function cacheFirst(
+  request: Request,
+  cacheName: string,
+  /**
+   * Nur der Medienspeicher führt Buch (Grenze, siehe `medienAufraeumen`).
+   * Bei einem Treffer ohne Argument, beim Ablegen mit dem Ablegen selbst.
+   * Aufgeräumt wird nur danach – nur dann kann der Speicher wachsen, und
+   * `waitUntil` im Abruf hält den Arbeiter bis zum gedrosselten Lauf wach.
+   */
+  gebraucht?: (abgelegt?: Promise<void>) => void,
+): Promise<Response> {
   const cache = await caches.open(cacheName);
   const bereichKopf = request.headers.get('range');
   const cached = await cache.match(request, { ignoreVary: true });
   if (cached) {
+    gebraucht?.();
     if (!bereichKopf) return cached;
     // Eine abgelegte 206 gibt es nicht (unten wird nur bei 200 abgelegt), also
     // ist das Geschnittene immer aus der vollen Datei.
@@ -202,7 +235,7 @@ async function cacheFirst(request: Request, cacheName: string): Promise<Response
       // einem iPhone mit knappem Speicherkontingent lehnt der Browser die
       // Ablage ab. Dann wird eben beim naechsten Mal wieder geladen – das ist
       // besser, als das Freistellen an einer vollen Ablage scheitern zu lassen.
-      cache.put(request, response.clone()).catch(() => {});
+      gebraucht?.(cache.put(request, response.clone()).catch(() => {}));
     }
     return response;
   } catch (error) {
@@ -215,6 +248,66 @@ async function cacheFirst(request: Request, cacheName: string): Promise<Response
     throw error;
   }
 }
+
+/*
+ * ---------- Grenze des Medienspeichers ----------
+ *
+ * Was ausgewählt wird, steht in `lib/medienVorrat.ts`; hier nur die
+ * Buchführung. Die Cache-API kennt weder Grösse noch letzten Zugriff eines
+ * Eintrags. Beides steht deshalb in einem kleinen Verzeichnis IM selben
+ * Speicher (`MEDIEN_VERZEICHNIS`) – so verschwindet es mit ihm, und es gibt
+ * keinen zweiten Ort, der aus dem Takt geraten kann.
+ *
+ * Zugriffe landen erst im Arbeitsspeicher (`medienZugriffe`) und werden beim
+ * nächsten Aufräumen eingetragen. Geht der Arbeiter vorher schlafen, fehlen
+ * ein paar Zeitstempel – dann ist die Reihenfolge eben etwas ungenauer. Das
+ * ist billiger als ein Schreibvorgang bei jedem angezeigten Bild.
+ */
+const MEDIEN_VERZEICHNIS = new URL('/__medienvorrat.json', self.location.origin).href;
+
+type MedienVerzeichnis = Record<string, { bytes: number; zuletzt: number }>;
+
+const medienZugriffe = new Map<string, number>();
+
+const medienAufraeumen = gedrosselt(async () => {
+  const cache = await caches.open(MEDIA_CACHE);
+  const gelesen = await cache.match(MEDIEN_VERZEICHNIS);
+  const verzeichnis: MedienVerzeichnis = gelesen
+    ? ((await gelesen.json().catch(() => ({}))) as MedienVerzeichnis)
+    : {};
+  const zugriffe = new Map(medienZugriffe);
+  medienZugriffe.clear();
+
+  const eintraege: VorratEintrag[] = [];
+  const neu: MedienVerzeichnis = {};
+  for (const anfrage of await cache.keys()) {
+    const url = anfrage.url;
+    if (url === MEDIEN_VERZEICHNIS) continue;
+    let bekannt = verzeichnis[url];
+    if (!bekannt) {
+      // Altbestand von vor dieser Grenze, oder ein Eintrag, dessen Buchung
+      // verloren ging: Grösse einmal nachmessen, Zeit unbekannt (0) – damit
+      // geht er als einer der ersten.
+      const antwort = await cache.match(anfrage, { ignoreVary: true });
+      const laenge = Number(antwort?.headers.get('content-length'));
+      const bytes =
+        Number.isFinite(laenge) && laenge > 0 ? laenge : ((await antwort?.blob())?.size ?? 0);
+      bekannt = { bytes, zuletzt: 0 };
+    }
+    const zuletzt = Math.max(bekannt.zuletzt, zugriffe.get(url) ?? 0);
+    neu[url] = { bytes: bekannt.bytes, zuletzt };
+    eintraege.push({ url, bytes: bekannt.bytes, zuletzt });
+  }
+
+  for (const url of verdraengen(eintraege)) {
+    await cache.delete(url, { ignoreVary: true });
+    delete neu[url];
+  }
+  await cache.put(
+    MEDIEN_VERZEICHNIS,
+    new Response(JSON.stringify(neu), { headers: { 'content-type': 'application/json' } }),
+  );
+}, MEDIEN_AUFRAEUMEN_ABSTAND_MS);
 
 const shareCache = new Map<string, { title: string; text: string; url: string; files: File[] }>();
 
@@ -263,40 +356,77 @@ const SYMBOL_ICON = typeof __SYMBOL_ICON__ === 'string' ? __SYMBOL_ICON__ : '/ic
 const SYMBOL_BADGE =
   typeof __SYMBOL_BADGE__ === 'string' ? __SYMBOL_BADGE__ : '/icons/badge-96.png';
 
-self.addEventListener('push', (event) => {
-  if (!event.data) return;
-  let payload: PushPayload;
+/** Liest die Nutzlast – auch eine leere oder kaputte ergibt eine Mitteilung. */
+function nutzlastLesen(data: PushMessageData | null): PushPayload {
+  const rueckfall: PushPayload = {
+    title: 'Initiative',
+    body: 'Neue Nachricht',
+    url: '/',
+    kind: 'system',
+  };
+  if (!data) return rueckfall;
   try {
-    payload = event.data.json() as PushPayload;
+    return { ...rueckfall, ...(data.json() as PushPayload) };
   } catch {
-    payload = {
-      title: 'Initiative',
-      body: event.data.text(),
-      url: '/',
-      kind: 'system',
-    };
+    const text = data.text();
+    return text ? { ...rueckfall, body: text } : rueckfall;
   }
+}
+
+async function fensterHolen(): Promise<readonly WindowClient[]> {
+  return self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+}
+
+/*
+ * Jedes push-Ereignis zeigt eine Mitteilung.
+ *
+ * Safari (iOS) verlangt das ausnahmslos: Ein push ohne sichtbare Mitteilung
+ * zählt als Verstoss gegen `userVisibleOnly`, und nach wenigen solchen
+ * entzieht Safari das Abo – danach kommt auf dem iPhone nie wieder etwas an,
+ * ohne dass es jemand merkt. Hier gab es zwei solche Wege: ein push ohne
+ * Daten (`return`) und der offene, sichtbare Chat (nur `postMessage`). Beim
+ * offenen Chat wird jetzt trotzdem gezeigt – leise, und gleich wieder
+ * geschlossen, wo der Browser das zulässt.
+ *
+ * Und jedes push sagt den offenen Fenstern Bescheid. Auf dem iPhone friert die
+ * App im Hintergrund ein, die Echtzeitleitung stirbt ohne `close`, und die
+ * Chatliste zeigte nach der Rückkehr nicht, dass jemand geantwortet hat. Die
+ * Botschaft wartet, bis das Fenster wieder läuft, und löst dort das Nachholen
+ * aus (`state/chat.ts`).
+ */
+self.addEventListener('push', (event) => {
+  const payload = nutzlastLesen(event.data);
 
   event.waitUntil(
     (async () => {
-      // Stay quiet when the matching chat is already open and focused.
-      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      const focused = clients.find(
-        (client) => client.focused && client.visibilityState === 'visible',
+      const fenster = await fensterHolen();
+      for (const client of fenster) client.postMessage({ type: 'push', payload });
+
+      const imChat = fenster.some(
+        (client) =>
+          client.focused &&
+          client.visibilityState === 'visible' &&
+          Boolean(payload.conversationId) &&
+          client.url.includes(payload.conversationId as string),
       );
-      if (focused && payload.conversationId && focused.url.includes(payload.conversationId)) {
-        focused.postMessage({ type: 'push', payload });
-        return;
-      }
+      const tag = payload.tag ?? payload.kind;
 
       await self.registration.showNotification(payload.title, {
         body: payload.body,
         icon: payload.icon ?? SYMBOL_ICON,
         badge: payload.badge ?? SYMBOL_BADGE,
-        tag: payload.tag ?? payload.kind,
-        renotify: Boolean(payload.tag),
+        tag,
+        renotify: Boolean(payload.tag) && !imChat,
+        silent: imChat,
         data: { url: payload.url ?? '/' },
       } as NotificationOptions);
+
+      // Wer den Chat vor Augen hat, braucht die Meldung nicht: gezeigt (für
+      // Safari), aber sofort wieder weg.
+      if (imChat) {
+        const gezeigt = await self.registration.getNotifications({ tag });
+        for (const mitteilung of gezeigt) mitteilung.close();
+      }
     })(),
   );
 });
@@ -306,15 +436,53 @@ self.addEventListener('notificationclick', (event) => {
   const target = (event.notification.data as { url?: string } | undefined)?.url ?? '/';
   event.waitUntil(
     (async () => {
-      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      for (const client of clients) {
-        if ('focus' in client) {
-          await client.focus();
-          client.postMessage({ type: 'navigate', url: target });
+      const fenster = await fensterHolen();
+      // Lieber ein Fenster dieser App als irgendeines – und das sichtbare zuerst.
+      const passend = fenster.find((client) => client.visibilityState === 'visible') ?? fenster[0];
+      if (passend) {
+        try {
+          const vorn = await passend.focus();
+          vorn.postMessage({ type: 'navigate', url: target });
           return;
+        } catch {
+          // `focus` ist ohne Nutzergeste verboten oder das Fenster ist weg –
+          // dann ein neues öffnen.
         }
       }
       await self.clients.openWindow(target);
+    })(),
+  );
+});
+
+/*
+ * Der Browser hat das Abo ausgetauscht (abgelaufen, vom Dienst erneuert).
+ *
+ * Ohne Behandlung gingen alle Mitteilungen an die alte, tote Adresse, bis
+ * jemand den Schalter in den Einstellungen von Hand neu umlegt. Hier wird mit
+ * denselben Optionen neu abonniert; ANMELDEN kann der Service Worker das neue
+ * Abo nicht (er hat kein Zugriffstoken) – das übernimmt die App, sobald sie
+ * läuft (`aboAuffrischen` in `lib/push.ts`, beim Start und auf diese
+ * Botschaft hin).
+ */
+self.addEventListener('pushsubscriptionchange', (event) => {
+  const aenderung = event as Event & {
+    oldSubscription?: PushSubscription | null;
+    newSubscription?: PushSubscription | null;
+    waitUntil(promise: Promise<unknown>): void;
+  };
+  aenderung.waitUntil(
+    (async () => {
+      if (!aenderung.newSubscription) {
+        const schluessel = aenderung.oldSubscription?.options?.applicationServerKey;
+        if (schluessel) {
+          await self.registration.pushManager
+            .subscribe({ userVisibleOnly: true, applicationServerKey: schluessel })
+            .catch(() => null);
+        }
+      }
+      for (const client of await fensterHolen()) {
+        client.postMessage({ type: 'push-abo-geaendert' });
+      }
     })(),
   );
 });

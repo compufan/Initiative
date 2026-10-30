@@ -10,8 +10,10 @@ import {
   type MessageType,
   type ReactionDto,
 } from '@initiative/shared';
-import { ApiError, api } from '../lib/api.js';
+import { ApiError, api, getTokens } from '../lib/api.js';
+import { aboAuffrischen } from '../lib/push.js';
 import { realtime } from '../lib/realtime.js';
+import { beiRueckkehr, gedrosselt } from '../lib/wiederaufnahme.js';
 import {
   auf as aufTerminEreignisse,
   auffrischen as terminAuffrischen,
@@ -736,8 +738,50 @@ export function kartenNachholen(): void {
   }
 }
 
+/** Die eigene Kennung – aus dem Zugriffstoken (`sub`), ohne Umweg über die Sitzung. */
+function eigeneKennung(): string | null {
+  const token = getTokens()?.accessToken;
+  const teil = token?.split('.')[1];
+  if (!teil) return null;
+  try {
+    const json = atob(teil.replace(/-/g, '+').replace(/_/g, '/'));
+    return (JSON.parse(json) as { sub?: string }).sub ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Zählt eine live eingetroffene fremde Nachricht als ungelesen.
+ *
+ * Vorher setzte `applyMessage` nur die Vorschau; der Zähler kam allein aus der
+ * Chatliste des Servers. Wer die Liste offen hatte, sah die neue Antwort in
+ * der Vorschau, aber keinen (oder einen veralteten) Ungelesen-Zähler – bis
+ * zum nächsten Laden. Gezählt wird wie auf dem Server: alles, was nicht von
+ * mir ist, auch Systemzeilen. Ist der Chat offen und unten, setzt
+ * `markRead` den Zähler sofort zurück und meldet das Lesen – vorher blieb das
+ * aus, weil der Zähler schon 0 war.
+ */
+function ungelesenMitzaehlen(message: MessageDto): void {
+  const ich = eigeneKennung();
+  if (!ich || message.senderId === ich || message.deletedAt) return;
+  const { conversations, messages } = useChat.getState();
+  const gespraech = conversations.find((item) => item.id === message.conversationId);
+  if (!gespraech) return;
+  // UUIDv7: lexikalisch = zeitlich. Schon Bekanntes zählt nicht doppelt.
+  if (gespraech.lastMessage && gespraech.lastMessage.id >= message.id) return;
+  if ((messages[message.conversationId] ?? []).some((item) => item.id === message.id)) return;
+  useChat.setState((state) => ({
+    conversations: state.conversations.map((item) =>
+      item.id === message.conversationId ? { ...item, unreadCount: item.unreadCount + 1 } : item,
+    ),
+  }));
+}
+
 /** Wire realtime events into the store exactly once. */
 let wired = false;
+/** Wie oft höchstens nachgeholt wird – siehe `gedrosselt`. */
+const NACHHOL_FENSTER_MS = 2_000;
 /**
  * Chatliste und jeden schon geladenen Chat auf den Stand des Servers bringen.
  *
@@ -769,7 +813,27 @@ export function connectChatRealtime(): void {
     nachholen: kartenNachholen,
   });
 
-  realtime.on('message.new', ({ message }) => useChat.getState().applyMessage(message));
+  /*
+   * Alle Wege des Nachholens laufen durch EINE Drossel: Zurückkommen,
+   * Wiederverbinden und eine eingetroffene Mitteilung fallen auf dem iPhone
+   * fast immer zusammen. Ohne Drossel lüde die Liste dreimal; mit ihr einmal
+   * sofort und einmal am Ende des Fensters (für das, was zwischen erstem
+   * Laden und neuer Leitung geschah).
+   */
+  const nachholen = gedrosselt(() => {
+    if (getTokens()) chatsNachholen();
+  }, NACHHOL_FENSTER_MS);
+
+  realtime.on('message.new', ({ message }) => {
+    ungelesenMitzaehlen(message);
+    useChat.getState().applyMessage(message);
+    // Eine Nachricht in einem Chat, den die Liste noch nicht kennt (gerade
+    // erst angelegt, in der Lücke dazugekommen): ohne Nachholen erschiene er
+    // erst beim nächsten Neuladen.
+    if (!useChat.getState().conversations.some((item) => item.id === message.conversationId)) {
+      nachholen();
+    }
+  });
   realtime.on('message.updated', ({ message }) => useChat.getState().applyMessage(message));
   realtime.on('message.deleted', ({ conversationId, messageId }) => {
     void dropCachedMessage(messageId);
@@ -836,12 +900,38 @@ export function connectChatRealtime(): void {
     void useChat.getState().flushOutbox();
     if (warWeg) {
       warWeg = false;
-      chatsNachholen();
+      nachholen();
     }
   });
 
   if (typeof window !== 'undefined') {
     window.addEventListener('online', () => void useChat.getState().flushOutbox());
+
+    /*
+     * Zurück im Vordergrund: Chatliste und offene Chats nachholen – unabhängig
+     * davon, ob die Leitung überlebt hat.
+     *
+     * Vorher hing das Nachholen allein am Zustandswechsel der Leitung. Auf
+     * dem iPhone stirbt sie beim Einfrieren aber ohne `close`, der Zustand
+     * blieb „online“, und die Chatliste zeigte nach der Rückkehr nicht, dass
+     * jemand geantwortet hatte – bis zum nächsten Neuladen.
+     */
+    beiRueckkehr(nachholen);
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', (event: MessageEvent) => {
+        const art = (event.data as { type?: string } | undefined)?.type;
+        // Eine Mitteilung ist eingetroffen: Es gibt Neues, und die Leitung hat
+        // es womöglich nicht gebracht (eingefroren, oder gerade erst wach).
+        if (art === 'push') nachholen();
+        // Der Browser hat das Push-Abo ausgetauscht; der Service Worker kann
+        // es ohne Zugriffstoken nicht selbst anmelden.
+        if (art === 'push-abo-geaendert') void aboAuffrischen();
+      });
+      // Einmal je Sitzung: ein Abo, das an einen alten Server-Schlüssel gebunden
+      // ist oder dem Server verloren ging, wieder in Ordnung bringen.
+      void aboAuffrischen();
+    }
   }
 
   // Typing indicators expire on their own.

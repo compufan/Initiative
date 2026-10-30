@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectionState } from '../lib/realtime.js';
 
 /**
@@ -17,6 +17,10 @@ const handlers = new Map<string, (payload: never) => void>();
 const zustaende: ((state: ConnectionState) => void)[] = [];
 
 vi.mock('../lib/api.js', () => ({
+  // Ein Token, dessen `sub` die eigene Kennung ist (Kopf.Nutzlast.Signatur).
+  getTokens: () => ({
+    accessToken: `x.${Buffer.from(JSON.stringify({ sub: 'ich' })).toString('base64url')}.y`,
+  }),
   ApiError: class ApiError extends Error {
     isOffline = false;
     status = 0;
@@ -58,6 +62,9 @@ vi.mock('../lib/db.js', () => ({
 }));
 
 vi.mock('../lib/upload.js', () => ({ uploadBlob: vi.fn() }));
+
+const aboAuffrischen = vi.fn(async () => null);
+vi.mock('../lib/push.js', () => ({ aboAuffrischen: () => aboAuffrischen() }));
 
 let chat: typeof import('./chat.js');
 
@@ -107,5 +114,132 @@ describe('Nachholen', () => {
     await warten();
     expect(conversationsListMock).not.toHaveBeenCalled();
     expect(listMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * iPhone: Die App kommt aus dem Hintergrund zurück, die Leitung ist ohne
+ * `close` gestorben, ihr Zustand steht weiter auf „online“. Vorher holte
+ * dann nichts nach – die Chatliste zeigte nicht, dass jemand geantwortet
+ * hatte. Jetzt löst jedes Zurückkommen und jede eingetroffene Mitteilung
+ * (Botschaft des Service Workers) das Nachholen aus, gedrosselt.
+ */
+describe('Nachholen beim Zurückkommen', () => {
+  let fenster: EventTarget;
+  let dokument: EventTarget & { visibilityState: string };
+  let sw: EventTarget;
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
+    vi.resetModules();
+    handlers.clear();
+    zustaende.length = 0;
+    conversationsListMock.mockClear();
+    listMock.mockClear();
+    aboAuffrischen.mockClear();
+    fenster = new EventTarget();
+    dokument = Object.assign(new EventTarget(), { visibilityState: 'hidden' });
+    sw = new EventTarget();
+    vi.stubGlobal('window', fenster);
+    vi.stubGlobal('document', dokument);
+    vi.stubGlobal('navigator', { serviceWorker: sw });
+    chat = await import('./chat.js');
+    chat.connectChatRealtime();
+    chat.useChat.setState({ loaded: { offen: true } });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('holt beim Sichtbarwerden Liste und offene Chats nach', async () => {
+    dokument.dispatchEvent(new Event('visibilitychange'));
+    expect(conversationsListMock).not.toHaveBeenCalled();
+    dokument.visibilityState = 'visible';
+    dokument.dispatchEvent(new Event('visibilitychange'));
+    await warten();
+    expect(conversationsListMock).toHaveBeenCalledOnce();
+    expect(listMock.mock.calls.map(([id]) => id)).toEqual(['offen']);
+  });
+
+  it('drosselt: sichtbar + pageshow + focus + Wiederverbinden = sofort und ein Nachzügler', async () => {
+    dokument.visibilityState = 'visible';
+    dokument.dispatchEvent(new Event('visibilitychange'));
+    fenster.dispatchEvent(new Event('pageshow'));
+    fenster.dispatchEvent(new Event('focus'));
+    zustand('offline');
+    zustand('online');
+    await warten();
+    expect(conversationsListMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(conversationsListMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('eine eingetroffene Mitteilung holt die Liste nach', async () => {
+    sw.dispatchEvent(
+      Object.assign(new Event('message'), { data: { type: 'push', payload: { title: 'x' } } }),
+    );
+    await warten();
+    expect(conversationsListMock).toHaveBeenCalledOnce();
+  });
+
+  it('ein ausgetauschtes Push-Abo wird neu angemeldet', async () => {
+    expect(aboAuffrischen).toHaveBeenCalledOnce(); // beim Start
+    sw.dispatchEvent(Object.assign(new Event('message'), { data: { type: 'push-abo-geaendert' } }));
+    expect(aboAuffrischen).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Ungelesen-Zähler live', () => {
+  function nachricht(id: string, senderId: string | null) {
+    return {
+      id,
+      conversationId: 'c1',
+      senderId,
+      type: 'text',
+      body: 'hallo',
+      createdAt: new Date().toISOString(),
+      deletedAt: null,
+    };
+  }
+
+  beforeEach(() => {
+    chat.useChat.setState({
+      conversations: [
+        {
+          id: 'c1',
+          unreadCount: 1,
+          lastMessage: nachricht('0001', 'du'),
+        } as never,
+      ],
+      messages: {},
+    });
+  });
+
+  function zaehler() {
+    return chat.useChat.getState().conversations[0]!.unreadCount;
+  }
+
+  it('zählt eine fremde neue Nachricht mit – einmal, nicht bei der eigenen', () => {
+    handlers.get('message.new')!({ message: nachricht('0002', 'du') } as never);
+    expect(zaehler()).toBe(2);
+    expect(chat.useChat.getState().conversations[0]!.lastMessage!.id).toBe('0002');
+    // Dieselbe noch einmal (Nachholen und Leitung überschneiden sich).
+    handlers.get('message.new')!({ message: nachricht('0002', 'du') } as never);
+    expect(zaehler()).toBe(2);
+    handlers.get('message.new')!({ message: nachricht('0003', 'ich') } as never);
+    expect(zaehler()).toBe(2);
+    // Systemzeilen zählt der Server auch.
+    handlers.get('message.new')!({ message: nachricht('0004', null) } as never);
+    expect(zaehler()).toBe(3);
+  });
+
+  it('holt die Liste, wenn der Chat darin noch fehlt', async () => {
+    handlers.get('message.new')!({
+      message: { ...nachricht('0005', 'du'), conversationId: 'neu' },
+    } as never);
+    await warten();
+    expect(conversationsListMock).toHaveBeenCalledOnce();
   });
 });

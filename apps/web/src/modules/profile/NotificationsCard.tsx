@@ -1,7 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { UserSettings } from '@initiative/shared';
 import { api } from '../../lib/api.js';
-import { disablePush, enablePush, pushStatus, type PushStatus } from '../../lib/push.js';
+import {
+  aboVorhanden,
+  disablePush,
+  enablePush,
+  pushMeldung,
+  pushStatus,
+  type PushStatus,
+} from '../../lib/push.js';
 import { useSession } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 import { Toggle } from './Toggle.js';
@@ -22,8 +29,28 @@ export function NotificationsCard() {
   const [status, setStatus] = useState<PushStatus>(() => pushStatus());
   const [pending, setPending] = useState<Pending>(null);
 
+  /*
+   * Ob dieses Gerät wirklich ein Abo hat – nicht nur, ob es dürfte.
+   *
+   * Hier stand `settings.push && status === 'granted'`. Die Einstellung steht
+   * ab Werk auf „an“; war die Erlaubnis irgendwann erteilt (anderer Weg, frühere
+   * Installation, Abo verloren), zeigte der Schalter „an“, obwohl nichts
+   * abonniert war – es kam nie etwas, und der erste Druck auf den Schalter
+   * schaltete AUS statt ein.
+   */
+  const [hatAbo, setHatAbo] = useState(false);
+  useEffect(() => {
+    let aktiv = true;
+    void aboVorhanden().then((ja) => {
+      if (aktiv) setHatAbo(ja);
+    });
+    return () => {
+      aktiv = false;
+    };
+  }, []);
+
   const blocked = status === 'denied' || status === 'needs-install' || status === 'unsupported';
-  const pushOn = settings.push && status === 'granted';
+  const pushOn = settings.push && status === 'granted' && hatAbo;
 
   async function save(patch: Partial<UserSettings['notifications']>) {
     await patchMe({ settings: { notifications: { ...settings, ...patch } } });
@@ -33,24 +60,24 @@ export function NotificationsCard() {
     setPending('push');
     try {
       if (next) {
-        const ok = await enablePush();
-        const current = pushStatus();
-        setStatus(current);
-        if (!ok) {
-          toast(
-            current === 'denied'
-              ? 'Benachrichtigungen sind im Browser blockiert'
-              : current === 'granted'
-                ? 'Dieser Server verschickt gerade keine Benachrichtigungen'
-                : 'Benachrichtigungen wurden nicht erlaubt',
-            'error',
-          );
+        /*
+         * `enablePush()` fragt die Erlaubnis im selben Takt wie dieser Klick –
+         * kein `await` davor, sonst verbraucht Safari die Geste und fragt gar
+         * nicht erst (siehe `lib/push.ts`). Der Grund kommt mit zurück, statt
+         * ihn hinterher aus dem Zustand zu erraten.
+         */
+        const ergebnis = await enablePush();
+        setStatus(pushStatus());
+        if (!ergebnis.ok) {
+          toast(pushMeldung(ergebnis), 'error');
           return;
         }
+        setHatAbo(true);
         await save({ push: true });
         toast('Benachrichtigungen sind an', 'success');
       } else {
         await disablePush();
+        setHatAbo(false);
         await save({ push: false });
         toast('Benachrichtigungen sind aus', 'success');
       }
