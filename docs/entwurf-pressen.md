@@ -130,9 +130,10 @@ Team mal Läuferzahl).
 ## Modi und Rollen (`planFuer(n)`)
 
 - 1 Person: **gegen den Spiegel**. Das zweite Männchen trinkt synchron, also
-  gleiche Wertung, also **immer Atempo** – und mit dem Atempo beginnt die **nächste
-  Runde automatisch** (nach 2,6 s, mit „Anhalten“-Knopf), bis jemand aufgibt. Der
-  Malus wächst nicht.
+  gleiche Wertung, also **immer Atempo**. Jede weitere Runde beginnt **erst mit
+  „Anstoßen“** (früher startete sie nach 2,6 s von selbst – das ist weg: ein Lauf
+  beginnt nie ohne den Knopf), bis jemand aufgibt. Der Malus wächst nicht. Der
+  Spiegel ist eine **Übung ohne Chat** (siehe „Übung ohne Chat“).
 - 2: Duell, beide gleichzeitig.
 - 3: **Ampel** ist der dritte Sitz. Er trinkt und stellt ab, danach starten die
   beiden anderen. Seine Zeit wird nicht gewertet.
@@ -172,6 +173,46 @@ versatzMs + Lauf`) und meldet den Versatz mit.
 - **„Anstoßen“** (früher „Los, Lauf starten“) startet den Lauf **sofort**, ohne
   Anlauf und ohne weiteren Zwischenschritt. Vor dem gemeinsamen Beginn ist der
   Knopf gesperrt.
+- **Nur der Knopf startet.** Klick, Tippen, Enter oder Leertaste **auf dem
+  fokussierten Knopf** (Enter und Leertaste lösen beim Knopf einen Klick aus) –
+  nichts sonst: weder ein Klick ins Brett oder daneben, noch ein Timer, noch die
+  Leertaste außerhalb des Knopfs. Es gibt dafür keinen globalen Handler
+  (`beimAnstossen` hängt nur am Knopf). Die Tastensteuerung (Pfeile, Leertaste =
+  Neigen) wird erst scharf, wenn der Lauf läuft; eine Leertaste, die den Knopf
+  auslöst, wirkt erst beim Loslassen und kann daher nicht zugleich „Neigen“ sein
+  (Wiederholungen einer noch gehaltenen Taste werden ohnehin ignoriert).
+  Getestet in `e2e/pressen.spec.ts` (Klick daneben startet nichts).
+
+## Vollbild
+
+Das **ganze Brett** (`.pressen`, samt Bühne, Steuerung, Ergebnis) füllt die
+Anzeige. Zwei Wege, ein Aussehen (`pressenVollbild.ts`):
+
+1. **Fullscreen-API** (`requestFullscreen`, Rückfall `webkitRequestFullscreen`).
+2. **Überlagerung** (`position: fixed; inset: 0; height: 100dvh`, Ränder um
+   `env(safe-area-inset-*)`): wo es die API nicht gibt (iPhone-Safari) – und als
+   Rückfall, wenn der Browser sie verweigert. Das Brett wird dafür **sofort**
+   bildschirmfüllend dargestellt und übernimmt das echte Vollbild, sobald es
+   bestätigt ist (`fullscreenchange`).
+
+Angefordert wird nur aus einer **Nutzergeste**, synchron im Klick: dem Klick auf
+„Anstoßen“ oder dem eigenen Knopf „⛶ Vollbild“. Scheitert die Anfrage, läuft
+das Spiel unverändert weiter. Im Querformat (Handy) steht die Bühne links, alles
+andere rechts daneben, das Ergebnis wird kompakter, damit „Anstoßen“ ohne
+Blättern erreichbar bleibt; im echten Vollbild wird zusätzlich
+`screen.orientation.lock('landscape')` versucht (nur ein Wunsch).
+
+**Beenden:** „✕ Vollbild beenden“ (immer sichtbar), **Esc**, die **Zurück-Taste**
+(beide über den zentralen Dialogstapel `lib/dialogVerlauf`, der das Esc als
+vergeben markiert) und das **Verlassen der Seite** (Aufräumen beim Entladen).
+**Esc und der Lauf:** Im Vollbild schließt Esc _nur_ das Vollbild und bricht
+keinen Lauf ab (der Lauf geht weiter); „Vorzeitig abstellen“ bleibt als Knopf.
+Außerhalb des Vollbilds gilt Esc wie bisher als „vorzeitig abstellen“. Im
+echten Browser-Vollbild bekommt die Seite Esc ohnehin nicht zu sehen – der
+Browser schließt selbst und meldet es über `fullscreenchange`.
+**Merker:** „Anstoßen“ geht von selbst ins Vollbild, bis jemand es mit „Vollbild
+beenden“ (oder Esc/Zurück) wegschickt; der Knopf „Vollbild“ stellt es wieder an
+(`localStorage`, nur eine Voreinstellung dieses Geräts).
 
 Der Zustand steht im Spielstand (`state.start`): `gruppe`, je Sitz `art` und
 `bereitAm`, und `beginn`. Die Frist wird **nicht** vom Server durch einen
@@ -214,10 +255,69 @@ steht nur „fertig“ oder „noch nicht“. Umgesetzt im Server, nicht im Clie
 Nicht verborgen sind die Malus-Werte der anderen: Sie verraten nur, wie oft
 jemand gespielt hat, nicht wie gut.
 
+## Ergebnis
+
+Steht eine Runde fest, zeigt das Brett ein **großes Ergebnis aus Sicht des
+Betrachters** (`pressenErgebnis.ts`, getestet in `pressenErgebnis.test.ts`):
+
+| Lage                                                 | Titel                                       |
+| ---------------------------------------------------- | ------------------------------------------- |
+| Partie entschieden, ich im Siegerteam                | „Du hast gewonnen“                          |
+| Partie entschieden, ich im anderen Team              | „Du wurdest abgeschluckt“                   |
+| Unterschied unter der Toleranz (im Spiegel immer)    | „Atempo“ – bis zum nächsten Anstoßen        |
+| Zuschauer ohne Sitz, oder die Ampel (nicht gewertet) | „Anna hat gewonnen“ / „Team A hat gewonnen“ |
+
+Darunter je Spieler **Zeit, verschüttetes Bier (ml) und Score** (= Wertung, Zeit
+plus Strafe); die eigene Zeile ist hervorgehoben, Sieger tragen 👑, die Auszeichnung
+„getrümmert“ 🏅; bei der Staffette steht das Teamergebnis („Team A 18,1 s : Team B
+22,2 s“) im Untertitel, ein Sieg gilt für das ganze Team. Bei Atempo stehen die
+Zeilen der Vorrunde und der Abstand in ms. **Die Sichtbarkeitsregel bleibt:** Das
+Ergebnis erscheint erst, wenn die Runde feststeht – solange ein fremder Lauf
+„verborgen“ ist, gibt es keine Zeile. Mitten in der Runde bleibt es beim Satz „Dein
+Lauf: …; die Ergebnisse der anderen siehst du, sobald alle fertig sind“.
+
+Barrierefrei: Titel und Untertitel stehen in einem `role="status"` (wird
+vorgelesen), die Liste ist eine echte Liste mit `dl` je Zeile; Rahmen und Fläche
+tragen die Farbe, die Schrift bleibt `--text` (Kontrast in hell und dunkel); die
+Einblendung entfällt bei „Bewegung reduzieren“; die Titelschrift ist mindestens
+`clamp(1.9rem, 8vw, 3rem)`. Nach einer entschiedenen Partie steht im Ergebnis
+„Revanche“ (im Vollbild sind die Knöpfe der Spielansicht ja verdeckt); bei Atempo
+geht es mit „Anstoßen“ weiter.
+
+## Übung ohne Chat („gegen den Spiegel“)
+
+Eine Übung allein braucht niemanden zum Spielen – also keinen Chat. Früher hing
+jede Partie an einem Chat (`conversation_id not null`) und stand dort als Karte,
+mit Vorschau in der Chatliste und Mitteilung. Jetzt (Migration `0027`):
+
+- `game_sessions.conversation_id` ist **leer erlaubt**, neu ist `besitzer_id`
+  (`on delete cascade`: das Konto löschen nimmt die Übung mit). Eine Prüfung
+  verlangt Chat **oder** Besitzer. Bestehende Partien bleiben unberührt (auch
+  alte Spiegel-Karten in Chats – sie werden nicht nachträglich entfernt).
+- `POST /games/sessions` **ohne** `conversationId` und ohne Gegner legt eine
+  Übung an (nur für Spiele mit `min_players <= 1`, also Pressen): **keine
+  Nachricht, keine Karte, keine Chatlisten-Vorschau, keine Mitteilung** (der
+  „am Zug“-Hinweis geht nur an andere). Ein **älterer Client**, der noch einen
+  Chat mitschickt, aber keinen Gegner wählt, bekommt dieselbe Übung ohne Karte;
+  `conversationId` ist in der Antwort `null`.
+- **Zugriff:** Nur der Besitzer liest, spielt, gibt auf, startet Revanche
+  (`sichtbar_fuer` liefert nur ihn, `game.updated` geht nur an ihn); alle anderen
+  bekommen `404` (auch Mitglieder eines gemeinsamen Chats), die Liste zeigt die
+  Übung nur ihm. Ein Chat-Filter blendet Übungen aus.
+- **Aufräumen:** Es gibt **eine Übung je Spiel und Person**: Eine neue (auch die
+  Revanche) räumt die vorige ab, dazu fertige Reste älter als ein Tag.
+- **Zugang:** Spiele-Übersicht → „Pressen allein“ → „Gegen den Spiegel üben“. Im
+  Startblatt aus dem Chat heißt es nicht mehr „Allein üben“; dort wählt man
+  mindestens einen Gegner.
+- Tests: `apps/api/tests/uebung_ohne_chat.rs` (keine Karte, nur Besitzer, 404 für
+  Fremde, alter Client, Aufräumen, Konto löschen, Prüfung der Tabelle).
+
 ## Strichmännchen
 
 Jeder gestaltet sein Männchen in einem Bearbeitungsblatt mit Live-Vorschau
-(„Strichmännchen anpassen“, sichtbar vor dem Start): Frisur (12), Haarfarbe (10),
+(„Mein Strichmännchen“ – **unabhängig von einer Partie**: in der Spiele-Übersicht
+und in den Einstellungen unter „Spiele“; im Brett nur noch ein Verweis dorthin
+(`/spiele?figur=1`, öffnet das Blatt gleich)): Frisur (12), Haarfarbe (10),
 Hautfarbe (7), Shirt (12), Bart (5), Brille (4), Hut (5), dazu „Würfeln“ und
 „Zurücksetzen“. Jede Angabe ist eine kleine Nummer (kein Freitext, keine Farbcodes).
 
@@ -296,9 +396,11 @@ sodass auch die anderen es sehen (nach Rundenende).
 
 ## Zugänglichkeit
 
-Alle Eingaben per Tastatur (vier Pfeile, Leertaste, Esc). Touch: Steuerkreuz und
+Alle Eingaben per Tastatur (vier Pfeile, Leertaste, Esc – im Vollbild schließt Esc nur
+das Vollbild). Touch: Steuerkreuz und
 Neigen-Knopf, je mindestens 64 px. Zustandsansagen über einen `aria-live`-Bereich
-(Wahl, Warten, „Los!“, Glas leer, Ergebnis). Der Malus-Balken ist ein `meter` mit
+(Wahl, Warten, „Los!“, Glas leer); das Ergebnis sagt sein eigener `role="status"`
+an. Der Malus-Balken ist ein `meter` mit
 Beschriftung und Erklärung. `prefers-reduced-motion`: Atmen, Blinzeln, Schlucken
 und Wackeln entfallen; die Physik bleibt (sie ist das Spiel).
 

@@ -8,13 +8,14 @@ interface GameBoardProps {
   mySeat: number | null;
   onMove: (move: unknown) => void;
   busy: boolean;
+  onRematch?: () => void;
 }
 
 /**
  * Picks the board for a match from the registry. A game the client does not
  * know yet stays readable instead of breaking the screen.
  */
-export function GameBoard({ session, mySeat, onMove, busy }: GameBoardProps) {
+export function GameBoard({ session, mySeat, onMove, busy, onRematch }: GameBoardProps) {
   const Board = gameBoards[session.gameKey];
   if (!Board) {
     return (
@@ -25,7 +26,9 @@ export function GameBoard({ session, mySeat, onMove, busy }: GameBoardProps) {
       />
     );
   }
-  return <Board session={session} mySeat={mySeat} onMove={onMove} busy={busy} />;
+  return (
+    <Board session={session} mySeat={mySeat} onMove={onMove} busy={busy} onRematch={onRematch} />
+  );
 }
 
 /** Small board preview for chat bubbles and lists. */

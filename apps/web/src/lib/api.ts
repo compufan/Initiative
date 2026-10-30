@@ -835,7 +835,7 @@ export const api = {
     /** Laufende (oder gefilterte) Partien des angemeldeten Nutzers. */
     sessions: (query: { conversationId?: string; status?: string } = {}) =>
       get<ListResult<GameSessionDto>>('/games/sessions', { query }),
-    create: (body: { conversationId: string; gameKey: string; opponentIds?: string[] }) =>
+    create: (body: { conversationId?: string | null; gameKey: string; opponentIds?: string[] }) =>
       post<GameSessionDto>('/games/sessions', body),
     byId: (id: string) => get<GameSessionDto>(`/games/sessions/${id}`),
     join: (id: string) => post<GameSessionDto>(`/games/sessions/${id}/join`),

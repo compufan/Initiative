@@ -197,7 +197,13 @@ export function GameScreen() {
   return (
     <Screen
       title={`${info.emoji} ${info.name}`}
-      subtitle={conversation ? conversationLabel(conversation, myId) : 'Partie'}
+      subtitle={
+        conversation
+          ? conversationLabel(conversation, myId)
+          : session.conversationId == null
+            ? 'Übung – nur für dich'
+            : 'Partie'
+      }
       back={back}
       actions={
         /*
@@ -260,6 +266,7 @@ export function GameScreen() {
         mySeat={mySeat}
         onMove={(move) => void submitMove(move)}
         busy={busy}
+        onRematch={mySeat != null ? () => void rematch() : undefined}
       />
 
       {busy && <Spinner label="Zug wird gesendet" />}

@@ -3,12 +3,18 @@ import { expect, test, type Browser, type Page } from '@playwright/test';
 /**
  * Pressen im Browser:
  *
- *  1. „Gegen den Spiegel“: Anstoßen startet SOFORT, ein Lauf mit allen vier
- *     Pfeiltasten, danach immer Atempo – und die nächste Runde beginnt von selbst.
- *  2. „Bierjunge“ / „hängt“ im Chat startet eine Partie; Echtzeit mit
- *     gemeinsamem Countdown, späteres Anstoßen kostet Zeit, und fremde Ergebnisse
- *     bleiben bis zum Rundenende verborgen.
- *  3. Rückfall in asynchron, wenn der zweite nicht rechtzeitig bereit ist.
+ *  1. „Gegen den Spiegel“ ist eine Übung OHNE Chat (Spiele-Übersicht): keine Karte
+ *     in einem Chat. Ein Lauf beginnt NUR durch den Knopf „Anstoßen“ (nicht durch
+ *     Klick daneben, nicht durch die Leertaste außerhalb des Knopfs), geht ins
+ *     Vollbild, endet mit dem großen Ergebnis „Atempo“ – und die nächste Runde
+ *     beginnt nicht von selbst. Das Strichmännchen ändert man in der Übersicht.
+ *  2. Ohne Fullscreen-API (iPhone-Safari) füllt eine Überlagerung die Anzeige;
+ *     „Vollbild beenden“, Esc und Zurück räumen auf, Esc bricht den Lauf nicht ab.
+ *  3. „Bierjunge“ / „hängt“ im Chat startet eine Partie; Echtzeit mit
+ *     gemeinsamem Countdown, späteres Anstoßen kostet Zeit, fremde Ergebnisse
+ *     bleiben bis zum Rundenende verborgen, danach „Du hast gewonnen“ /
+ *     „Du wurdest abgeschluckt“.
+ *  4. Rückfall in asynchron, wenn der zweite nicht rechtzeitig bereit ist.
  *
  * Die Steuerung kommt von einem kleinen Spieler IM Browser (Tastenereignisse
  * auf `window`, gelesen wird, was die Bühne als `data-*` zeigt): Von außen,
@@ -121,7 +127,30 @@ async function schreibe(page: Page, text: string) {
   await expect(page.getByText(text, { exact: true }).last()).toBeVisible();
 }
 
-test('Pressen gegen den Spiegel: Anstoßen sofort, vier Richtungen, Atempo, nächste Runde von selbst', async ({
+/** Öffnet die Spiele-Übersicht und startet die Übung gegen den Spiegel. */
+async function spiegelStarten(page: Page) {
+  await page.goto('/spiele');
+  await expect(page.getByTestId('spiegel-karte')).toBeVisible();
+  await page.getByTestId('spiegel-starten').click();
+  await expect(page.getByTestId('pressen-feld')).toBeVisible({ timeout: 15_000 });
+}
+
+/** Wie groß die Anzeige ist und wie groß das Brett: im Vollbild sind beide gleich. */
+async function fuelltAnzeige(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const brett = document.querySelector<HTMLElement>('[data-testid="pressen-brett"]');
+    if (!brett) return false;
+    const r = brett.getBoundingClientRect();
+    return (
+      Math.abs(r.width - window.innerWidth) <= 1 &&
+      Math.abs(r.height - window.innerHeight) <= 1 &&
+      Math.abs(r.left) <= 1 &&
+      Math.abs(r.top) <= 1
+    );
+  });
+}
+
+test('Pressen gegen den Spiegel: Übung ohne Chat, Anstoßen nur per Knopf, Vollbild, Ergebnis „Atempo“', async ({
   browser,
 }) => {
   const alice = credentials('presse');
@@ -129,43 +158,60 @@ test('Pressen gegen den Spiegel: Anstoßen sofort, vier Richtungen, Atempo, näc
   const alicePage = await signUp(browser, alice);
   const bobPage = await signUp(browser, bob);
 
-  // Direktchat mit Bob, dann Spiel → Pressen → allein üben.
+  // Es gibt einen Chat mit Bob – und die Übung taucht darin trotzdem nicht auf.
   await neuerChat(alicePage, bob);
-  await alicePage.getByRole('button', { name: 'Mehr hinzufügen' }).click();
-  await alicePage.getByText('Spiel', { exact: true }).click();
-  await alicePage.getByRole('radio', { name: /Pressen/ }).click();
-  // Ohne den Schalter wäre es ein Duell mit Bob.
-  await expect(alicePage.getByTestId('pressen-aufstellung')).toContainText('Zu zweit');
-  await alicePage.getByLabel('Allein üben – gegen den Spiegel').check();
-  await expect(alicePage.getByTestId('pressen-aufstellung')).toContainText('Gegen den Spiegel');
-  await alicePage.getByRole('button', { name: 'Spiel starten' }).click();
 
-  // Das Brett: Malus angezeigt (im Spiegel aus), kein „Los! Lauf starten“ mehr.
+  // Das Strichmännchen gehört zum Konto, nicht zu einer Partie: Änderung in der Übersicht.
+  await alicePage.goto('/spiele');
+  await alicePage.getByTestId('maennchen-anpassen').click();
+  await alicePage.getByRole('radio', { name: 'Sonnenbrille' }).click();
+  await alicePage.getByRole('radio', { name: 'Zylinder' }).click();
+  // Die Vorschau im Blatt zeigt die Wahl sofort.
+  await expect(
+    alicePage
+      .getByTestId('pressen-figur-editor')
+      .locator('.pressen-figur rect[fill="#14121a"]')
+      .first(),
+  ).toBeAttached();
+  await alicePage.getByRole('button', { name: 'Speichern' }).click();
+  await expect(alicePage.getByTestId('pressen-figur-editor')).toHaveCount(0);
+
+  // Die Übung: allein, ohne Chat.
+  await alicePage.getByTestId('spiegel-starten').click();
   const feld = alicePage.getByTestId('pressen-feld');
   await expect(feld).toBeVisible({ timeout: 15_000 });
   await expect(alicePage.getByTestId('pressen-malus')).toContainText('aus (Spiegel)');
   await expect(alicePage.getByRole('button', { name: /Lauf starten/ })).toHaveCount(0);
-
-  // Das Strichmännchen lässt sich anpassen, wird im Konto gespeichert und überlebt das Neuladen.
-  await alicePage.getByTestId('pressen-figur-aendern').click();
-  await alicePage.getByRole('radio', { name: 'Sonnenbrille' }).click();
-  await alicePage.getByRole('radio', { name: 'Zylinder' }).click();
-  // Die Auswahl bleibt stehen, auch wenn das Brett im Hintergrund neu zeichnet.
-  await alicePage.waitForTimeout(1500);
-  await expect(alicePage.getByRole('radio', { name: 'Sonnenbrille' })).toHaveAttribute(
-    'aria-checked',
-    'true',
-  );
-  await alicePage.getByRole('button', { name: 'Speichern' }).click();
+  await expect(alicePage.getByRole('link', { name: /Zum Chat/ })).toHaveCount(0);
+  // Die Figur aus dem Konto ist im Brett.
   await expect(
     alicePage.locator('.pressen-feld .pressen-figur rect[fill="#14121a"]').first(),
   ).toBeAttached();
 
-  // „Anstoßen“ startet den Lauf SOFORT – kein Countdown, kein Zwischenschritt.
-  const anstossen = alicePage.getByRole('button', { name: /Anstoßen/ });
+  // Vor dem Anstoßen startet NICHTS: weder Klick ins Brett noch daneben, noch Leertaste.
+  const brett = alicePage.getByTestId('pressen-brett');
+  await feld.click({ position: { x: 40, y: 80 } });
+  await alicePage.locator('body').click({ position: { x: 3, y: 3 } });
+  await alicePage.getByRole('heading', { level: 1 }).click();
+  await alicePage.keyboard.press(' ');
+  await alicePage.keyboard.press('Enter');
+  await alicePage.waitForTimeout(800);
+  await expect(feld).toHaveAttribute('data-phase', 'bereit');
+  await expect(brett).toHaveAttribute('data-vollbild', 'aus');
+
+  // Leertaste auf dem fokussierten Knopf startet – ohne zugleich zu neigen.
+  const anstossen = alicePage.getByTestId('pressen-anstossen');
   await expect(anstossen).toBeEnabled();
-  await anstossen.click();
+  await anstossen.focus();
+  await alicePage.keyboard.press(' ');
   await expect(feld).toHaveAttribute('data-phase', 'laeuft', { timeout: 1500 });
+  await alicePage.waitForTimeout(300);
+  await expect(feld).toHaveAttribute('data-neigung', '0');
+
+  // Vollbild: das Brett füllt die ganze Anzeige (echt oder als Überlagerung).
+  await expect(brett).not.toHaveAttribute('data-vollbild', 'aus');
+  await expect.poll(() => fuelltAnzeige(alicePage)).toBe(true);
+  await expect(alicePage.getByTestId('pressen-vollbild')).toContainText('Vollbild beenden');
   // Steuerkreuz mit allen vier Richtungen und der Neigeknopf.
   for (const richtung of ['links', 'rechts', 'hinten', 'vorn']) {
     await expect(
@@ -189,22 +235,156 @@ test('Pressen gegen den Spiegel: Anstoßen sofort, vier Richtungen, Atempo, näc
 
   // Spiegel: gleiche Wertung → IMMER Atempo, Runde 2 – vom Server bestätigt …
   await expect(feld).toHaveAttribute('data-runde', '2', { timeout: 15_000 });
-  // … und die nächste Runde beginnt von selbst (kein weiteres Anstoßen).
-  await expect(feld).toHaveAttribute('data-phase', 'laeuft', { timeout: 10_000 });
+  // … mit dem großen Ergebnis: „Atempo“, darunter Zeit, Verschüttetes und Score.
+  const ergebnis = alicePage.getByTestId('pressen-ergebnis');
+  await expect(ergebnis).toBeVisible();
+  await expect(ergebnis).toHaveAttribute('data-art', 'atempo');
+  await expect(alicePage.getByTestId('pressen-ergebnis-titel')).toHaveText(/Atempo/);
+  await expect(ergebnis.locator('[role="status"]')).toContainText('Atempo');
+  const zeile = ergebnis.locator('li.ist-ich');
+  await expect(zeile).toContainText('Zeit');
+  await expect(zeile).toContainText('Verschüttet');
+  await expect(zeile).toContainText('Score');
+  const titelGroesse = await alicePage
+    .getByTestId('pressen-ergebnis-titel')
+    .evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+  expect(titelGroesse).toBeGreaterThanOrEqual(28);
+
+  // Die nächste Runde beginnt NICHT von selbst – nur der Knopf startet sie.
+  await alicePage.waitForTimeout(3500);
+  await expect(feld).toHaveAttribute('data-phase', 'bereit');
+  await expect(alicePage.getByTestId('pressen-anstossen')).toBeEnabled();
   // Der Malus wächst im Spiegel nicht.
   await expect(alicePage.getByTestId('pressen-malus')).toContainText('aus (Spiegel)');
 
-  // Nach dem Neuladen steht die Runde 2 weiter (vom Server), und sie läuft wieder an.
+  // „Vollbild beenden“ bringt die normale Ansicht zurück …
+  await alicePage.getByTestId('pressen-vollbild').click();
+  await expect(brett).toHaveAttribute('data-vollbild', 'aus');
+  // … und merkt sich das: Das nächste Anstoßen geht nicht wieder ins Vollbild.
+  await alicePage.getByTestId('pressen-anstossen').click();
+  await expect(feld).toHaveAttribute('data-phase', 'laeuft', { timeout: 1500 });
+  await expect(brett).toHaveAttribute('data-vollbild', 'aus');
+  // Ohne Vollbild bricht Esc den Lauf ab (vorzeitig abstellen).
+  await alicePage.waitForTimeout(1800);
+  await alicePage.keyboard.press('Escape');
+  await expect(feld).toHaveAttribute('data-runde', '3', { timeout: 15_000 });
+
+  // Nach dem Neuladen steht die Runde weiter (vom Server).
   await alicePage.reload();
-  await expect(alicePage.getByTestId('pressen-feld')).toHaveAttribute('data-runde', '2', {
+  await expect(alicePage.getByTestId('pressen-feld')).toHaveAttribute('data-runde', '3', {
     timeout: 15_000,
   });
-  await expect(
-    alicePage.locator('.pressen-feld .pressen-figur rect[fill="#14121a"]').first(),
-  ).toBeAttached();
+
+  // Die Übung steht in KEINEM Chat: keine Karte bei Alice, keine bei Bob, keine Vorschau.
+  await alicePage.goto('/');
+  await alicePage.getByText(bob.displayName).first().click();
+  await expect(alicePage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await expect(alicePage.locator('.game-bubble')).toHaveCount(0);
+  await bobPage.reload();
+  await expect(bobPage.getByRole('heading', { name: 'Chats' })).toBeVisible();
+  await expect(bobPage.locator('.chat-row, .list-row').filter({ hasText: /Pressen/ })).toHaveCount(
+    0,
+  );
+  await bobPage.getByText(alice.displayName).first().click();
+  await expect(bobPage.getByPlaceholder('Nachricht schreiben')).toBeVisible();
+  await expect(bobPage.locator('.game-bubble')).toHaveCount(0);
 
   await alicePage.context().close();
   await bobPage.context().close();
+});
+
+test('Ohne Fullscreen-API (iPhone): Überlagerung füllt die Anzeige, Esc und Zurück räumen auf', async ({
+  browser,
+}) => {
+  const alice = credentials('phone');
+  const context = await browser.newContext({
+    viewport: { width: 844, height: 390 },
+    hasTouch: true,
+  });
+  // Wie iPhone-Safari: weder `requestFullscreen` noch der webkit-Weg am Element.
+  await context.addInitScript(() => {
+    const proto = Element.prototype as unknown as Record<string, unknown>;
+    proto.requestFullscreen = undefined;
+    proto.webkitRequestFullscreen = undefined;
+  });
+  const page = await context.newPage();
+  await page.goto('/');
+  await page.getByRole('button', { name: /Noch kein Konto/ }).click();
+  await page.getByLabel('Benutzername').fill(alice.username);
+  await page.getByLabel('Anzeigename').fill(alice.displayName);
+  await page.getByLabel('Passwort', { exact: true }).fill(alice.password);
+  await page.getByRole('button', { name: 'Konto erstellen' }).click();
+  await expect(page.getByRole('heading', { name: 'Chats' })).toBeVisible();
+
+  await spiegelStarten(page);
+  const brett = page.getByTestId('pressen-brett');
+  const feld = page.getByTestId('pressen-feld');
+
+  // „Anstoßen“ geht ins Vollbild: Überlagerung, 100 % der Anzeige, auch im Querformat.
+  await page.getByTestId('pressen-anstossen').click();
+  await expect(feld).toHaveAttribute('data-phase', 'laeuft', { timeout: 1500 });
+  await expect(brett).toHaveAttribute('data-vollbild', 'ueberlagerung');
+  await expect.poll(() => fuelltAnzeige(page)).toBe(true);
+  // Im Querformat steht die Bühne neben den Knöpfen, nicht darüber.
+  const bf = await feld.boundingBox();
+  const bn = await page.getByRole('button', { name: /Glas neigen/ }).boundingBox();
+  expect(bn!.x).toBeGreaterThan(bf!.x + bf!.width - 2);
+
+  // Esc schließt nur das Vollbild – der Lauf geht weiter.
+  await page.waitForTimeout(500);
+  await page.keyboard.press('Escape');
+  await expect(brett).toHaveAttribute('data-vollbild', 'aus');
+  await page.waitForTimeout(500);
+  await expect(feld).toHaveAttribute('data-phase', 'laeuft');
+
+  // Eigener Knopf „Vollbild“; die Zurück-Taste schließt erst das Vollbild, nicht die Seite.
+  await page.getByTestId('pressen-vollbild').click();
+  await expect(brett).toHaveAttribute('data-vollbild', 'ueberlagerung');
+  await page.goBack();
+  await expect(brett).toHaveAttribute('data-vollbild', 'aus');
+  await expect(feld).toBeVisible();
+
+  // Die Seite zu verlassen räumt das Vollbild auf.
+  await page.getByTestId('pressen-vollbild').click();
+  await expect(brett).toHaveAttribute('data-vollbild', 'ueberlagerung');
+  await page.goto('/spiele');
+  await expect(page.getByTestId('spiegel-karte')).toBeVisible();
+  await expect(page.getByTestId('pressen-brett')).toHaveCount(0);
+
+  await context.close();
+});
+
+test('Echtes Vollbild: Anstoßen ruft die Fullscreen-API aus der Geste, „Vollbild beenden“ schließt sie', async ({
+  browser,
+}) => {
+  const alice = credentials('echt');
+  const page = await signUp(browser, alice);
+  await spiegelStarten(page);
+  const brett = page.getByTestId('pressen-brett');
+  await page.getByTestId('pressen-anstossen').click();
+  await expect(page.getByTestId('pressen-feld')).toHaveAttribute('data-phase', 'laeuft', {
+    timeout: 1500,
+  });
+  await expect(brett).not.toHaveAttribute('data-vollbild', 'aus');
+  await expect.poll(() => fuelltAnzeige(page)).toBe(true);
+  // Wo der Browser das echte Vollbild gewährt, ist das Brett das Vollbild-Element.
+  const nativ = await page.evaluate(
+    () => document.fullscreenElement?.getAttribute('data-testid') ?? null,
+  );
+  if (nativ) {
+    expect(nativ).toBe('pressen-brett');
+    await expect(brett).toHaveAttribute('data-vollbild', 'nativ');
+  }
+  await page.getByTestId('pressen-vollbild').click();
+  await expect(brett).toHaveAttribute('data-vollbild', 'aus');
+  expect(await page.evaluate(() => document.fullscreenElement === null)).toBe(true);
+  // Der Lauf geht währenddessen weiter.
+  await expect(page.getByTestId('pressen-feld')).toHaveAttribute('data-phase', 'laeuft');
+  // Verlassen mit Vollbild: wieder hinein, dann wegnavigieren.
+  await page.getByTestId('pressen-vollbild').click();
+  await page.goto('/spiele');
+  expect(await page.evaluate(() => document.fullscreenElement === null)).toBe(true);
+  await page.context().close();
 });
 
 test('Bierjunge und hängt starten eine Partie; Echtzeit mit Countdown, Versatz zählt, fremde Zeiten bleiben verborgen', async ({
@@ -251,6 +431,12 @@ test('Bierjunge und hängt starten eine Partie; Echtzeit mit Countdown, Versatz 
   await expect(feldA).toHaveAttribute('data-start-phase', 'gestartet', { timeout: 8_000 });
   await expect(feldB).toHaveAttribute('data-start-phase', 'gestartet', { timeout: 8_000 });
 
+  // Ein Klick ins Brett oder daneben startet nichts – nur der Knopf.
+  await feldA.click({ position: { x: 40, y: 80 } });
+  await alicePage.locator('body').click({ position: { x: 3, y: 3 } });
+  await alicePage.waitForTimeout(500);
+  await expect(feldA).toHaveAttribute('data-phase', 'bereit');
+
   // Alice stößt sofort an, Bob zwei Sekunden später: Er ist zwei Sekunden langsamer.
   await alicePage.getByTestId('pressen-anstossen').click();
   await expect(feldA).toHaveAttribute('data-phase', 'laeuft', { timeout: 1500 });
@@ -268,6 +454,7 @@ test('Bierjunge und hängt starten eine Partie; Echtzeit mit Countdown, Versatz 
   const bahnVonAlice = bobPage.getByTestId('pressen-bahn-stand').first();
   await expect(bahnVonAlice).toHaveText('fertig', { timeout: 10_000 });
   await expect(bobPage.locator('.pressen-wertung')).toHaveCount(0);
+  await expect(bobPage.getByTestId('pressen-ergebnis')).toHaveCount(0);
 
   await bobPage.waitForTimeout(1800);
   await bobPage.getByRole('button', { name: /Vorzeitig abstellen/ }).click();
@@ -279,8 +466,19 @@ test('Bierjunge und hängt starten eine Partie; Echtzeit mit Countdown, Versatz 
   await expect(bobPage.locator('.pressen-wertung')).toContainText('Endwertung', {
     timeout: 15_000,
   });
+  // Das große Ergebnis aus Sicht jedes Spielers: Alice war früher dran.
+  await expect(alicePage.getByTestId('pressen-ergebnis-titel')).toHaveText(/Du hast gewonnen/);
+  await expect(bobPage.getByTestId('pressen-ergebnis-titel')).toHaveText(/Du wurdest abgeschluckt/);
+  await expect(alicePage.getByTestId('pressen-ergebnis')).toHaveAttribute('data-art', 'sieg');
+  await expect(bobPage.getByTestId('pressen-ergebnis')).toHaveAttribute('data-art', 'niederlage');
+  // Zeit, verschüttetes Bier und Score je Spieler, die eigene Zeile hervorgehoben.
+  await expect(alicePage.locator('.pressen-wertung li')).toHaveCount(2);
+  await expect(alicePage.locator('.pressen-wertung li.ist-ich')).toContainText('Score');
+  await expect(bobPage.locator('.pressen-wertung li.ist-ich')).toContainText('Verschüttet');
   const zeilen = await alicePage.locator('.pressen-wertung li').allInnerTexts();
-  const sekunden = zeilen.map((z) => Number((/([\d,]+) s \+/.exec(z) ?? [])[1]?.replace(',', '.')));
+  const sekunden = zeilen.map((z) =>
+    Number((/Zeit\s+([\d,]+) s/.exec(z) ?? [])[1]?.replace(',', '.')),
+  );
   // [Alice, Bob]: Beide liefen gleich lang, aber Bob stieß 2,2 s später an – das
   // steckt in seiner Zeit (etwas Spielraum für Alices eigene Wartezeit).
   expect(sekunden[1]! - sekunden[0]!).toBeGreaterThan(1.5);

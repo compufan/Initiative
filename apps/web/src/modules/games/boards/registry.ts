@@ -15,6 +15,8 @@ export interface GameBoardProps {
   onMove(move: unknown): void;
   /** A move is on the wire – ignore further input until it comes back. */
   busy: boolean;
+  /** Dieselbe Aufstellung noch einmal (nur gesetzt, wo die Partie es kann). */
+  onRematch?: () => void;
 }
 
 /** Compact, non-interactive board for chat bubbles and lists. */

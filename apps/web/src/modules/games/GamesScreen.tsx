@@ -4,11 +4,15 @@ import type { GameSessionDto } from '@initiative/shared';
 import { EmptyState, Spinner } from '../../components/Feedback.js';
 import { Screen } from '../../components/Screen.js';
 import { useMyId } from '../../state/session.js';
+import { api } from '../../lib/api.js';
+import { toast } from '../../state/ui.js';
 import { GameSetup } from './GameSetup.js';
+import { MeinMaennchen } from './MeinMaennchen.js';
 import { MiniBoard } from './GameBoard.js';
 import { useGameSessions } from './useGameSession.js';
 import {
   compareSessions,
+  errorMessage,
   gameInfoFor,
   isFinished,
   nameFrom,
@@ -44,6 +48,25 @@ export function GamesScreen() {
     };
   }, [sessions, myId]);
 
+  /*
+   * Gegen den Spiegel üben: allein, ohne Chat. Der Server legt eine Übung an,
+   * die nur dir gehört – es entsteht keine Karte in irgendeinem Chat.
+   */
+  const [uebtGerade, setUebtGerade] = useState(false);
+  async function spiegelStarten() {
+    if (uebtGerade) return;
+    setUebtGerade(true);
+    try {
+      const session = await api.games.create({ gameKey: 'pressen', opponentIds: [] });
+      navigate(`/spiele/${session.id}`);
+    } catch (error) {
+      toast(errorMessage(error, 'Die Übung konnte nicht gestartet werden'), 'error');
+    } finally {
+      setUebtGerade(false);
+    }
+  }
+  const pressenDa = games.some((game) => game.key === 'pressen');
+
   function start(gameKey: string | null) {
     setPreselected(gameKey);
     setSetupOpen(true);
@@ -77,6 +100,36 @@ export function GamesScreen() {
         </button>
       }
     >
+      {pressenDa && (
+        <section className="stack" aria-label="Pressen allein">
+          <h2 className="game-section-title">Pressen allein</h2>
+          <div className="game-catalog">
+            <article className="card game-card" data-testid="spiegel-karte">
+              <span className="game-card-emoji" aria-hidden="true">
+                🪞
+              </span>
+              <div className="game-card-facts">
+                <h3 className="game-card-title">Gegen den Spiegel üben</h3>
+                <p className="game-card-text">
+                  Allein trinken, so oft du magst – ohne Chat, ohne Mitteilung, nur für dich. Das
+                  zweite Männchen trinkt synchron zu deinem; es gibt immer Atempo.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={uebtGerade}
+                onClick={() => void spiegelStarten()}
+                data-testid="spiegel-starten"
+              >
+                {uebtGerade ? 'Wird gestartet …' : 'Üben'}
+              </button>
+            </article>
+            <MeinMaennchen />
+          </div>
+        </section>
+      )}
+
       <section className="stack" aria-label="Laufende Partien">
         <h2 className="game-section-title">
           Laufende Partien {refreshing && <span className="muted">· wird aktualisiert …</span>}

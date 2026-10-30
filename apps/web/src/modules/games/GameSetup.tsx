@@ -120,15 +120,16 @@ export function GameSetup({
   }, [chat, myId]);
 
   const maxOpponents = Math.max(1, (info?.maxPlayers ?? 2) - 1);
-  const minOpponents = Math.max(0, (info?.minPlayers ?? 2) - 1);
   /*
-   * Spiele, die auch allein gehen (Pressen: "gegen den Spiegel"), brauchen
-   * keinen Gegner. Im Einzelchat ist der Gegner sonst gesetzt – dort entscheidet
-   * dieser Schalter; in Gruppen genügt es, niemanden zu wählen.
+   * Hier startet man immer eine Partie MIT jemandem aus dem Chat.
+   *
+   * Pressen gegen den Spiegel (allein üben) braucht keinen Chat und taucht in
+   * keinem auf: Der Zugang steht in der Spiele-Übersicht (`GamesScreen`), die
+   * Übung hat keine Karte im Chat. Deshalb mindestens ein Gegner, auch wenn das
+   * Spiel selbst mit einer Person läuft.
    */
-  const alleinMoeglich = minOpponents === 0;
-  const [allein, setAllein] = useState(false);
-  const mitspielende = alleinMoeglich && allein ? [] : opponents;
+  const minOpponents = Math.max(1, (info?.minPlayers ?? 2) - 1);
+  const mitspielende = opponents;
   const ready = Boolean(chat && info) && mitspielende.length >= minOpponents;
 
   /*
@@ -211,7 +212,7 @@ export function GameSetup({
       )}
 
       {info && <p className="game-note">{info.description}</p>}
-      {info && info.key === 'pressen' && chat && (
+      {info && info.key === 'pressen' && chat && mitspielende.length > 0 && (
         <p className="game-note" data-testid="pressen-aufstellung">
           {pressenAufstellung(mitspielende.length + 1)}
         </p>
@@ -258,22 +259,8 @@ export function GameSetup({
             </p>
           )}
 
-          {chat && chat.type === 'direct' && alleinMoeglich && (
-            <label className="game-check-row">
-              <input
-                type="checkbox"
-                checked={allein}
-                onChange={(event) => setAllein(event.target.checked)}
-              />
-              <span>Allein üben – gegen den Spiegel</span>
-            </label>
-          )}
-
           {chat && chat.type === 'group' && (
             <div className="stack">
-              {alleinMoeglich && (
-                <p className="game-note">Ohne Auswahl übst du allein gegen den Spiegel.</p>
-              )}
               <span className="game-label">
                 Wer spielt mit?{' '}
                 <span className="muted">

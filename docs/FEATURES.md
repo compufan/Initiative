@@ -1033,7 +1033,9 @@ weiter als Alarm enthält:
 
 - **Tic Tac Toe**, **Vier gewinnt** und **Pressen** (siehe unten), direkt aus dem
   Chat gestartet.
-- Die Partie erscheint als Karte im Chat und lässt sich von dort öffnen.
+- Die Partie erscheint als Karte im Chat und lässt sich von dort öffnen. Eine
+  **Übung allein** (Pressen „gegen den Spiegel“) hat **keinen Chat und keine Karte**:
+  sie startet unter **Spiele** und gehört nur dir.
 - Züge sind sofort bei allen sichtbar; wer am Zug ist, steht unter dem Brett.
 - **Der Server prüft jeden Zug** – Schummeln über die Entwicklerkonsole geht nicht.
 - Wer am Zug ist, bekommt eine **Benachrichtigung** („Du bist am Zug").
@@ -1055,7 +1057,7 @@ halten. **Nur was im Mund landet, ist getrunken**; der Mund nimmt höchstens
 leer, erscheint an wechselnder Stelle der Knopf **„Abstellen!“**; wer ihn
 besonders schnell trifft (höchstens 450 ms), bekommt die Auszeichnung
 **„getrümmert“** (lokal auf dem Gerät gezählt, der Lauf wird allen angezeigt).
-Mit **Esc** (oder dem Knopf darunter) stellt man vorzeitig ab – der Rest im Glas
+Mit **Esc** (außerhalb des Vollbilds) oder dem Knopf darunter stellt man vorzeitig ab – der Rest im Glas
 zählt als verschüttet.
 
 - **Die Tasten haben Gewicht:** Das Glas **driftet immer leicht ab**, beschleunigt
@@ -1072,13 +1074,26 @@ zählt als verschüttet.
   gewinnt; die Tests fahren Spielerprofile durch die echte Simulation.
 - **Atempo:** liegen die Wertungen unter 250 ms auseinander, wird wiederholt.
 - **Modi:** _Gegen den Spiegel_ (allein üben, das zweite Männchen trinkt
-  synchron – **es kommt immer Atempo heraus, und die nächste Runde beginnt von
-  selbst**, bis man abbricht oder „Anhalten“ wählt); **zu zweit**; **zu dritt**
+  synchron – **es kommt immer Atempo heraus; jede weitere Runde beginnt mit
+  „Anstoßen“**, bis man aufgibt; **ohne Chat**, startet unter _Spiele → Gegen den
+  Spiegel üben_); **zu zweit**; **zu dritt**
   (der Dritte macht die **Ampel**: trinkt und stellt ab, erst dann starten die
   anderen); **ab vier eine Staffette** – zwei Teams, aus jedem läuft einer, der
   Nächste darf, sobald sein Teamkollege abgestellt hat; bei ungerader Zahl
   macht der Letzte zuerst die Ampel. Bis zu acht Personen.
-- **Anstoßen:** Der Knopf heißt „Anstoßen“ und startet den Lauf **sofort**.
+- **Anstoßen:** Der Knopf heißt „Anstoßen“ und startet den Lauf **sofort** – und
+  **nur er**: ein Klick ins Brett oder daneben, ein Timer oder die Leertaste
+  außerhalb des Knopfs starten nichts.
+- **Vollbild:** Pressen läuft im **Vollbild** (Fullscreen-Funktion des Browsers; auf
+  dem iPhone ein bildschirmfüllendes Blatt), im Querformat mit der Bühne links
+  und den Knöpfen rechts. Es beginnt mit „Anstoßen“ oder dem Knopf „Vollbild“ und
+  endet mit „Vollbild beenden“, **Esc** oder **Zurück** – ein Esc im Vollbild
+  schließt nur das Vollbild, der Lauf geht weiter.
+- **Ergebnis groß:** Nach der Runde steht groß **„Du hast gewonnen“**, **„Du wurdest
+  abgeschluckt“** oder **„Atempo“** (Zuschauer: „Anna hat gewonnen“; bei der
+  Staffette zählt das Team), darunter je Spieler **Zeit, verschüttetes Bier und
+  Score**, die eigene Zeile hervorgehoben. Fremde Werte siehst du weiterhin erst,
+  wenn die Runde feststeht.
 - **Echtzeit oder asynchron – beides geht.** Vor dem Start wählt jeder
   _Zusammen (Echtzeit)_ oder _Wann ich will (asynchron)_. Bei Echtzeit
   bestätigen alle innerhalb von **10 Sekunden** (sichtbarer Countdown), dann
@@ -1093,7 +1108,8 @@ zählt als verschüttet.
   steht nur „fertig“ oder „noch nicht“ – auch im Chat, in der Liste und für
   Zuschauer; der Server liefert fremde Zeiten vorher gar nicht aus.
 - **Dein Strichmännchen:** Frisur, Haar- und Hautfarbe, Shirt, Bart, Brille und
-  Hut, mit Vorschau („Strichmännchen anpassen“). Es wird in deinem Konto
+  Hut, mit Vorschau („Mein Strichmännchen“ unter _Spiele_ und in den
+  _Einstellungen_ – unabhängig von einer Partie oder einem Gegner). Es wird in deinem Konto
   gespeichert, gilt auf allen Geräten und in allen Spielen, und die anderen sehen
   es im Spiel. Die Figuren sind lebendig: atmen, blinzeln, schlucken, blähen die
   Wangen, erschrecken beim Verschütten, jubeln beim Sieg.

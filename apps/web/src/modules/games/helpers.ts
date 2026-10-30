@@ -189,7 +189,7 @@ export function playersLabel(
 export function pressenAufstellung(spieler: number): string {
   const plan = planFuer(spieler);
   if (plan.modus === 'spiegel') {
-    return 'Gegen den Spiegel: Das zweite Männchen trinkt synchron zu deinem – es gibt immer Atempo, die nächste Runde beginnt von selbst, bis du abbrichst. Dein Malus wächst dabei nicht.';
+    return 'Gegen den Spiegel: Das zweite Männchen trinkt synchron zu deinem – es gibt immer Atempo, jede weitere Runde beginnt mit „Anstoßen“, bis du aufgibst. Dein Malus wächst dabei nicht.';
   }
   if (plan.modus === 'duell')
     return 'Zu zweit: zusammen in Echtzeit oder jeder, wann er will; die bessere Wertung gewinnt. Bis alle fertig sind, sieht jeder nur sein eigenes Ergebnis.';

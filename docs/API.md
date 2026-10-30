@@ -864,16 +864,16 @@ Auch diese Routen antworten mit nackten Arrays und `{ … : true }` statt mit
 
 ## Mini-Spiele
 
-| Methode | Pfad                           | Auth   | Request                                     | Antwort                                 |
-| ------- | ------------------------------ | ------ | ------------------------------------------- | --------------------------------------- |
-| GET     | `/games`                       | –      | –                                           | `200` `{ items: GameInfo[] }` (Katalog) |
-| GET     | `/games/sessions`              | Bearer | Query `conversationId?`, `status?`          | `200` `{ items: GameSession[] }`        |
-| POST    | `/games/sessions`              | Bearer | `{ conversationId, gameKey, opponentIds? }` | `201` `GameSession`                     |
-| GET     | `/games/sessions/{id}`         | Bearer | –                                           | `200` `GameSession`                     |
-| POST    | `/games/sessions/{id}/join`    | Bearer | –                                           | `200` `GameSession`                     |
-| POST    | `/games/sessions/{id}/moves`   | Bearer | `{ move, version? }`                        | `200` `GameSession`                     |
-| POST    | `/games/sessions/{id}/abort`   | Bearer | –                                           | `200` `GameSession`                     |
-| POST    | `/games/sessions/{id}/rematch` | Bearer | –                                           | `201` `GameSession` (neue Partie)       |
+| Methode | Pfad                           | Auth   | Request                                      | Antwort                                 |
+| ------- | ------------------------------ | ------ | -------------------------------------------- | --------------------------------------- |
+| GET     | `/games`                       | –      | –                                            | `200` `{ items: GameInfo[] }` (Katalog) |
+| GET     | `/games/sessions`              | Bearer | Query `conversationId?`, `status?`           | `200` `{ items: GameSession[] }`        |
+| POST    | `/games/sessions`              | Bearer | `{ conversationId?, gameKey, opponentIds? }` | `201` `GameSession`                     |
+| GET     | `/games/sessions/{id}`         | Bearer | –                                            | `200` `GameSession`                     |
+| POST    | `/games/sessions/{id}/join`    | Bearer | –                                            | `200` `GameSession`                     |
+| POST    | `/games/sessions/{id}/moves`   | Bearer | `{ move, version? }`                         | `200` `GameSession`                     |
+| POST    | `/games/sessions/{id}/abort`   | Bearer | –                                            | `200` `GameSession`                     |
+| POST    | `/games/sessions/{id}/rematch` | Bearer | –                                            | `201` `GameSession` (neue Partie)       |
 
 Der Server ist **autoritativ**: `move` ist ein beliebiges JSON-Objekt, das die
 Spielregel in `apps/api/src/games/` prüft. Ein ungültiger Zug ergibt `400` mit
@@ -884,6 +884,14 @@ Ansichten: Passt sie nicht zum aktuellen Stand, kommt
 
 Beim Anlegen wird automatisch eine Chat-Nachricht vom Typ `game` erzeugt. Wer am
 Zug ist, bekommt eine Push-Benachrichtigung.
+
+**Übung ohne Chat:** Ohne `conversationId` und ohne Gegner entsteht für Spiele, die
+mit einer Person laufen (Pressen „gegen den Spiegel“), eine Übung: `conversationId`
+und `messageId` sind `null`, es gibt keine Chat-Nachricht und keine Mitteilung. Nur
+ihr Besitzer sieht sie (Liste, `GET`, Züge, Aufgeben, Revanche); jeder andere
+bekommt `404`. Eine neue Übung räumt die vorige desselben Spiels ab. Ein älterer
+Client, der einen Chat mitschickt, aber keinen Gegner, bekommt ebenfalls eine
+Übung. Ohne Chat und mit Gegner – oder ein Spiel für zwei – ergibt `400`.
 
 **GameSession**
 

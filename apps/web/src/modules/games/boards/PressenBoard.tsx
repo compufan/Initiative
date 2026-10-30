@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent } from 'react';
+import { Link } from 'react-router-dom';
 import {
   GLAS_ML,
   MALUS_MAX_MS,
@@ -20,7 +21,6 @@ import {
   type PressenAnsicht,
   type PressenErgebnis,
   type PressenFigurDaten,
-  type PressenState,
   type StartPhase,
   type Taste,
 } from '@initiative/shared';
@@ -38,7 +38,8 @@ import {
   type FigurAnsicht,
   type Stimmung,
 } from './PressenFigur.js';
-import { PressenFigurEditor } from './PressenFigurEditor.js';
+import { ergebnisAnzeige } from './pressenErgebnis.js';
+import { usePressenVollbild, vollbildWunschLesen } from './pressenVollbild.js';
 import { getruemmertMerken, getruemmertZaehler, usePressenLauf } from './pressenLauf.js';
 
 /** Liest den Spielstand vorsichtig – ein unbekannter Stand wird zu einer leeren Runde. */
@@ -106,9 +107,6 @@ const ALLE_AUS: Record<Taste, boolean> = {
   neigen: false,
 };
 
-/** Wie lange (ms), bevor im Spiegelmodus die nächste Runde von selbst beginnt. */
-const SPIEGEL_AUTOSTART_MS = 2600;
-
 /**
  * Pressen: das Bier so schnell wie möglich trinken, ohne etwas zu verschütten.
  *
@@ -116,7 +114,7 @@ const SPIEGEL_AUTOSTART_MS = 2600;
  * meldet nur das Ergebnis als Zug; der Server wertet. Fremde Läufe sind bis
  * zum Rundenende nur als „fertig“ zu sehen (der Server schickt nicht mehr).
  */
-export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) {
+export function PressenBoard({ session, mySeat, onMove, busy, onRematch }: GameBoardProps) {
   const myId = useMyId();
   const state = lesen(session);
   const reduziert = useReduzierteBewegung();
@@ -140,7 +138,6 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
         : session.figuren?.[userId];
     return figurLesen(roh) ?? standardFigur(userId);
   };
-  const [editorOffen, setEditorOffen] = useState(false);
 
   const aktiv = session.status === 'active' && !state.fertig;
   const dran = dranSitze(state);
@@ -148,6 +145,11 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
     mySeat != null ? offen(state.ergebnisse[mySeat]) : null;
   const ichDran = aktiv && mySeat != null && dran.includes(mySeat);
   const spiegel = state.modus === 'spiegel';
+
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const vollbild = usePressenVollbild(wrapRef);
+  const vollbildRef = useRef(vollbild.aktiv);
+  vollbildRef.current = vollbild.aktiv;
 
   const laufRunde = useRef(state.runde);
   const laufVerz = useRef(0);
@@ -246,11 +248,15 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
       if (!t) return;
       // Der Abstellen-Knopf gehört sich selbst (Leertaste/Enter lösen ihn aus).
       if ((e.target as HTMLElement | null)?.closest?.('[data-abstellen]')) return;
-      e.preventDefault();
       if (t === 'esc') {
+        // Ein Esc, das nur das Vollbild schließt, bricht keinen Lauf ab: Der
+        // Dialogstapel (lib/dialogVerlauf) hat es dann schon vergeben.
+        if (e.defaultPrevented || vollbildRef.current) return;
+        e.preventDefault();
         if (runter && !e.repeat) laufRef.current.vorzeitigAbstellen();
         return;
       }
+      e.preventDefault();
       if (e.repeat) return;
       druecke(t, runter);
     };
@@ -331,16 +337,6 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
     onMove({ typ: 'start', art });
   };
 
-  /* ---- Spiegelmodus: die nächste Runde beginnt von selbst ---- */
-  const [spiegelPause, setSpiegelPause] = useState(false);
-  const spiegelAuto =
-    spiegel && ichDran && lauf.phase === 'bereit' && !meinErgebnis && state.atempo > 0;
-  useEffect(() => {
-    if (!spiegelAuto || spiegelPause || busy) return undefined;
-    const id = window.setTimeout(() => anstossen(), SPIEGEL_AUTOSTART_MS);
-    return () => window.clearTimeout(id);
-  }, [spiegelAuto, spiegelPause, busy, anstossen, state.runde]);
-
   /* ---- Stimmung: Schreck beim Verschütten, Freude am Ende ---- */
   const [schreckBis, setSchreckBis] = useState(0);
   const letzteMenge = useRef(0);
@@ -384,17 +380,6 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
       );
     }
   }, [lauf.phase, lauf.zustand.tick, lauf.zustand.leerTick, lauf.ergebnis]);
-  const angesagt = useRef('');
-  useEffect(() => {
-    const schluessel = `${state.runde}-${state.fertig}`;
-    if (angesagt.current === schluessel) return;
-    if (state.fertig) {
-      setAnsage(`Entschieden. ${pressen.describe(state as unknown as PressenState, [])}.`);
-    } else if (state.atempo > 0 && state.letzterAbstandMs != null) {
-      setAnsage(`Atempo! Nur ${state.letzterAbstandMs} Millisekunden Unterschied – nochmal.`);
-    }
-    angesagt.current = schluessel;
-  }, [state]);
   const startKey = startP?.phase ?? '';
   const startAngesagt = useRef('');
   useEffect(() => {
@@ -447,8 +432,9 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
   const z = lauf.zustand;
   const verschuettetText = z.verschuettet.toFixed(1).replace('.', ',');
   const versatz = laufVersatz.current ?? 0;
-  const ergebnisListe = (state.fertig ? state.ergebnisse : state.vorrunde) ?? [];
-  const zeigeListe = state.fertig || (state.atempo > 0 && state.ergebnisse.every((e) => e == null));
+  // Das große Ergebnis: bei entschiedener Partie immer, bei Atempo bis zum nächsten Anstoßen.
+  const ergebnis = ergebnisAnzeige(state, mySeat, nameVon);
+  const zeigeErgebnis = ergebnis != null && (state.fertig || lauf.phase === 'bereit');
   const runde1Sek = Math.max(
     0,
     Math.ceil((startP?.phase === 'zaehlt' ? startP.beginn - jetzt : 0) / 1000),
@@ -465,12 +451,46 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
     ['frei', 'asynchron', 'gestartet', 'zaehlt'].includes(startP.phase);
   const kannAnstossen = zeigeAnstossen && startP?.phase !== 'zaehlt' && !busy;
   const wirdZurueckgefallen = startP?.phase === 'asynchron' && startP.grund === 'frist';
+  /*
+   * Der EINZIGE Weg, einen Lauf zu beginnen: Klick, Tippen, Enter oder Leertaste
+   * auf dem Knopf „Anstoßen“ (Enter und Leertaste lösen beim Knopf einen Klick
+   * aus – eine Taste auf der Seite sonst nicht). Weder ein Klick ins Brett noch
+   * einer daneben, kein Timer und keine Rückkehr zur Seite starten etwas.
+   *
+   * Der Klick ist zugleich die Nutzergeste, die das Vollbild verlangt – deshalb
+   * wird es HIER angefragt, synchron und vor allem anderen. Scheitert es, läuft
+   * das Spiel trotzdem (siehe `pressenVollbild.ts`).
+   */
+  const beimAnstossen = () => {
+    if (!kannAnstossen) return;
+    if (vollbildWunschLesen()) vollbild.betreten();
+    anstossen();
+  };
 
   return (
-    <div className="game-board-wrap pressen">
+    <div
+      ref={wrapRef}
+      className={`game-board-wrap pressen${vollbild.aktiv ? ' is-vollbild' : ''}${vollbild.nativ ? ' is-nativ' : ''}`}
+      data-vollbild={vollbild.aktiv ? (vollbild.nativ ? 'nativ' : 'ueberlagerung') : 'aus'}
+      data-testid="pressen-brett"
+    >
       <p className="visually-hidden" role="status" aria-live="polite" data-testid="pressen-ansage">
         {ansage}
       </p>
+
+      {mySeat != null && (
+        <div className="pressen-vollbild-zeile">
+          <button
+            type="button"
+            className="btn btn-sm pressen-vollbild-knopf"
+            data-testid="pressen-vollbild"
+            aria-pressed={vollbild.aktiv}
+            onClick={() => (vollbild.aktiv ? vollbild.beenden(true) : vollbild.betreten(true))}
+          >
+            {vollbild.aktiv ? '✕ Vollbild beenden' : '⛶ Vollbild'}
+          </button>
+        </div>
+      )}
 
       {mySeat != null && (
         <div
@@ -573,6 +593,82 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
         </div>
       )}
 
+      {zeigeErgebnis && ergebnis && (
+        <section
+          className={`pressen-ergebnis is-${ergebnis.art}`}
+          aria-label="Ergebnis"
+          data-testid="pressen-ergebnis"
+          data-art={ergebnis.art}
+        >
+          <div role="status" aria-live="polite" aria-atomic="true">
+            <p className="pressen-ergebnis-titel" data-testid="pressen-ergebnis-titel">
+              <span aria-hidden="true">
+                {ergebnis.art === 'sieg'
+                  ? '🏆 '
+                  : ergebnis.art === 'niederlage'
+                    ? '🍺 '
+                    : ergebnis.art === 'atempo'
+                      ? '🤝 '
+                      : '👑 '}
+              </span>
+              {ergebnis.titel}
+            </p>
+            {ergebnis.untertitel && (
+              <p className="pressen-ergebnis-untertitel">{ergebnis.untertitel}</p>
+            )}
+          </div>
+          {ergebnis.zeilen.length > 0 && (
+            <div className="pressen-wertung">
+              <h3>{ergebnis.listenTitel}</h3>
+              <ol>
+                {ergebnis.zeilen.map((zeile) => (
+                  <li
+                    key={zeile.sitz}
+                    className={`${zeile.sieger ? 'ist-sieger' : ''}${zeile.ich ? ' ist-ich' : ''}`}
+                    aria-current={zeile.ich ? 'true' : undefined}
+                  >
+                    <span className="pressen-wertung-name truncate">
+                      {zeile.sieger ? '👑 ' : ''}
+                      {zeile.name}
+                      {zeile.rolle ? ` · ${zeile.rolle}` : ''}
+                      {zeile.nichtGewertet ? ' (nicht gewertet)' : ''}
+                    </span>
+                    <dl className="pressen-wertung-werte">
+                      <div>
+                        <dt>Zeit</dt>
+                        <dd>{sek(zeile.dauerMs)}</dd>
+                      </div>
+                      <div>
+                        <dt>Verschüttet</dt>
+                        <dd>{ml(zeile.verschuettetDezi)}</dd>
+                      </div>
+                      <div>
+                        <dt>Score</dt>
+                        <dd>
+                          <strong>{sek(zeile.wertungMs)}</strong>
+                          {zeile.getruemmert ? ' 🏅' : ''}
+                        </dd>
+                      </div>
+                    </dl>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )}
+          {state.fertig && mySeat != null && onRematch && (
+            <button
+              type="button"
+              className="btn btn-primary btn-block"
+              disabled={busy}
+              onClick={onRematch}
+              data-testid="pressen-revanche"
+            >
+              🔁 Revanche
+            </button>
+          )}
+        </section>
+      )}
+
       {mySeat != null && lauf.phase === 'laeuft' && (
         <div className="pressen-steuerung">
           <div className="pressen-kreuz" role="group" aria-label="Glas bewegen">
@@ -630,9 +726,9 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
           type="button"
           className="btn pressen-vorzeitig"
           onClick={() => lauf.vorzeitigAbstellen()}
-          data-tipp="Stellt das Glas sofort ab – was noch drin ist, zählt als verschüttet (Esc)"
+          data-tipp={`Stellt das Glas sofort ab – was noch drin ist, zählt als verschüttet${vollbild.aktiv ? '' : ' (Esc)'}`}
         >
-          Vorzeitig abstellen (Esc)
+          Vorzeitig abstellen{vollbild.aktiv ? '' : ' (Esc)'}
         </button>
       )}
 
@@ -702,23 +798,16 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
           <button
             type="button"
             className="btn btn-primary btn-block pressen-anstossen"
-            onClick={anstossen}
+            onClick={beimAnstossen}
             disabled={!kannAnstossen}
             data-testid="pressen-anstossen"
           >
             🍻 Anstoßen
           </button>
-          {spiegelAuto && !spiegelPause && (
-            <p className="game-hint" role="status">
-              Atempo – die nächste Runde beginnt gleich von selbst.{' '}
-              <button type="button" className="btn" onClick={() => setSpiegelPause(true)}>
-                Anhalten
-              </button>
-            </p>
-          )}
           <p className="game-hint">
             Pfeiltasten: Glas bewegen (links, rechts, vor, zurück) · Leertaste (oder Knopf) halten:
-            neigen · Esc: vorzeitig abstellen. Je länger du hältst, desto schneller wird es.
+            neigen · {vollbild.aktiv ? 'Esc: Vollbild verlassen' : 'Esc: vorzeitig abstellen'}. Je
+            länger du hältst, desto schneller wird es.
           </p>
         </div>
       )}
@@ -757,13 +846,6 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
             : ''}
           {meinErgebnis.getruemmert ? ' · 🏅 getrümmert!' : ''}. Die Ergebnisse der anderen siehst
           du, sobald alle fertig sind.
-        </p>
-      )}
-
-      {!state.fertig && state.atempo > 0 && state.ergebnisse.every((e) => e == null) && (
-        <p className="pressen-atempo" role="status">
-          Atempo! Nur {state.letzterAbstandMs ?? 0} ms Unterschied – ihr tretet noch einmal an
-          (Runde {state.runde}).
         </p>
       )}
 
@@ -844,56 +926,12 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
         </p>
       )}
 
-      {zeigeListe && ergebnisListe.some((e) => e != null) && (
-        <section className="pressen-wertung" aria-label="Wertung">
-          <h3>{state.fertig ? 'Endwertung' : `Runde ${state.runde - 1}`}</h3>
-          <ol>
-            {ergebnisListe.map((roh, sitz) => {
-              const e = offen(roh);
-              return e ? (
-                <li key={sitz} className={state.sieger.includes(sitz) ? 'ist-sieger' : undefined}>
-                  <span className="truncate">
-                    {state.sieger.includes(sitz) ? '👑 ' : ''}
-                    {nameVon(sitz)}
-                    {rolle(state, sitz) ? ` · ${rolle(state, sitz)}` : ''}
-                    {state.ampel === sitz ? ' (nicht gewertet)' : ''}
-                  </span>
-                  <span>
-                    {sek(e.dauerMs)} + {ml(e.verschuettetDezi)} →{' '}
-                    <strong>{sek(e.wertungMs)}</strong>
-                    {e.getruemmert ? ' 🏅' : ''}
-                  </span>
-                </li>
-              ) : null;
-            })}
-          </ol>
-          {state.fertig && state.teamWertung && state.modus === 'staffette' && (
-            <p className="game-hint">
-              Team A {sek(state.teamWertung[0]!)} : Team B {sek(state.teamWertung[1]!)}
-            </p>
-          )}
-        </section>
-      )}
-
-      {mySeat != null && lauf.phase === 'bereit' && !meinErgebnis && (
+      {mySeat != null && !vollbild.aktiv && lauf.phase === 'bereit' && !meinErgebnis && (
         <div className="pressen-figur-zeile">
-          <button
-            type="button"
-            className="btn"
-            onClick={() => setEditorOffen(true)}
-            data-testid="pressen-figur-aendern"
-          >
-            🎨 Strichmännchen anpassen
-          </button>
+          <Link className="btn" to="/spiele?figur=1" data-testid="pressen-figur-aendern">
+            🎨 Mein Strichmännchen
+          </Link>
         </div>
-      )}
-      {mySeat != null && (
-        <PressenFigurEditor
-          open={editorOffen}
-          onClose={() => setEditorOffen(false)}
-          start={figurVon(mySeat)}
-          kennung={myId}
-        />
       )}
 
       {zaehlerAuszeichnung > 0 && (
@@ -904,9 +942,9 @@ export function PressenBoard({ session, mySeat, onMove, busy }: GameBoardProps) 
 
       {mySeat != null && spiegel && (
         <p className="game-hint">
-          Gegen den Spiegel trinkt das zweite Männchen genau wie du – es gibt immer Atempo, und die
-          nächste Runde beginnt von selbst, bis du oben „Aufgeben“ wählst. Der Malus wächst dabei
-          nicht.
+          Gegen den Spiegel trinkt das zweite Männchen genau wie du – es gibt immer Atempo. Jede
+          weitere Runde beginnt erst, wenn du auf „Anstoßen“ drückst; „Aufgeben“ beendet die Übung.
+          Der Malus wächst dabei nicht.
         </p>
       )}
 
