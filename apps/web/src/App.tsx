@@ -10,6 +10,7 @@ import { appModules } from './modules/registry.js';
 import { connectChatRealtime, useChat } from './state/chat.js';
 import { connectVerlaufRealtime } from './state/verlauf.js';
 import { useSession } from './state/session.js';
+import { sitzungsZustandLeeren } from './state/abmelden.js';
 import { useNavVisibility } from './state/ui.js';
 
 function BottomNav() {
@@ -114,6 +115,18 @@ export function App() {
   useEffect(() => {
     void useSession.getState().bootstrap();
   }, []);
+
+  // Wer abgemeldet ist – ausdrücklich oder weil die Sitzung von aussen endete –,
+  // hinterlässt dem Nächsten im selben Tab nichts im Arbeitsspeicher.
+  useEffect(
+    () =>
+      useSession.subscribe((jetzt, vorher) => {
+        if (vorher.status === 'authenticated' && jetzt.status === 'anonymous') {
+          sitzungsZustandLeeren();
+        }
+      }),
+    [],
+  );
 
   return (
     <BrowserRouter>

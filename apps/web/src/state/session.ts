@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { AuthSession, SelfUserDto } from '@initiative/shared';
-import { ApiError, api, getTokens, setTokens } from '../lib/api.js';
+import { ApiError, api, getTokens, onTokenChange, setTokens } from '../lib/api.js';
 import { realtime, type ConnectionState } from '../lib/realtime.js';
 import { clearOfflineData, readMeta, writeMeta } from '../lib/db.js';
 
@@ -93,17 +93,21 @@ export const useSession = create<SessionState>((set, get) => ({
   async logout() {
     const tokens = getTokens();
     realtime.disconnect();
+    abmeldenLaeuft = true;
+    try {
+      // Das Push-Abo ZUERST loesen, solange der Token noch gilt. Danach kaeme
+      // der Server nicht mehr an die Anfrage – und das Geraet bekaeme weiter
+      // Benachrichtigungen fuer ein Konto, von dem es sich abgemeldet hat.
+      await pushAbmelden().catch(() => {});
 
-    // Das Push-Abo ZUERST loesen, solange der Token noch gilt. Danach kaeme
-    // der Server nicht mehr an die Anfrage – und das Geraet bekaeme weiter
-    // Benachrichtigungen fuer ein Konto, von dem es sich abgemeldet hat.
-    await pushAbmelden().catch(() => {});
-
-    if (tokens) await api.auth.logout(tokens.refreshToken).catch(() => {});
-    setTokens(null);
-    await clearOfflineData();
-    await medienSpeicherLeeren();
-    set({ status: 'anonymous', user: null });
+      if (tokens) await api.auth.logout(tokens.refreshToken).catch(() => {});
+      setTokens(null);
+      await clearOfflineData();
+      await medienSpeicherLeeren();
+      set({ status: 'anonymous', user: null });
+    } finally {
+      abmeldenLaeuft = false;
+    }
   },
 
   setUser(user) {
@@ -121,6 +125,31 @@ export const useSession = create<SessionState>((set, get) => ({
 }));
 
 realtime.onStateChange((connection) => useSession.setState({ connection }));
+
+/** Läuft gerade `logout`? Dann räumt das selbst auf, in seiner Reihenfolge. */
+let abmeldenLaeuft = false;
+
+/*
+ * Die Sitzung endet auch OHNE `logout`.
+ *
+ * Der Server lehnt die Erneuerung ab (abgelaufen, auf einem anderen Gerät
+ * alle Sitzungen beendet, Konto gelöscht), oder ein anderer Tab meldet sich
+ * ab. In beiden Fällen sind die Token weg – bisher blieb die Oberfläche aber
+ * auf `authenticated` stehen: Chats, Fotos und Termine blieben sichtbar, jede
+ * Anfrage lief ohne Token ins Leere, und die lokalen Daten blieben liegen,
+ * bis sich jemand ausdrücklich abmeldete. Auf einem geteilten Gerät ist das
+ * genau der Fall, der nicht vorkommen darf.
+ */
+onTokenChange((next) => {
+  if (next || abmeldenLaeuft) return;
+  if (useSession.getState().status !== 'authenticated') return;
+  realtime.disconnect();
+  useSession.setState({ status: 'anonymous', user: null });
+  void (async () => {
+    await clearOfflineData().catch(() => {});
+    await medienSpeicherLeeren().catch(() => {});
+  })();
+});
 
 /** Convenience selector – the id of the signed-in user (empty when anonymous). */
 export function useMyId(): string {

@@ -12,6 +12,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const meMock = vi.fn();
 const setTokensMock = vi.fn();
 const metaStore = new Map<string, unknown>();
+const clearOfflineMock = vi.fn(async () => {});
+/** Der Hörer, den `session.ts` bei `onTokenChange` anmeldet. */
+let tokenHoerer: (tokens: unknown) => void = () => {};
 
 /** Ersatz fuer `ApiError` – der Status entscheidet ueber Abmelden oder Halten. */
 class MockApiError extends Error {
@@ -35,6 +38,10 @@ vi.mock('../lib/api.js', () => ({
   api: { auth: { me: () => meMock() } },
   getTokens: () => ({ accessToken: 'a', refreshToken: 'r', expiresAt: Date.now() + 60_000 }),
   setTokens: (value: unknown) => setTokensMock(value),
+  onTokenChange: (hoerer: (tokens: unknown) => void) => {
+    tokenHoerer = hoerer;
+    return () => {};
+  },
 }));
 
 vi.mock('../lib/realtime.js', () => ({
@@ -47,7 +54,7 @@ vi.mock('../lib/realtime.js', () => ({
 }));
 
 vi.mock('../lib/db.js', () => ({
-  clearOfflineData: vi.fn(),
+  clearOfflineData: () => clearOfflineMock(),
   readMeta: async (key: string) => metaStore.get(key) ?? null,
   writeMeta: async (key: string, value: unknown) => {
     metaStore.set(key, value);
@@ -62,6 +69,7 @@ beforeEach(async () => {
   vi.resetModules();
   meMock.mockReset();
   setTokensMock.mockReset();
+  clearOfflineMock.mockClear();
   metaStore.clear();
   ({ useSession } = await import('./session.js'));
 });
@@ -123,5 +131,37 @@ describe('Start ohne erreichbaren Server', () => {
     expect(useSession.getState().status).toBe('authenticated');
     expect(useSession.getState().user).toEqual(profile);
     expect(setTokensMock).not.toHaveBeenCalledWith(null);
+  });
+});
+
+/**
+ * Regressionstest: Die Sitzung endet, ohne dass jemand „Abmelden“ drückt.
+ *
+ * Lehnt der Server die Erneuerung ab oder meldet sich ein anderer Tab ab, sind
+ * die Token weg. Die Oberfläche blieb trotzdem angemeldet stehen – mit allen
+ * Chats im Blick und allen lokalen Daten im Gerät.
+ */
+describe('Sitzung endet von aussen', () => {
+  it('wechselt zur Anmeldung und räumt die lokalen Daten', async () => {
+    metaStore.set('session.user', profile);
+    meMock.mockResolvedValue(profile);
+    await useSession.getState().bootstrap();
+    expect(useSession.getState().status).toBe('authenticated');
+
+    tokenHoerer(null);
+
+    expect(useSession.getState().status).toBe('anonymous');
+    expect(useSession.getState().user).toBeNull();
+    await vi.waitFor(() => expect(clearOfflineMock).toHaveBeenCalled());
+  });
+
+  it('bleibt bei einer blossen Rotation angemeldet', async () => {
+    meMock.mockResolvedValue(profile);
+    await useSession.getState().bootstrap();
+
+    tokenHoerer({ accessToken: 'b', refreshToken: 'r2', expiresAt: Date.now() + 60_000 });
+
+    expect(useSession.getState().status).toBe('authenticated');
+    expect(clearOfflineMock).not.toHaveBeenCalled();
   });
 });
