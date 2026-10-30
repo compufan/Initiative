@@ -893,6 +893,45 @@ bekommt `404`. Eine neue Übung räumt die vorige desselben Spiels ab. Ein älte
 Client, der einen Chat mitschickt, aber keinen Gegner, bekommt ebenfalls eine
 Übung. Ohne Chat und mit Gegner – oder ein Spiel für zwei – ergibt `400`.
 
+**Pressen-Statistik:** Jeder gewertete Lauf bleibt als Zeile erhalten
+(`pressen_laeufe`), auch wenn die Partie oder die Übung längst aufgeräumt ist. Der
+Server schreibt sie beim Abschluss einer Runde, je gewerteter Person, in derselben
+Transaktion wie den Spielstand; ein Wiederholen doppelt nichts (eindeutig je
+Sitzung, Runde, Person). Gelesen wird nur das **eigene** Konto – fremde Läufe gibt
+es nicht (`404`), und es zählt nur, was bei Rundenende bereits offen war.
+
+| Methode | Pfad                         | Auth   | Query                                                                                                                   | Antwort                                      |
+| ------- | ---------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| GET     | `/games/pressen/statistik`   | Bearer | `von?`, `bis?` (RFC 3339), `modus?`, `art?`, `ausgang?`                                                                 | `200` `PressenStatistik`                     |
+| GET     | `/games/pressen/laeufe`      | Bearer | wie oben, dazu `sortierung?` (`neu`, `alt`, `zeit`, `wertung`, `verschuettet`), `cursor?`, `limit?` (1–100, Vorgabe 25) | `200` `{ items: PressenLauf[], nextCursor }` |
+| GET     | `/games/pressen/laeufe/{id}` | Bearer | –                                                                                                                       | `200` `PressenLauf`, fremd/unbekannt `404`   |
+
+`modus`: `spiegel`, `duell`, `ampel`, `staffette`; `art`: `echtzeit`, `asynchron`;
+`ausgang`: `sieg`, `niederlage`, `atempo`, `nicht_gewertet`. Ein unbekannter Wert,
+eine unbekannte Sortierung oder ein ungültiger Cursor ergibt `400`. Der Cursor ist
+undurchsichtig und gilt nur für dieselbe Sortierung und denselben Filter;
+`nextCursor` ist `null` auf der letzten Seite.
+
+`PressenStatistik` (zod-Schema `pressenStatistikSchema` in `@initiative/shared`):
+`kopf` (Läufe, Siege, Niederlagen, Atempo, nicht gewertet, `siegquote` 0–1 oder
+`null`, getrümmert, vorzeitig, Ø Zeit/Wertung/Verschüttetes, Gesamtmenge getrunken und
+verschüttet in Zehntelml, `trefferquote`, Gesamtdauer, längste und aktuelle
+Siegesserie), `rekorde` (beste Zeit, beste Wertung, sauberster Lauf, schnellste
+Reaktion, längste Siegesserie – je mit `wert`, `laufId`, `gespieltAm`), `nachModus`,
+`nachGegner` (Bilanz über gemeinsame, abgeschlossene Runden; `name` ist `null`, wenn
+das Konto nicht mehr besteht), `nachMalus` (Wertung je 50-ms-Stufe der Ermüdung, ohne
+Spiegel), `verlauf` (die jüngsten 600 Läufe in zeitlicher Reihenfolge) und
+`verlaufGekuerzt`. Zeiten und Wertungen sind Millisekunden, Mengen Zehntelmilliliter.
+Zeit- und Wertungsrekorde und Durchschnitte zählen nur Läufe, die ins Ziel kamen
+(nicht vorzeitig abgestellt); die Siegesserie zählt Siege in Folge, eine
+Niederlage beendet sie, Atempo und nicht gewertete Läufe nicht.
+
+`PressenLauf` (`pressenLaufSchema`): `id`, `sessionId` (`null`, wenn die Übung
+aufgeräumt wurde), `runde`, `sitz`, `modus`, `startArt`, `gegner[]`, `team[]`
+(`{ userId, name }`), `dauerMs`, `verschuettetDezi`, `wertungMs`, `reaktionMs`,
+`vorzeitig`, `getruemmert`, `malusMs`, `versatzMs`, `ausgang`, `teamWertungMs`,
+`gegnerWertungMs`, `gespieltAm`.
+
 **GameSession**
 
 ```json

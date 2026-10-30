@@ -47,7 +47,8 @@ mit der Gießstärke. Der Mund nimmt weiter höchstens 30 ml/s auf und fasst 25 
 auf einmal.
 
 Tasten: Pfeiltasten (alle vier) bewegen das Glas, Leertaste neigt, Esc stellt
-vorzeitig ab. Touch: ein Steuerkreuz aus vier Knöpfen plus „Neigen“.
+vorzeitig ab. Touch: ein Steuerkreuz aus vier Knöpfen plus „Neigen“ (Anordnung siehe
+„Bedienelemente“).
 
 ## Wie sich die Tasten anfühlen
 
@@ -197,8 +198,9 @@ Anzeige. Zwei Wege, ein Aussehen (`pressenVollbild.ts`):
 
 Angefordert wird nur aus einer **Nutzergeste**, synchron im Klick: dem Klick auf
 „Anstoßen“ oder dem eigenen Knopf „⛶ Vollbild“. Scheitert die Anfrage, läuft
-das Spiel unverändert weiter. Im Querformat (Handy) steht die Bühne links, alles
-andere rechts daneben, das Ergebnis wird kompakter, damit „Anstoßen“ ohne
+das Spiel unverändert weiter. Im Querformat (jede Größe) stehen drei Spalten: links das
+Steuerkreuz, in der Mitte die Bühne, rechts „Neigen“ unten und alles andere darüber
+(siehe „Bedienelemente“); das Ergebnis wird kompakter, damit „Anstoßen“ ohne
 Blättern erreichbar bleibt; im echten Vollbild wird zusätzlich
 `screen.orientation.lock('landscape')` versucht (nur ein Wunsch).
 
@@ -312,6 +314,151 @@ mit Vorschau in der Chatliste und Mitteilung. Jetzt (Migration `0027`):
 - Tests: `apps/api/tests/uebung_ohne_chat.rs` (keine Karte, nur Besitzer, 404 für
   Fremde, alter Client, Aufräumen, Konto löschen, Prüfung der Tabelle).
 
+## Bedienelemente: links das Kreuz, rechts Neigen
+
+Überall gleich – Normalansicht, Vollbild, iPhone-Rückfall (Überlagerung), Hoch- und
+Querformat: das **Steuerkreuz auf der linken, „Neigen“ auf der rechten Seite des
+Bildschirms**, unten, wo die Daumen liegen (im Querformat je ein Daumen). Die
+Tastatur bleibt, wie sie ist.
+
+- **Normalansicht und Vollbild hoch:** eine Zeile unter der Bühne
+  (`.pressen-steuerung`, `justify-content: space-between`, `align-items: flex-end`);
+  im Vollbild ohne die 600-px-Grenze, sodass das Kreuz am linken, „Neigen“ am
+  rechten Rand sitzt. Den Abstand halten die Polsterung des Bretts und
+  `env(safe-area-inset-*)`.
+- **Vollbild quer (jede Größe, `orientation: landscape`):** ein Raster aus drei Spalten
+  `auto | 2fr | 1fr`. Links das Kreuz (die Spalte hat nur Breite, solange es da ist),
+  in der Mitte die Bühne, rechts „Vollbild beenden“, „Vorzeitig abstellen“, Malus und
+  Status; „Neigen“ steht in der letzten, dehnbaren Zeile ganz unten rechts. Die
+  Steuerung selbst ist dafür `display: contents`. Die Kreuzknöpfe sind hier 56 px, alles
+  andere mindestens 64 px; nichts unter 44 px. Die langen Erklärtexte (Spiegel, Malus)
+  entfallen im Vollbild, damit alles ohne Blättern in 390 px Höhe passt.
+- **Davor:** Im Querformat lagen beide Bedienelemente nebeneinander in der rechten
+  Spalte, und über 640 px Höhe (Desktop-Vollbild) galt das Hochformat – dort wurde die
+  Bühne zudem unten abgeschnitten, weil der Behälter sie schrumpfen ließ
+  (`flex-shrink: 0` am Feld behebt es).
+- **Nachweis:** `apps/web/e2e/pressen-steuerung.spec.ts` misst die Lage relativ zur
+  Fensterbreite in neun Ansichten (Normal Desktop/Handy hoch/Handy quer, Vollbild
+  Desktop/Handy hoch/Handy quer, iPhone-Rückfall hoch/quer/SE quer): Kreuz links von
+  „Neigen“, Kreuz in der linken, Neigen in der rechten Hälfte, Abstand zum Rand, alle
+  Knöpfe ≥ 44 px, im Vollbild quer die Bühne zwischen den Tasten; dazu wirkt Pfeil
+  rechts und ein Druck auf „Neigen“. In der Normalansicht auf einem flachen
+  Querformat liegt „Neigen“ unter dem Rand (die Seite scrollt) – dort gehört man ins
+  Vollbild.
+
+## Das Bier: Animation des Leerens
+
+Rein dekorativ: `pressen-sim.ts` (bitgleich) wird **nicht** angefasst. Die Dekoration
+liest nur, was die Simulation zeigt, und rechnet daraus Bilder; nichts fließt in Zeit,
+Verschüttetes oder Wertung zurück.
+
+| Was                 | Wie                                                                                                                                                                                                                          |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Füllstand           | folgt der Füllung weich (Zeitkonstante 80 ms), kein Treppeneffekt zwischen den 20-ms-Schritten                                                                                                                               |
+| Schwappen           | Federschwinger (≈ 2,2 Hz, Dämpfung 0,16), angestoßen von jeder Änderung der Glasgeschwindigkeit (`vx`) und Drehung (`neigungV`); die Oberfläche kippt bis ±24° gegen das Glas und schwingt gegen die Richtung zurück         |
+| Welle, Schaum       | Unruhe der Oberfläche wächst beim Gießen und Schwappen; Schaumkrone wächst mit dem Fluss und setzt sich wieder (Ziel 0,3, leer 0)                                                                                            |
+| Blasen              | fünf steigen vom Boden zur Oberfläche, solange das Glas „im Spiel“ ist (sonst ruhen sie, und die Schleife auch)                                                                                                              |
+| Strahl              | Strang mit wanderndem Glanz; unter 9 ml/s eine Perlenkette; seitlich lösen sich Tropfen (je dünner, desto mehr und kleiner)                                                                                                  |
+| Aufprall            | Danebengegangenes spritzt Bier hoch; am Mund Schaumspritzer                                                                                                                                                                  |
+| Nachlaufen          | nach dem letzten Strahl wächst ein Tropfen am Rand und fällt, bis zu fünfmal; das leere Glas behält Schaumreste an der Wand                                                                                                  |
+| Pfützen             | entstehen **dort, wo es landete** (nicht mehr am jeweils aktuellen Landepunkt), wachsen weich, verschmelzen nahe beieinander (bis 6); große Pfützen nahe der Tischkante tropfen hinunter; ein voller Mund läuft am Kinn über |
+| Mund-Schluck        | ein Puls je 5 ml tatsächlich getrunkenem Bier (`getrunken`): Kehlkopf, Wangen, Mundinhalt – nicht mehr als Dauerschleife                                                                                                     |
+| Bewegung reduzieren | `Fluessigkeit(ruhig = true)`: Pegel springt, nichts schwappt, keine Tropfen, Blasen oder Wellen; Pfützen und Schaum stehen ruhig da                                                                                          |
+
+Gebaut für Handys (`pressenFluessigkeit.ts`, `usePressenAnimation.ts`, Tests in
+`pressenFluessigkeit.test.ts`):
+
+- **Keine Allokation je Bild:** Pools aus `Float32Array` (32 Tropfen, 6 Pfützen, 5 Blasen,
+  6 Schaumreste), eigene Zufallsreihe (LCG) statt `Math.random` – die Darstellung ist
+  wiederholbar.
+- **Kein Layout-Thrash, kein React-Render:** Die Zeichnung legt die SVG-Elemente einmal
+  an; eine eigene `requestAnimationFrame`-Schleife schreibt die Zahlen direkt über
+  `SVGAnimatedLength.baseVal.value` und `SVGTransform.setRotate/setTranslate` (keine
+  Zeichenketten) in die Attribute und liest nie Layout. Unveränderte Werte werden
+  ausgelassen.
+- **Ruht, wenn nichts zu tun ist:** Die Schleife endet, sobald nichts mehr schwappt,
+  fliegt oder wächst (`unruhig()`), und wird vom nächsten Stand der Simulation geweckt.
+  Kleine Bahnen anderer Spieler (nur „trinkt …“) bekommen gar keine Schleife.
+- **Gemessen** (headless Chromium, Software-Rendering, ganzer Lauf): Rahmenzeit Median
+  16,7 ms, 95. Perzentil 16,8 ms.
+- Die Pfütze liegt jetzt im Zustand der Dekoration, nicht mehr im Brett; ein fertiger
+  Lauf (nur die Menge bekannt) zeigt eine Pfütze in der Mitte vor dem Männchen.
+
+## Statistik (`pressen_laeufe`)
+
+Der Spielstand hält nur die laufende und die letzte Atempo-Runde, Übungen werden
+aufgeräumt und Partien können verschwinden. Eine Statistik, die man auch später
+einsehen will, hat deshalb eine **eigene Tabelle** (Migration `0028_pressen_laeufe.sql`,
+`if not exists`).
+
+**Schreiben.** Schließt ein Zug eine Runde ab – das Spiel ist entschieden, oder es gab
+Atempo (die Ergebnisse wandern in die `vorrunde`) –, bildet `laeufe_aus_zug`
+(`services/pressen_statistik.rs`) aus Spielstand vorher und nachher je gewerteter Person
+(und die Ampel) eine Zeile: Sitzung, Runde, Sitz, Modus, Startart, Gegner und Team
+(Kennungen), Dauer, Verschüttetes, Wertung, Reaktion, vorzeitig, getrümmert, Malus,
+Versatz, Ausgang (`sieg`, `niederlage`, `atempo`, `nicht_gewertet`), Teamwertung und Wertung
+der Gegner, Zeitpunkt. `persist_session` trägt sie **in derselben Transaktion** wie den
+Spielstand ein (beides oder nichts); der eindeutige Schlüssel (Sitzung, Runde, Person) und
+`on conflict do nothing` machen jede Wiederholung wirkungslos.
+
+**Sichtbarkeit.** Eine Zeile entsteht erst, wenn die Runde feststeht – dann sind fremde
+Zeiten ohnehin offen. Davor gibt es nichts, was eine Statistik verraten könnte. Die
+Abfragen sind immer auf das eigene Konto begrenzt; fremde Läufe sind `404`. Die Bilanz
+gegen einen Gegner entsteht aus den **eigenen** Zeilen (nur gemeinsame, abgeschlossene
+Runden); der Gegner sieht seine eigenen Zahlen.
+
+**Ausgang.** Entschiedene Runde: Sieg oder Niederlage nach `sieger`; Atempo: `atempo` (im
+Spiegel jede Runde); die Ampel: `nicht_gewertet`. Die Siegesserie zählt Siege in Folge,
+Atempo und nicht gewertete Läufe lassen sie unberührt, eine Niederlage beendet sie.
+
+**Abgeleitet statt gespeichert.** Die Simulation läuft nur im Client und meldet weder
+„wohin ging es daneben“ noch eine Mundtreffer-Quote. Die **Trefferquote** ist deshalb
+getrunken / (getrunken + verschüttet) aus `verschuettet_dezi` (Glas = 300 ml); einen Ort
+des Fehlschlags gibt es nicht. `start_art` ist `echtzeit`, wenn es einen gemeinsamen
+Beginn gab (dann steckt ein Versatz > 0 im Lauf), sonst `asynchron` – auch Spiegel, Ampel
+und Staffetten-Nachfolger starten ab dem eigenen „Anstoßen“. Der Zeitpunkt ist der des
+Rundenendes (beim Erstfertigen im Duell also etwas später als sein Abstellen).
+
+**Löschen.** `user_id` ist `on delete cascade` (das Konto löschen nimmt die Läufe mit),
+`session_id` ist `on delete set null` (die aufgeräumte Übung nimmt den Lauf nicht mit). Die
+Gegner stehen als Kennungen in der Zeile, ohne Fremdschlüssel; ein gelöschtes Konto
+erscheint beim Gegner als „Gelöschtes Konto“.
+
+**Nachtrag aus vorhandenen Sitzungen** (am Ende der Migration, wiederholbar): nur, was sich
+aus dem Spielstand **sicher** ableiten lässt – die entscheidende Runde jeder beendeten
+Partie (Zeitpunkt = `updated_at`, der beendende Zug war der letzte Schreibvorgang) und die
+letzte Runde einer laufenden Übung gegen den Spiegel (jeder Spiegel-Zug schließt eine Runde).
+**Nicht** übernommen, und das fehlt ehrlich: frühere Atempo-Runden (der Spielstand hält sie
+nicht) sowie Vorrunden beendeter Partien und abgebrochener Übungen (ihr Zeitpunkt ist nicht
+bekannt – `updated_at` wäre dort der Abbruch).
+
+**API** (siehe `docs/API.md`): `GET /games/pressen/statistik` (Aggregate, Filter nach Zeitraum,
+Modus, Startart, Ausgang), `GET /games/pressen/laeufe` (Cursor, Sortierung, Filter),
+`GET /games/pressen/laeufe/{id}`. DTOs mit zod in `packages/shared/src/schemas/pressen-statistik.ts`.
+Der Verlauf der Statistik enthält die jüngsten 600 Läufe; alles, was nur die Anzeige betrifft
+(gleitendes Mittel über 5 Läufe, Histogramm, Tageszeit und Wochentag in der Zeitzone des
+Geräts), rechnet der Client (`statistik/pressenStatistik.ts`, getestet).
+
+**Oberfläche** (`apps/web/src/modules/games/statistik/`): Seite `/spiele/pressen/statistik`
+(erreichbar über _Spiele_ → „Meine Statistik“ und über „Statistik“ im Ergebnis), Einzelansicht
+`/spiele/pressen/statistik/{id}`. Kopfzahlen als Kacheln; Verlauf als eigenes SVG-Liniendiagramm
+mit gleitendem Mittel und Umschalter Wertung/Zeit/Verschüttet; Histogramm der Zeiten; Rekorde mit
+Datum; Tabellen nach Modus, nach Gegner und nach Ermüdung; Tageszeit und Wochentag; die Liste
+aller Läufe. Leer-, Lade- und Fehlerzustand. Barrierefrei: jedes Diagramm ist ein `role="img"`
+mit `<title>`/`<desc>` und hat eine Tabelle („Als Tabelle anzeigen“); echte Tabellen mit
+`<caption>`/`<th scope>`; Farben aus den Tokens (hell und dunkel), Auswahl nie allein über die
+Farbe; alle Bedienelemente ≥ 44 px und per Tastatur erreichbar; ab 320 px ohne Querscrollen
+(breite Tabellen scrollen in ihrem Rahmen); Zahlen und Daten deutsch (`Intl`).
+
+**Tests:** `apps/api/tests/pressen_statistik.rs` (Schreiben erst am Rundenende, je Person,
+Wiederholen doppelt nichts, fremd 404, Aggregate, Liste mit Cursor/Sortierung/Filter, Läufe
+überleben die aufgeräumte Übung, gehen mit dem Konto, Nachtrag wiederholbar), Einheitentests in
+`pressen_statistik.rs` (Aggregate an bekannten Läufen, Schreiben je Modus), Vitest
+(`pressenStatistik.test.ts`, `pressen-statistik.test.ts`), Playwright
+`e2e/pressen-statistik.spec.ts` (bekannte Zahlen, Diagramm mit Tabelle, Filter, „Mehr laden“,
+Einzelansicht, 375 px, Fehlerzustand; echt gespielter Spiegel und Duell, nach Neuladen und
+aufgeräumter Übung weiter einsehbar).
+
 ## Strichmännchen
 
 Jeder gestaltet sein Männchen in einem Bearbeitungsblatt mit Live-Vorschau
@@ -397,12 +544,12 @@ sodass auch die anderen es sehen (nach Rundenende).
 ## Zugänglichkeit
 
 Alle Eingaben per Tastatur (vier Pfeile, Leertaste, Esc – im Vollbild schließt Esc nur
-das Vollbild). Touch: Steuerkreuz und
-Neigen-Knopf, je mindestens 64 px. Zustandsansagen über einen `aria-live`-Bereich
+das Vollbild). Touch: Steuerkreuz (links) und
+Neigen-Knopf (rechts), je mindestens 56 px (sonst 64 px), nie unter 44 px. Zustandsansagen über einen `aria-live`-Bereich
 (Wahl, Warten, „Los!“, Glas leer); das Ergebnis sagt sein eigener `role="status"`
 an. Der Malus-Balken ist ein `meter` mit
-Beschriftung und Erklärung. `prefers-reduced-motion`: Atmen, Blinzeln, Schlucken
-und Wackeln entfallen; die Physik bleibt (sie ist das Spiel).
+Beschriftung und Erklärung. `prefers-reduced-motion`: Atmen, Blinzeln, Wackeln und die ganze
+Bier-Dynamik (Schwappen, Tropfen, Blasen, Schluck) entfallen; die Physik bleibt (sie ist das Spiel).
 
 ## Offen
 
@@ -416,3 +563,14 @@ und Wackeln entfallen; die Physik bleibt (sie ist das Spiel).
   Laufzeit würde den Countdown auf Zehntelsekunden angleichen.
 - Fremde Läufe werden nicht live gezeigt (nur „trinkt …“); eine Wiederholung nach
   Rundenende aus dem Eingabeprotokoll wäre möglich, weil die Physik bitgleich ist.
+- Die Bier-Animation ist im headless Chromium gemessen und angesehen, nicht auf echten
+  Handys; die Stellschrauben (Federfrequenz, Tropfenraten, Schluckgröße) stehen als
+  Konstanten oben in `pressenFluessigkeit.ts`. Ein echter Test auf einem schwachen Gerät
+  steht aus (der Zwischenspeicher und die ruhende Schleife sind darauf vorbereitet).
+- Die Statistik kennt keinen „Ort des Fehlschlags“ und keine Mundtreffer-Quote aus der
+  Simulation – die Trefferquote ist aus dem Verschütteten abgeleitet. Ein Eingabeprotokoll
+  käme dafür in Frage, wird aber (siehe „keine Nachrechnung“) nicht an den Server gemeldet.
+- Der Zeitpunkt eines Laufs ist der des Rundenendes; ein Lauf, der lange vor dem Gegner fertig
+  war, trägt dessen Ende. Der Verlauf der Statistik ist auf die jüngsten 600 Läufe begrenzt
+  (die Kopfzahlen zählen bis 20 000 Läufe).
+- Der Nachtrag aus alten Sitzungen holt keine früheren Atempo-Runden nach (siehe „Statistik“).

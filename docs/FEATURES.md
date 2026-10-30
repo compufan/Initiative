@@ -1085,8 +1085,8 @@ zählt als verschüttet.
   **nur er**: ein Klick ins Brett oder daneben, ein Timer oder die Leertaste
   außerhalb des Knopfs starten nichts.
 - **Vollbild:** Pressen läuft im **Vollbild** (Fullscreen-Funktion des Browsers; auf
-  dem iPhone ein bildschirmfüllendes Blatt), im Querformat mit der Bühne links
-  und den Knöpfen rechts. Es beginnt mit „Anstoßen“ oder dem Knopf „Vollbild“ und
+  dem iPhone ein bildschirmfüllendes Blatt), im Querformat mit der Bühne in der
+  Mitte, dem Steuerkreuz links und „Neigen“ rechts. Es beginnt mit „Anstoßen“ oder dem Knopf „Vollbild“ und
   endet mit „Vollbild beenden“, **Esc** oder **Zurück** – ein Esc im Vollbild
   schließt nur das Vollbild, der Lauf geht weiter.
 - **Ergebnis groß:** Nach der Runde steht groß **„Du hast gewonnen“**, **„Du wurdest
@@ -1113,13 +1113,42 @@ zählt als verschüttet.
   gespeichert, gilt auf allen Geräten und in allen Spielen, und die anderen sehen
   es im Spiel. Die Figuren sind lebendig: atmen, blinzeln, schlucken, blähen die
   Wangen, erschrecken beim Verschütten, jubeln beim Sieg.
+- **Das Bier lebt:** Der Füllstand sinkt weich, die Oberfläche schwappt mit jedem
+  Ruck und jeder Drehung des Glases, eine Schaumkrone wächst beim Gießen und setzt
+  sich wieder, Blasen steigen auf, der Strahl glänzt als Strang und löst sich gegen
+  Ende in einzelne Tropfen auf. Danach hängt der letzte Tropfen am Rand und fällt
+  (bis zu fünf), das leere Glas behält Schaumreste an der Wand. Danebengegangenes
+  spritzt vom Tisch hoch und bleibt als Pfütze liegen, wo es landete; große Pfützen
+  an der Tischkante tropfen hinunter. Der Mund schluckt, wenn wirklich etwas
+  getrunken wurde (ein Schluck je 5 ml), die Wangen füllen sich mit dem Mundinhalt,
+  und ein voller Mund läuft am Kinn über. Das ist reines Beiwerk: Die Physik des
+  Laufs bleibt, wie sie ist. Bei „Bewegung reduzieren“ steht alles ruhig da
+  (Pegel springt, nichts schwappt, keine Tropfen, Pfützen sofort in ihrer Größe).
+- **Bedienelemente überall gleich:** Das Steuerkreuz (vier Pfeile) steht auf der
+  **linken**, „Neigen“ auf der **rechten** Seite – in der Normalansicht, im Vollbild
+  und im iPhone-Rückfall, hoch und quer. Im Querformat hängen sie links und rechts
+  der Bühne am Rand (je ein Daumen), mit Abstand zu Rand und Safe-Area; alle
+  Knöpfe sind mindestens 44 px groß. Die Tastatur bleibt unverändert.
+- **Statistik – auch im Nachhinein:** Unter _Spiele_ → „Meine Statistik“ (und im
+  Ergebnis über „Statistik“) stehen alle deine gewerteten Läufe, auch die, deren
+  Partie oder Übung längst aufgeräumt ist: Läufe, Siege, Niederlagen, Atempo,
+  Siegquote, beste Zeit und Wertung, Ø Zeit und Ø verschüttet, getrunkene und
+  verschüttete Menge, „getrümmert“, längste Siegesserie, Rekorde mit Datum,
+  Verlauf als Liniendiagramm (Wertung, Zeit oder Verschüttetes je Lauf mit
+  gleitendem Mittel; Zeitraum 7 Tage / 30 Tage / Alles, Filter nach Modus),
+  Verteilung der Zeiten, Aufschlüsselung nach Modus, Bilanz gegen jeden Gegner,
+  Wertung nach Ermüdung (Malus), Tageszeit und Wochentag und die Liste aller Läufe
+  (filtern, sortieren, nachladen) mit Einzelansicht. Jedes Diagramm hat eine
+  Tabelle als Alternative. Es zählt nur, was bei Rundenende bereits offen war;
+  die Läufe sieht nur dein Konto, und die Bilanz gegen Anna steht nur dir und Anna
+  (jedem mit den eigenen Zahlen). Beim Löschen des Kontos verschwinden die Läufe.
 - **Echtzeit, aber vom Server gewertet:** Jeder rechnet seinen Lauf selbst (so
   lagfrei wie möglich) und meldet das Ergebnis; der Server prüft es auf
   Plausibilität und entscheidet Atempo, Sieg und wer als Nächster laufen darf.
   Der Entwurf steht in [entwurf-pressen.md](entwurf-pressen.md).
 - Bedienung ohne Maus: alle Tasten per Tastatur, Zustandsansagen für
-  Vorlesehilfen; bei „Bewegung reduzieren“ stehen die Figuren still (die
-  Simulation selbst bleibt).
+  Vorlesehilfen; bei „Bewegung reduzieren“ stehen die Figuren und das Bier still
+  (die Simulation selbst bleibt).
 
 ### „Bierjunge“ und „hängt“ im Chat
 
