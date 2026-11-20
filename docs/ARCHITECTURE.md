@@ -171,6 +171,56 @@ Sprachnachrichten) in eine Outbox, die beim Reconnect abgearbeitet wird.
 Der Service Worker cached die App-Shell und alle Medien (`cache-first`, Medien
 sind unveränderlich).
 
+## Atomarität und genau-einmal
+
+**Grundregel:** Was zusammengehört, steht in *einer* Datenbank-Transaktion;
+gemeldet wird erst nach dem Commit. Kein Echtzeit-Ereignis und keine
+Push-Mitteilung für etwas, das nicht festgeschrieben ist.
+
+- **Nachrichten** – `services::messages` trennt Schreiben und Melden:
+  `nachricht_anlegen(tx, …)` schreibt Nachricht, Anhangbindung und
+  Chat-Zeitstempel in der Transaktion des Aufrufers und liefert ein
+  `Angelegt` zurück (`#[must_use]`); `ausliefern(state, angelegt)` spielt nach
+  dem Commit aus (Echtzeit, Push, Bierjunge). `create_message` ist beides mit
+  eigener Transaktion. Wer neben der Nachricht etwas schreibt – Umfrage,
+  Partie, Gruppe/Mitglieder samt Systemzeile, Besitzwechsel, Termin- und
+  Erinnerungskarten, Weitergabe von Dateien –, legt die Nachricht in *seiner*
+  Transaktion an.
+- **Anhänge** einer Nachricht: alle genannten müssen fertig (`ready`), eigen
+  und frei sein, sonst scheitert die ganze Nachricht (400) und nichts ist
+  gebunden.
+- **Genau einmal:** `clientId` ist der Wiederholungsschlüssel
+  (eindeutiger Index `(conversation_id, sender_id, client_id)`, `on conflict
+  do nothing`). Eine Wiederholung – auch eine gleichzeitige – bekommt das
+  Original zurück, mit allen Anhängen und Karten, weil es nur ganz oder gar
+  nicht existiert. Sie meldet nichts erneut. Server-Karten haben feste
+  Schlüssel (`karte:…`, `erinnerung:…`, `vorab:…`).
+- **Prüfen-dann-Schreiben** gibt es nur unter Sperre oder Constraint:
+  Umfrage platzieren belegt zuerst den eindeutigen Platz, Karten sperren ihre
+  Zeile (`for update`), Bierjunge verbraucht den Aufruf per bedingtem Update,
+  Sticker zählen unter der Paketsperre, Sammlungen hängen unter einer
+  Advisory-Sperre um; Bearbeiten/Löschen prüfen in der Anweisung selbst
+  (`deleted_at is null`) und sind wiederholbar.
+- **Dateien:** erst die Bytes, dann die Zeile (`ready`); bricht es dazwischen
+  ab, räumt das Aufräumen die `pending`-Zeile samt Datei ab. Löschen: erst die
+  Zeile, die Bytes über `storage_muell` (Auslöser in derselben Transaktion,
+  Migration 0013/0020) – nie umgekehrt. Weitergeben sperrt das Original
+  (`for share`), damit der Müll-Auslöser die geteilten Bytes nicht wegräumt.
+- **Auslagern/Rückholen** sind bewusst keine Transaktion, sondern eine
+  Zustandsmaschine über zwei Speicher (`lokal → wandert → fern`, Löschen der
+  alten Fassung zuletzt): bei Abbruch lieber doppelt als weg.
+
+**Client:** Die Outbox (IndexedDB) trägt den `clientId` von Anfang an.
+Anhänge gehen zuerst hoch; jeder fertige Anhang wird in der Outbox gemerkt
+(`hochgeladenId`), damit ein Neuversuch nichts erneut hochlädt. Erfolgreich
+gesendet heisst: `outboxErledigt` nimmt den Eintrag aus der Outbox *und* legt
+die Nachricht in den Verlauf – in einer IndexedDB-Transaktion über beide
+Speicher. Lokale Schatten („wird gesendet“) mit demselben `clientId` wie eine
+Server-Nachricht werden beim Zusammenführen verworfen. Belegt durch
+`apps/api/tests/atomar.rs` (Fehlerinjektion per Auslöser),
+`state/chat.genauEinmal.test.ts` und `e2e/genauEinmal.spec.ts` (Netz reisst
+nach dem Festschreiben bzw. beim Hochladen, Neuladen → genau eine Nachricht).
+
 ## Warum Rust
 
 - Eine statisch gelinkte Binary (~15 MB) ohne Laufzeit, OpenSSL oder libcurl –
