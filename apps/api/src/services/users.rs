@@ -32,15 +32,23 @@ pub fn merge_settings(stored: &Value) -> Value {
         "marke": "dezent",
         "locale": "de",
         "notifications": { "push": true, "sound": true, "previews": true },
-        "modules": {}
+        "modules": {},
+        // Wer was von mir sieht. Voreinstellung: alles offen wie bisher – wer
+        // nie etwas eingestellt hat, soll nicht ploetzlich unsichtbar werden.
+        "privacy": {
+            "lastSeen": "alle",
+            "online": "alle",
+            "readReceipts": true,
+            "typing": true
+        }
     });
     let mut merged = defaults;
     if let (Some(target), Some(source)) = (merged.as_object_mut(), stored.as_object()) {
         for (key, value) in source {
-            if key == "notifications" {
+            if key == "notifications" || key == "privacy" {
                 if let (Some(existing), Some(incoming)) = (
                     target
-                        .get_mut("notifications")
+                        .get_mut(key.as_str())
                         .and_then(Value::as_object_mut),
                     value.as_object(),
                 ) {

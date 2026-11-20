@@ -37,7 +37,47 @@ export interface UserSettings {
   };
   /** Per-module preferences; unknown keys are preserved so new modules can extend. */
   modules: Record<string, unknown>;
+  /** Wer was von mir sieht. Der Server filtert danach – die Oberfläche zeigt es nur an. */
+  privacy: PrivacySettings;
 }
+
+/**
+ * Wem etwas gezeigt wird. „kontakte" heisst: wer mit mir mindestens einen
+ * Chat teilt – ein eigenes Adressbuch gibt es nicht.
+ */
+export type Sichtbarkeit = 'alle' | 'kontakte' | 'niemand';
+export const SICHTBARKEITEN = ['alle', 'kontakte', 'niemand'] as const;
+
+export interface PrivacySettings {
+  /** Wer „zuletzt online" sieht. */
+  lastSeen: Sichtbarkeit;
+  /** Wer den Punkt „gerade online" sieht. */
+  online: Sichtbarkeit;
+  /**
+   * Lesebestätigungen. Gegenseitig wie bei WhatsApp: Wer sie ausschaltet,
+   * verschickt keine und sieht auch die der anderen nicht. Gilt in
+   * Direktchats; in Gruppen bleiben sie sichtbar (siehe docs/FEATURES.md).
+   */
+  readReceipts: boolean;
+  /** Ob andere „schreibt …" von mir sehen. Gegenseitig wie `readReceipts`. */
+  typing: boolean;
+}
+
+export const DEFAULT_PRIVACY: PrivacySettings = {
+  lastSeen: 'alle',
+  online: 'alle',
+  readReceipts: true,
+  typing: true,
+};
+
+export const privacySettingsSchema = z
+  .object({
+    lastSeen: z.enum(SICHTBARKEITEN),
+    online: z.enum(SICHTBARKEITEN),
+    readReceipts: z.boolean(),
+    typing: z.boolean(),
+  })
+  .partial();
 
 export const userSettingsSchema = z.object({
   theme: z.enum(['system', 'light', 'dark']).optional(),
@@ -48,6 +88,7 @@ export const userSettingsSchema = z.object({
     .partial()
     .optional(),
   modules: z.record(z.unknown()).optional(),
+  privacy: privacySettingsSchema.optional(),
 });
 
 export const updateProfileSchema = z.object({
@@ -69,6 +110,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   locale: 'de',
   notifications: { push: true, sound: true, previews: true },
   modules: {},
+  privacy: DEFAULT_PRIVACY,
 };
 
 const ACCENTS = [

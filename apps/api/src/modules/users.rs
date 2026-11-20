@@ -354,7 +354,7 @@ async fn update_me(
             let mut merged = merge_settings(&current.settings);
             if let (Some(target), Some(source)) = (merged.as_object_mut(), patch.as_object()) {
                 for (key, value) in source {
-                    if key == "notifications" || key == "modules" {
+                    if key == "notifications" || key == "modules" || key == "privacy" {
                         if let (Some(existing), Some(incoming)) = (
                             target.get_mut(key).and_then(Value::as_object_mut),
                             value.as_object(),
