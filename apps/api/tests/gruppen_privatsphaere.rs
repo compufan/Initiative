@@ -305,7 +305,7 @@ async fn drei(p: &Probe) -> (Konto, Konto, Konto) {
     )
 }
 
-fn mitglied<'a>(chat: &'a Value, id: Uuid) -> &'a Value {
+fn mitglied(chat: &Value, id: Uuid) -> &Value {
     chat["members"]
         .as_array()
         .unwrap()
