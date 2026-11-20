@@ -392,7 +392,7 @@ erneut zuschlägt – kommt die bereits gespeicherte Nachricht zurück, statt ei
 zweiten.
 
 **Typen**: `text`, `image`, `video`, `audio`, `file`, `sticker`, `poll`, `event`,
-`game`, `system`. `system` kann nicht gesendet werden – das macht der Server bei
+`game`, `system`, `location`, `contact`. `system` kann nicht gesendet werden – das macht der Server bei
 Ereignissen wie „X ist der Gruppe beigetreten".
 
 Eine Nachricht braucht mindestens eines von: Text, Anhang oder einen Sticker
@@ -434,6 +434,39 @@ Messenger-Kern weiß nichts von Umfragen oder Spielen (siehe
 
 Gelöschte Nachrichten verschwinden nicht aus der Liste: `deletedAt` ist gesetzt,
 `body` und `attachments` sind leer – so bleibt der Verlauf lückenlos.
+
+### Zweite Welle: Erwähnungen, Bearbeiten, Anheften, Geplant, Selbstlöschen, Einmal, Vorschau, Standort
+
+| Methode | Pfad | Request | Antwort / Regeln |
+| ------- | ---- | ------- | ---------------- |
+| PATCH | `/messages/{id}` | `{ body, mentions? }` | Text und Bildunterschriften, **15 min** nach dem Senden; alte Fassung → `message_edits`; sonst `403` |
+| GET | `/messages/{id}/bearbeitungen` | – | `{ items: [{ body, am }], aktuell, gesendetAm }` – für alle, die die Nachricht sehen |
+| DELETE | `/messages/{id}?scope=all` | – | eigene **48 h**, Admins in Gruppen ohne Frist; sonst `403` |
+| GET | `/conversations/{id}/erwaehnungen` | – | `{ items: messageId[] }` – ungelesene Erwähnungen (max. 50) |
+| PUT/DELETE | `/messages/{id}/anheften` | – | `201`/`200` bzw. `204`; max. 3 je Chat (älteste fällt heraus); Rechte: Direktchat beide, Gruppe nach `nurAdminsInfo`; Ereignis `conversation.angeheftet` |
+| GET | `/conversations/{id}/angeheftet` | – | `{ items: Message[] }`, neueste zuerst |
+| GET/POST | `/conversations/{id}/geplant` | `{ type?, body?, attachmentIds?, replyToId?, metadata?, sendenUm, zeitzone? }` | nur eigene; `sendenUm` > jetzt + 30 s, ≤ 1 Jahr |
+| PATCH/DELETE | `/geplant/{id}` | `{ body?, sendenUm?, zeitzone? }` | nur `geplant`/`fehlgeschlagen`; Löschen räumt ungebundene Anhänge |
+| POST | `/geplant/{id}/jetzt` | – | `{ messageId }` (Wiederholung: dieselbe); Wiederholungsschlüssel `geplant:<id>` |
+| PUT | `/conversations/{id}/selbstloeschen` | `{ sekunden: 86400 \| 604800 \| 7776000 \| null }` | `Conversation`; Systemzeile; neue Nachrichten bekommen `expiresAt` |
+| GET | `/messages/{id}/einmal/{anhangId}` | – | Bytes, `Cache-Control: no-store`; je Person genau einmal, danach `410`; Absender `403` |
+| POST | `/link-vorschau` | `{ url }` | `{ url, titel, beschreibung, seite, bildId, bildUrl }`; nur mit `settings.linkVorschauen`; `400` interne/ungültige Adresse, `502` nicht abrufbar |
+| PUT | `/messages/{id}/standort` | `{ lat, lon, genauigkeit? }` | nur eigene laufende Live-Freigabe; danach `410` |
+| POST | `/messages/{id}/standort/beenden` | – | beendet die Live-Freigabe |
+| GET | `/orte/rueckwaerts` | Query `lat`, `lon` | `{ item: Ort \| null, quelle }` (Photon reverse, Punkt auf 4 Stellen gerundet) |
+
+Neue `metadata`-Schlüssel vom Client: `mentions` (Kennungen, nur Mitglieder,
+max. 50), `mentionsAlle` (`true`, nur Admins in Gruppen, gebremst),
+`einmalAnsehen` (`true`, nur `image`/`video` ohne Text), `linkVorschau`
+(`{ url, titel?, beschreibung?, seite?, bildId? }` – `url` muss im Text stehen,
+`bildId` ein eigener freier Anhang), `kontakt` (`{ userId }`, nur bei Typ
+`contact`, nur eigene Kontakte ohne Sperre), `standort` (`{ lat, lon,
+genauigkeit?, adresse?, live?: { minuten: 15 | 60 } }`, nur bei Typ `location`;
+`live.bis` setzt der Server). Vom Server ergänzt: `einmalStatus`,
+`linkVorschau.bildUrl`, `kontaktProfil`. `Conversation` trägt zusätzlich
+`selbstloeschenS` und `ungeleseneErwaehnungen`; `Poll` trägt `quiz` und – nach
+der eigenen Stimme, für die Erstellerin oder nach dem Ende – `aufloesung`
+(`{ richtig: optionId[], erklaerung }`).
 
 ## Medien
 

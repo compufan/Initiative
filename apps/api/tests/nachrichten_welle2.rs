@@ -1182,11 +1182,9 @@ async fn testserver() -> u16 {
                 let pfad = anfrage.split_whitespace().nth(1).unwrap_or("/").to_string();
                 let antwort: Vec<u8> = match pfad.as_str() {
                     "/seite" => {
-                        let html = format!(
-                            "<html><head><title>Alt</title><meta property=\"og:title\" content=\"Probe &amp; Seite\">\
+                        let html = "<html><head><title>Alt</title><meta property=\"og:title\" content=\"Probe &amp; Seite\">\
                              <meta property=\"og:description\" content=\"Beschreibung\">\
-                             <meta property=\"og:image\" content=\"/bild.png\"></head><body>x</body></html>"
-                        );
+                             <meta property=\"og:image\" content=\"/bild.png\"></head><body>x</body></html>";
                         format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}", html.len()).into_bytes()
                     }
                     "/bild.png" => {

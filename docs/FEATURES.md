@@ -174,15 +174,20 @@ Startbildschirm legen und funktioniert auch ohne Netz weiter.
 - **Text** mit Emoji, bis 8000 Zeichen.
 - **Antworten** auf eine bestimmte Nachricht – die zitierte steht darüber, ein
   Tipp darauf springt zum Original.
-- **Bearbeiten** eigener Textnachrichten **in der Eingabezeile** (wie bei
+- **Bearbeiten** eigener Textnachrichten und **Bildunterschriften** (Fotos,
+  Videos, Dateien, Sprachnachrichten) **in der Eingabezeile** (wie bei
   WhatsApp): „Bearbeiten“ im Menü legt den Text in die Zeile, ✓ speichert,
   Esc oder ✕ bricht ab. Am Rechner bearbeitet **↑** in der leeren Zeile die
-  letzte eigene Nachricht. Die geänderte Nachricht ist als bearbeitet
-  gekennzeichnet.
-- **Löschen** eigener Nachrichten – bei allen. Statt einer Lücke bleibt „Diese
+  letzte eigene Nachricht. Das geht **15 Minuten** nach dem Senden (das Menü
+  zeigt, wie lange noch; der Server erzwingt die Frist). Die geänderte
+  Nachricht ist als **bearbeitet** gekennzeichnet; ein Tipp darauf (oder
+  „Bearbeitungsverlauf“ im Menü) zeigt **allen im Chat** jede frühere Fassung
+  mit Zeit – Bearbeiten kann nichts still umschreiben.
+- **Löschen** eigener Nachrichten – bei allen, **bis 48 Stunden** nach dem
+  Senden („Nur für mich löschen“ geht immer). Statt einer Lücke bleibt „Diese
   Nachricht wurde gelöscht" stehen, damit der Verlauf nachvollziehbar bleibt;
-  Text und Anhänge sind weg. In Gruppen dürfen Besitzer und Admins auch fremde
-  Nachrichten löschen.
+  Text, Anhänge und Bearbeitungsverlauf sind weg. In Gruppen dürfen Besitzer
+  und Admins auch fremde Nachrichten löschen – ohne Frist (Moderation).
 - **Kopieren** über das Menü der Nachricht oder für mehrere in der Auswahl.
 - **Suchen** über alle Chats oder innerhalb eines Chats (siehe unten).
 - Lange Verläufe laden beim Hochscrollen **automatisch nach**.
@@ -283,6 +288,97 @@ Startbildschirm legen und funktioniert auch ohne Netz weiter.
 - **Lange auf „Senden“ drücken** (oder Rechtsklick / Kontextmenü-Taste) →
   **„Ohne Ton senden“**. Die anderen bekommen die Mitteilung leise, ohne Ton
   und Vibration; der Chat zählt trotzdem als ungelesen.
+
+### @Erwähnungen
+
+- **„@“ tippen** zeigt die Mitglieder des Chats (Anzeigename oder
+  Benutzername, Spitzname vor Name). **↑/↓** wählen, **Enter** oder **Tab**
+  übernimmt, **Esc** schliesst; antippen geht auch. Im Text steht „@Name“,
+  gemerkt wird, wen er meint – wer den Namen wieder löscht, erwähnt niemanden.
+- Erwähnungen sind **hervorgehoben**, die **eigene** farbig hinterlegt.
+- Wer erwähnt wird, bekommt die Mitteilung **auch in einem stummgeschalteten
+  Chat** und bei der Stufe **„Nur @Erwähnungen“**. Die Stufe „Aus“ bleibt aus.
+- In der Chatliste steht ein **„@“**, solange eine Erwähnung ungelesen ist; im
+  Chat springt der **@-Knopf** von einer ungelesenen Erwähnung zur nächsten.
+- **„@alle“** gibt es für Admins in Gruppen: Es gilt bei „Nur @Erwähnungen“
+  als Erwähnung jedes Mitglieds, durchbricht aber keine Stummschaltung und
+  ist gebremst (drei, dann etwa eins in zwanzig Minuten je Chat).
+- Erwähnen lassen sich nur Mitglieder des Chats, höchstens 50 je Nachricht.
+
+### Anheften
+
+- **Anheften** (Menü einer Nachricht) legt sie in den **Banner oben im Chat**
+  – für alle. Bis zu **drei** je Chat; beim vierten fällt die älteste heraus.
+  Ein Tipp auf den Banner springt zur Nachricht und schaltet zur nächsten
+  weiter. **Lösen** im selben Menü.
+- Im Direktchat dürfen beide, in einer Gruppe gilt „Nur Admins ändern
+  Gruppeninfo“. Anheften hinterlässt eine Systemzeile; eine für alle
+  gelöschte Nachricht ist nicht mehr angeheftet.
+
+### Später senden
+
+- **Lange auf „Senden“ drücken** → **„Später senden …“**: Datum und Uhrzeit
+  wählen (oder „Heute 18:00“, „Morgen 8:00“). Der **Server** sendet zum
+  Zeitpunkt – auch wenn dein Gerät dann aus ist; Erwähnungen, Antwortbezug
+  und Link-Vorschau kommen mit.
+- Die Leiste **„🕒 N geplante Nachrichten“** über der Eingabezeile (und das
+  Chat-Menü) öffnet die Liste: **bearbeiten** (Text, Zeit), **jetzt senden**,
+  **löschen**. Nur du siehst sie.
+- Beim Senden wird noch einmal geprüft: noch Mitglied, darfst noch schreiben
+  (Sperre, „Nur Admins senden“, langsamer Modus), Anhänge noch da. Sonst steht
+  sie mit ⚠️ und dem Grund in der Liste. Gesendet wird genau einmal, auch
+  wenn der Server mittendrin neu startet.
+
+### Selbstlöschende Nachrichten
+
+- Chat-Menü ⋮ → **„Selbstlöschende Nachrichten“**: aus, **24 Stunden**,
+  **7 Tage**, **90 Tage**. Gilt für alle im Chat und für Nachrichten, die
+  **danach** geschrieben werden. Im Direktchat dürfen beide, in Gruppen wer
+  die Gruppeninfo ändern darf; jede Änderung steht als Systemzeile im Chat.
+- Solche Nachrichten tragen ein **⏱**; sie verschwinden zur Ablaufzeit aus dem
+  Chat, und der Server löscht sie samt Anhängen (über denselben Weg wie alles
+  Gelöschte – weitergeleitete Kopien behalten ihre Datei).
+- Ehrlich: Ohne Ende-zu-Ende-Verschlüsselung schützt das **nicht vor
+  Kopien** (Weiterleiten, Kopieren, Bildschirmfoto). Die App sagt das dabei.
+
+### Einmal ansehen
+
+- **＋ → „Einmal ansehen“**: Foto oder Video aus der Galerie oder mit der
+  Kamera, mit Schalter „Einmal ansehbar“ (Standard an).
+- Jede Person kann es **genau einmal** öffnen – bildschirmfüllend, beim
+  Schliessen ist es fort; ein zweiter Versuch sagt „Schon geöffnet“. Es gibt
+  **keine Vorschau und keine Miniatur**, und es lässt sich nicht weiterleiten,
+  speichern (Stern) oder in eine Sammlung legen. Der Absender sieht nur
+  **„Geöffnet“** (in Gruppen mit Anzahl), nicht das Foto selbst.
+- Ehrlich: **Bildschirmfotos lassen sich im Web nicht verhindern.**
+
+### Link-Vorschau
+
+- Nur mit **Einstellungen → Privatsphäre → „Link-Vorschauen erzeugen“**
+  (Standard **aus**). Dann holt beim Schreiben eines Links **unser Server**
+  Titel, Beschreibung und Bild der Seite; die Karte erscheint über der
+  Eingabezeile und lässt sich mit ✕ verwerfen.
+- Das Bild liegt verkleinert im eigenen Speicher, Titel und Text stehen in
+  der Nachricht: **Empfänger laden nichts von der fremden Seite**.
+- Abgerufen werden nur öffentliche Adressen (keine Umleitung ins interne
+  Netz), höchstens 512 KB in fünf Sekunden, ohne Skripte.
+
+### Standort und Kontakt teilen
+
+- **＋ → „Standort“**: Das Gerät bestimmt den Standort (mit Erlaubnis), die
+  Karte zeigt Koordinaten, Genauigkeit und – über die Ortssuche des eigenen
+  Servers – die Adresse. **Keine Karte von einem fremden Server**; „In
+  Karten-App öffnen“ übergibt den Punkt erst auf Tipp.
+- **„Live 15 min“ / „Live 60 min“**: Die Position wird nachgeführt, **nur
+  solange die App offen und sichtbar ist** – geht sie in den Hintergrund oder
+  wird geschlossen, endet die Freigabe, spätestens zur gewählten Zeit. Die
+  anderen sehen die letzte Position mit Uhrzeit, keinen Weg. „Live-Standort
+  beenden“ an der eigenen Karte.
+- **＋ → „Kontakt“**: Eine Person aus deinen Kontakten (wer mit dir einen Chat
+  teilt) als Karte mit Name und Bild – so, wie der Empfänger sie sehen darf.
+  Auf der Karte: **„Nachricht schreiben“** und, wenn du Admin einer Gruppe
+  bist, **„Zu Gruppe hinzufügen“**. Gesperrte (in beide Richtungen) lassen
+  sich nicht teilen.
 
 ### Suchen im Chat und Springen
 
@@ -1355,6 +1451,11 @@ weiter als Alarm enthält:
 - Balken zeigen den Stand in Echtzeit, während andere abstimmen.
 - Die eigene Stimme lässt sich ändern oder zurücknehmen.
 - Wer die Umfrage erstellt hat, kann sie **schließen** und wieder **öffnen**.
+- **Quiz**: richtige Antwort(en) beim Anlegen markieren, optional eine
+  **Erklärung**. Vor der eigenen Stimme sieht man weder Zahlen noch Lösung;
+  danach ✓ richtig / ✗ falsch, Ergebnis und Erklärung. Im Quiz zählt die
+  **erste Antwort** (keine Änderung), Antworten ergänzen geht nicht. Nach dem
+  Ende sehen alle die Auflösung.
 
 ## Terminfindung
 
