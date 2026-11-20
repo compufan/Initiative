@@ -174,40 +174,162 @@ Startbildschirm legen und funktioniert auch ohne Netz weiter.
 - **Text** mit Emoji, bis 8000 Zeichen.
 - **Antworten** auf eine bestimmte Nachricht – die zitierte steht darüber, ein
   Tipp darauf springt zum Original.
-- **Bearbeiten** eigener Nachrichten; die geänderte Nachricht ist als bearbeitet
+- **Bearbeiten** eigener Textnachrichten **in der Eingabezeile** (wie bei
+  WhatsApp): „Bearbeiten“ im Menü legt den Text in die Zeile, ✓ speichert,
+  Esc oder ✕ bricht ab. Am Rechner bearbeitet **↑** in der leeren Zeile die
+  letzte eigene Nachricht. Die geänderte Nachricht ist als bearbeitet
   gekennzeichnet.
 - **Löschen** eigener Nachrichten – bei allen. Statt einer Lücke bleibt „Diese
   Nachricht wurde gelöscht" stehen, damit der Verlauf nachvollziehbar bleibt;
   Text und Anhänge sind weg. In Gruppen dürfen Besitzer und Admins auch fremde
   Nachrichten löschen.
-- **Kopieren** per langem Druck auf die Nachricht.
-- **Suchen** über alle Chats oder innerhalb eines Chats.
+- **Kopieren** über das Menü der Nachricht oder für mehrere in der Auswahl.
+- **Suchen** über alle Chats oder innerhalb eines Chats (siehe unten).
 - Lange Verläufe laden beim Hochscrollen **automatisch nach**.
 - Eine Markierung **„Neue Nachrichten"** zeigt, wo du beim letzten Mal aufgehört
   hast.
 
+### Antworten mit einem Wisch
+
+- Auf dem Telefon eine Nachricht **nach rechts wischen**: Ab etwa einem
+  Daumenbreit gibt es einen kurzen Ruck (wo das Gerät vibrieren kann), beim
+  Loslassen steht die Nachricht als Zitat über der Eingabezeile. Kürzer
+  gewischt passiert nichts; senkrecht bleibt es Scrollen.
+- Mit Maus und Tastatur geht dasselbe über „⋯“ → **Antworten**.
+
+### Mehrere Nachrichten auswählen
+
+- **Langer Druck** (oder Rechtsklick) auf eine Nachricht beginnt die
+  **Auswahl**; jeder weitere Tipp nimmt eine Nachricht dazu oder heraus.
+  Über „⋯“ → **Auswählen** geht es auch mit der Tastatur; Esc beendet.
+- Oben stehen dann: **Antworten** (bei einer), **Speichern** (Stern),
+  **Kopieren** – als Text mit Absender und Zeit, z. B.
+  `[03.11.26, 14:05] Anna: Bis gleich` –, **Weiterleiten** und **Löschen**
+  (für mich, oder für alle, wenn das bei jeder ausgewählten erlaubt ist).
+
+### Weiterleiten
+
+- Über das Menü einer Nachricht oder die Auswahl: Chats ankreuzen (mit
+  Suche, bis zu 20 auf einmal) und weiterleiten.
+- Darüber steht **„Weitergeleitet“** – wahlweise mit dem Namen des
+  ursprünglichen Absenders („Weitergeleitet von Anna“) oder ohne. Eine
+  Kette behält ihren Ursprung; wer ohne Namen weitergeleitet hat, dessen
+  Herkunft bleibt auch beim nächsten Weiterleiten verborgen.
+- Fotos, Videos, Sprachnachrichten und Dateien werden **nicht neu
+  hochgeladen**: Der Server legt einen zweiten Verweis auf dieselbe Datei an.
+- **Nicht weiterleiten** lassen sich Umfragen, Termine, Spiele und
+  Systemhinweise. Ihre Karte ist nur eine Ansicht auf etwas, das an ihrem
+  Chat hängt (wer abstimmen, zusagen, mitspielen darf); eine Kopie wäre
+  entweder tot oder zeigte Fremden, was nur der Chat sehen soll.
+- Weiterleiten darf nur, wer das Original sehen kann: Mitglied, nicht vor
+  dem eigenen Beitritt, nicht gelöscht, nicht „für mich gelöscht“. In
+  Gruppen, in denen nur Admins schreiben, gilt das auch fürs Weiterleiten.
+  Alle gewählten Chats bekommen die Nachricht – oder keiner.
+
+### Formatierung
+
+- `*fett*`, `_kursiv_`, `~durchgestrichen~`, `` `Monospace` ``,
+  ` ```Block``` ` (auch über mehrere Zeilen) und `||Spoiler||` – ein Spoiler
+  ist verdeckt, bis man ihn antippt (oder mit Enter aufdeckt).
+- Die Zeichen wirken nur am Wortanfang bzw. -ende: `2 * 3 * 4`,
+  `datei_name_neu.txt` und Adressen mit Unterstrichen bleiben, wie sie sind.
+  Links werden weiterhin erkannt.
+- **Formatierungshilfe**: Text in der Eingabezeile markieren – darüber
+  erscheinen **B**, *I*, ~~S~~, `</>` und ▒ (Spoiler). Noch einmal tippen
+  nimmt die Zeichen wieder weg.
+- In der **Chatliste** und in **Mitteilungen** steht der Text ohne Zeichen,
+  ein Spoiler als „▒▒▒“.
+- Technisch: ein eigener Parser ohne HTML (das Ergebnis sind
+  React-Elemente) und in linearer Zeit, auch bei zehntausenden Sternchen.
+
 ### Reaktionen
 
-- Langer Druck auf eine Nachricht öffnet die Reaktionsleiste:
-  👍 ❤️ 😂 😮 😢 🙏 🎉 🔥
+- Im Menü einer Nachricht (langer Druck → „⋯“, oder „⋯“ direkt) stehen die
+  häufigsten: 👍 ❤️ 😂 😮 😢 🙏 🎉 🔥 – und **＋** für **alle Emoji** mit
+  Kategorien, „Zuletzt benutzt“ und **Suche** nach deutschen und englischen
+  Namen („herz“, „heart“, „bär“, „baer“). Die Liste liegt in der App und wird
+  erst geladen, wenn man ＋ antippt; es geht nichts an fremde Server.
 - Ein zweiter Tipp auf dieselbe Reaktion nimmt sie zurück.
-- Unter der Nachricht stehen alle Reaktionen mit Anzahl; wer reagiert hat, ist
-  ablesbar.
+- Unter der Nachricht stehen alle Reaktionen mit Anzahl; **„⋯“ daneben**
+  zeigt, **wer womit reagiert hat** – filterbar je Emoji, die eigene lässt
+  sich dort entfernen.
 - Reaktionen erscheinen bei allen **sofort**, ohne die Ansicht neu zu laden.
+- Der Server nimmt nur Emoji an (auch Folgen mit Hautfarbe, Familien,
+  Flaggen; bis 16 Zeichen), keinen Text.
+
+### Gespeicherte Nachrichten
+
+- **Speichern (Stern)** im Menü einer Nachricht oder in der Auswahl. Die
+  Nachricht trägt dann ein kleines ⭐.
+- **Gespeicherte Nachrichten**: ⭐ oben in der Chatliste oder im Chat-Menü
+  (⋮). Ein Tipp springt zum Original im Chat.
+- Sterne sieht niemand sonst. Wird eine Nachricht gelöscht oder verlässt man
+  den Chat, verschwindet sie aus der Liste.
+
+### Entwürfe
+
+- Was du in einen Chat tippst und nicht abschickst, bleibt als **Entwurf**
+  stehen – auch nach dem Neuladen und **auf deinen anderen Geräten**. Die
+  Chatliste zeigt „Entwurf: …“.
+- Eine Antwort, an der du schreibst, bleibt mit ihrem Zitat erhalten.
+- Gleichen sich zwei Geräte ab, gilt der **neueste** Stand (die Uhr des
+  Geräts, das zuletzt getippt hat; eine vorgehende Uhr wird auf die Zeit
+  des Servers gekappt). Hast du auf einem Gerät gerade die Eingabe im
+  Fokus, überschreibt ein anderes Gerät sie nicht.
+- Mit dem Senden ist der Entwurf überall weg.
+
+### Ohne Ton senden
+
+- **Lange auf „Senden“ drücken** (oder Rechtsklick / Kontextmenü-Taste) →
+  **„Ohne Ton senden“**. Die anderen bekommen die Mitteilung leise, ohne Ton
+  und Vibration; der Chat zählt trotzdem als ungelesen.
+
+### Suchen im Chat und Springen
+
+- **🔍 im Chat-Kopf**: Treffer sind markiert, **↑/↓** (oder Enter /
+  Umschalt+Enter) springen von Treffer zu Treffer – auch zu älteren, die
+  noch nicht geladen sind: Der Chat holt den fehlenden Verlauf in einem Zug.
+- **Filter**: Medien, Links, Dateien, Sprachnachrichten und Absender; mit
+  Filter darf der Suchbegriff fehlen („alle Links in diesem Chat“).
+- Die **Suche über alle Chats** in der Chatliste öffnet den Chat **an der
+  Stelle des Treffers**.
+- **Zu Datum springen** (Chat-Menü ⋮): Tag wählen, der Chat springt zur
+  ersten Nachricht ab diesem Tag.
+- Was du „für mich gelöscht“ hast, findet die Suche nicht mehr.
 
 ### Lesebestätigungen
 
 - Jede eigene Nachricht zeigt ihren Zustand: **wird gesendet** (Uhr),
-  **gesendet** (Haken) oder **fehlgeschlagen**.
+  **✓ gesendet** (beim Server), **✓✓ zugestellt** (auf einem Gerät des
+  Empfängers angekommen), **✓✓ blau gelesen**, oder **fehlgeschlagen**. In
+  Gruppen steht ✓✓ erst, wenn es bei **allen** angekommen ist, und blau erst,
+  wenn **alle** gelesen haben. Wer erst später dazugekommen ist, zählt nicht.
+- „Gelesen“ ist nicht nur an der Farbe zu erkennen: Die Haken sind dann
+  kräftiger, und Vorlesehilfen sagen „gelesen“.
+- **Info** (Menü einer eigenen Nachricht): **Gelesen von** und **Zugestellt
+  an**, jeweils mit Zeit, und wer sie noch nicht bekommen hat. Die Zeit ist
+  der Augenblick, in dem die Meldung des Geräts beim Server ankam – „zugestellt“
+  meldet die App gebündelt alle paar Sekunden, „gelesen“, sobald der Chat
+  sichtbar unten steht. Für Lesestände von vor dieser Funktion steht „Zeit
+  unbekannt“.
+- **Zugestellt** heisst: Die App hat die Nachricht empfangen (über die
+  Leitung, beim Nachladen oder mit der Chatliste) – auch wenn der Chat nie
+  geöffnet wurde. Eine Mitteilung allein, bei geschlossener App, zählt nicht:
+  Der Service Worker hat dafür keine Anmeldung.
+- **Lesebestätigungen ausgeschaltet** (Einstellungen → Privatsphäre): Im
+  Einzelchat gegenseitig – wer sie ausschaltet, zeigt nicht, dass er gelesen
+  hat, und sieht es bei anderen auch nicht. „Zugestellt“ bleibt. In Gruppen
+  bleiben sie an.
 - Gelesen wird **automatisch gemeldet**, sobald eine Nachricht auf dem
   Bildschirm war – niemand muss etwas antippen.
 - Daraus entstehen der **Ungelesen-Zähler** in der Chatliste und die Linie
   **„Neue Nachrichten"** an der Stelle, an der du zuletzt aufgehört hast.
 - Der Lesestand wandert nur vorwärts – ein Blick in ältere Nachrichten setzt
   ihn nicht zurück. Er gleicht sich über alle deine Geräte ab.
-- **Tipp-Anzeige**: Während jemand schreibt, siehst du das im Chat. Sie
-  verschwindet nach wenigen Sekunden von selbst, auch wenn die Verbindung
-  abbricht.
+- **Tipp-Anzeige**: Während jemand schreibt, siehst du das im Chat („tippt
+  …“), während jemand eine Sprachnachricht aufnimmt, „nimmt Sprachnachricht
+  auf …“. Sie verschwindet nach wenigen Sekunden von selbst, auch wenn die
+  Verbindung abbricht.
 - **Online-Status**: Ob ein Kontakt gerade online ist beziehungsweise wann er
   zuletzt gesehen wurde.
 
@@ -1323,6 +1445,13 @@ Die App ist dafür gebaut, dass Funklöcher, U-Bahn und Flugmodus nicht stören.
   im Senden abbricht.
 - Scheitert eine Nachricht dauerhaft, ist sie als **fehlgeschlagen** markiert und
   lässt sich erneut senden oder verwerfen.
+- Auch **Bearbeiten, Löschen, Reaktionen und Sterne** gehen offline: Sie sind
+  sofort zu sehen und warten in einer eigenen Warteschlange, bis Netz da ist –
+  auch über einen Neustart hinweg. Je Nachricht gilt die letzte Absicht (zweimal
+  ❤️ offline heisst: keine Reaktion), und jeder Aufruf ist beim Server
+  wiederholbar, ohne doppelt zu wirken. Lehnt der Server ab (etwa weil die
+  Nachricht inzwischen für alle gelöscht ist), zeigt die App den wahren Stand.
+- **Entwürfe** liegen auf dem Gerät und gehen mit, sobald Netz da ist.
 - Ein **Verbindungsanzeiger** sagt jederzeit, woran man ist: verbunden,
   verbindet, offline.
 - Nach einer Trennung holt die App **automatisch alles Verpasste** nach.
