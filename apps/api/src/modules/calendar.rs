@@ -1457,11 +1457,15 @@ async fn create_note(
         .length("body", &input.body, 0, EVENT_DESCRIPTION_MAX)
         .finish()?;
 
+    // Notiz, Bearbeiter und Punkte in EINER Transaktion: Vorher stand jede
+    // Zeile für sich, und ein Abbruch mittendrin hinterliess eine halbe
+    // Packliste – samt einer Notiz, deren Bearbeiter fehlten.
+    let mut tx = state.pool.begin().await?;
     let next: i32 = sqlx::query_scalar(
         "select coalesce(max(position), 0) + 1 from event_notes where event_id = $1",
     )
     .bind(id)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     // Ohne eigene Angabe gilt fuers Hinzufuegen dasselbe wie fuers Aendern –
@@ -1487,12 +1491,12 @@ async fn create_note(
     .bind(&add_scope)
     .bind(&input.check_scope)
     .bind(next)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await?;
 
-    set_note_editors(&state, &note, "edit", &input.editor_ids).await?;
-    set_note_editors(&state, &note, "add", &input.adder_ids).await?;
-    set_note_editors(&state, &note, "check", &input.checker_ids).await?;
+    set_note_editors(&mut tx, &note, "edit", &input.editor_ids).await?;
+    set_note_editors(&mut tx, &note, "add", &input.adder_ids).await?;
+    set_note_editors(&mut tx, &note, "check", &input.checker_ids).await?;
 
     // Punkte, die gleich mitkamen. Eine Packliste legt man in einem Zug an,
     // nicht Zeile fuer Zeile ueber einzelne Anfragen.
@@ -1514,10 +1518,11 @@ async fn create_note(
         .bind(punkt.required_checks.max(0))
         .bind(punkt.required_all)
         .bind(user.id())
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
-        set_item_assignees(&state, punkt_id, &punkt.assignee_ids).await?;
+        set_item_assignees(&mut tx, punkt_id, &punkt.assignee_ids).await?;
     }
+    tx.commit().await?;
 
     let dto = to_note_dto(&state.pool, &event, note, user.id()).await?;
     broadcast_event(&state, &load_event_dto(&state, id).await?).await?;
@@ -1603,6 +1608,7 @@ async fn update_note(
             .finish()?;
     }
 
+    let mut tx = state.pool.begin().await?;
     let updated = sqlx::query_as::<_, EventNoteRow>(
         "update event_notes set
            title       = case when $3 then $4 else title end,
@@ -1626,19 +1632,20 @@ async fn update_note(
     .bind(input.add_scope)
     .bind(input.check_scope)
     .bind(input.position)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| AppError::not_found("Notiz nicht gefunden"))?;
 
     if let Some(editor_ids) = input.editor_ids {
-        set_note_editors(&state, &updated, "edit", &editor_ids).await?;
+        set_note_editors(&mut tx, &updated, "edit", &editor_ids).await?;
     }
     if let Some(adder_ids) = input.adder_ids {
-        set_note_editors(&state, &updated, "add", &adder_ids).await?;
+        set_note_editors(&mut tx, &updated, "add", &adder_ids).await?;
     }
     if let Some(checker_ids) = input.checker_ids {
-        set_note_editors(&state, &updated, "check", &checker_ids).await?;
+        set_note_editors(&mut tx, &updated, "check", &checker_ids).await?;
     }
+    tx.commit().await?;
     let dto = to_note_dto(&state.pool, &event, updated, user.id()).await?;
     broadcast_event(&state, &load_event_dto(&state, id).await?).await?;
     Ok(Json(dto))
@@ -1667,8 +1674,12 @@ async fn remove_note(
 }
 
 /// Die namentlich Benannten fuer EIN Recht setzen (`edit`, `add`, `check`).
+///
+/// Löschen und Neuanlegen in der Verbindung des Aufrufers: Läuft das in seiner
+/// Transaktion, sieht niemand eine Notiz, deren Bearbeiter kurz alle weg sind –
+/// und ein Abbruch dazwischen lässt die alte Liste stehen statt einer leeren.
 async fn set_note_editors(
-    state: &AppState,
+    conn: &mut sqlx::PgConnection,
     note: &EventNoteRow,
     rolle: &str,
     ids: &[Uuid],
@@ -1676,7 +1687,7 @@ async fn set_note_editors(
     sqlx::query("delete from event_note_editors where note_id = $1 and role = $2")
         .bind(note.id)
         .bind(rolle)
-        .execute(&state.pool)
+        .execute(&mut *conn)
         .await?;
     for user_id in ids {
         sqlx::query(
@@ -1686,17 +1697,21 @@ async fn set_note_editors(
         .bind(note.id)
         .bind(user_id)
         .bind(rolle)
-        .execute(&state.pool)
+        .execute(&mut *conn)
         .await?;
     }
     Ok(())
 }
 
 /// Die namentlich Zugewiesenen eines Punktes setzen.
-async fn set_item_assignees(state: &AppState, item_id: Uuid, ids: &[Uuid]) -> AppResult<()> {
+async fn set_item_assignees(
+    conn: &mut sqlx::PgConnection,
+    item_id: Uuid,
+    ids: &[Uuid],
+) -> AppResult<()> {
     sqlx::query("delete from event_note_item_assignees where item_id = $1")
         .bind(item_id)
-        .execute(&state.pool)
+        .execute(&mut *conn)
         .await?;
     for user_id in ids {
         sqlx::query(
@@ -1705,7 +1720,7 @@ async fn set_item_assignees(state: &AppState, item_id: Uuid, ids: &[Uuid]) -> Ap
         )
         .bind(item_id)
         .bind(user_id)
-        .execute(&state.pool)
+        .execute(&mut *conn)
         .await?;
     }
     Ok(())
@@ -1741,11 +1756,14 @@ async fn add_item(
     let text = input.text.trim();
     Validator::new().length("text", text, 1, 500).finish()?;
 
+    // Punkt, Zuweisung und „ist jetzt eine Liste“ zusammen – sonst konnte ein
+    // Punkt an einer Notiz hängen, die ihn nicht anzeigt.
+    let mut tx = state.pool.begin().await?;
     let next: i32 = sqlx::query_scalar(
         "select coalesce(max(position), 0) + 1 from event_note_items where note_id = $1",
     )
     .bind(note_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     let item_id = Uuid::now_v7();
@@ -1761,17 +1779,18 @@ async fn add_item(
     .bind(input.required_checks.max(0))
     .bind(input.required_all)
     .bind(user.id())
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
-    set_item_assignees(&state, item_id, &input.assignee_ids).await?;
+    set_item_assignees(&mut tx, item_id, &input.assignee_ids).await?;
 
     // Ein Punkt macht daraus eine Liste. Sonst laege er in der Datenbank und
     // waere in der App nicht zu sehen – Punkte werden nur an einer Liste
     // dargestellt. Dieselbe Regel wie beim Anlegen, siehe `kind_bestimmen`.
     sqlx::query("update event_notes set kind = 'list' where id = $1 and kind <> 'list'")
         .bind(note_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
 
     broadcast_event(&state, &load_event_dto(&state, id).await?).await?;
     let antwort = note_antwort(&state, &event, note_id, user.id()).await?;
@@ -1811,7 +1830,8 @@ async fn update_item(
             .finish()?;
     }
 
-    sqlx::query(
+    let mut tx = state.pool.begin().await?;
+    let geaendert = sqlx::query(
         "update event_note_items set
            text            = coalesce($3, text),
            required_checks = coalesce($4, required_checks),
@@ -1826,12 +1846,19 @@ async fn update_item(
     .bind(input.required_checks.map(|wert| wert.max(0)))
     .bind(input.required_all)
     .bind(input.position)
-    .execute(&state.pool)
-    .await?;
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    // Gehört der Punkt nicht zu dieser Liste, ändert sich nichts – auch nicht
+    // die Zuweisung (vorher wurde sie für jede Kennung gesetzt).
+    if geaendert == 0 {
+        return Err(AppError::not_found("Punkt nicht gefunden"));
+    }
 
     if let Some(ids) = input.assignee_ids.as_deref() {
-        set_item_assignees(&state, item_id, ids).await?;
+        set_item_assignees(&mut tx, item_id, ids).await?;
     }
+    tx.commit().await?;
 
     broadcast_event(&state, &load_event_dto(&state, id).await?).await?;
     note_antwort(&state, &event, note_id, user.id()).await
@@ -2173,6 +2200,12 @@ async fn confirm_event(
     };
     let ends_at = option.ends_at.unwrap_or(starts_at + Duration::hours(1));
 
+    // Termin, Antworten und Umfrage in EINER Transaktion: Vorher stand der
+    // Termin schon als bestätigt da, während die Zusagen noch eingetragen
+    // wurden – ein Abbruch dazwischen liess einen bestätigten Termin ohne die
+    // Antworten, die zu ihm geführt hatten, und eine Umfrage, die nichts von
+    // ihm wusste (also erneut „bestätigen“ anbot).
+    let mut tx = state.pool.begin().await?;
     sqlx::query(
         "update calendar_events set
            starts_at      = $2,
@@ -2186,7 +2219,7 @@ async fn confirm_event(
     .bind(starts_at)
     .bind(ends_at)
     .bind(poll_id)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
 
     // Die Antworten zum gewählten Zeitpunkt werden zu Zu- und Absagen.
@@ -2207,7 +2240,7 @@ async fn confirm_event(
         .bind(id)
         .bind(vote.user_id)
         .bind(&vote.value)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
         if eingetragen > 0 {
@@ -2221,7 +2254,7 @@ async fn confirm_event(
                 )
                 .bind(chat)
                 .bind(vote.user_id)
-                .fetch_one(&state.pool)
+                .fetch_one(&mut *tx)
                 .await?
             }
             None => false,
@@ -2238,7 +2271,7 @@ async fn confirm_event(
         .bind(id)
         .bind(vote.user_id)
         .bind(&vote.value)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
     }
 
@@ -2250,8 +2283,9 @@ async fn confirm_event(
     .bind(poll_id)
     .bind(id)
     .bind(input.close_poll)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     let poll_dto = load_poll_dto(&state, poll_id, user.id()).await?;
     broadcast_poll(&state, &poll_dto).await?;

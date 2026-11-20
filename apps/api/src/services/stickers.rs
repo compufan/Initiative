@@ -140,7 +140,7 @@ pub async fn require_pack(state: &AppState, pack_id: Uuid) -> AppResult<StickerP
  * die Groessengrenze und `darf_angezeigt_werden`.
  */
 pub async fn claim_ton_attachment(
-    state: &AppState,
+    conn: &mut sqlx::PgConnection,
     attachment_id: Uuid,
 ) -> AppResult<AttachmentRow> {
     sqlx::query_as::<_, AttachmentRow>(
@@ -149,7 +149,7 @@ pub async fn claim_ton_attachment(
          returning *",
     )
     .bind(attachment_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(conn)
     .await?
     .ok_or_else(|| AppError::not_found("Tondatei nicht gefunden"))
 }
@@ -168,7 +168,10 @@ pub async fn claim_ton_attachment(
 /// Geprueft wird in SQL und nicht danach in Rust: So kann zwischen Pruefung
 /// und Umschreiben nichts dazwischenkommen, und ein abgelehnter Anhang
 /// behaelt seine bisherige Art, statt als halber Sticker liegenzubleiben.
-pub async fn claim_attachment(state: &AppState, attachment_id: Uuid) -> AppResult<AttachmentRow> {
+pub async fn claim_attachment(
+    conn: &mut sqlx::PgConnection,
+    attachment_id: Uuid,
+) -> AppResult<AttachmentRow> {
     let erlaubt = allowed_mime("sticker");
     let hoechstens = max_upload_bytes("sticker");
     sqlx::query_as::<_, AttachmentRow>(
@@ -180,7 +183,7 @@ pub async fn claim_attachment(state: &AppState, attachment_id: Uuid) -> AppResul
     .bind(attachment_id)
     .bind(erlaubt)
     .bind(hoechstens)
-    .fetch_optional(&state.pool)
+    .fetch_optional(conn)
     .await?
     .ok_or_else(|| {
         AppError::bad_request(format!(

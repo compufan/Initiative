@@ -257,6 +257,23 @@ async fn update(
             .finish()?;
     }
 
+    /*
+     * Umhängen unter einer Sperre.
+     *
+     * Die Prüfungen unten (kein Kreis, nicht zu tief) lesen den Baum und
+     * schreiben danach. Zwei gleichzeitige Umzüge – A unter B und B unter A –
+     * sahen beide noch keinen Kreis und schrieben beide: ein Zweig, der an
+     * sich selbst hängt und von nirgends mehr erreichbar ist. Die Sperre gilt
+     * bis zum Commit dieser Transaktion; die Prüfungen danach sehen jeden
+     * vorher festgeschriebenen Umzug.
+     */
+    let mut tx = state.pool.begin().await?;
+    if matches!(input.parent_id, Some(Some(_))) {
+        sqlx::query("select pg_advisory_xact_lock(hashtextextended('sammlungen:umzug', 0))")
+            .execute(&mut *tx)
+            .await?;
+    }
+
     if let Some(parent) = input.parent_id {
         match parent {
             Some(parent_id) => {
@@ -318,9 +335,10 @@ async fn update(
     .bind(input.parent_id.is_some())
     .bind(input.parent_id.flatten())
     .bind(input.member_level)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| AppError::not_found("Sammlung nicht gefunden"))?;
+    tx.commit().await?;
 
     let count: i64 = sqlx::query_scalar(
         "select count(*) from collection_items where collection_id = $1 and deleted_at is null",

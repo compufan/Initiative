@@ -509,7 +509,7 @@ fn default_true() -> bool {
 /// Normalfall unsichtbar zu machen: Einer überweist und meldet es, der andere
 /// sieht das Geld und bestätigt.
 async fn abhaken(
-    state: &AppState,
+    conn: &mut sqlx::PgConnection,
     expense_id: Uuid,
     ziel: Uuid,
     wer: Uuid,
@@ -545,7 +545,7 @@ async fn abhaken(
     .bind(ziel)
     .bind(wer)
     .bind(gesetzt)
-    .execute(&state.pool)
+    .execute(conn)
     .await?;
     Ok(())
 }
@@ -564,7 +564,9 @@ async fn settle(
         ));
     }
 
-    abhaken(&state, id, ziel, user.id(), input.settled).await?;
+    // Anteil und Stand der Ausgabe zusammen – wie bei `settle_up`.
+    let mut tx = state.pool.begin().await?;
+    abhaken(&mut tx, id, ziel, user.id(), input.settled).await?;
 
     // Ist alles abgehakt, gilt die ganze Ausgabe als erledigt.
     sqlx::query(
@@ -580,8 +582,9 @@ async fn settle(
          where id = $1",
     )
     .bind(id)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     let expense = require_expense(&state.pool, id).await?;
     // Allen Beteiligten Bescheid sagen – jedem seine eigene Fassung.
@@ -639,6 +642,11 @@ async fn settle_up(
 
     // Nur Anteile, die ich auch einzeln abhaken dürfte – dieselbe Regel wie in
     // `settle`, nur als Mengenoperation.
+    // Anteile und der Stand der Ausgaben in EINER Transaktion: Vorher waren
+    // die Anteile schon abgehakt, während die Ausgaben noch als offen galten –
+    // ein Abbruch dazwischen liess Ausgaben „offen“ stehen, an denen nichts
+    // mehr offen war (und die keine spätere Abrechnung mehr anfasste).
+    let mut tx = state.pool.begin().await?;
     let rows = sqlx::query_as::<_, (Uuid, i64)>(
         // Dieselbe Regel wie in `abhaken`, nur als Mengenoperation: Hat die
         // ANDERE Seite bereits markiert, ist dies die Gegenzeichnung – sonst
@@ -682,7 +690,7 @@ async fn settle_up(
     .bind(user.id())
     .bind(input.user_id)
     .bind(input.settled)
-    .fetch_all(&state.pool)
+    .fetch_all(&mut *tx)
     .await?;
 
     let betroffene: Vec<Uuid> = {
@@ -708,9 +716,10 @@ async fn settle_up(
              where id = $1",
         )
         .bind(expense_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
     }
+    tx.commit().await?;
 
     let summe: i64 = rows.iter().map(|(_, cents)| *cents).sum();
 
