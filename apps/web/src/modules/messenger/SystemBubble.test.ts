@@ -1,0 +1,22 @@
+import { describe as gruppe, expect, it } from 'vitest';
+import { describe } from './SystemBubble.js';
+
+gruppe('Systemzeilen der Gruppenverwaltung', () => {
+  it('nennen, was sich geändert hat', () => {
+    expect(describe('conversation.renamed', 'Anna', [], null, 'Grillrunde')).toBe(
+      'Anna hat die Gruppe in „Grillrunde“ umbenannt',
+    );
+    expect(describe('member.promoted', 'Du', ['Bodo'], null)).toBe(
+      'Du hast Bodo zum Admin gemacht',
+    );
+    expect(describe('owner.transferred', 'Anna', ['Cleo'], null)).toBe(
+      'Anna hat die Gruppe an Cleo übergeben',
+    );
+    expect(describe('conversation.settings', 'Anna', [], null, 'nur Admins dürfen schreiben')).toBe(
+      'Anna hat die Gruppeneinstellungen geändert: nur Admins dürfen schreiben',
+    );
+    expect(describe('member.joined', 'Du', [], null)).toBe(
+      'Du bist über einen Einladungslink beigetreten',
+    );
+  });
+});

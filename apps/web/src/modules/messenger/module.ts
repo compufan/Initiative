@@ -6,6 +6,10 @@ import { ChatScreen } from './ChatScreen.js';
 import { ShareTargetScreen } from './ShareTargetScreen.js';
 import { SystemBubble } from './SystemBubble.js';
 import { TextBubble } from './TextBubble.js';
+import { BeitrittScreen } from './BeitrittScreen.js';
+import { MeldenAktion } from './MeldenAktion.js';
+import { reiterZahl } from './chatliste.js';
+import { leerenVerdrahten } from './leeren.js';
 import './styles.css';
 
 /**
@@ -24,13 +28,8 @@ export default defineWebModule({
       label: 'Chats',
       icon: '💬',
       order: 10,
-      useBadge: () =>
-        useChat((state) =>
-          state.conversations.reduce(
-            (sum, conversation) => sum + (conversation.archived ? 0 : conversation.unreadCount),
-            0,
-          ),
-        ),
+      // Ein als ungelesen markierter Chat zählt eins (siehe `reiterZahl`).
+      useBadge: () => useChat((state) => reiterZahl(state.conversations)),
     },
   ],
   routes: [
@@ -38,7 +37,23 @@ export default defineWebModule({
     { path: '/chats/:conversationId', element: createElement(ChatScreen) },
     // Ziel des System-Teilen-Dialogs (share_target im Manifest).
     { path: '/teilen', element: createElement(ShareTargetScreen) },
+    // Einladungslink einer Gruppe – Vorschau ohne Inhalt, dann beitreten.
+    { path: '/join/:token', element: createElement(BeitrittScreen) },
   ],
+  messageActions: [
+    {
+      key: 'melden',
+      label: 'Melden',
+      icon: '🚩',
+      order: 90,
+      // Eigene, gelöschte und Systemzeilen meldet man nicht.
+      applies: (message) =>
+        message.type !== 'system' && !message.deletedAt && message.senderId != null,
+      render: MeldenAktion,
+    },
+  ],
+  // Geleerte Chats auch im Gerät leeren – auf allen Geräten (siehe `leeren.ts`).
+  init: leerenVerdrahten,
   messageRenderers: {
     text: TextBubble,
     system: SystemBubble,

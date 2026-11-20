@@ -1,29 +1,65 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { messagePreview, type ConversationDto, type MessageDto } from '@initiative/shared';
+import {
+  messagePreview,
+  ohneFormatierung,
+  type ChatOrdnerDto,
+  type ConversationDto,
+  type MessageDto,
+} from '@initiative/shared';
 import { Avatar } from '../../components/Avatar.js';
 import { EmptyState, Spinner } from '../../components/Feedback.js';
 import { Screen } from '../../components/Screen.js';
 import { api } from '../../lib/api.js';
 import { useShallow } from 'zustand/react/shallow';
 import { useChat } from '../../state/chat.js';
+import { useEntwuerfe } from '../../state/entwuerfe.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 import { NewChatSheet } from './NewChatSheet.js';
+import { verwaltung } from '../../lib/verwaltungApi.js';
+import { ChatAktionenSheet, archivUmschalten, lesenUmschalten } from './ChatAktionenSheet.js';
+import { OrdnerSheet } from './OrdnerSheet.js';
+import { useLongPress } from './useLongPress.js';
+import {
+  abzeichen,
+  FESTE_FILTER,
+  filterAusSchluessel,
+  filterSchluessel,
+  filtern,
+  istStumm,
+  istUngelesen,
+  sortieren,
+  wischErgebnis,
+  wischVersatz,
+  type ListenFilter,
+  type WischAktion,
+} from './chatliste.js';
+import './verwaltung.css';
 import { gegenueberIds, onlineUnter } from './praesenz.js';
 import {
   conversationAvatar,
   conversationTitle,
   counterpartOf,
   formatListStamp,
-  mutedLabel,
   senderName,
 } from './helpers.js';
 
-function lastActivity(conversation: ConversationDto): number {
-  const stamp = conversation.lastMessage?.createdAt ?? conversation.updatedAt;
-  const time = new Date(stamp).getTime();
-  return Number.isNaN(time) ? 0 : time;
+/** Der zuletzt gewählte Filter – nur eine Bequemlichkeit dieses Geräts. */
+const FILTER_SPEICHER = 'initiative.chatliste.filter';
+
+function gemerkterFilter(): ListenFilter {
+  try {
+    return filterAusSchluessel(window.localStorage.getItem(FILTER_SPEICHER));
+  } catch {
+    return { art: 'alle' };
+  }
 }
 
 export function ChatListScreen() {
@@ -89,16 +125,48 @@ export function ChatListScreen() {
    * Das Archiv – bisher eine Einbahnstrasse.
    *
    * „Chat archivieren" nahm den Chat aus der Liste, und damit war er weg:
-   * `api.conversations.list()` fragt ohne Argument nur die unarchivierten ab,
-   * und eine Archivansicht gab es nirgends. Der Weg zurück („Aus dem Archiv
-   * holen") steht in der Chat-Info – die man nur AUS dem Chat heraus öffnet,
-   * den man nicht mehr öffnen kann.
-   *
-   * Geladen wird erst beim Hinsehen: Wer nie archiviert, soll dafür auch
-   * keine Anfrage bezahlen.
+   * `api.conversations.list()` fragt ohne Argument nur die unarchivierten ab.
+   * Heute ist das Archiv einer der Filter über der Liste (und der Knopf oben
+   * führt weiter dorthin). Geladen wird erst beim Hinsehen: Wer nie
+   * archiviert, soll dafür auch keine Anfrage bezahlen.
    */
-  const [archivOffen, setArchivOffen] = useState(false);
+  const [filter, setFilterRoh] = useState<ListenFilter>(gemerkterFilter);
+  const archivOffen = filter.art === 'archiv';
   const [archiv, setArchiv] = useState<ConversationDto[] | null>(null);
+  const [ordner, setOrdner] = useState<ChatOrdnerDto[]>([]);
+  const [ordnerBearbeiten, setOrdnerBearbeiten] = useState<ChatOrdnerDto | 'neu' | null>(null);
+  const [aktionenFuer, setAktionenFuer] = useState<string | null>(null);
+
+  function setFilter(neu: ListenFilter) {
+    setFilterRoh(neu);
+    try {
+      window.localStorage.setItem(FILTER_SPEICHER, filterSchluessel(neu));
+    } catch {
+      // Ohne Speicher (privates Fenster) gilt der Filter eben nur jetzt.
+    }
+  }
+
+  useEffect(() => {
+    let weg = false;
+    verwaltung.liste
+      .ordner()
+      .then(({ items }) => {
+        if (!weg) setOrdner(items);
+      })
+      .catch(() => {
+        // Ohne Ordner bleibt die Liste benutzbar – die festen Filter genügen.
+      });
+    return () => {
+      weg = true;
+    };
+  }, []);
+
+  // Ein gemerkter Ordner, den es nicht mehr gibt, fällt auf „Alle“ zurück.
+  useEffect(() => {
+    if (filter.art === 'ordner' && ordner.length > 0 && !ordner.some((o) => o.id === filter.id)) {
+      setFilter({ art: 'alle' });
+    }
+  }, [filter, ordner]);
 
   useEffect(() => {
     if (!archivOffen) return;
@@ -119,16 +187,56 @@ export function ChatListScreen() {
     };
   }, [archivOffen]);
 
+  /** Alles, was die Liste kennt: die offenen aus dem Speicher, das Archiv nachgeladen. */
+  const bekannt = useMemo(() => {
+    const ids = new Set(conversations.map((chat) => chat.id));
+    return [...conversations, ...(archiv ?? []).filter((chat) => !ids.has(chat.id))];
+  }, [conversations, archiv]);
+
   const visible = useMemo(() => {
-    const list = conversations.filter((conversation) => !conversation.archived);
-    const filtered =
+    const gefiltert = filtern(bekannt, filter, ordner);
+    const gesucht =
       term.length === 0
-        ? list
-        : list.filter((conversation) =>
+        ? gefiltert
+        : gefiltert.filter((conversation) =>
             conversationTitle(conversation, myId).toLowerCase().includes(term.toLowerCase()),
           );
-    return filtered.slice().sort((a, b) => lastActivity(b) - lastActivity(a));
-  }, [conversations, myId, term]);
+    return sortieren(gesucht);
+  }, [bekannt, filter, ordner, myId, term]);
+
+  const aktionenChat = aktionenFuer
+    ? (bekannt.find((chat) => chat.id === aktionenFuer) ?? null)
+    : null;
+
+  /** Nach Archivieren/Löschen: das nachgeladene Archiv mitführen. */
+  function nachAenderung(chat: ConversationDto | null, id: string) {
+    setArchiv((liste) => {
+      if (liste === null) return liste;
+      const ohne = liste.filter((eintrag) => eintrag.id !== id);
+      return chat?.archived ? [chat, ...ohne] : ohne;
+    });
+  }
+
+  async function gewischt(chat: ConversationDto, aktion: WischAktion) {
+    try {
+      if (aktion === 'archivieren') {
+        const neu = await archivUmschalten(chat);
+        nachAenderung(neu, neu.id);
+      } else {
+        await lesenUmschalten(chat);
+      }
+    } catch (error) {
+      toast(error instanceof Error ? error.message : 'Das hat nicht geklappt', 'error');
+    }
+  }
+
+  function ordnerGeaendert(neu: ChatOrdnerDto | null, id?: string) {
+    setOrdner((liste) => {
+      if (!neu) return liste.filter((eintrag) => eintrag.id !== id);
+      const da = liste.some((eintrag) => eintrag.id === neu.id);
+      return da ? liste.map((eintrag) => (eintrag.id === neu.id ? neu : eintrag)) : [...liste, neu];
+    });
+  }
 
   function closeSearch() {
     setSearchOpen(false);
@@ -161,9 +269,18 @@ export function ChatListScreen() {
                 ? 'Zurück zur normalen Chatliste'
                 : 'Zeigt die Chats, die du archiviert hast – von dort holst du sie zurück'
             }
-            onClick={() => setArchivOffen((wert) => !wert)}
+            onClick={() => setFilter(archivOffen ? { art: 'alle' } : { art: 'archiv' })}
           >
             {archivOffen ? '💬' : '🗄️'}
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            aria-label="Gespeicherte Nachrichten"
+            data-tipp="Alle Nachrichten, die du mit einem Stern gespeichert hast"
+            onClick={() => navigate('/gespeichert')}
+          >
+            ⭐
           </button>
           <button
             type="button"
@@ -178,6 +295,14 @@ export function ChatListScreen() {
       }
     >
       <div className="page">
+        <FilterLeiste
+          filter={filter}
+          ordner={ordner}
+          chats={bekannt}
+          onFilter={setFilter}
+          onOrdnerNeu={() => setOrdnerBearbeiten('neu')}
+          onOrdnerBearbeiten={(eintrag) => setOrdnerBearbeiten(eintrag)}
+        />
         {archivOffen ? (
           <>
             {archiv === null && (
@@ -185,22 +310,24 @@ export function ChatListScreen() {
                 <Spinner label="Archiv wird geladen" />
               </div>
             )}
-            {archiv?.length === 0 && (
+            {archiv !== null && visible.length === 0 && (
               <EmptyState
                 emoji="🗄️"
                 title="Nichts archiviert"
                 description="Archivierte Chats verschwinden aus der Liste, bleiben aber vollständig erhalten. Hier findest du sie wieder."
               />
             )}
-            {archiv && archiv.length > 0 && (
+            {visible.length > 0 && (
               <div className="list">
-                {archiv.map((conversation) => (
+                {visible.map((conversation) => (
                   <ChatRow
                     key={conversation.id}
                     conversation={conversation}
                     myId={myId}
                     online={undefined}
                     typing={false}
+                    onAktionen={() => setAktionenFuer(conversation.id)}
+                    onWisch={(aktion) => void gewischt(conversation, aktion)}
                   />
                 ))}
               </div>
@@ -245,6 +372,18 @@ export function ChatListScreen() {
               />
             )}
 
+            {conversations.length > 0 && visible.length === 0 && term.length === 0 && (
+              <EmptyState
+                emoji={filter.art === 'ungelesen' ? '✅' : '📂'}
+                title={filter.art === 'ungelesen' ? 'Alles gelesen' : 'Hier ist nichts'}
+                description={
+                  filter.art === 'ordner'
+                    ? 'Leg Chats über ihr Menü (langes Drücken oder „⋯“) in diesen Ordner.'
+                    : 'Kein Chat passt zu diesem Filter.'
+                }
+              />
+            )}
+
             {conversations.length > 0 &&
               visible.length === 0 &&
               term.length > 0 &&
@@ -270,6 +409,8 @@ export function ChatListScreen() {
                         : undefined
                     }
                     typing={(typing[conversation.id] ?? []).some((entry) => entry.userId !== myId)}
+                    onAktionen={() => setAktionenFuer(conversation.id)}
+                    onWisch={(aktion) => void gewischt(conversation, aktion)}
                   />
                 ))}
               </div>
@@ -301,7 +442,8 @@ export function ChatListScreen() {
                         className="list-row"
                         onClick={() => {
                           closeSearch();
-                          navigate(`/chats/${hit.conversationId}`);
+                          // Zum Treffer springen, nicht nur in den Chat.
+                          navigate(`/chats/${hit.conversationId}?m=${hit.id}`);
                         }}
                       >
                         <span aria-hidden="true" style={{ fontSize: '1.2rem' }}>
@@ -332,7 +474,99 @@ export function ChatListScreen() {
       </div>
 
       <NewChatSheet open={newChatOpen} onClose={() => setNewChatOpen(false)} />
+      {aktionenChat && (
+        <ChatAktionenSheet
+          chat={aktionenChat}
+          alle={bekannt}
+          ordner={ordner}
+          onOrdnerGeaendert={(neu) => ordnerGeaendert(neu)}
+          onGeaendert={nachAenderung}
+          onClose={() => setAktionenFuer(null)}
+        />
+      )}
+      {ordnerBearbeiten && (
+        <OrdnerSheet
+          ordner={ordnerBearbeiten === 'neu' ? null : ordnerBearbeiten}
+          chats={conversations.filter((chat) => !chat.archived)}
+          anzahl={ordner.length}
+          onClose={() => setOrdnerBearbeiten(null)}
+          onGespeichert={(neu) => {
+            ordnerGeaendert(neu);
+            setFilter({ art: 'ordner', id: neu.id });
+          }}
+          onGeloescht={(id) => {
+            ordnerGeaendert(null, id);
+            setFilter({ art: 'alle' });
+          }}
+        />
+      )}
     </Screen>
+  );
+}
+
+/** Die Filter über der Liste: feste Chips, eigene Ordner, „＋ Ordner“. */
+function FilterLeiste({
+  filter,
+  ordner,
+  chats,
+  onFilter,
+  onOrdnerNeu,
+  onOrdnerBearbeiten,
+}: {
+  filter: ListenFilter;
+  ordner: ChatOrdnerDto[];
+  chats: ConversationDto[];
+  onFilter: (filter: ListenFilter) => void;
+  onOrdnerNeu: () => void;
+  onOrdnerBearbeiten: (ordner: ChatOrdnerDto) => void;
+}) {
+  const ungelesen = chats.filter((chat) => !chat.archived && istUngelesen(chat)).length;
+  const aktiv = filterSchluessel(filter);
+  return (
+    <div className="chat-filter" role="toolbar" aria-label="Chats filtern">
+      {FESTE_FILTER.map((eintrag) => (
+        <button
+          key={eintrag.art}
+          type="button"
+          className="chat-filter-chip"
+          aria-pressed={aktiv === eintrag.art}
+          onClick={() => onFilter({ art: eintrag.art })}
+        >
+          {eintrag.label}
+          {eintrag.art === 'ungelesen' && ungelesen > 0 && (
+            <span className="chat-filter-zahl" aria-label={`${ungelesen} ungelesen`}>
+              {ungelesen}
+            </span>
+          )}
+        </button>
+      ))}
+      {ordner.map((eintrag) => {
+        const schluessel = filterSchluessel({ art: 'ordner', id: eintrag.id });
+        const gewaehlt = aktiv === schluessel;
+        return (
+          <button
+            key={eintrag.id}
+            type="button"
+            className="chat-filter-chip"
+            aria-pressed={gewaehlt}
+            data-tipp={gewaehlt ? 'Noch einmal tippen: Ordner bearbeiten' : undefined}
+            onClick={() =>
+              gewaehlt ? onOrdnerBearbeiten(eintrag) : onFilter({ art: 'ordner', id: eintrag.id })
+            }
+          >
+            📁 {eintrag.name}
+          </button>
+        );
+      })}
+      <button
+        type="button"
+        className="chat-filter-chip chat-filter-neu"
+        aria-label="Neuer Ordner"
+        onClick={onOrdnerNeu}
+      >
+        ＋ Ordner
+      </button>
+    </div>
   );
 }
 
@@ -341,19 +575,34 @@ function ChatRow({
   myId,
   online,
   typing,
+  onAktionen,
+  onWisch,
 }: {
   conversation: ConversationDto;
   myId: string;
   online: boolean | undefined;
   typing: boolean;
+  onAktionen: () => void;
+  onWisch: (aktion: WischAktion) => void;
 }) {
   const avatar = conversationAvatar(conversation, myId);
   const last = conversation.lastMessage;
-  const muted = mutedLabel(conversation.mutedUntil);
+  const stumm = istStumm(conversation);
+  const marke = abzeichen(conversation);
+  const titel = conversationTitle(conversation, myId);
+  const langDruecken = useLongPress(onAktionen);
+  const [versatz, setVersatz] = useState(0);
+  const start = useRef<{ x: number; y: number; breite: number } | null>(null);
+  /** Ein Wisch soll nicht zusätzlich den Chat öffnen. */
+  const gewischt = useRef(false);
 
+  const entwurf = useEntwuerfe((state) => state.entwuerfe[conversation.id]?.text.trim() ?? '');
   let preview = 'Noch keine Nachrichten';
   if (typing) {
     preview = 'tippt …';
+  } else if (entwurf) {
+    // Wie bei WhatsApp: Was man angefangen hat, steht vor der letzten Nachricht.
+    preview = `Entwurf: ${ohneFormatierung(entwurf)}`;
   } else if (last) {
     const prefix =
       last.type === 'system' || last.metadata?.erinnerung
@@ -366,32 +615,139 @@ function ChatRow({
     preview = `${prefix}${messagePreview(last)}`;
   }
 
+  function runter(event: ReactPointerEvent) {
+    langDruecken.onPointerDown(event);
+    gewischt.current = false;
+    // Wischen nur mit Finger oder Stift: Mit der Maus zieht man nicht an Zeilen.
+    if (event.pointerType === 'mouse') return;
+    start.current = {
+      x: event.clientX,
+      y: event.clientY,
+      breite: event.currentTarget.getBoundingClientRect().width,
+    };
+  }
+
+  function bewegen(event: ReactPointerEvent) {
+    langDruecken.onPointerMove(event);
+    const anfang = start.current;
+    if (!anfang) return;
+    const dx = event.clientX - anfang.x;
+    const dy = event.clientY - anfang.y;
+    const neu = wischVersatz(dx, dy);
+    if (Math.abs(neu) > 10) gewischt.current = true;
+    setVersatz(neu);
+  }
+
+  function hoch(event: ReactPointerEvent) {
+    langDruecken.onPointerUp();
+    const anfang = start.current;
+    start.current = null;
+    setVersatz(0);
+    if (!anfang) return;
+    const aktion = wischErgebnis(event.clientX - anfang.x, event.clientY - anfang.y, anfang.breite);
+    if (aktion) onWisch(aktion);
+  }
+
+  function abbrechen() {
+    langDruecken.onPointerCancel();
+    start.current = null;
+    setVersatz(0);
+  }
+
+  const lesenText = istUngelesen(conversation) ? 'Gelesen' : 'Ungelesen';
+
   return (
-    <Link className="list-row chat-row" to={`/chats/${conversation.id}`}>
-      <Avatar name={avatar.name} id={avatar.id} url={avatar.url} size={50} online={online} />
-      <span className="chat-row-main">
-        <span className="chat-row-line">
-          <span className="chat-row-name truncate">{conversationTitle(conversation, myId)}</span>
-          <span className="chat-row-time">
-            {muted && (
-              <span aria-label="stummgeschaltet" title="stummgeschaltet">
-                🔕
-              </span>
-            )}
-            {last ? formatListStamp(last.createdAt) : ''}
-          </span>
+    <div
+      className={`chat-row-wrap${versatz !== 0 ? ' is-wischend' : ''}`}
+      onPointerDown={runter}
+      onPointerMove={bewegen}
+      onPointerUp={hoch}
+      onPointerCancel={abbrechen}
+      onContextMenu={langDruecken.onContextMenu}
+    >
+      {versatz !== 0 && (
+        <span
+          className={`chat-row-wischziel ${versatz > 0 ? 'is-rechts' : 'is-links'}`}
+          aria-hidden="true"
+        >
+          {versatz > 0
+            ? `✓ ${lesenText}`
+            : `🗄️ ${conversation.archived ? 'Zurückholen' : 'Archivieren'}`}
         </span>
-        <span className="chat-row-line">
-          <span className={`chat-row-preview truncate ${typing ? 'chat-row-typing' : ''}`}>
-            {preview}
-          </span>
-          {conversation.unreadCount > 0 && (
-            <span className="chat-badge">
-              {conversation.unreadCount > 99 ? '99+' : conversation.unreadCount}
+      )}
+      <Link
+        className={`list-row chat-row${conversation.pinnedAt ? ' is-angeheftet' : ''}`}
+        to={`/chats/${conversation.id}`}
+        style={versatz !== 0 ? { transform: `translateX(${versatz}px)` } : undefined}
+        draggable={false}
+        onClickCapture={(event) => {
+          if (gewischt.current) {
+            event.preventDefault();
+            gewischt.current = false;
+            return;
+          }
+          // Öffnen nimmt die Markierung „ungelesen“ zurück – auch wenn keine
+          // neue Nachricht da ist, die das Lesen ohnehin erledigen würde.
+          if (conversation.markedUnread) {
+            useChat.getState().upsertConversation({ ...conversation, markedUnread: false });
+            void verwaltung.gruppe.aendern(conversation.id, { markedUnread: false }).catch(() => {
+              // Der nächste Abgleich holt es nach.
+            });
+          }
+        }}
+        onKeyDown={(event) => {
+          // Tastatur-Alternativen zum Wischen: Entf archiviert, „u“ schaltet
+          // gelesen/ungelesen. Das Menü öffnet Umschalt+F10 oder die
+          // Kontextmenü-Taste (ein `contextmenu`-Ereignis, siehe oben).
+          if (event.key === 'Delete') {
+            event.preventDefault();
+            onWisch('archivieren');
+          } else if (event.key === 'u' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+            event.preventDefault();
+            onWisch('lesen');
+          }
+        }}
+        aria-keyshortcuts="Delete U Shift+F10"
+      >
+        <Avatar name={avatar.name} id={avatar.id} url={avatar.url} size={50} online={online} />
+        <span className="chat-row-main">
+          <span className="chat-row-line">
+            <span className="chat-row-name truncate">{titel}</span>
+            <span className="chat-row-time">
+              {conversation.pinnedAt && (
+                <span aria-label="angeheftet" title="angeheftet">
+                  📌
+                </span>
+              )}
+              {stumm && (
+                <span aria-label="stummgeschaltet" title="stummgeschaltet">
+                  🔕
+                </span>
+              )}
+              {last ? formatListStamp(last.createdAt) : ''}
             </span>
-          )}
+          </span>
+          <span className="chat-row-line">
+            <span className={`chat-row-preview truncate ${typing ? 'chat-row-typing' : ''}`}>
+              {preview}
+            </span>
+            {marke?.art === 'zahl' && <span className="chat-badge">{marke.text}</span>}
+            {marke?.art === 'punkt' && (
+              <span className="chat-badge chat-badge-punkt" aria-label="als ungelesen markiert" />
+            )}
+          </span>
         </span>
-      </span>
-    </Link>
+      </Link>
+      <button
+        type="button"
+        className="icon-btn chat-row-menu"
+        aria-label={`Aktionen für ${titel}`}
+        aria-haspopup="dialog"
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={onAktionen}
+      >
+        ⋯
+      </button>
+    </div>
   );
 }

@@ -432,7 +432,10 @@ export function ChatScreen() {
 
       <VerlaufsAntraege conversation={conversation} myId={myId} />
 
-      <div className="msg-body">
+      {/* Hintergrund je Chat: die Klasse setzt `--hg` (verwaltung.css). */}
+      <div
+        className={`msg-body${conversation?.hintergrund ? ` hg-${conversation.hintergrund} hat-hintergrund` : ''}`}
+      >
         <div className="msg-scroll" ref={scrollRef} onScroll={onScroll}>
           <div className="msg-content" ref={contentRef}>
             {hasMore && (

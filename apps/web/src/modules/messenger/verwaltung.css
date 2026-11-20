@@ -1,0 +1,305 @@
+/* Chatliste je Person (Filter, Ordner, Wischen, Menü) und Gruppenverwaltung.
+   Eigene Datei neben styles.css, damit die Nachrichtenansicht und diese
+   Funktionen einander beim Gestalten nicht in die Quere kommen. Nur Tokens –
+   Hell und Dunkel kommen von dort. */
+
+/* ---------- Filter über der Liste ---------- */
+
+.chat-filter {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-filter::-webkit-scrollbar {
+  display: none;
+}
+
+.chat-filter-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 6px 12px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background var(--transition),
+    color var(--transition);
+}
+
+.chat-filter-chip[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.chat-filter-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.chat-filter-neu {
+  background: transparent;
+  border: 1px dashed var(--border-strong, var(--border));
+}
+
+.chat-filter-zahl {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.68rem;
+  display: inline-grid;
+  place-items: center;
+}
+
+/* ---------- Zeile: Menüknopf, Wischen, Markierungen ---------- */
+
+.chat-row-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  touch-action: pan-y;
+}
+
+.chat-row-wrap + .chat-row-wrap {
+  border-top: 1px solid var(--border);
+}
+
+.chat-row-wrap .chat-row {
+  flex: 1;
+  min-width: 0;
+  padding-right: var(--space-1);
+  background: var(--bg);
+  position: relative;
+  z-index: 1;
+  transition: transform 160ms ease;
+}
+
+.chat-row-wrap.is-wischend .chat-row {
+  transition: none;
+}
+
+.chat-row.is-angeheftet {
+  background: color-mix(in srgb, var(--accent-soft) 45%, var(--bg));
+}
+
+.chat-row-menu {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  margin-right: var(--space-2);
+  font-size: 1.1rem;
+}
+
+.chat-row-wischziel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-5);
+  font-weight: 700;
+  font-size: 0.85rem;
+  color: var(--accent-contrast);
+}
+
+.chat-row-wischziel.is-links {
+  justify-content: flex-end;
+  background: var(--warning, #b45309);
+}
+
+.chat-row-wischziel.is-rechts {
+  justify-content: flex-start;
+  background: var(--accent);
+}
+
+.chat-badge-punkt {
+  min-width: 12px;
+  width: 12px;
+  height: 12px;
+  padding: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-row-wrap .chat-row {
+    transition: none;
+  }
+}
+
+/* ---------- Menü eines Chats, Ordner ---------- */
+
+.chat-aktionen .btn-block {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.chat-aktionen-ordner,
+.ordner-chats {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ordner-chat {
+  cursor: pointer;
+}
+
+.ordner-chat input,
+.chat-aktionen-ordner input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+
+/* ---------- Gruppenverwaltung (Chat-Info) ---------- */
+
+.gv-zeile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.gv-beschreibung {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+
+.gv-mitglied {
+  cursor: pointer;
+}
+
+.gv-link {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.gv-link code {
+  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+}
+
+.gv-hintergruende {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  gap: var(--space-2);
+}
+
+.gv-hintergrund {
+  aspect-ratio: 1;
+  border-radius: var(--radius);
+  border: 2px solid var(--border);
+  font-size: 0.68rem;
+  display: grid;
+  place-items: end center;
+  padding-bottom: 4px;
+  color: var(--text);
+}
+
+.gv-hintergrund[aria-pressed='true'] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.gv-hintergrund:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- Hintergründe je Chat ----------
+   Die Werte kommen als CSS-Variable `--chat-hintergrund` an den Container des
+   Chats (ChatScreen). Jede Kennung hat eine Fassung für Hell und für Dunkel. */
+
+.hg-sand {
+  --hg: #f4ead7;
+}
+.hg-salbei {
+  --hg: #dfeadf;
+}
+.hg-himmel {
+  --hg: #dcebf7;
+}
+.hg-flieder {
+  --hg: #e9e1f5;
+}
+.hg-nacht {
+  --hg: #1d2540;
+}
+.hg-punkte {
+  --hg:
+    radial-gradient(circle, rgba(120, 120, 160, 0.22) 1.2px, transparent 1.4px) 0 0 / 14px 14px,
+    var(--bg);
+}
+.hg-wellen {
+  --hg:
+    repeating-linear-gradient(135deg, rgba(110, 140, 200, 0.1) 0 10px, transparent 10px 20px),
+    var(--bg);
+}
+.hg-karo {
+  --hg:
+    linear-gradient(rgba(120, 120, 160, 0.12) 1px, transparent 1px) 0 0 / 18px 18px,
+    linear-gradient(90deg, rgba(120, 120, 160, 0.12) 1px, transparent 1px) 0 0 / 18px 18px,
+    var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .hg-sand {
+    --hg: #2f2a20;
+  }
+  :root:not([data-theme='light']) .hg-salbei {
+    --hg: #1f2b22;
+  }
+  :root:not([data-theme='light']) .hg-himmel {
+    --hg: #17263a;
+  }
+  :root:not([data-theme='light']) .hg-flieder {
+    --hg: #261f36;
+  }
+  :root:not([data-theme='light']) .hg-nacht {
+    --hg: #0a0e1c;
+  }
+}
+
+:root[data-theme='dark'] .hg-sand {
+  --hg: #2f2a20;
+}
+:root[data-theme='dark'] .hg-salbei {
+  --hg: #1f2b22;
+}
+:root[data-theme='dark'] .hg-himmel {
+  --hg: #17263a;
+}
+:root[data-theme='dark'] .hg-flieder {
+  --hg: #261f36;
+}
+:root[data-theme='dark'] .hg-nacht {
+  --hg: #0a0e1c;
+}
+
+.gv-hintergrund[class*='hg-'] {
+  background: var(--hg);
+}
+
+/* Im Chat selbst (ChatScreen, Klasse am Container `.msg-body`). */
+.msg-body.hat-hintergrund {
+  background: var(--hg);
+}

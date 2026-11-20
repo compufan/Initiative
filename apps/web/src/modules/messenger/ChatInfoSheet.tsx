@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { ConversationDto, UserDto } from '@initiative/shared';
+import type { ConversationDto, ConversationMemberDto } from '@initiative/shared';
 import { Avatar } from '../../components/Avatar.js';
 import { PersonenWahl } from '../../components/PersonenWahl.js';
 import { Sheet } from '../../components/Sheet.js';
@@ -8,28 +8,33 @@ import { api } from '../../lib/api.js';
 import { useChat } from '../../state/chat.js';
 import { useMyId } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
-import { UserSearch } from './UserSearch.js';
+import { verwaltung } from '../../lib/verwaltungApi.js';
 import {
   canModerate,
   conversationAvatar,
   conversationTitle,
+  counterpartOf,
   formatLastSeen,
   memberCountLabel,
   memberName,
   roleLabel,
 } from './helpers.js';
+import {
+  ChatMitteilungen,
+  Einladungslinks,
+  GruppenInfo,
+  GruppenSchalter,
+  HintergrundWahl,
+  MeldenSheet,
+  MitgliedSheet,
+} from './GruppenVerwaltung.js';
+import { geleertAnwenden } from './leeren.js';
+import './verwaltung.css';
 
 import { FernsehSheet } from '../fernseher/FernsehSheet.js';
 
 /** Was addMembersSchema erlaubt (packages/shared/src/schemas/conversation.ts). */
 const HINZU_MAX = 100;
-
-const MUTE_PRESETS: { label: string; hours: number | null }[] = [
-  { label: '1 Stunde', hours: 1 },
-  { label: '8 Stunden', hours: 8 },
-  { label: '1 Woche', hours: 24 * 7 },
-  { label: 'Aus', hours: null },
-];
 
 interface ChatInfoSheetProps {
   open: boolean;
@@ -70,21 +75,51 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
   }, [conversations, conversation, myId]);
   const [busy, setBusy] = useState(false);
   const [confirmLeave, setConfirmLeave] = useState(false);
+  const [frage, setFrage] = useState<'leeren' | 'loeschen' | null>(null);
+  const [mitgliedOffen, setMitgliedOffen] = useState<ConversationMemberDto | null>(null);
+  const [melden, setMelden] = useState(false);
+  /** Wen ich blockiert habe – für „Blockieren“/„Freigeben“. */
+  const [gesperrt, setGesperrt] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!open) {
       setAdding(false);
       setPicked([]);
       setConfirmLeave(false);
+      setFrage(null);
+      setMitgliedOffen(null);
+      setMelden(false);
+      return;
     }
+    let weg = false;
+    verwaltung.sperren
+      .liste()
+      .then(({ items }) => {
+        if (!weg) setGesperrt(new Set(items.map((person) => person.id)));
+      })
+      .catch(() => {
+        // Ohne Liste zeigt der Knopf „Blockieren“ – der Server weiss es besser.
+      });
+    return () => {
+      weg = true;
+    };
   }, [open]);
+
+  function sperreGeaendert(person: string, an: boolean) {
+    setGesperrt((alt) => {
+      const neu = new Set(alt);
+      if (an) neu.add(person);
+      else neu.delete(person);
+      return neu;
+    });
+  }
 
   if (!conversation) return null;
 
   const isGroup = conversation.type === 'group';
   const moderator = canModerate(conversation, myId);
   const avatar = conversationAvatar(conversation, myId);
-  const muted = conversation.mutedUntil && new Date(conversation.mutedUntil).getTime() > Date.now();
+  const gegenueber = counterpartOf(conversation, myId);
 
   async function apply(patch: Record<string, unknown>, message: string, failure: string) {
     if (!conversation) return;
@@ -148,6 +183,53 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
     }
   }
 
+  async function leeren() {
+    if (!conversation) return;
+    setBusy(true);
+    try {
+      const neu = await verwaltung.liste.leeren(conversation.id);
+      useChat.getState().upsertConversation(neu);
+      await geleertAnwenden(neu);
+      setFrage(null);
+      toast('Chat geleert – nur bei dir', 'success');
+    } catch {
+      toast('Leeren fehlgeschlagen', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function fuerMichLoeschen() {
+    if (!conversation) return;
+    setBusy(true);
+    try {
+      await verwaltung.liste.ausblenden(conversation.id);
+      useChat.getState().removeConversation(conversation.id);
+      onClose();
+      navigate('/chats', { replace: true });
+      toast('Chat gelöscht – nur bei dir', 'success');
+    } catch {
+      toast('Löschen fehlgeschlagen', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function sperreUmschalten(person: string) {
+    setBusy(true);
+    const war = gesperrt.has(person);
+    try {
+      if (war) await verwaltung.sperren.freigeben(person);
+      else await verwaltung.sperren.blockieren(person);
+      sperreGeaendert(person, !war);
+      toast(war ? 'Freigegeben' : 'Blockiert', 'success');
+    } catch {
+      toast('Das hat nicht geklappt', 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (adding) {
     return (
       <Sheet open={open} onClose={onClose} title="Mitglieder hinzufügen">
@@ -195,38 +277,9 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
         </div>
       </div>
 
-      <section className="stack">
-        <span className="msg-info-label">Stummschalten</span>
-        <div className="msg-chip-row">
-          {MUTE_PRESETS.map((preset) => (
-            <button
-              key={preset.label}
-              type="button"
-              className={`btn btn-sm ${preset.hours == null && !muted ? 'btn-primary' : ''}`}
-              disabled={busy}
-              onClick={() =>
-                void apply(
-                  {
-                    mutedUntil:
-                      preset.hours == null
-                        ? null
-                        : new Date(Date.now() + preset.hours * 3_600_000).toISOString(),
-                  },
-                  preset.hours == null ? 'Benachrichtigungen wieder an' : 'Chat stummgeschaltet',
-                  'Stummschalten fehlgeschlagen',
-                )
-              }
-            >
-              {preset.label}
-            </button>
-          ))}
-        </div>
-        {muted && (
-          <span className="muted" style={{ fontSize: '0.82rem' }}>
-            Stumm bis {new Date(conversation.mutedUntil ?? '').toLocaleString('de-DE')}
-          </span>
-        )}
-      </section>
+      {isGroup && <GruppenInfo chat={conversation} myId={myId} />}
+
+      <ChatMitteilungen chat={conversation} />
 
       {/*
           „Auf den Fernseher" im Chat-Menü.
@@ -262,7 +315,13 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
             const online = presence[member.userId]?.online ?? false;
             const lastSeen = presence[member.userId]?.lastSeenAt ?? member.user.lastSeenAt;
             return (
-              <div key={member.userId} className="list-row">
+              <button
+                key={member.userId}
+                type="button"
+                className="list-row gv-mitglied"
+                aria-label={`${memberName(member)}${member.userId === myId ? ' (du)' : ''}, ${roleLabel(member.role)} – Aktionen`}
+                onClick={() => setMitgliedOffen(member)}
+              >
                 <Avatar
                   name={memberName(member)}
                   id={member.userId}
@@ -280,7 +339,7 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
                   </span>
                 </span>
                 <span className="badge">{roleLabel(member.role)}</span>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -290,6 +349,39 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
           </button>
         )}
       </section>
+
+      {isGroup && moderator && (
+        <>
+          <Einladungslinks chat={conversation} titel={conversationTitle(conversation, myId)} />
+          <GruppenSchalter chat={conversation} />
+        </>
+      )}
+
+      <HintergrundWahl chat={conversation} />
+
+      {!isGroup && gegenueber && (
+        <section className="stack" aria-label="Sicherheit">
+          <button
+            type="button"
+            className="btn btn-block"
+            disabled={busy}
+            onClick={() => void sperreUmschalten(gegenueber.userId)}
+          >
+            {gesperrt.has(gegenueber.userId)
+              ? `✅ ${memberName(gegenueber)} freigeben`
+              : `⛔ ${memberName(gegenueber)} blockieren`}
+          </button>
+          {gesperrt.has(gegenueber.userId) && (
+            <span className="muted" style={{ fontSize: '0.82rem' }}>
+              Blockiert: Ihr könnt einander hier nicht schreiben, und {memberName(gegenueber)} sieht
+              weder dein Bild noch wann du online bist.
+            </span>
+          )}
+          <button type="button" className="btn btn-block" onClick={() => setMelden(true)}>
+            🚩 {memberName(gegenueber)} melden
+          </button>
+        </section>
+      )}
 
       <section className="stack">
         <button
@@ -306,6 +398,51 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
         >
           {conversation.archived ? '📥 Aus dem Archiv holen' : '🗄️ Chat archivieren'}
         </button>
+        {frage ? (
+          <div className="stack">
+            <p style={{ margin: 0 }}>
+              {frage === 'leeren'
+                ? 'Alle Nachrichten verschwinden – nur bei dir. Die anderen behalten alles.'
+                : 'Der Chat verschwindet aus deiner Liste und wird für dich geleert. Schreibt dir die Person wieder, taucht er neu auf.'}
+            </p>
+            <div className="row" style={{ gap: 'var(--space-2)' }}>
+              <button type="button" className="btn" onClick={() => setFrage(null)}>
+                Abbrechen
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                style={{ flex: 1 }}
+                disabled={busy}
+                autoFocus
+                onClick={() => void (frage === 'leeren' ? leeren() : fuerMichLoeschen())}
+              >
+                {frage === 'leeren' ? 'Chat leeren' : 'Für mich löschen'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="btn btn-block"
+              disabled={busy}
+              onClick={() => setFrage('leeren')}
+            >
+              🧹 Chat leeren
+            </button>
+            {!isGroup && (
+              <button
+                type="button"
+                className="btn btn-danger btn-block"
+                disabled={busy}
+                onClick={() => setFrage('loeschen')}
+              >
+                🗑️ Chat löschen
+              </button>
+            )}
+          </>
+        )}
         <button
           type="button"
           className="btn btn-danger btn-block"
@@ -315,6 +452,26 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
           {confirmLeave ? 'Wirklich verlassen?' : 'Chat verlassen'}
         </button>
       </section>
+
+      {mitgliedOffen && (
+        <MitgliedSheet
+          chat={conversation}
+          mitglied={
+            conversation.members.find((member) => member.userId === mitgliedOffen.userId) ??
+            mitgliedOffen
+          }
+          myId={myId}
+          gesperrt={gesperrt.has(mitgliedOffen.userId)}
+          onSperreGeaendert={(an) => sperreGeaendert(mitgliedOffen.userId, an)}
+          onClose={() => setMitgliedOffen(null)}
+        />
+      )}
+      {melden && gegenueber && (
+        <MeldenSheet
+          ziel={{ userId: gegenueber.userId, name: memberName(gegenueber) }}
+          onClose={() => setMelden(false)}
+        />
+      )}
     </Sheet>
   );
 }

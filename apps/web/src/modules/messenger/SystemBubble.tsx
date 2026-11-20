@@ -16,14 +16,43 @@ function joinNames(names: string[]): string {
   return `${names.slice(0, -1).join(', ')} und ${names[names.length - 1]}`;
 }
 
-function describe(
+export function describe(
   kind: string,
   actor: string,
   targets: string[],
   conversation: ConversationDto | null,
+  text?: string | null,
 ): string {
   const isMe = actor === 'Du';
+  const hat = isMe ? 'hast' : 'hat';
   switch (kind) {
+    // Gruppenverwaltung: `text` ist der Rumpf der Systemzeile (neuer Name,
+    // geänderte Schalter) – der Server setzt ihn, damit auch spätere Namen
+    // die Zeile nicht umschreiben.
+    case 'conversation.renamed':
+      return text
+        ? `${actor} ${hat} die Gruppe in „${text}“ umbenannt`
+        : `${actor} ${hat} die Gruppe umbenannt`;
+    case 'conversation.avatar':
+      return `${actor} ${hat} das Gruppenbild geändert`;
+    case 'conversation.avatar.removed':
+      return `${actor} ${hat} das Gruppenbild entfernt`;
+    case 'conversation.description':
+      return `${actor} ${hat} die Beschreibung geändert`;
+    case 'conversation.settings':
+      return text
+        ? `${actor} ${hat} die Gruppeneinstellungen geändert: ${text}`
+        : `${actor} ${hat} die Gruppeneinstellungen geändert`;
+    case 'member.promoted':
+      return `${actor} ${hat} ${joinNames(targets)} zum Admin gemacht`;
+    case 'member.demoted':
+      return `${actor} ${hat} ${joinNames(targets)} die Adminrechte entzogen`;
+    case 'owner.transferred':
+      return `${actor} ${hat} die Gruppe an ${joinNames(targets)} übergeben`;
+    case 'member.joined':
+      return `${actor} ${isMe ? 'bist' : 'ist'} über einen Einladungslink beigetreten`;
+    case 'member.approved':
+      return `${actor} ${hat} ${joinNames(targets)} aufgenommen`;
     case 'conversation.created':
       return `${actor} ${isMe ? 'hast' : 'hat'} ${
         conversation?.type === 'group' ? 'die Gruppe' : 'den Chat'
@@ -50,7 +79,7 @@ export function SystemBubble({ message, conversation }: MessageRendererProps) {
   const actor = nameOf(conversation, system?.actorId ?? message.senderId, myId);
   const targets = (system?.targetIds ?? []).map((id) => nameOf(conversation, id, myId));
   const text =
-    (system ? describe(system.kind, actor, targets, conversation) : '') ||
+    (system ? describe(system.kind, actor, targets, conversation, message.body) : '') ||
     message.body?.trim() ||
     'Der Chat wurde aktualisiert';
 
