@@ -448,6 +448,36 @@ nicht. Der Dienst sieht nur unseren Server. Wir speichern die Suchtexte nicht da
 merken uns die Treffer aber zehn Minuten im Arbeitsspeicher. Der Betreiber kann die
 Suche abschalten; dann bleibt das Feld ein Textfeld.</p>
 
+<h2>Link-Vorschauen</h2>
+<p>Link-Vorschauen sind <strong>ausgeschaltet</strong>, bis du sie in den Einstellungen
+(Privatsphäre) einschaltest. Dann holt <strong>unser Server</strong> – nicht dein Gerät –
+Titel, Beschreibung und Vorschaubild einer Seite, deren Link du gerade schreibst. Die
+Seite sieht dabei nur unseren Server, nicht dich und nicht die Empfänger. Abgerufen
+werden nur öffentliche Adressen, höchstens 512 KB Text in höchstens fünf Sekunden, ohne
+Skripte und ohne Kekse. Das Vorschaubild legen wir verkleinert in unserem Speicher ab;
+Titel und Text stehen in deiner Nachricht. Wer sie öffnet, lädt nichts von der fremden
+Seite. Ohne die Einstellung erzeugt niemand eine Vorschau für deine Links.</p>
+
+<h2>Standort teilen</h2>
+<p>Teilst du deinen Standort, bestimmt ihn dein Gerät (mit deiner Erlaubnis) und schickt
+Koordinaten und Genauigkeit in die Nachricht. Für die Adresse fragt unser Server den
+Suchdienst der Ortssuche mit einem auf etwa zehn Meter gerundeten Punkt. Eine Karte von
+einem fremden Server laden wir nicht. Ein Live-Standort läuft nur, solange die App offen
+und sichtbar ist, und endet spätestens nach 15 bzw. 60 Minuten; gespeichert bleibt nur
+die letzte Position, kein Weg.</p>
+
+<h2>Selbstlöschende und einmal ansehbare Nachrichten</h2>
+<p>Ist in einem Chat „Selbstlöschende Nachrichten“ eingestellt, löschen wir neue
+Nachrichten samt Anhängen nach Ablauf der Zeit vom Server. Einmal ansehbare Fotos und
+Videos liefern wir jeder Person genau einmal aus und vermerken, wer sie geöffnet hat.
+Beides schützt nicht vor Kopien: Die Nachrichten sind nicht Ende-zu-Ende verschlüsselt,
+und Bildschirmfotos lassen sich im Web nicht verhindern.</p>
+
+<h2>Geplante Nachrichten</h2>
+<p>Planst du eine Nachricht, speichern wir Text, Anhänge und Zeitpunkt (samt der
+Zeitzone deines Geräts, nur zur Anzeige), bis sie gesendet ist. Bis dahin siehst nur du
+sie.</p>
+
 <h2>Was auf deinem Gerät bleibt</h2>
 <p>Die App legt in deinem Browser ab: den Anmelde-Token, deine noch nicht gesendeten
 Nachrichten, einen Zwischenspeicher der Chats für den Betrieb ohne Netz, deine

@@ -103,6 +103,18 @@ export function PrivatsphaereCard() {
     }
   }
 
+  async function linkVorschauenSetzen(an: boolean) {
+    setBusy(true);
+    try {
+      await patchMe({ settings: { linkVorschauen: an } });
+      toast(an ? 'Link-Vorschauen an' : 'Link-Vorschauen aus', 'success');
+    } catch (error) {
+      toast(errorMessage(error, 'Speichern fehlgeschlagen'), 'error');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function freigeben(person: UserDto) {
     setBusy(true);
     try {
@@ -144,6 +156,13 @@ export function PrivatsphaereCard() {
         checked={p.readReceipts}
         busy={busy}
         onChange={(an) => void speichern({ readReceipts: an })}
+      />
+      <Toggle
+        label="Link-Vorschauen erzeugen"
+        description="Aus: Für deine Links holt niemand Titel oder Bild. An: Unser Server (nicht dein Gerät) ruft die Seite ab, sobald du einen Link schreibst – die Seite sieht nur den Server, die Empfänger laden nichts von ihr."
+        checked={user?.settings?.linkVorschauen === true}
+        busy={busy}
+        onChange={(an) => void linkVorschauenSetzen(an)}
       />
       <Toggle
         label="Tipp-Anzeige"

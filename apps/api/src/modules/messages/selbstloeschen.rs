@@ -63,6 +63,13 @@ async fn setzen(
             .sekunden
             .map(|s| s.to_string())
             .unwrap_or_else(|| "aus".to_string()));
+        // Die Dauer in Worten als Text der Zeile – auch ältere Fassungen der
+        // App, die die Art nicht kennen, zeigen dann etwas Verständliches.
+        zeile.body = Some(match eingabe.sekunden {
+            Some(86_400) => "24 Stunden".to_string(),
+            Some(s) => format!("{} Tage", s / 86_400),
+            None => "aus".to_string(),
+        });
         Some(nachricht_anlegen(&mut tx, zeile).await?)
     } else {
         None
