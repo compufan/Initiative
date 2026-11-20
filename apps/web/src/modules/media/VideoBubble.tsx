@@ -6,6 +6,8 @@ import { FernsehKnopf } from '../fernseher/FernsehKnopf.js';
 import { VideoWerkstatt } from '../video/VideoWerkstatt.js';
 import { MediaCaption, PendingMedia } from './MediaFrame.js';
 import { claimPlayback, mediaSrc, releasePlayback, standbildHolen } from './helpers.js';
+import { istVideonachricht } from './videonachricht.js';
+import { VideoNachrichtBubble } from './VideoNachrichtBubble.js';
 
 /**
  * Video bubble – unscharfe Vorschau als Untergrund, darauf ein echtes Standbild.
@@ -15,7 +17,13 @@ import { claimPlayback, mediaSrc, releasePlayback, standbildHolen } from './help
  * HINTER dem Video – sie füllt den Rahmen sofort und ohne schwarzes Aufblitzen –
  * und `standbildHolen` holt darüber das erste echte Bild.
  */
-export function VideoBubble({ message, isMine }: MessageRendererProps) {
+export function VideoBubble(props: MessageRendererProps) {
+  // Videonachricht im Kreis: eigene Darstellung (`VideoNachrichtBubble`).
+  if (istVideonachricht(props.message)) return <VideoNachrichtBubble {...props} />;
+  return <VideoRahmen {...props} />;
+}
+
+function VideoRahmen({ message, isMine }: MessageRendererProps) {
   const [video, setVideo] = useState<HTMLVideoElement | null>(null);
   const attachment = message.attachments.find((item) => item.kind === 'video');
 

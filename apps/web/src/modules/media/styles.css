@@ -1328,3 +1328,155 @@
   background: var(--accent);
   color: var(--accent-contrast);
 }
+
+/* ---------- Videonachricht im Kreis ---------- */
+.vn-blatt {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: calc(var(--safe-top) + var(--space-4)) var(--space-4)
+    calc(env(safe-area-inset-bottom, 0px) + var(--space-4));
+  background: color-mix(in srgb, var(--bg) 94%, transparent);
+  backdrop-filter: blur(10px);
+  color: var(--text);
+}
+
+.vn-kreis {
+  position: relative;
+  width: min(78vw, 340px);
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #000;
+}
+
+.vn-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.vn-spiegel {
+  transform: scaleX(-1);
+}
+
+.vn-leinwand {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.vn-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+  pointer-events: none;
+}
+
+.vn-ring circle {
+  fill: none;
+  stroke-width: 3;
+}
+
+.vn-ring-grund {
+  stroke: color-mix(in srgb, var(--text) 25%, transparent);
+}
+
+.vn-ring-lauf {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.15s linear;
+}
+
+.vn-zeit {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.vn-knoepfe {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.vn-ausloeser {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: 4px solid var(--text);
+  background: #dc2626;
+  cursor: pointer;
+}
+
+.vn-ausloeser.is-recording {
+  border-radius: 30%;
+  background: #991b1b;
+}
+
+.vn-ausloeser:focus-visible,
+.vn-blase-knopf:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.vn-blase {
+  display: flex;
+}
+
+.vn-blase-knopf {
+  position: relative;
+  width: min(56vw, 220px);
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 0;
+  padding: 0;
+  background: var(--surface-2);
+  cursor: pointer;
+}
+
+.vn-blase-vorschau,
+.vn-blase-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.vn-blase-vorschau {
+  filter: blur(6px);
+}
+
+.vn-blase-ton {
+  position: absolute;
+  left: 50%;
+  bottom: 10%;
+  transform: translateX(-50%);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vn-ring-lauf {
+    transition: none;
+  }
+}

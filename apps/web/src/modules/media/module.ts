@@ -9,6 +9,7 @@ import { RezeptBubble } from './RezeptBubble.js';
 import { VideoBubble } from './VideoBubble.js';
 import { VoiceSheet } from './VoiceSheet.js';
 import { HaltenAufnahme } from './HaltenAufnahme.js';
+import { VideoNachrichtSheet } from './VideoNachrichtSheet.js';
 import './styles.css';
 // Der Cast-Knopf sitzt in der Lightbox – also kommt sein Blatt mit ihr.
 import '../fernseher/styles.css';
@@ -44,6 +45,13 @@ export default defineWebModule({
       pinned: true,
       knopf: HaltenAufnahme,
       render: VoiceSheet,
+    },
+    {
+      key: 'videonachricht',
+      label: 'Videonachricht',
+      icon: '⭕',
+      order: 35,
+      render: VideoNachrichtSheet,
     },
     { key: 'file', label: 'Datei', icon: '📎', order: 40, render: FileSheet },
   ],
