@@ -78,6 +78,13 @@ export function describe(
     // oder Kontolöschung); Handelnder ist der Nachfolger.
     case 'owner.changed':
       return `${actor} ${isMe ? 'bist' : 'ist'} jetzt Besitzer der Gruppe`;
+    // 1:1-Anruf: Der Server schreibt aus Sicht des Angerufenen („Verpasster
+    // Anruf“, „Anruf, 3:12“); wer selbst angerufen hat, liest es anders.
+    case 'anruf':
+      if (isMe && text?.startsWith('Verpasst')) {
+        return text.includes('Video') ? 'Videoanruf nicht angenommen' : 'Anruf nicht angenommen';
+      }
+      return text ?? 'Anruf';
     default:
       return '';
   }

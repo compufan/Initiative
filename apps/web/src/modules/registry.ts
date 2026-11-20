@@ -11,6 +11,7 @@ import polls from './polls/module.js';
 import games from './games/module.js';
 import profile from './profile/module.js';
 import player from './player/module.js';
+import anruf from './anruf/module.js';
 import type {
   AppModuleDefinition,
   ComposerAction,
@@ -37,6 +38,7 @@ export const appModules: AppModuleDefinition[] = [
   polls,
   profile,
   player,
+  anruf,
 ];
 
 export function moduleRoutes(): RouteObject[] {

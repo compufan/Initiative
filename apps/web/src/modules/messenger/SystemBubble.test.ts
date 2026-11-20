@@ -20,3 +20,16 @@ gruppe('Systemzeilen der Gruppenverwaltung', () => {
     );
   });
 });
+
+gruppe('Systemzeilen der Anrufe', () => {
+  it('sagen dem Anrufer „nicht angenommen“ und dem Angerufenen „verpasst“', () => {
+    expect(describe('anruf', 'Anna', ['Du'], null, 'Verpasster Anruf')).toBe('Verpasster Anruf');
+    expect(describe('anruf', 'Du', ['Bodo'], null, 'Verpasster Anruf')).toBe(
+      'Anruf nicht angenommen',
+    );
+    expect(describe('anruf', 'Du', ['Bodo'], null, 'Verpasster Videoanruf')).toBe(
+      'Videoanruf nicht angenommen',
+    );
+    expect(describe('anruf', 'Du', ['Bodo'], null, 'Anruf, 3:12')).toBe('Anruf, 3:12');
+  });
+});

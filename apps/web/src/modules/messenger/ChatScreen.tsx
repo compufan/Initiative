@@ -25,6 +25,7 @@ import { useMyId, useSession } from '../../state/session.js';
 import { useEntwuerfe } from '../../state/entwuerfe.js';
 import { toast, useHideNav } from '../../state/ui.js';
 import { ChatInfoSheet } from './ChatInfoSheet.js';
+import { AnrufKnoepfe } from '../anruf/AnrufKnoepfe.js';
 import { Composer } from './Composer.js';
 import { MessageActionsSheet } from './MessageActionsSheet.js';
 import { MessageBubble } from './MessageBubble.js';
@@ -685,6 +686,7 @@ export function ChatScreen() {
             </span>
           </span>
         </button>
+        {conversation && <AnrufKnoepfe conversation={conversation} myId={myId} />}
         <button
           type="button"
           className="icon-btn"

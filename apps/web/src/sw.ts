@@ -423,20 +423,32 @@ self.addEventListener('push', (event) => {
       // „Ohne Ton senden“: Die Mitteilung kommt, aber ohne Ton und Vibration
       // (`notify_new_message_mit` im Server).
       const leise = payload.kind === 'message-leise';
+      /*
+       * Anrufe (`services/anrufe.rs`): „Anruf von …“ klingelt laut und bleibt
+       * stehen, bis man reagiert – ausser die App ist offen, dann klingelt die
+       * App selbst. „anruf-ende“ (anderswo angenommen/abgelehnt) ersetzt die
+       * Klingel-Mitteilung (gleicher `tag`) und verschwindet gleich wieder.
+       */
+      const anruf = payload.kind === 'anruf';
+      const anrufVorbei = payload.kind === 'anruf-ende';
+      const appOffen = fenster.some((client) => client.visibilityState === 'visible');
+      const still = imChat || leise || anrufVorbei || (anruf && appOffen);
 
       await self.registration.showNotification(payload.title, {
         body: payload.body,
         icon: payload.icon ?? SYMBOL_ICON,
         badge: payload.badge ?? SYMBOL_BADGE,
         tag,
-        renotify: Boolean(payload.tag) && !imChat && !leise,
-        silent: imChat || leise,
+        renotify: Boolean(payload.tag) && !still,
+        silent: still,
+        requireInteraction: anruf && !appOffen,
+        ...(anruf && !appOffen ? { vibrate: [400, 200, 400, 200, 400] } : {}),
         data: { url: payload.url ?? '/' },
       } as NotificationOptions);
 
       // Wer den Chat vor Augen hat, braucht die Meldung nicht: gezeigt (für
-      // Safari), aber sofort wieder weg.
-      if (imChat) {
+      // Safari), aber sofort wieder weg. Ebenso ein beendetes Klingeln.
+      if (imChat || anrufVorbei || (anruf && appOffen)) {
         const gezeigt = await self.registration.getNotifications({ tag });
         for (const mitteilung of gezeigt) mitteilung.close();
       }
