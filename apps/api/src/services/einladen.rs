@@ -31,9 +31,11 @@
 //! und die *reservierten* Karten-Zeilen. Jeder Fehler rollt alles zurück.
 //! Phase 2 legt die Nachrichten an – nach dem Commit, je Karte wiederholbar.
 //! Scheitert sie teilweise, bleibt der Termin gültig, die Antwort nennt, was
-//! aussteht, und `…/zustellung/nachliefern` holt es nach. `create_message` ist
-//! der eine Einstieg für Nachrichten (Rundruf, Push, Hydrierung) und nicht
-//! transaktionsfähig; ein Umbau beträfe jeden Nachrichtenweg.
+//! aussteht, und `…/zustellung/nachliefern` holt es nach. Jede Karte für sich
+//! ist atomar: Nachricht und Eintrag in ihrer Zeile stehen in einer
+//! Transaktion (`karte_zustellen`), gemeldet wird erst nach dem Commit. Alle
+//! Karten in Phase 1 zu legen hiesse, hunderte Nachrichten in einer
+//! Transaktion zu schreiben, während die Gruppe gesperrt ist.
 
 use std::collections::{HashMap, HashSet};
 
@@ -52,7 +54,7 @@ use crate::realtime::Event;
 use crate::state::AppState;
 
 use super::conversations::{einzelchats_sichern, vorhandene_einzelchats};
-use super::messages::{create_message, NewMessage};
+use super::messages::{ausliefern, nachricht_anlegen, NewMessage};
 
 /// Wie viele fehlende Personen je ausgelassenem Gruppenchat genannt werden.
 const FEHLENDE_GENANNT: usize = 5;
@@ -486,24 +488,9 @@ pub async fn offene_karten_zustellen(
     // Termins.
     let ergebnisse: Vec<(EventPlacementRow, Ausgang)> = stream::iter(offen)
         .map(|zeile| async move {
-            let offen_noch: bool = sqlx::query_scalar(
-                "select exists (select 1 from event_placements
-                                 where id = $1 and message_id is null)",
-            )
-            .bind(zeile.id)
-            .fetch_one(&state.pool)
-            .await
-            // Im Zweifel anlegen: Eine überzählige Karte räumt die Eintragung
-            // unten weg, eine fehlende fiele niemandem auf.
-            .unwrap_or(true);
-            if !offen_noch {
-                return (zeile, Ausgang::Uebersprungen);
-            }
-            let mut nachricht =
-                NewMessage::einladung(zeile.conversation_id, ersteller, event_id, zeile.id);
-            nachricht.silent = still;
-            match create_message(state, nachricht).await {
-                Ok(angelegt) => (zeile, Ausgang::Angelegt(angelegt.id)),
+            match karte_zustellen(state, &zeile, event_id, ersteller, still).await {
+                Ok(Some(id)) => (zeile, Ausgang::Angelegt(id)),
+                Ok(None) => (zeile, Ausgang::Uebersprungen),
                 Err(fehler) => {
                     tracing::warn!(
                         %fehler, termin = %event_id, chat = %zeile.conversation_id,
@@ -521,67 +508,10 @@ pub async fn offene_karten_zustellen(
         .iter()
         .filter(|(_, ausgang)| matches!(ausgang, Ausgang::Fehlgeschlagen))
         .count();
-    let (karten_ids, nachricht_ids): (Vec<Uuid>, Vec<Uuid>) = ergebnisse
-        .iter()
-        .filter_map(|(zeile, ausgang)| match ausgang {
-            Ausgang::Angelegt(id) => Some((zeile.id, *id)),
-            _ => None,
-        })
-        .unzip();
-    // Nur Zeilen, die noch leer sind: Wer schneller war, behält seine Karte.
-    let eingetragen: HashSet<Uuid> = if karten_ids.is_empty() {
-        HashSet::new()
-    } else {
-        sqlx::query_scalar::<_, Uuid>(
-            "update event_placements p set message_id = t.nachricht
-               from unnest($1::uuid[], $2::uuid[]) as t(karte, nachricht)
-              where p.id = t.karte and p.message_id is null
-          returning p.id",
-        )
-        .bind(&karten_ids)
-        .bind(&nachricht_ids)
-        .fetch_all(&state.pool)
-        .await?
-        .into_iter()
-        .collect()
-    };
-
-    // Nachrichten ohne Zeile zurücknehmen – sie sind verwaist.
-    let verwaist: Vec<Uuid> = ergebnisse
-        .iter()
-        .filter_map(|(zeile, ausgang)| match ausgang {
-            Ausgang::Angelegt(id) if !eingetragen.contains(&zeile.id) => Some(*id),
-            _ => None,
-        })
-        .collect();
-    /*
-     * Nicht löschen, was inzwischen eine Zeile trägt: Die Kennung der Karte
-     * (`karte:<Zeile>`) macht das Anlegen wiederholbar – der Verlierer eines
-     * Wettlaufs bekommt dieselbe Nachricht zurück wie der Gewinner. Sie als
-     * verwaist zu löschen, nähme dem Gewinner seine Karte.
-     */
-    let verwaist: Vec<Uuid> = if verwaist.is_empty() {
-        verwaist
-    } else {
-        sqlx::query_scalar(
-            "select id from unnest($1::uuid[]) as t(id)
-              where not exists (select 1 from event_placements p where p.message_id = t.id)",
-        )
-        .bind(&verwaist)
-        .fetch_all(&state.pool)
-        .await?
-    };
-    if !verwaist.is_empty() {
-        let mut tx = state.pool.begin().await?;
-        let geloescht = nachrichten_loeschen(&mut tx, &verwaist).await?;
-        tx.commit().await?;
-        karten_melden(state, geloescht).await;
-    }
-
     let karten = ergebnisse
         .into_iter()
         .filter_map(|(mut zeile, ausgang)| match ausgang {
-            Ausgang::Angelegt(id) if eingetragen.contains(&zeile.id) => {
+            Ausgang::Angelegt(id) => {
                 zeile.message_id = Some(id);
                 Some(zeile)
             }
@@ -592,6 +522,57 @@ pub async fn offene_karten_zustellen(
         karten,
         fehlgeschlagen,
     })
+}
+
+/// Eine Karte zustellen: Nachricht und Eintrag in der Zeile in EINER
+/// Transaktion, gemeldet erst danach.
+///
+/// # Warum nicht mehr „anlegen, eintragen, Waisen zurücknehmen“
+///
+/// Vorher entstand die Nachricht für sich (und wurde sofort allen
+/// ausgespielt), eingetragen wurde sie danach gesammelt, und Karten, deren
+/// Zeile inzwischen weg war, wurden wieder gelöscht. Damit sahen die
+/// Empfänger kurz eine Karte, die es dann nicht gab, und ein Abbruch zwischen
+/// Anlegen und Eintragen hinterliess eine Karte, die niemand nachführt.
+///
+/// Jetzt sperrt die Transaktion die Zeile: Ist sie weg (Termin gelöscht,
+/// Person ausgeladen) oder schon belegt (eine andere Runde war schneller),
+/// entsteht nichts. Sonst stehen Nachricht und Eintrag zusammen fest, und erst
+/// dann wird gemeldet.
+async fn karte_zustellen(
+    state: &AppState,
+    zeile: &EventPlacementRow,
+    event_id: Uuid,
+    ersteller: Uuid,
+    still: bool,
+) -> AppResult<Option<Uuid>> {
+    let mut tx = state.pool.begin().await?;
+    let offen: Option<Uuid> = sqlx::query_scalar(
+        "select id from event_placements where id = $1 and message_id is null for update",
+    )
+    .bind(zeile.id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if offen.is_none() {
+        return Ok(None);
+    }
+    let mut nachricht = NewMessage::einladung(zeile.conversation_id, ersteller, event_id, zeile.id);
+    nachricht.silent = still;
+    let angelegt = nachricht_anlegen(&mut tx, nachricht).await?;
+    sqlx::query("update event_placements set message_id = $2 where id = $1")
+        .bind(zeile.id)
+        .bind(angelegt.id())
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    let id = angelegt.id();
+    // Festgeschrieben ist sie – scheitert nur die Meldung, holt der nächste
+    // Abgleich des Clients sie ab.
+    if let Err(fehler) = ausliefern(state, angelegt).await {
+        tracing::warn!(%fehler, termin = %event_id, "Karte steht, Meldung gescheitert");
+    }
+    Ok(Some(id))
 }
 
 /// Wartet, bis eine eben begonnene Zustellung fertig ist – höchstens ein paar

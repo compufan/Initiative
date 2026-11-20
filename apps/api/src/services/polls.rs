@@ -278,10 +278,18 @@ pub async fn create_poll(state: &AppState, input: NewPoll) -> AppResult<PollDto>
         .execute(&mut *tx)
         .await?;
     }
-    tx.commit().await?;
 
-    let message = super::messages::create_message(
-        state,
+    /*
+     * Umfrage, Karte und Verweis auf die Karte in EINER Transaktion.
+     *
+     * Vorher wurde die Umfrage festgeschrieben, danach die Karte angelegt und
+     * zuletzt `message_id` nachgetragen – drei Commits. Brach es nach dem
+     * ersten ab, gab es eine Umfrage ohne Karte (für niemanden erreichbar,
+     * denn der Zugriff hängt an der Karte); nach dem zweiten eine Karte, die
+     * die Umfrage nicht kannte (kein Neuausspielen beim Abstimmen).
+     */
+    let karte = super::messages::nachricht_anlegen(
+        &mut tx,
         super::messages::NewMessage::entity(
             input.conversation_id,
             input.created_by,
@@ -292,10 +300,13 @@ pub async fn create_poll(state: &AppState, input: NewPoll) -> AppResult<PollDto>
     )
     .await?;
     sqlx::query("update polls set message_id = $1 where id = $2")
-        .bind(message.id)
+        .bind(karte.id())
         .bind(poll_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
+
+    super::messages::ausliefern(state, karte).await?;
 
     let dto = load_poll_dto(state, poll_id, input.created_by).await?;
     broadcast_poll(state, &dto).await?;
@@ -558,58 +569,95 @@ pub async fn place_poll(
     if conversation_id == poll.conversation_id {
         return Ok(None);
     }
-    let vorhanden: Option<PollPlacementRow> =
-        sqlx::query_as("select * from poll_placements where poll_id = $1 and conversation_id = $2")
-            .bind(poll.id)
-            .bind(conversation_id)
-            .fetch_optional(&state.pool)
-            .await?;
-    if vorhanden.is_some() {
-        return Ok(vorhanden);
-    }
-
-    let message = super::messages::create_message(
-        state,
-        super::messages::NewMessage::entity(conversation_id, by, "poll", "pollId", poll.id),
-    )
-    .await?;
-
-    let row = sqlx::query_as::<_, PollPlacementRow>(
+    /*
+     * Erst den Platz belegen, dann die Karte – in einer Transaktion.
+     *
+     * Vorher: nachsehen, ob es den Auftritt gibt, sonst Karte anlegen und den
+     * Auftritt mit `on conflict … do update` eintragen. Zwei gleichzeitige
+     * Anfragen sahen beide nichts, legten beide eine Karte an, und die zweite
+     * überschrieb den Verweis der ersten: zwei Karten derselben Umfrage im
+     * Chat, eine davon verwaist. Jetzt wartet die zweite am eindeutigen
+     * Schlüssel (Umfrage, Chat), bis die erste festgeschrieben ist, und
+     * bekommt deren Auftritt.
+     */
+    let mut tx = state.pool.begin().await?;
+    let platz = sqlx::query_as::<_, PollPlacementRow>(
         "insert into poll_placements (id, poll_id, conversation_id, message_id, created_by)
-         values ($1, $2, $3, $4, $5)
-         on conflict (poll_id, conversation_id) do update set message_id = excluded.message_id
+         values ($1, $2, $3, null, $4)
+         on conflict (poll_id, conversation_id) do nothing
          returning *",
     )
     .bind(Uuid::now_v7())
     .bind(poll.id)
     .bind(conversation_id)
-    .bind(message.id)
     .bind(by)
-    .fetch_one(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?;
+    let Some(platz) = platz else {
+        drop(tx);
+        let vorhanden: Option<PollPlacementRow> = sqlx::query_as(
+            "select * from poll_placements where poll_id = $1 and conversation_id = $2",
+        )
+        .bind(poll.id)
+        .bind(conversation_id)
+        .fetch_optional(&state.pool)
+        .await?;
+        return Ok(vorhanden);
+    };
+
+    let karte = super::messages::nachricht_anlegen(
+        &mut tx,
+        super::messages::NewMessage::entity(conversation_id, by, "poll", "pollId", poll.id),
+    )
+    .await?;
+    let row = sqlx::query_as::<_, PollPlacementRow>(
+        "update poll_placements set message_id = $2 where id = $1 returning *",
+    )
+    .bind(platz.id)
+    .bind(karte.id())
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    super::messages::ausliefern(state, karte).await?;
     Ok(Some(row))
 }
 
 /// Nimmt einen Auftritt zurück und löscht die zugehörige Nachricht.
 pub async fn unplace_poll(state: &AppState, poll: &PollRow, placement_id: Uuid) -> AppResult<()> {
+    // Auftritt und Karte zusammen: Vorher zwei Anweisungen ohne Transaktion –
+    // eine gelöschte Karte mit stehendem Auftritt liess sich nie wieder
+    // platzieren („steht schon dort“), ein Auftritt ohne Karte umgekehrt.
+    let mut tx = state.pool.begin().await?;
     let row: Option<PollPlacementRow> =
-        sqlx::query_as("select * from poll_placements where id = $1 and poll_id = $2")
+        sqlx::query_as("delete from poll_placements where id = $1 and poll_id = $2 returning *")
             .bind(placement_id)
             .bind(poll.id)
-            .fetch_optional(&state.pool)
+            .fetch_optional(&mut *tx)
             .await?;
     let Some(row) = row else { return Ok(()) };
 
+    let mut empfaenger = Vec::new();
     if let Some(message_id) = row.message_id {
-        sqlx::query("update messages set deleted_at = now() where id = $1")
+        empfaenger =
+            crate::services::verlauf::empfaenger_fuer_nachricht(&mut *tx, message_id).await?;
+        sqlx::query("update messages set deleted_at = now() where id = $1 and deleted_at is null")
             .bind(message_id)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?;
     }
-    sqlx::query("delete from poll_placements where id = $1")
-        .bind(placement_id)
-        .execute(&state.pool)
-        .await?;
+    tx.commit().await?;
+
+    // Erst nach dem Commit: Die Karte verschwindet bei allen, die sie sahen.
+    if let Some(message_id) = row.message_id {
+        state
+            .hub
+            .publish(
+                empfaenger,
+                crate::realtime::Event::message_deleted(row.conversation_id, message_id),
+            )
+            .await;
+    }
     Ok(())
 }
 

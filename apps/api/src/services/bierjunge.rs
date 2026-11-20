@@ -308,6 +308,16 @@ async fn antworten(state: &AppState, nachricht: &MessageDto, antwortender: Uuid)
     .await?;
 
     for kandidat in kandidaten {
+        /*
+         * Buchen, Beanspruchen und Partie in EINER Transaktion.
+         *
+         * Vorher waren es einzelne Anweisungen mit einem Rückbau von Hand
+         * (`zuruecknehmen`), wenn das Anlegen scheiterte. Brach der Vorgang
+         * dazwischen ab (Absturz, Verbindung weg), blieb eine Antwort ohne
+         * Partie stehen – und ein normaler Aufruf galt als verbraucht, ohne
+         * dass je gespielt wurde. Jetzt rollt alles zusammen zurück.
+         */
+        let mut tx = state.pool.begin().await?;
         // 1. Die Antwort buchen. Der Schlüssel (Aufruf, Person) lässt jede
         //    Person nur einmal antworten – auch bei zwei „hängt“ gleichzeitig.
         let gebucht = sqlx::query(
@@ -318,30 +328,31 @@ async fn antworten(state: &AppState, nachricht: &MessageDto, antwortender: Uuid)
         .bind(kandidat.id)
         .bind(antwortender)
         .bind(nachricht.id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
         if gebucht == 0 {
             continue;
         }
         // 2. Ein normaler Aufruf verbraucht sich: genau ein „hängt“ gewinnt.
+        //    Der zweite wartet an der Zeilensperre und findet ihn verbraucht.
         if kandidat.art == "normal" {
             let beansprucht = sqlx::query(
                 "update bierjunge_aufrufe set verbraucht_am = now()
                   where id = $1 and verbraucht_am is null",
             )
             .bind(kandidat.id)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?
             .rows_affected();
             if beansprucht == 0 {
-                zuruecknehmen(&state.pool, kandidat.id, antwortender, false).await?;
+                // Verlorenes Rennen: Die Buchung rollt mit der Transaktion zurück.
                 continue;
             }
         }
         // 3. Die Partie anlegen: Ausrufer gegen Antwortenden.
-        match super::games::create_session(
-            state,
+        match super::games::partie_anlegen(
+            &mut tx,
             Some(nachricht.conversation_id),
             "pressen",
             kandidat.ausrufer_id,
@@ -349,51 +360,26 @@ async fn antworten(state: &AppState, nachricht: &MessageDto, antwortender: Uuid)
         )
         .await
         {
-            Ok(spiel) => {
+            Ok(partie) => {
                 sqlx::query(
                     "update bierjunge_antworten set spiel_id = $3
                       where aufruf_id = $1 and user_id = $2",
                 )
                 .bind(kandidat.id)
                 .bind(antwortender)
-                .bind(spiel.id)
-                .execute(&state.pool)
+                .bind(partie.id)
+                .execute(&mut *tx)
                 .await?;
+                tx.commit().await?;
+                super::games::partie_melden(state, partie, kandidat.ausrufer_id).await?;
                 // Ein „hängt“ startet höchstens ein Spiel.
                 return Ok(());
             }
             Err(fehler) => {
+                // Buchung und Beanspruchung rollen mit der Transaktion zurück.
                 tracing::warn!(?fehler, "Pressen-Partie aus „hängt“ nicht angelegt");
-                zuruecknehmen(
-                    &state.pool,
-                    kandidat.id,
-                    antwortender,
-                    kandidat.art == "normal",
-                )
-                .await?;
             }
         }
-    }
-    Ok(())
-}
-
-/// Macht eine Antwort rückgängig (verlorenes Rennen, gescheitertes Anlegen).
-async fn zuruecknehmen(
-    pool: &PgPool,
-    aufruf: Uuid,
-    person: Uuid,
-    aufruf_freigeben: bool,
-) -> AppResult<()> {
-    sqlx::query("delete from bierjunge_antworten where aufruf_id = $1 and user_id = $2")
-        .bind(aufruf)
-        .bind(person)
-        .execute(pool)
-        .await?;
-    if aufruf_freigeben {
-        sqlx::query("update bierjunge_aufrufe set verbraucht_am = null where id = $1")
-            .bind(aufruf)
-            .execute(pool)
-            .await?;
     }
     Ok(())
 }

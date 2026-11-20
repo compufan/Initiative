@@ -383,61 +383,31 @@ async fn zustellen(state: &AppState, anspruch: &Anspruch) -> Ausgang {
         };
     };
 
-    let angelegt = match super::messages::create_message(
-        state,
-        super::messages::NewMessage::vorab_erinnerung(
-            chat,
-            ersteller,
-            anspruch.event_id,
-            anspruch.id,
-            anspruch.minuten,
-            &anspruch.title,
-        ),
-    )
-    .await
-    {
-        Ok(nachricht) => nachricht,
+    let karte = super::messages::NewMessage::vorab_erinnerung(
+        chat,
+        ersteller,
+        anspruch.event_id,
+        anspruch.id,
+        anspruch.minuten,
+        &anspruch.title,
+    );
+    use super::erinnern::{karte_eintragen, Eingetragen, ErinnerungsTabelle};
+    match karte_eintragen(state, ErinnerungsTabelle::Vorab, anspruch.id, karte).await {
+        Ok(Eingetragen::Neu(id) | Eingetragen::Schon(id)) => Ausgang::Gesendet {
+            chat: Some(chat),
+            nachricht: Some(id),
+            karte_gescheitert: false,
+        },
+        Ok(Eingetragen::ZeileWeg) => Ausgang::Zurueckgenommen,
         Err(fehler) => {
             tracing::warn!(
                 %fehler, termin = %anspruch.event_id, person = %anspruch.user_id,
                 "Erinnerung vor dem Termin: Karte nicht angelegt"
             );
-            return Ausgang::Gesendet {
+            Ausgang::Gesendet {
                 chat: None,
                 nachricht: None,
                 karte_gescheitert: true,
-            };
-        }
-    };
-
-    let eingetragen = sqlx::query_scalar::<_, Uuid>(
-        "update event_vorab_erinnerungen set message_id = $2
-          where id = $1 and message_id is null
-      returning id",
-    )
-    .bind(anspruch.id)
-    .bind(angelegt.id)
-    .fetch_optional(&state.pool)
-    .await;
-    match eingetragen {
-        Ok(Some(_)) => Ausgang::Gesendet {
-            chat: Some(chat),
-            nachricht: Some(angelegt.id),
-            karte_gescheitert: false,
-        },
-        Ok(None) => {
-            super::erinnern::verwaist_loeschen(state, angelegt.id).await;
-            Ausgang::Zurueckgenommen
-        }
-        Err(fehler) => {
-            tracing::warn!(
-                %fehler, termin = %anspruch.event_id, person = %anspruch.user_id,
-                "Erinnerung vor dem Termin nicht eingetragen"
-            );
-            Ausgang::Gesendet {
-                chat: Some(chat),
-                nachricht: Some(angelegt.id),
-                karte_gescheitert: false,
             }
         }
     }

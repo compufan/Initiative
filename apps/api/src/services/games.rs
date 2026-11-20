@@ -181,6 +181,48 @@ pub async fn create_session(
     created_by: Uuid,
     opponent_ids: &[Uuid],
 ) -> AppResult<GameSessionDto> {
+    let mut tx = state.pool.begin().await?;
+    let angelegt =
+        partie_anlegen(&mut tx, conversation_id, game_key, created_by, opponent_ids).await?;
+    tx.commit().await?;
+    partie_melden(state, angelegt, created_by).await
+}
+
+/// Eine Partie, die in einer Transaktion steht, aber noch nicht gemeldet ist.
+#[must_use = "eine angelegte Partie muss nach dem Commit gemeldet werden"]
+pub struct PartieAngelegt {
+    pub id: Uuid,
+    karte: Option<super::messages::Angelegt>,
+}
+
+/// Nach dem Commit: Karte ausspielen, Spielstand an alle, Sicht des Betrachters.
+pub async fn partie_melden(
+    state: &AppState,
+    angelegt: PartieAngelegt,
+    betrachter: Uuid,
+) -> AppResult<GameSessionDto> {
+    if let Some(karte) = angelegt.karte {
+        super::messages::ausliefern(state, karte).await?;
+    }
+    let row = require_session(state, angelegt.id).await?;
+    broadcast_session(state, &row).await?;
+    dto_fuer(state, &row, betrachter).await
+}
+
+/// Schreibt Partie und Karte in die übergebene Transaktion – ohne Meldung.
+///
+/// Vorher stand die Partie nach ihrem eigenen Commit da, die Karte kam
+/// danach und `message_id` zuletzt. Ein Abbruch dazwischen hinterliess eine
+/// Partie ohne Karte: Ihr Sichtkreis hängt an der Karte, und ohne sie fiel er
+/// auf „alle Mitglieder“ zurück – eine Partie, die keiner im Chat sieht und
+/// die trotzdem läuft.
+pub async fn partie_anlegen(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    conversation_id: Option<Uuid>,
+    game_key: &str,
+    created_by: Uuid,
+    opponent_ids: &[Uuid],
+) -> AppResult<PartieAngelegt> {
     let definition =
         get_game(game_key).ok_or_else(|| AppError::bad_request("Unbekanntes Spiel"))?;
     if conversation_id.is_none()
@@ -241,7 +283,7 @@ pub async fn create_session(
         .bind(created_by)
         .bind(game_key)
         .bind(UEBUNG_BEHALTEN_TAGE)
-        .execute(&state.pool)
+        .execute(&mut **tx)
         .await?;
     }
 
@@ -264,14 +306,15 @@ pub async fn create_session(
     } else {
         None
     })
-    .execute(&state.pool)
+    .execute(&mut **tx)
     .await?;
 
     // Nur eine Partie im Chat bekommt eine Karte. Die Übung allein bleibt dem
     // Besitzer vorbehalten: keine Nachricht, keine Vorschau in der Chatliste.
+    let mut karte = None;
     if let Some(conversation_id) = conversation_id {
-        let message = super::messages::create_message(
-            state,
+        let angelegt = super::messages::nachricht_anlegen(
+            tx,
             super::messages::NewMessage::entity(
                 conversation_id,
                 created_by,
@@ -282,15 +325,17 @@ pub async fn create_session(
         )
         .await?;
         sqlx::query("update game_sessions set message_id = $1 where id = $2")
-            .bind(message.id)
+            .bind(angelegt.id())
             .bind(session_id)
-            .execute(&state.pool)
+            .execute(&mut **tx)
             .await?;
+        karte = Some(angelegt);
     }
 
-    let row = require_session(state, session_id).await?;
-    broadcast_session(state, &row).await?;
-    dto_fuer(state, &row, created_by).await
+    Ok(PartieAngelegt {
+        id: session_id,
+        karte,
+    })
 }
 
 pub struct SessionUpdate {

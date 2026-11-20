@@ -543,89 +543,93 @@ async fn zustellen(state: &AppState, anspruch: &Anspruch) -> Ausgang {
         }
     }
 
-    let angelegt = match super::messages::create_message(
-        state,
-        super::messages::NewMessage::erinnerung(
-            anspruch.conversation_id,
-            ersteller,
-            anspruch.event_id,
-            anspruch.id,
-            anspruch.nummer,
-            &anspruch.title,
-        ),
-    )
-    .await
-    {
-        Ok(nachricht) => nachricht,
+    let karte = super::messages::NewMessage::erinnerung(
+        anspruch.conversation_id,
+        ersteller,
+        anspruch.event_id,
+        anspruch.id,
+        anspruch.nummer,
+        &anspruch.title,
+    );
+    match karte_eintragen(state, ErinnerungsTabelle::Antwort, anspruch.id, karte).await {
+        Ok(Eingetragen::Neu(id) | Eingetragen::Schon(id)) => Ausgang::Zugestellt(id),
+        Ok(Eingetragen::ZeileWeg) => Ausgang::Zurueckgenommen,
         Err(fehler) => {
             tracing::warn!(
                 %fehler, termin = %anspruch.event_id, person = %anspruch.user_id,
                 "Erinnerung konnte nicht zugestellt werden"
-            );
-            return Ausgang::Gescheitert;
-        }
-    };
-
-    let eingetragen = sqlx::query_scalar::<_, Uuid>(
-        "update event_erinnerungen set message_id = $2
-          where id = $1 and message_id is null
-      returning id",
-    )
-    .bind(anspruch.id)
-    .bind(angelegt.id)
-    .fetch_optional(&state.pool)
-    .await;
-    match eingetragen {
-        Ok(Some(_)) => Ausgang::Zugestellt(angelegt.id),
-        Ok(None) => {
-            // Entweder war eine andere Instanz schneller (dieselbe Nachricht,
-            // der Schlüssel ist fest), oder die Zeile ist weg.
-            let vorhanden: Result<Option<Option<Uuid>>, _> =
-                sqlx::query_scalar("select message_id from event_erinnerungen where id = $1")
-                    .bind(anspruch.id)
-                    .fetch_optional(&state.pool)
-                    .await;
-            match vorhanden {
-                Ok(Some(Some(nachricht))) if nachricht == angelegt.id => {
-                    Ausgang::Zugestellt(angelegt.id)
-                }
-                Ok(Some(_)) => Ausgang::Gescheitert,
-                Ok(None) => {
-                    verwaist_loeschen(state, angelegt.id).await;
-                    Ausgang::Zurueckgenommen
-                }
-                Err(fehler) => {
-                    tracing::warn!(
-                        %fehler, termin = %anspruch.event_id, person = %anspruch.user_id,
-                        "Erinnerung nicht eingetragen"
-                    );
-                    Ausgang::Gescheitert
-                }
-            }
-        }
-        Err(fehler) => {
-            tracing::warn!(
-                %fehler, termin = %anspruch.event_id, person = %anspruch.user_id,
-                "Erinnerung nicht eingetragen"
             );
             Ausgang::Gescheitert
         }
     }
 }
 
-/// Nimmt eine Nachricht zurück, deren Zeile verschwunden ist.
-pub(super) async fn verwaist_loeschen(state: &AppState, nachricht: Uuid) {
-    let ergebnis = async {
-        let mut tx = state.pool.begin().await?;
-        let geloescht = nachrichten_loeschen(&mut tx, &[nachricht]).await?;
-        tx.commit().await?;
-        Ok::<_, AppError>(geloescht)
+/// Welche Erinnerungsart – je eine Tabelle mit derselben Form.
+#[derive(Clone, Copy)]
+pub(super) enum ErinnerungsTabelle {
+    /// `event_erinnerungen`: an eine ausstehende Antwort.
+    Antwort,
+    /// `event_vorab_erinnerungen`: vor dem Beginn.
+    Vorab,
+}
+
+/// Was aus einer Erinnerungskarte wurde.
+pub(super) enum Eingetragen {
+    /// Eben angelegt, eingetragen und gemeldet.
+    Neu(Uuid),
+    /// Eine andere Instanz war schneller – das ist ihre Karte.
+    Schon(Uuid),
+    /// Die Zeile ist weg (ausgeladen, abgesagt, gelöscht): keine Karte.
+    ZeileWeg,
+}
+
+/// Karte und Eintrag in ihrer Zeile in EINER Transaktion; gemeldet wird erst
+/// nach dem Commit.
+///
+/// Vorher: Karte anlegen (und sofort allen ausspielen), dann eintragen, und
+/// war die Zeile inzwischen weg, die Karte wieder löschen. Die Empfänger sahen
+/// kurz eine Erinnerung, die es nicht gab, und ein Abbruch zwischen Anlegen und
+/// Eintragen liess eine Karte zurück, die niemand nachführt – der nächste
+/// Durchgang bekam dank des festen Schlüssels zwar dieselbe Nachricht zurück,
+/// aber nur, wenn die Zeile noch stand.
+///
+/// Die Zeile wird gesperrt: Ein Ausladen in diesem Augenblick wartet, bis die
+/// Karte steht, und nimmt sie dann in seiner eigenen Transaktion mit.
+pub(super) async fn karte_eintragen(
+    state: &AppState,
+    tabelle: ErinnerungsTabelle,
+    zeile: Uuid,
+    karte: super::messages::NewMessage,
+) -> AppResult<Eingetragen> {
+    let name = match tabelle {
+        ErinnerungsTabelle::Antwort => "event_erinnerungen",
+        ErinnerungsTabelle::Vorab => "event_vorab_erinnerungen",
+    };
+    let mut tx = state.pool.begin().await?;
+    let stand: Option<Option<Uuid>> = sqlx::query_scalar(&format!(
+        "select message_id from {name} where id = $1 for update"
+    ))
+    .bind(zeile)
+    .fetch_optional(&mut *tx)
+    .await?;
+    match stand {
+        None => return Ok(Eingetragen::ZeileWeg),
+        Some(Some(nachricht)) => return Ok(Eingetragen::Schon(nachricht)),
+        Some(None) => {}
     }
-    .await;
-    match ergebnis {
-        Ok(geloescht) => super::einladen::karten_melden(state, geloescht).await,
-        Err(fehler) => tracing::warn!(%fehler, "Verwaiste Erinnerung nicht zurückgenommen"),
+    let angelegt = super::messages::nachricht_anlegen(&mut tx, karte).await?;
+    sqlx::query(&format!("update {name} set message_id = $2 where id = $1"))
+        .bind(zeile)
+        .bind(angelegt.id())
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    let id = angelegt.id();
+    if let Err(fehler) = super::messages::ausliefern(state, angelegt).await {
+        tracing::warn!(%fehler, nachricht = %id, "Erinnerung steht, Meldung gescheitert");
     }
+    Ok(Eingetragen::Neu(id))
 }
 
 /* ---------- Der Dienst ------------------------------------------------------ */
