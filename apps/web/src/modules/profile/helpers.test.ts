@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { SelfUserDto } from '@initiative/shared';
+import { DEFAULT_PRIVACY, type SelfUserDto } from '@initiative/shared';
 import { connectionInfo, errorMessage, memberSince, notificationSettings } from './helpers.js';
 
 function user(overrides: Partial<SelfUserDto> = {}): SelfUserDto {
@@ -19,6 +19,7 @@ function user(overrides: Partial<SelfUserDto> = {}): SelfUserDto {
       locale: 'de',
       notifications: { push: true, sound: true, previews: true },
       modules: {},
+      privacy: DEFAULT_PRIVACY,
     },
     ...overrides,
   };
@@ -64,6 +65,7 @@ describe('notificationSettings', () => {
           locale: 'de',
           notifications: { push: false, sound: true, previews: false },
           modules: {},
+          privacy: DEFAULT_PRIVACY,
         },
       }),
     );

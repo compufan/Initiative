@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { ConversationDto, ConversationMemberDto, VerlaufsantragDto } from '@initiative/shared';
+import {
+  CHAT_VOREINSTELLUNGEN,
+  type ConversationDto,
+  type ConversationMemberDto,
+  type VerlaufsantragDto,
+} from '@initiative/shared';
 import { eigeneLage, fremdeAntraege } from './verlaufBand.js';
 
 const ICH = 'aaaaaaaa-0000-0000-0000-000000000001';
@@ -39,6 +44,7 @@ function chat(members: ConversationMemberDto[], verdeckterVerlauf = true): Conve
     unreadCount: 0,
     mutedUntil: null,
     archived: false,
+    ...CHAT_VOREINSTELLUNGEN,
   };
 }
 

@@ -133,6 +133,59 @@ export function accentFor(id: string): string {
   return ACCENTS[hash % ACCENTS.length]!;
 }
 
+/** Eine angemeldete Sitzung – ein Eintrag der Geräteliste. */
+export interface SitzungDto {
+  id: string;
+  /** Roh; `geraetName` macht daraus „Firefox auf Linux“. */
+  userAgent: string | null;
+  angemeldetAt: string | null;
+  zuletztAktiv: string | null;
+  /** Das Gerät, auf dem man gerade ist. */
+  aktuell: boolean;
+}
+
+export const MELDE_GRUENDE = [
+  'spam',
+  'belaestigung',
+  'unangemessen',
+  'gewalt',
+  'sonstiges',
+] as const;
+export type MeldeGrund = (typeof MELDE_GRUENDE)[number];
+export const MELDE_STATUS = ['offen', 'in_bearbeitung', 'erledigt', 'abgewiesen'] as const;
+export type MeldeStatus = (typeof MELDE_STATUS)[number];
+
+export const meldungSchema = z
+  .object({
+    userId: z.string().uuid().optional(),
+    messageId: z.string().uuid().optional(),
+    grund: z.enum(MELDE_GRUENDE),
+    freitext: z.string().trim().max(1000).optional(),
+  })
+  .refine((wert) => wert.userId || wert.messageId, { message: 'Person oder Nachricht angeben' });
+export type MeldungInput = z.infer<typeof meldungSchema>;
+
+/** Eine Meldung, wie die Verwaltung sie sieht. */
+export interface MeldungDto {
+  id: string;
+  reporterId: string | null;
+  reporterName: string | null;
+  targetUserId: string | null;
+  targetName: string | null;
+  targetUsername: string | null;
+  messageId: string | null;
+  conversationId: string | null;
+  grund: MeldeGrund;
+  freitext: string | null;
+  /** Was der Meldende in dem Augenblick sah. */
+  nachrichtAuszug: string | null;
+  status: MeldeStatus;
+  notiz: string | null;
+  bearbeitetVon: string | null;
+  bearbeitetAt: string | null;
+  createdAt: string;
+}
+
 export function initialsFor(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return '?';
