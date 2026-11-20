@@ -212,7 +212,11 @@ test('Medien-Reiter in der Chat-Info: Fotos, Links, Sprung zur Nachricht', async
   await expect(annaSeite.getByText('Keine Dokumente')).toBeVisible();
 
   await annaSeite.getByRole('tab', { name: 'Links' }).click();
-  await expect(annaSeite.getByRole('link', { name: 'example.org/plan' })).toBeVisible();
+  // `exact`: Der Link in der Nachricht selbst („https://example.org/plan“)
+  // steht unter dem Blatt ebenfalls im Baum; gemeint ist der Eintrag der Liste.
+  await expect(
+    annaSeite.getByRole('link', { name: 'example.org/plan', exact: true }),
+  ).toBeVisible();
   await annaSeite.getByRole('tab', { name: 'Sprachnachrichten' }).click();
   await expect(annaSeite.getByText('Keine Sprachnachrichten')).toBeVisible();
 
