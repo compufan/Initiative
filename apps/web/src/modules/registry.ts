@@ -10,6 +10,7 @@ import expenses from './expenses/module.js';
 import polls from './polls/module.js';
 import games from './games/module.js';
 import profile from './profile/module.js';
+import player from './player/module.js';
 import type {
   AppModuleDefinition,
   ComposerAction,
@@ -35,6 +36,7 @@ export const appModules: AppModuleDefinition[] = [
   stickers,
   polls,
   profile,
+  player,
 ];
 
 export function moduleRoutes(): RouteObject[] {

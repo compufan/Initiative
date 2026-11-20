@@ -1,0 +1,98 @@
+/* Globaler Sprachnachrichten-Spieler – die Mini-Leiste oben im Rahmen. */
+.mini-spieler {
+  order: -1;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: calc(var(--safe-top) + 4px) var(--space-3) 6px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  min-height: 48px;
+  z-index: 25;
+}
+
+/* Die Kopfzeile darunter braucht den Abstand zur Kamerakerbe nicht mehr. */
+:root:has(.mini-spieler) .app-header {
+  padding-top: var(--space-2);
+}
+
+.mini-spieler-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 2px var(--space-1);
+  cursor: pointer;
+  border-radius: var(--radius-sm, 6px);
+}
+
+.mini-spieler-text strong {
+  font-size: 0.88rem;
+  max-width: 100%;
+}
+
+.mini-spieler-text span {
+  font-size: 0.75rem;
+  max-width: 100%;
+}
+
+.mini-spieler-knopf,
+.mini-spieler-tempo {
+  min-width: 40px;
+  min-height: 40px;
+  border-radius: var(--radius-full);
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 1.05rem;
+  cursor: pointer;
+}
+
+.mini-spieler-tempo {
+  font-size: 0.8rem;
+  font-weight: 650;
+  background: var(--surface-2);
+  min-width: 44px;
+  min-height: 30px;
+}
+
+.mini-spieler-knopf:hover,
+.mini-spieler-tempo:hover,
+.mini-spieler-text:hover {
+  background: var(--surface-2);
+}
+
+.mini-spieler button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mini-spieler-fortschritt {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: var(--surface-2);
+}
+
+.mini-spieler-fortschritt span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mini-spieler-fortschritt span {
+    transition: none;
+  }
+}

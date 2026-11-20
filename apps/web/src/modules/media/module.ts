@@ -8,6 +8,7 @@ import { ImageBubble } from './ImageBubble.js';
 import { RezeptBubble } from './RezeptBubble.js';
 import { VideoBubble } from './VideoBubble.js';
 import { VoiceSheet } from './VoiceSheet.js';
+import { HaltenAufnahme } from './HaltenAufnahme.js';
 import './styles.css';
 // Der Cast-Knopf sitzt in der Lightbox – also kommt sein Blatt mit ihr.
 import '../fernseher/styles.css';
@@ -34,7 +35,16 @@ export default defineWebModule({
   composerActions: [
     { key: 'camera', label: 'Kamera', icon: '📷', order: 10, render: CameraSheet },
     { key: 'gallery', label: 'Foto/Video', icon: '🖼️', order: 20, render: GallerySheet },
-    { key: 'voice', label: 'Sprachnachricht', icon: '🎤', order: 30, render: VoiceSheet },
+    {
+      key: 'voice',
+      label: 'Sprachnachricht',
+      icon: '🎤',
+      order: 30,
+      // Eigener Knopf in der Eingabezeile: gedrückt halten nimmt auf.
+      pinned: true,
+      knopf: HaltenAufnahme,
+      render: VoiceSheet,
+    },
     { key: 'file', label: 'Datei', icon: '📎', order: 40, render: FileSheet },
   ],
 });

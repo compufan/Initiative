@@ -406,7 +406,14 @@ export function Composer({
         )}
         {/* Aktionen, die sich einen eigenen Platz gewünscht haben. */}
         {!bearbeiten &&
-          pinned.map((action) => (
+          pinned.map((action) => action.knopf ? (
+            // Eigener Knopf (Sprachnachricht: gedrückt halten), sonst der übliche.
+            <action.knopf
+              key={action.key}
+              conversationId={conversationId}
+              oeffnen={() => setActiveAction(action)}
+            />
+          ) : (
             <button
               key={action.key}
               type="button"

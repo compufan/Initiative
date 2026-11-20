@@ -1200,3 +1200,82 @@
 .media-edit-btn[disabled] {
   opacity: 0.5;
 }
+
+/* ---------- Sprachnachricht: gedrückt halten ---------- */
+.media-halten {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.media-halten.is-recording {
+  background: #dc2626;
+  color: #fff;
+  transform: scale(1.25);
+}
+
+.media-halten-leiste {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) calc(env(safe-area-inset-bottom, 0px) + var(--space-3));
+  /* Platz für den Mikrofonknopf rechts daneben, solange gehalten wird. */
+  padding-right: 72px;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  pointer-events: none;
+}
+
+.media-halten-leiste.is-gesperrt {
+  padding-right: var(--space-4);
+  pointer-events: auto;
+}
+
+.media-halten-punkt {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #dc2626;
+  animation: media-halten-blinken 1s steps(2) infinite;
+}
+
+@keyframes media-halten-blinken {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .media-halten-punkt {
+    animation: none;
+  }
+}
+
+.media-halten-zeit {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.media-halten-hinweis {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.media-halten-schloss {
+  text-align: center;
+  font-size: 0.8rem;
+  line-height: 1.1;
+  color: var(--text-muted);
+}

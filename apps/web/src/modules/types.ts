@@ -20,6 +20,13 @@ export interface ComposerActionProps {
   onClose: () => void;
 }
 
+/** Für einen eigenen Knopf in der Eingabezeile (`ComposerAction.knopf`). */
+export interface ComposerKnopfProps {
+  conversationId: string;
+  /** Das Blatt der Aktion öffnen – wie ein Tipp auf den gewöhnlichen Knopf. */
+  oeffnen: () => void;
+}
+
 export interface ComposerAction {
   key: string;
   label: string;
@@ -40,6 +47,11 @@ export interface ComposerAction {
    * Handyschirm das Textfeld besser gebrauchen kann.
    */
   pinned?: boolean;
+  /**
+   * Ein eigener Knopf statt des gewöhnlichen (nur mit `pinned`) – für Gesten,
+   * die mehr sind als ein Tipp: Die Sprachnachricht wird gedrückt gehalten.
+   */
+  knopf?: ComponentType<ComposerKnopfProps>;
   render: ComponentType<ComposerActionProps>;
 }
 

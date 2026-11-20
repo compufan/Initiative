@@ -1,35 +1,41 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
+import { useMemo, type KeyboardEvent, type MouseEvent } from 'react';
 import { formatDuration } from '@initiative/shared';
 import type { MessageRendererProps } from '../types.js';
 import { MediaCaption, PendingMedia, surfaceClass } from './MediaFrame.js';
-import { claimPlayback, fallbackPeaks, mediaSrc, releasePlayback } from './helpers.js';
+import { fallbackPeaks } from './helpers.js';
 import { toast } from '../../state/ui.js';
+import {
+  abspielen,
+  namenFuer,
+  springen as spielerSpringen,
+  tempoWechseln,
+  useSpieler,
+} from '../player/spieler.js';
 
-const SPEEDS = [1, 1.5, 2];
-
-/** Voice message bubble – waveform, scrubbing, playback speed. */
+/**
+ * Voice message bubble – waveform, scrubbing, playback speed.
+ *
+ * Gespielt wird im globalen Spieler (`modules/player/spieler.ts`): Die Blase
+ * zeigt nur, ob SIE gerade läuft, und steuert ihn. So spielt eine
+ * Sprachnachricht weiter, wenn man den Chat verlässt, und die nächste kommt
+ * von selbst.
+ */
 export function AudioBubble({ message, isMine }: MessageRendererProps) {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const notified = useRef(false);
-  const [playing, setPlaying] = useState(false);
-  const [position, setPosition] = useState(0);
-  const [speedIndex, setSpeedIndex] = useState(0);
   const attachment = message.attachments.find((item) => item.kind === 'audio');
-  const [duration, setDuration] = useState(
-    attachment?.durationMs != null ? attachment.durationMs / 1000 : 0,
+  const aktiv = useSpieler((zustand) =>
+    attachment ? zustand.titel?.attachment.id === attachment.id : false,
   );
+  const playing = useSpieler((zustand) => aktiv && zustand.spielt);
+  const position = useSpieler((zustand) => (aktiv ? zustand.position : 0));
+  const tempo = useSpieler((zustand) => zustand.tempo);
+  const spielerDauer = useSpieler((zustand) => (aktiv ? zustand.dauer : 0));
+  const duration =
+    spielerDauer > 0 ? spielerDauer : attachment?.durationMs != null ? attachment.durationMs / 1000 : 0;
 
   const peaks = useMemo(() => {
     if (attachment?.waveform && attachment.waveform.length > 0) return attachment.waveform;
     return fallbackPeaks(attachment?.id ?? message.id);
   }, [attachment?.id, attachment?.waveform, message.id]);
-
-  useEffect(() => {
-    const audio = audioRef.current;
-    return () => {
-      if (audio) releasePlayback(audio);
-    };
-  }, []);
 
   if (!attachment) {
     return (
@@ -45,16 +51,13 @@ export function AudioBubble({ message, isMine }: MessageRendererProps) {
   const progress = duration > 0 ? Math.min(1, position / duration) : 0;
 
   const toggle = async () => {
-    const audio = audioRef.current;
-    if (!audio) return;
     try {
-      if (audio.paused) {
-        claimPlayback(audio);
-        audio.playbackRate = SPEEDS[speedIndex];
-        await audio.play();
-      } else {
-        audio.pause();
-      }
+      await abspielen({
+        conversationId: message.conversationId,
+        messageId: message.id,
+        attachment,
+        ...namenFuer(message.conversationId, message.senderId),
+      });
     } catch (error) {
       toast('Sprachnachricht kann nicht abgespielt werden', 'error');
       console.warn('audio playback failed', error);
@@ -62,13 +65,9 @@ export function AudioBubble({ message, isMine }: MessageRendererProps) {
   };
 
   const springen = (sekunden: number) => {
-    const audio = audioRef.current;
-    if (!audio || duration <= 0) return;
-    const ziel = Math.min(duration, Math.max(0, sekunden));
-    audio.currentTime = ziel;
-    setPosition(ziel);
+    if (!aktiv || duration <= 0) return;
+    spielerSpringen(Math.min(duration, Math.max(0, sekunden)));
   };
-
   /*
    * Nur ein echter Zeigerklick trägt eine Position.
    *
@@ -81,8 +80,7 @@ export function AudioBubble({ message, isMine }: MessageRendererProps) {
    */
   const seekFromEvent = (event: MouseEvent<HTMLButtonElement>) => {
     if (event.detail === 0) return;
-    const audio = audioRef.current;
-    if (!audio || duration <= 0) return;
+    if (duration <= 0) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const ratio = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
     springen(ratio * duration);
@@ -93,12 +91,6 @@ export function AudioBubble({ message, isMine }: MessageRendererProps) {
     if (schritt == null) return;
     event.preventDefault();
     springen(position + schritt);
-  };
-
-  const cycleSpeed = () => {
-    const next = (speedIndex + 1) % SPEEDS.length;
-    setSpeedIndex(next);
-    if (audioRef.current) audioRef.current.playbackRate = SPEEDS[next];
   };
 
   const remaining = playing || position > 0 ? Math.max(0, duration - position) : duration;
@@ -161,35 +153,13 @@ export function AudioBubble({ message, isMine }: MessageRendererProps) {
           <button
             type="button"
             className="media-speed"
-            onClick={cycleSpeed}
-            aria-label={`Geschwindigkeit ${SPEEDS[speedIndex]}x`}
+            onClick={tempoWechseln}
+            aria-label={`Geschwindigkeit ${tempo}x`}
           >
-            {SPEEDS[speedIndex]}x
+            {tempo}x
           </button>
         </div>
 
-        <audio
-          ref={audioRef}
-          src={mediaSrc(attachment)}
-          preload="metadata"
-          onLoadedMetadata={(event) => {
-            const value = event.currentTarget.duration;
-            if (Number.isFinite(value) && value > 0) setDuration(value);
-          }}
-          onTimeUpdate={(event) => setPosition(event.currentTarget.currentTime)}
-          onPlay={() => setPlaying(true)}
-          onPause={() => setPlaying(false)}
-          onEnded={(event) => {
-            setPlaying(false);
-            setPosition(0);
-            event.currentTarget.currentTime = 0;
-          }}
-          onError={() => {
-            if (notified.current) return;
-            notified.current = true;
-            toast('Sprachnachricht konnte nicht geladen werden', 'error');
-          }}
-        />
       </div>
       <MediaCaption body={message.body} isMine={isMine} />
     </div>
