@@ -532,6 +532,29 @@ async fn full_api_scenario() {
         )
         .await;
     let sticker_attachment = sticker_upload["attachmentId"].as_str().unwrap().to_string();
+    // Ohne Bytes kein Sticker: Das Beanspruchen prüft die Ablage.
+    let (status, ohne) = app
+        .call(
+            "POST",
+            &format!("/api/v1/stickers/packs/{pack_id}/stickers"),
+            Some(&alice_token),
+            Some(json!({ "attachmentId": sticker_attachment, "emoji": "😀" })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{ohne}");
+    let (status, _, _) = app
+        .raw(
+            "POST",
+            &format!("/api/v1/media/uploads/{sticker_attachment}/data"),
+            Some(&alice_token),
+            vec![(
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )],
+            Body::from(multipart_png(boundary, &png)),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
     app.call(
         "POST",
         &format!("/api/v1/media/uploads/{sticker_attachment}/complete"),

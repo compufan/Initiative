@@ -795,20 +795,41 @@ async fn umziehen(
      * alle: Eine Kopie, die weiter „lokal" behauptet, während die Bytes drüben
      * liegen, schickt die Weiche in die falsche Ablage.
      */
-    sqlx::query(
-        "update attachments set ablage = 'wandert'
-          where storage_key = $1 and ablage = 'lokal'",
+    /*
+     * Beanspruchen – bedingt, mit Marke.
+     *
+     * Laufen mehrere Instanzen, können zwei denselben Kandidaten wählen. Bisher
+     * setzten beide `wandert` (die zweite traf keine Zeile mehr, machte aber
+     * trotzdem weiter) und kopierten gleichzeitig in denselben Schlüssel.
+     * Jetzt zieht nur um, wer die Zeile wirklich von `lokal` auf `wandert`
+     * gesetzt hat. Der Zeitpunkt `wandert_seit` ist die Marke dieses Umzugs:
+     * Abschliessen und Zurücknehmen gelten nur, solange er noch derselbe ist
+     * (siehe [`haengende_zuruecksetzen`]).
+     */
+    let marke: Option<DateTime<Utc>> = sqlx::query_scalar(
+        "with neu as (select clock_timestamp() as zeit)
+         update attachments set ablage = 'wandert', wandert_seit = (select zeit from neu)
+          where storage_key = $1 and ablage = 'lokal'
+          returning wandert_seit",
     )
     .bind(&schluessel)
-    .execute(pool)
+    .fetch_all(pool)
     .await
-    .map_err(db)?;
+    .map_err(db)?
+    .into_iter()
+    .next();
+    let Some(marke) = marke else {
+        // Eine andere Instanz war schneller. Kein Fehler, nur nichts zu tun.
+        return Ok(0);
+    };
 
     let zurueck = || async {
         let _ = sqlx::query(
-            "update attachments set ablage = 'lokal' where storage_key = $1 and ablage = 'wandert'",
+            "update attachments set ablage = 'lokal', wandert_seit = null
+              where storage_key = $1 and ablage = 'wandert' and wandert_seit = $2",
         )
         .bind(&schluessel)
+        .bind(marke)
         .execute(pool)
         .await;
     };
@@ -833,7 +854,7 @@ async fn umziehen(
             sha256: sha_soll,
             regeln,
         };
-        return abschliessen(pool, warm, kalt, &schluessel, soll, zurueck).await;
+        return abschliessen(pool, warm, kalt, &schluessel, soll, marke, zurueck).await;
     }
 
     if groesse > SPEICHER_WEG_MAX {
@@ -882,7 +903,7 @@ async fn umziehen(
         sha256: sha_soll,
         regeln,
     };
-    abschliessen(pool, warm, kalt, &schluessel, soll, zurueck).await
+    abschliessen(pool, warm, kalt, &schluessel, soll, marke, zurueck).await
 }
 
 /// Was nach dem Hinüberschreiben drüben vorgefunden werden soll.
@@ -903,6 +924,7 @@ async fn abschliessen<F, Fut>(
     kalt: &Arc<dyn Storage>,
     schluessel: &str,
     soll: Soll,
+    marke: DateTime<Utc>,
     zurueck: F,
 ) -> Result<i64, Fehlschlag>
 where
@@ -970,16 +992,39 @@ where
             }
         }
     }
+    // Nur mit der eigenen Marke: Hat der Dienst die Zeile nach der Frist
+    // zurückgesetzt (und vielleicht eine andere Instanz neu beansprucht),
+    // gehört der Umzug nicht mehr uns.
     let geschrieben = sqlx::query(
-        "update attachments set ablage = 'fern', ausgelagert_at = now()
-          where storage_key = $1",
+        "update attachments set ablage = 'fern', ausgelagert_at = now(), wandert_seit = null
+          where storage_key = $1 and ablage = 'wandert' and wandert_seit = $2",
     )
     .bind(schluessel)
+    .bind(marke)
     .execute(pool)
     .await
     .map_err(|f| Fehlschlag::lokal(f.to_string()))?
     .rows_affected();
     if geschrieben == 0 {
+        let gibt_es: bool = sqlx::query_scalar(
+            "select exists (select 1 from attachments where storage_key = $1)",
+        )
+        .bind(schluessel)
+        .fetch_one(pool)
+        .await
+        .map_err(|f| Fehlschlag::lokal(f.to_string()))?;
+        if gibt_es {
+            /*
+             * Die Zeile gibt es noch, aber die Marke stimmt nicht mehr: Der
+             * Umzug dauerte länger als die Frist und wurde zurückgesetzt.
+             * NICHTS löschen – weder warm (die Zeile liest wieder lokal) noch
+             * kalt (dorthin schreibt vielleicht gerade eine andere Instanz
+             * dieselben Bytes). Lieber doppelt als weg; den Rest findet der
+             * Konsistenzcheck.
+             */
+            tracing::warn!(%schluessel, "Umzug überholt (Frist abgelaufen) – nichts gelöscht");
+            return Ok(0);
+        }
         /*
          * Die Zeile gibt es nicht mehr: Die Nachricht (oder das Konto) wurde
          * gelöscht, während die Datei unterwegs war. Die Müllliste hat ihren
@@ -1002,6 +1047,53 @@ where
         tracing::warn!(%schluessel, %fehler, "Ausgelagert, aber die lokale Fassung blieb liegen");
     }
     Ok(groesse)
+}
+
+/**
+ * Wie lange eine Zeile höchstens auf `wandert` stehen darf.
+ *
+ * Länger als jeder echte Umzug: 4 GiB über eine Leitung mit 1 MB/s brauchen
+ * gut eine Stunde. Sechs Stunden lassen dazu Luft für Wiederholungen. Wer
+ * länger steht, gehört zu einem Prozess, der abgestürzt ist.
+ */
+pub const WANDERT_FRIST: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
+
+/**
+ * Hängengebliebene Umzüge zurück auf `lokal` setzen.
+ *
+ * Stürzt der Prozess zwischen „`wandert`“ und „`fern`“ ab, blieb die Zeile
+ * bisher für immer so stehen – nie wieder ausgewählt, beim Löschen als unklar
+ * behandelt. Das ist harmlos, solange die lokale Fassung noch da ist (und die
+ * ist es bis zum allerletzten Schritt), kostet aber auf Dauer Platz.
+ *
+ * Sicher bei mehreren Instanzen: Es ist EINE bedingte Anweisung, und die
+ * Marke (`wandert_seit`) fällt mit. Ein Umzug, der doch noch lebt und
+ * später abschliessen will, findet seine Marke nicht mehr und lässt alles
+ * liegen (siehe `abschliessen`). Gibt zurück, wie viele Zeilen es waren.
+ */
+pub async fn haengende_zuruecksetzen(pool: &PgPool, frist: std::time::Duration) -> u64 {
+    match sqlx::query(
+        "update attachments set ablage = 'lokal', wandert_seit = null
+          where ablage = 'wandert'
+            and coalesce(wandert_seit, '-infinity'::timestamptz)
+                < now() - make_interval(secs => $1)",
+    )
+    .bind(frist.as_secs_f64())
+    .execute(pool)
+    .await
+    {
+        Ok(ergebnis) => {
+            let zahl = ergebnis.rows_affected();
+            if zahl > 0 {
+                tracing::warn!(zahl, "Hängengebliebene Umzüge zurück auf lokal gesetzt");
+            }
+            zahl
+        }
+        Err(fehler) => {
+            tracing::warn!(%fehler, "Hängengebliebene Umzüge: Zurücksetzen gescheitert");
+            0
+        }
+    }
 }
 
 /// Wie viele Umzüge in Folge an der Box scheitern dürfen, bevor der Durchgang
@@ -1068,6 +1160,8 @@ pub async fn durchgang_mit_regeln(
     bedarf: i64,
     regeln: Regeln,
 ) -> Bilanz {
+    // Erst die Hängengebliebenen zurück – sonst fehlen sie in der Auswahl.
+    haengende_zuruecksetzen(pool, WANDERT_FRIST).await;
     let belegt_jetzt = belegt(pool).await;
     let erlaubt = if bedarf > 0 {
         Erlaubt::Alles

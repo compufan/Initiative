@@ -304,6 +304,12 @@ async fn add_sticker(
     Json(input): Json<AddStickerInput>,
 ) -> AppResult<(StatusCode, Json<StickerPackDto>)> {
     own_pack(&state, id, user.id()).await?;
+    // Erst die Bytes, dann der Anspruch (siehe [`bytes_vorhanden`]) – vor der
+    // Transaktion, damit kein Speicherzugriff die Paketsperre hält.
+    bytes_vorhanden(&state, input.attachment_id).await?;
+    if let Some(ton_id) = input.ton_attachment_id {
+        bytes_vorhanden(&state, ton_id).await?;
+    }
 
     /*
      * Zählen, Beanspruchen und Einfügen in EINER Transaktion, unter der Sperre
@@ -474,6 +480,39 @@ async fn ton_besitz_pruefen(
     claim_ton_attachment(conn, ton_id).await
 }
 
+/**
+ * Liegen die Bytes dieses Anhangs wirklich im Speicher?
+ *
+ * Das Beanspruchen setzt `status = 'ready'` – auch bei einem Anhang, der noch
+ * `pending` war. Beim Weg über eine signierte Adresse (Objektspeicher) ist das
+ * gewollt: Der Browser lädt direkt in den Bucket, und der Server erfährt vom
+ * Ende nichts. Ohne diese Prüfung genügte aber ein angelegter, nie
+ * hochgeladener Anhang, und im Paket stand ein Sticker, den jeder
+ * Installierende als kaputtes Bild sieht – `ready` ohne Datei, genau das, was
+ * „erst die Bytes, dann die Zeile“ ausschliessen soll.
+ *
+ * Gefragt wird die Ablage selbst (ein Lesen, dessen Strom gleich verworfen
+ * wird), nicht die Zeile: Die Zeile ist es ja, der hier misstraut wird.
+ */
+async fn bytes_vorhanden(state: &AppState, attachment_id: Uuid) -> AppResult<()> {
+    let schluessel: Option<String> =
+        sqlx::query_scalar("select storage_key from attachments where id = $1")
+            .bind(attachment_id)
+            .fetch_optional(&state.pool)
+            .await?;
+    // Fehlt die Zeile, sagt das Beanspruchen gleich selbst, was los ist.
+    let Some(schluessel) = schluessel else {
+        return Ok(());
+    };
+    match state.storage.read(&schluessel, None).await {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err(AppError::bad_request(
+            "Die Datei ist noch nicht vollständig hochgeladen.",
+        )),
+        Err(fehler) => Err(fehler),
+    }
+}
+
 /// Die Dauer in einen Bereich klemmen, den ein Sticker haben darf.
 fn ton_dauer(roh: Option<i32>) -> Option<i32> {
     roh.map(|ms| ms.clamp(0, TON_MAX_MS))
@@ -486,6 +525,7 @@ async fn setze_ton(
     Json(input): Json<SetzeTonInput>,
 ) -> AppResult<Json<StickerPackDto>> {
     own_pack(&state, id, user.id()).await?;
+    bytes_vorhanden(&state, input.attachment_id).await?;
     // Neuer Ton, Umsetzen und Wegräumen des alten in EINER Transaktion.
     let mut tx = state.pool.begin().await?;
     let ton = ton_besitz_pruefen(&mut tx, input.attachment_id, user.id()).await?;

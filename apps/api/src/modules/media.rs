@@ -204,13 +204,63 @@ async fn upload_data(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<Uuid>,
-    mut multipart: Multipart,
+    multipart: Multipart,
 ) -> AppResult<Json<AttachmentDto>> {
     let attachment = require_own(&state, id, user.id()).await?;
-    if attachment.message_id.is_some() {
+    if attachment.message_id.is_some() || attachment.status != "pending" {
         return Err(AppError::bad_request("Upload wurde bereits abgeschlossen"));
     }
 
+    /*
+     * Den Anhang für DIESEN Upload beanspruchen – bedingt, in einer Anweisung.
+     *
+     * Zwei gleichzeitige Uploads auf denselben `pending`-Anhang (ein
+     * Neuversuch, während der erste noch läuft; zwei Tabs) schrieben beide in
+     * denselben Speicherschlüssel. Wer zuletzt fertig war, gewann die Bytes,
+     * und die Grösse in der Zeile konnte vom anderen stammen. Jetzt gewinnt
+     * genau einer; der zweite bekommt 409 und kann warten oder neu anlegen.
+     *
+     * Die Frist gibt einen Anspruch frei, dessen Upload abgestürzt ist, ohne
+     * aufzuräumen – länger als das grösste Zeitlimit unten (15 Minuten).
+     */
+    let beansprucht: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        "update attachments set empfang_seit = now()
+          where id = $1 and status = 'pending' and message_id is null
+            and (empfang_seit is null or empfang_seit < now() - interval '20 minutes')
+          returning empfang_seit",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some(marke) = beansprucht else {
+        return Err(AppError::conflict(
+            "Für diese Datei läuft schon ein Upload – bitte kurz warten",
+        ));
+    };
+    let ergebnis = upload_empfangen(&state, id, attachment, multipart, marke).await;
+    if ergebnis.is_err() {
+        // Den Anspruch freigeben, damit ein Neuversuch nicht 20 Minuten warten
+        // muss. Nur den eigenen (`marke`) – ein späterer gehört jemand anderem.
+        let _ = sqlx::query(
+            "update attachments set empfang_seit = null
+              where id = $1 and status = 'pending' and empfang_seit = $2",
+        )
+        .bind(id)
+        .bind(marke)
+        .execute(&state.pool)
+        .await;
+    }
+    ergebnis
+}
+
+/// Die Bytes eines beanspruchten Uploads annehmen (siehe [`upload_data`]).
+async fn upload_empfangen(
+    state: &AppState,
+    id: Uuid,
+    attachment: AttachmentRow,
+    mut multipart: Multipart,
+    marke: chrono::DateTime<chrono::Utc>,
+) -> AppResult<Json<AttachmentDto>> {
     let limit = max_upload_bytes(&attachment.kind);
     let mut stored: Option<i64> = None;
     let mut original_name: Option<String> = None;
@@ -279,15 +329,20 @@ async fn upload_data(
     // Erst die Bytes (oben), dann die Zeile: Bricht es dazwischen ab, liegt
     // eine Datei zu einer `pending`-Zeile, die das Aufräumen nach einem Tag
     // samt Datei (Müll-Auslöser) entfernt – nie eine `ready`-Zeile ohne Datei.
+    // Nur mit dem eigenen Anspruch (`marke`): Wurde er nach der Frist von
+    // einem anderen Upload übernommen, gehören die Bytes jetzt jenem.
     let row = sqlx::query_as::<_, AttachmentRow>(
-        "update attachments set status = 'ready', size = $3, file_name = coalesce(file_name, $2)
-         where id = $1 returning *",
+        "update attachments set status = 'ready', size = $3, file_name = coalesce(file_name, $2),
+                empfang_seit = null
+         where id = $1 and status = 'pending' and empfang_seit = $4 returning *",
     )
     .bind(id)
     .bind(original_name)
     .bind(groesse)
-    .fetch_one(&state.pool)
-    .await?;
+    .bind(marke)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::conflict("Der Upload wurde inzwischen von einem anderen ersetzt"))?;
 
     Ok(Json(to_attachment_dto(&row, &state.config)))
 }
