@@ -30,6 +30,8 @@ pub struct RefreshTokenRow {
     pub token_hash: String,
     pub expires_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
+    /// Die Kette, zu der der Token gehört (Migration 0039).
+    pub sitzung_id: Option<Uuid>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -51,6 +53,10 @@ pub struct ConversationRow {
     pub last_message_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Beschreibung der Gruppe (Migration 0037).
+    pub description: Option<String>,
+    /// Schalter der Gruppe: `nurAdminsSenden`, `nurAdminsInfo`, `langsamerModus`.
+    pub settings: serde_json::Value,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -65,6 +71,22 @@ pub struct ConversationMemberRow {
     pub joined_at: DateTime<Utc>,
     /// Ab wann diese Person den Verlauf sieht. `None` heisst: von Anfang an.
     pub sieht_ab: Option<DateTime<Utc>>,
+    /// Langsamer Modus: wann diese Person zuletzt geschrieben hat (0037).
+    pub zuletzt_gesendet: Option<DateTime<Utc>>,
+    /// Angeheftet seit – die Reihenfolge der angehefteten Chats (0039).
+    pub pinned_at: Option<DateTime<Utc>>,
+    pub marked_unread: bool,
+    /// „Chat leeren (für mich)“ bis hierhin; `sieht_ab` ist mitgezogen.
+    pub cleared_until: Option<DateTime<Utc>>,
+    /// Die Grenze vor dem Leeren – sie sehen die anderen Mitglieder.
+    pub sieht_ab_vor_leeren: Option<DateTime<Utc>>,
+    /// „Direktchat löschen (für mich)“: aus der Liste, bis Neues kommt.
+    pub ausgeblendet: bool,
+    /// `alle`, `erwaehnungen` oder `aus`.
+    pub notify_level: String,
+    pub notify_preview: bool,
+    /// Persönliches je Chat (Hintergrund).
+    pub settings: serde_json::Value,
 }
 
 #[derive(Debug, Clone, FromRow)]

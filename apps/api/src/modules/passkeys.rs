@@ -462,7 +462,7 @@ async fn login_finish(
     // Dieselbe Auslieferung wie bei Passwort-Anmeldung: Medien-Keks und
     // Erneuerungs-Keks. Bisher kam hier nur der Rumpf – wer sich mit einem
     // Passkey anmeldete, sah bis zur ersten Erneuerung keine Bilder.
-    let sitzung = crate::modules::auth::issue_session(&state, &user).await?;
+    let sitzung = crate::modules::auth::issue_session(&state, &user, &kopf).await?;
     Ok(crate::modules::auth::ausliefern(
         &state.config,
         &kopf,

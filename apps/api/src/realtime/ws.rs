@@ -51,12 +51,19 @@ pub const TICKET_GUELTIG_S: i64 = 30;
  */
 async fn ticket_ausstellen(
     State(state): State<AppState>,
-    user: crate::auth::AuthUser,
+    ich: crate::auth::AktuelleSitzung,
 ) -> crate::error::AppResult<axum::Json<serde_json::Value>> {
-    if !sitzung_lebt(&state.pool, user.id()).await {
+    if !sitzung_lebt_fuer(&state.pool, ich.user, ich.sitzung).await {
         return Err(crate::error::AppError::unauthorized("Sitzung beendet"));
     }
-    let ticket = crate::auth::password::random_token(32);
+    // Die Sitzung reist im Ticket mit (hinter `~`, das im Zufallsteil nie
+    // vorkommt): Die Leitung muss wissen, zu welchem Gerät sie gehört, damit
+    // „Gerät abmelden“ genau sie schliesst. Gefälscht werden kann der Zusatz
+    // nicht – gespeichert ist der Hash des GANZEN Tickets.
+    let ticket = match ich.sitzung {
+        Some(sitzung) => format!("{}~{sitzung}", crate::auth::password::random_token(32)),
+        None => crate::auth::password::random_token(32),
+    };
     // Abgelaufene gleich mit wegräumen: Die Tabelle bleibt so klein, dass sie
     // keinen weiteren Index braucht.
     let _ = sqlx::query("delete from echtzeit_tickets where gueltig_bis < now()")
@@ -67,7 +74,7 @@ async fn ticket_ausstellen(
          values ($1, $2, now() + make_interval(secs => $3))",
     )
     .bind(crate::auth::password::sha256_hex(&ticket))
-    .bind(user.id())
+    .bind(ich.user)
     .bind(TICKET_GUELTIG_S as f64)
     .execute(&state.pool)
     .await?;
@@ -135,6 +142,33 @@ where
  * nicht jede offene Leitung auf einmal trennen.
  */
 pub async fn sitzung_lebt(pool: &sqlx::PgPool, user_id: Uuid) -> bool {
+    sitzung_lebt_fuer(pool, user_id, None).await
+}
+
+/// Wie [`sitzung_lebt`], aber für genau ein Gerät, wenn es bekannt ist: Nach
+/// „Gerät abmelden“ lebt das Konto weiter, diese eine Sitzung nicht.
+pub async fn sitzung_lebt_fuer(pool: &sqlx::PgPool, user_id: Uuid, sitzung: Option<Uuid>) -> bool {
+    let Some(sitzung) = sitzung else {
+        return sitzung_lebt_konto(pool, user_id).await;
+    };
+    if crate::auth::sitzungen::widerrufen(&sitzung) {
+        return false;
+    }
+    sqlx::query_scalar::<_, bool>(
+        "select exists (
+           select 1 from refresh_tokens
+            where user_id = $1 and coalesce(sitzung_id, id) = $2
+              and revoked_at is null and expires_at > now()
+         )",
+    )
+    .bind(user_id)
+    .bind(sitzung)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(true)
+}
+
+async fn sitzung_lebt_konto(pool: &sqlx::PgPool, user_id: Uuid) -> bool {
     sqlx::query_scalar::<_, bool>(
         "select exists (
            select 1 from refresh_tokens
@@ -175,19 +209,31 @@ struct TokenQuery {
  * `?access_token=`), damit Clients von vor der Umstellung nicht stumm
  * bleiben. Es kann entfallen, sobald keine alten Stände mehr im Umlauf sind.
  */
-async fn wer_verbindet(state: &AppState, query: TokenQuery) -> Option<Uuid> {
+async fn wer_verbindet(state: &AppState, query: TokenQuery) -> Option<(Uuid, Option<Uuid>)> {
     let token = query.token.or(query.access_token);
     let ticket = query
         .ticket
         .or_else(|| token.clone().filter(|wert| !wert.contains('.')));
     if let Some(ticket) = ticket {
-        return ticket_einloesen(&state.pool, &ticket).await;
+        // Die Sitzung steht hinter `~` (siehe `ticket_ausstellen`); sie gilt
+        // erst, nachdem das ganze Ticket eingelöst ist.
+        let sitzung = ticket
+            .split_once('~')
+            .and_then(|(_, sitzung)| Uuid::parse_str(sitzung).ok());
+        return ticket_einloesen(&state.pool, &ticket)
+            .await
+            .map(|user| (user, sitzung));
     }
     token
         .as_deref()
         .and_then(|token| jwt::decode(token, &state.config.jwt_secret))
         .filter(|claims| claims.typ == "access")
-        .and_then(|claims| Uuid::parse_str(&claims.sub).ok())
+        .and_then(|claims| {
+            let sitzung = claims.sid.as_deref().and_then(|s| Uuid::parse_str(s).ok());
+            Uuid::parse_str(&claims.sub)
+                .ok()
+                .map(|user| (user, sitzung))
+        })
 }
 
 async fn upgrade(
@@ -200,12 +246,16 @@ async fn upgrade(
     // Ein noch nicht abgelaufenes Token einer widerrufenen Sitzung verbindet
     // nicht mehr – siehe `sitzung_lebt`.
     let user_id = match user_id {
-        Some(user_id) if sitzung_lebt(&state.pool, user_id).await => Some(user_id),
+        Some((user_id, sitzung)) if sitzung_lebt_fuer(&state.pool, user_id, sitzung).await => {
+            Some((user_id, sitzung))
+        }
         _ => None,
     };
 
     match user_id {
-        Some(user_id) => ws.on_upgrade(move |socket| handle(socket, state, user_id)),
+        Some((user_id, sitzung)) => {
+            ws.on_upgrade(move |socket| handle(socket, state, user_id, sitzung))
+        }
         // Closing with 4401 tells the client to refresh its token and retry.
         None => ws.on_upgrade(|mut socket| async move {
             let _ = socket.send(abgelaufen()).await;
@@ -213,9 +263,12 @@ async fn upgrade(
     }
 }
 
-async fn handle(socket: WebSocket, state: AppState, user_id: Uuid) {
+async fn handle(socket: WebSocket, state: AppState, user_id: Uuid, sitzung: Option<Uuid>) {
     let (mut sender, mut receiver) = socket.split();
     let (connection_id, ausgang, presence) = state.hub.register(user_id);
+    // „Gerät abmelden“ schliesst genau die Leitungen dieser Sitzung, sofort.
+    let abgemeldet =
+        sitzung.map(|sitzung| crate::auth::sitzungen::leitung_anmelden(sitzung, connection_id));
     let crate::realtime::hub::Ausgang {
         empfang: mut outbound,
         schliessen: ueberlauf,
@@ -242,6 +295,7 @@ async fn handle(socket: WebSocket, state: AppState, user_id: Uuid) {
     // Outbound pump: hub frames plus a heartbeat that detects dead sockets,
     // plus the periodic check that the session behind the socket still exists.
     let pool = state.pool.clone();
+    let abmelde_zeichen = abgemeldet.clone();
     let mut writer = tokio::spawn(async move {
         let mut heartbeat = tokio::time::interval(Duration::from_secs(HEARTBEAT_INTERVAL_SECS));
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -266,10 +320,19 @@ async fn handle(socket: WebSocket, state: AppState, user_id: Uuid) {
                     }
                 }
                 _ = pruefung.tick() => {
-                    if !sitzung_lebt(&pool, user_id).await {
+                    if !sitzung_lebt_fuer(&pool, user_id, sitzung).await {
                         let _ = sender.send(abgelaufen()).await;
                         break;
                     }
+                }
+                _ = async {
+                    match &abmelde_zeichen {
+                        Some(zeichen) => zeichen.notified().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    let _ = sender.send(abgelaufen()).await;
+                    break;
                 }
             }
         }
@@ -308,6 +371,9 @@ async fn handle(socket: WebSocket, state: AppState, user_id: Uuid) {
     }
 
     writer.abort();
+    if let Some(sitzung) = sitzung {
+        crate::auth::sitzungen::leitung_abmelden(sitzung, connection_id);
+    }
     crate::services::notify::chat_zu_melden(&state.pool, connection_id).await;
     if state.hub.unregister(user_id, connection_id) == PresenceChange::WentOffline {
         touch_last_seen(&state.pool, user_id).await;
@@ -318,10 +384,14 @@ async fn handle(socket: WebSocket, state: AppState, user_id: Uuid) {
 async fn broadcast_presence(state: &AppState, user_id: Uuid, online: bool) {
     match contacts_of(&state.pool, user_id).await {
         Ok(contacts) if !contacts.is_empty() => {
-            state
-                .hub
-                .publish(contacts, Event::presence(user_id, online))
-                .await;
+            // Wer was sehen darf, entscheidet die Privatsphäre der Person,
+            // nicht die Leitung (`services::privatsphaere::praesenz_melden`).
+            if let Err(error) =
+                crate::services::privatsphaere::praesenz_melden(state, user_id, online, contacts)
+                    .await
+            {
+                tracing::warn!(%error, "presence broadcast failed");
+            }
         }
         Ok(_) => {}
         Err(error) => tracing::warn!(%error, "presence broadcast failed"),
@@ -374,6 +444,10 @@ async fn handle_client_event(
                 .into_iter()
                 .filter(|member| *member != user_id)
                 .collect();
+            // Privatsphäre: Tipp-Anzeige aus (gegenseitig) und Sperren.
+            let audience =
+                crate::services::privatsphaere::tipp_empfaenger(&state.pool, user_id, audience)
+                    .await?;
             state
                 .hub
                 .publish(

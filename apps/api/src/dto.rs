@@ -186,6 +186,62 @@ pub struct ConversationDto {
     pub verdeckter_verlauf: bool,
     pub muted_until: Option<DateTime<Utc>>,
     pub archived: bool,
+    /// Beschreibung der Gruppe.
+    pub description: Option<String>,
+    /// Schalter der Gruppe – im Direktchat immer die Voreinstellung.
+    pub settings: GruppenEinstellungen,
+    /// Angeheftet seit; `None` heisst nicht angeheftet. Je Betrachter.
+    pub pinned_at: Option<DateTime<Utc>>,
+    /// „Als ungelesen markiert“ – ein Punkt in der Liste. Je Betrachter.
+    pub marked_unread: bool,
+    /// Bis hierhin geleert (für mich). Je Betrachter.
+    pub cleared_until: Option<DateTime<Utc>>,
+    /// Mitteilungen in diesem Chat: `alle`, `erwaehnungen` oder `aus`.
+    pub notify_level: String,
+    /// Ob Mitteilungen dieses Chats den Text zeigen.
+    pub notify_preview: bool,
+    /// Hintergrund dieses Chats (Kennung aus einer kleinen festen Auswahl,
+    /// siehe `HINTERGRUENDE`); `None` heisst Standard. Je Betrachter.
+    pub hintergrund: Option<String>,
+}
+
+/// Die Schalter einer Gruppe, gespeichert in `conversations.settings`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GruppenEinstellungen {
+    /// Nur Admins (und der Besitzer) dürfen schreiben.
+    #[serde(default)]
+    pub nur_admins_senden: bool,
+    /// Nur Admins dürfen Titel, Bild und Beschreibung ändern. Voreinstellung
+    /// `true`: So war es vor diesem Schalter, und eine bestehende Gruppe soll
+    /// sich nicht still öffnen.
+    #[serde(default = "wahr")]
+    pub nur_admins_info: bool,
+    /// Langsamer Modus: Sekunden zwischen zwei Nachrichten je Mitglied; 0 aus.
+    #[serde(default)]
+    pub langsamer_modus: u32,
+}
+
+fn wahr() -> bool {
+    true
+}
+
+impl Default for GruppenEinstellungen {
+    fn default() -> Self {
+        Self {
+            nur_admins_senden: false,
+            nur_admins_info: true,
+            langsamer_modus: 0,
+        }
+    }
+}
+
+impl GruppenEinstellungen {
+    /// Liest die gespeicherten Schalter; Unbekanntes oder Kaputtes gilt als
+    /// Voreinstellung, damit ein Datenfehler niemandem Rechte gibt oder nimmt.
+    pub fn aus(wert: &Value) -> Self {
+        serde_json::from_value(wert.clone()).unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

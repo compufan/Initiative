@@ -124,7 +124,14 @@ async fn create(
     let uebung = !mitspielend && spiel.is_some_and(|spiel| spiel.min_players() <= 1);
     let conversation_id = if uebung { None } else { input.conversation_id };
     if let Some(conversation_id) = conversation_id {
-        assert_membership(&state.pool, conversation_id, user.id()).await?;
+        // Eine Spielkarte ist eine Nachricht (`senden_erlaubt`).
+        crate::services::conversations::senden_erlaubt(
+            &state.pool,
+            conversation_id,
+            user.id(),
+            None,
+        )
+        .await?;
         for opponent in &input.opponent_ids {
             assert_membership(&state.pool, conversation_id, *opponent).await?;
         }

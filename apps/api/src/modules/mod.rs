@@ -7,6 +7,7 @@
 
 pub mod admin;
 pub mod auth;
+pub mod beitritt;
 pub mod calendar;
 pub mod collections;
 pub mod conversations;
@@ -20,6 +21,8 @@ pub mod orte;
 pub mod passkeys;
 pub mod polls;
 pub mod push;
+pub mod sitzungen;
+pub mod sperren;
 pub mod stickers;
 pub mod storage_check;
 pub mod stuecke;
@@ -38,6 +41,9 @@ pub fn router() -> Router<AppState> {
         .merge(passkeys::router())
         .merge(users::router())
         .merge(conversations::router())
+        .merge(beitritt::router())
+        .merge(sperren::router())
+        .merge(sitzungen::router())
         .merge(messages::router())
         .merge(orte::router())
         .merge(media::router())

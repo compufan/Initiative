@@ -104,7 +104,7 @@ fn zu_grund(zeile: GrundZeile) -> Grund {
         ("besitz", _) => Grund::Besitz,
         ("gespraech", Some(id)) => Grund::Gespraech { gespraech: id },
         ("profilbild", _) => Grund::Profilbild,
-        ("gruppenbild", Some(id)) => Grund::Gruppenbild { gespraech: id },
+        ("gruppenbild" | "gruppenbild_link", Some(id)) => Grund::Gruppenbild { gespraech: id },
         ("sticker_oeffentlich", _) => Grund::StickerOeffentlich,
         ("sticker_eigenes", _) => Grund::StickerEigenesPaket,
         ("sticker_gespraech", Some(id)) => Grund::StickerImGespraech { gespraech: id },
@@ -153,6 +153,17 @@ select art, bezug from (
     from conversations c
     join conversation_members cm on cm.conversation_id = c.id
    where c.avatar_attachment_id = $1 and cm.user_id = $2
+  union all
+  -- Das Bild einer Gruppe mit gültigem Einladungslink zeigt die Vorschau des
+  -- Links (`modules::beitritt`) jeder angemeldeten Person, die den Link hat –
+  -- wie ein Profilbild. Inhalte gibt es erst nach dem Beitritt.
+  select 'gruppenbild_link', c.id, 3
+    from conversations c
+   where c.avatar_attachment_id = $1
+     and exists (select 1 from conversation_invites i
+                  where i.conversation_id = c.id and i.revoked_at is null
+                    and (i.expires_at is null or i.expires_at > now())
+                    and (i.max_uses is null or i.uses < i.max_uses))
   union all
   -- Bild ODER Tonspur: Ein Sticker hat seit Migration 0022 zwei Anhaenge, und
   -- beide muessen denselben Weg gehen. Stuende hier nur `s.attachment_id`,
@@ -267,7 +278,12 @@ pub async fn wer_sieht_anhang(pool: &PgPool, attachment_id: Uuid) -> AppResult<K
     let alle_angemeldeten: bool = sqlx::query_scalar(
         "select exists (select 1 from users where avatar_attachment_id = $1)
              or exists (select 1 from stickers s join sticker_packs p on p.id = s.pack_id
-                         where $1 in (s.attachment_id, s.ton_attachment_id) and p.is_public)",
+                         where $1 in (s.attachment_id, s.ton_attachment_id) and p.is_public)
+             or exists (select 1 from conversations c
+                          join conversation_invites i on i.conversation_id = c.id
+                         where c.avatar_attachment_id = $1 and i.revoked_at is null
+                           and (i.expires_at is null or i.expires_at > now())
+                           and (i.max_uses is null or i.uses < i.max_uses))",
     )
     .bind(attachment_id)
     .fetch_one(pool)

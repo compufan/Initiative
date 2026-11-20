@@ -90,18 +90,46 @@ struct ChangePasswordInput {
     new_password: String,
 }
 
-pub(crate) async fn issue_session(state: &AppState, user: &UserRow) -> AppResult<AuthSession> {
+/// Eine neue Sitzung – ein neues Gerät in der Geräteliste.
+///
+/// `kopf` liefert den `User-Agent`, aus dem die Liste „Firefox auf Linux“
+/// macht. Gekürzt, weil er vom Client kommt und in die Datenbank geht.
+pub(crate) async fn issue_session(
+    state: &AppState,
+    user: &UserRow,
+    kopf: &HeaderMap,
+) -> AppResult<AuthSession> {
     let refresh_token = random_token(48);
-    refresh_speichern(&state.pool, &state.config, user.id, &refresh_token).await?;
-    Ok(sitzung_mit(state, user, refresh_token))
+    let sitzung = Uuid::now_v7();
+    let geraet = kopf
+        .get(header::USER_AGENT)
+        .and_then(|wert| wert.to_str().ok())
+        .map(|wert| wert.chars().take(300).collect::<String>());
+    let expires_at = chrono::Utc::now()
+        + chrono::Duration::seconds(state.config.refresh_token_ttl.as_secs() as i64);
+    sqlx::query(
+        "insert into refresh_tokens
+           (id, user_id, token_hash, expires_at, sitzung_id, user_agent, angemeldet_at, zuletzt_aktiv)
+         values ($1, $2, $3, $4, $5, $6, now(), now())",
+    )
+    .bind(Uuid::now_v7())
+    .bind(user.id)
+    .bind(sha256_hex(&refresh_token))
+    .bind(expires_at)
+    .bind(sitzung)
+    .bind(geraet)
+    .execute(&state.pool)
+    .await?;
+    Ok(sitzung_mit(state, user, refresh_token, sitzung))
 }
 
-/// Ein Erneuerungs-Token ablegen – nur als Hash. `false`, wenn es ihn schon
+/// Den Nachfolger eines Erneuerungs-Tokens ablegen – nur als Hash, in derselben
+/// Sitzung wie der Vorgänger (Gerät, Anmeldezeit). `false`, wenn es ihn schon
 /// gibt (zwei gleichzeitige Rotationen desselben Vorgängers).
 async fn refresh_speichern<'e, E>(
     executor: E,
     config: &Config,
-    user_id: Uuid,
+    vorgaenger: Uuid,
     token: &str,
 ) -> AppResult<bool>
 where
@@ -110,26 +138,37 @@ where
     let expires_at =
         chrono::Utc::now() + chrono::Duration::seconds(config.refresh_token_ttl.as_secs() as i64);
     let neu = sqlx::query(
-        "insert into refresh_tokens (id, user_id, token_hash, expires_at) values ($1, $2, $3, $4)
+        "insert into refresh_tokens
+           (id, user_id, token_hash, expires_at, sitzung_id, user_agent, angemeldet_at, zuletzt_aktiv)
+         select $1, user_id, $2, $3, coalesce(sitzung_id, id), user_agent,
+                coalesce(angemeldet_at, created_at), now()
+           from refresh_tokens where id = $4
          on conflict (token_hash) do nothing",
     )
     .bind(Uuid::now_v7())
-    .bind(user_id)
     .bind(sha256_hex(token))
     .bind(expires_at)
+    .bind(vorgaenger)
     .execute(executor)
     .await?;
     Ok(neu.rows_affected() > 0)
 }
 
 /// Die Antwort einer Sitzung: frisches Zugriffstoken zum gegebenen
-/// Erneuerungs-Token.
-fn sitzung_mit(state: &AppState, user: &UserRow, refresh_token: String) -> AuthSession {
-    let access_token = jwt::encode(
+/// Erneuerungs-Token. Das Zugriffstoken trägt die Sitzung (`sid`), damit die
+/// Geräteliste das aktuelle Gerät kennt und ein abgemeldetes sofort abweist.
+fn sitzung_mit(
+    state: &AppState,
+    user: &UserRow,
+    refresh_token: String,
+    sitzung: Uuid,
+) -> AuthSession {
+    let access_token = jwt::encode_mit_sitzung(
         &user.id.to_string(),
         "access",
         &state.config.jwt_secret,
         state.config.access_token_ttl.as_secs() as i64,
+        Some(&sitzung.to_string()),
     );
     AuthSession {
         access_token,
@@ -326,7 +365,7 @@ async fn register(
         redeem_invite_code(&state, &input.invite_code.unwrap_or_default(), user.id).await?;
     }
 
-    let sitzung = issue_session(&state, &user).await?;
+    let sitzung = issue_session(&state, &user, &kopf).await?;
     Ok((
         StatusCode::CREATED,
         ausliefern(&state.config, &kopf, user.id, sitzung),
@@ -435,7 +474,7 @@ async fn login(
         .execute(&state.pool)
         .await;
 
-    let sitzung = issue_session(&state, &user).await?;
+    let sitzung = issue_session(&state, &user, &kopf).await?;
     Ok(ausliefern(&state.config, &kopf, user.id, sitzung))
 }
 
@@ -484,7 +523,7 @@ async fn refresh(
     let hash = sha256_hex(&token);
 
     let row = sqlx::query_as::<_, crate::db::RefreshTokenRow>(
-        "select id, user_id, token_hash, expires_at, revoked_at
+        "select id, user_id, token_hash, expires_at, revoked_at, sitzung_id
          from refresh_tokens where token_hash = $1",
     )
     .bind(&hash)
@@ -522,7 +561,7 @@ async fn refresh(
         .rows_affected()
             > 0;
         if verbrannt {
-            refresh_speichern(&mut *tx, &state.config, row.user_id, &naechster).await?;
+            refresh_speichern(&mut *tx, &state.config, row.id, &naechster).await?;
         }
         tx.commit().await?;
         verbrannt
@@ -545,7 +584,7 @@ async fn refresh(
         };
         if let Some(naechster) = naechster {
             let user = load_user(&state.pool, row.user_id).await?;
-            let sitzung = sitzung_mit(&state, &user, naechster);
+            let sitzung = sitzung_mit(&state, &user, naechster, row.sitzung_id.unwrap_or(row.id));
             return Ok(ausliefern(&state.config, &kopf, user.id, sitzung));
         }
 
@@ -588,7 +627,7 @@ async fn refresh(
     .await;
 
     let user = load_user(&state.pool, row.user_id).await?;
-    let sitzung = sitzung_mit(&state, &user, naechster);
+    let sitzung = sitzung_mit(&state, &user, naechster, row.sitzung_id.unwrap_or(row.id));
     Ok(ausliefern(&state.config, &kopf, user.id, sitzung))
 }
 

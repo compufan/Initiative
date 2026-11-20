@@ -60,6 +60,12 @@ async fn search(
     let rows = sqlx::query_as::<_, UserRow>(
         "select * from users
          where id <> $1 and (lower(username) like $2 or lower(display_name) like $2)
+           -- Wer blockiert ist oder mich blockiert hat, taucht nicht auf – in
+           -- keiner Richtung. Sonst führte die Suche zurück zu jemandem, mit
+           -- dem es ohnehin keinen Chat geben kann (`einzelchats_sichern`).
+           and not exists (select 1 from user_blocks b
+                            where (b.blocker_id = $1 and b.blocked_id = users.id)
+                               or (b.blocked_id = $1 and b.blocker_id = users.id))
          order by case when lower(username) = $3 then 0 else 1 end, display_name asc
          limit $4",
     )
@@ -71,10 +77,25 @@ async fn search(
     .await?;
 
     Ok(Json(ListResult::new(
-        rows.iter()
-            .map(|row| to_user_dto(row, &state.config))
-            .collect(),
+        fuer_mich(&state, user.id(), rows.iter()).await?,
     )))
+}
+
+/// Profile so, wie dieser Betrachter sie sehen darf (Privatsphäre, Sperren).
+async fn fuer_mich<'a>(
+    state: &AppState,
+    betrachter: Uuid,
+    rows: impl Iterator<Item = &'a UserRow>,
+) -> AppResult<Vec<UserDto>> {
+    let mut profile: Vec<UserDto> = rows.map(|row| to_user_dto(row, &state.config)).collect();
+    crate::services::privatsphaere::fuer_betrachter(
+        &state.pool,
+        betrachter,
+        profile.iter_mut(),
+        false,
+    )
+    .await?;
+    Ok(profile)
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,7 +117,7 @@ struct BatchQuery {
 /// ausliest.
 async fn batch(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     Query(query): Query<BatchQuery>,
 ) -> AppResult<Json<ListResult<UserDto>>> {
     let ids: Vec<Uuid> = query
@@ -115,9 +136,7 @@ async fn batch(
         .await?;
 
     Ok(Json(ListResult::new(
-        rows.iter()
-            .map(|row| to_user_dto(row, &state.config))
-            .collect(),
+        fuer_mich(&state, user.id(), rows.iter()).await?,
     )))
 }
 
@@ -291,11 +310,15 @@ struct LoeschInput {
 
 async fn by_id(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<UserDto>> {
     let row = load_user(&state.pool, id).await?;
-    Ok(Json(to_user_dto(&row, &state.config)))
+    let profil = fuer_mich(&state, user.id(), std::iter::once(&row))
+        .await?
+        .pop()
+        .ok_or_else(|| AppError::not_found("Benutzer nicht gefunden"))?;
+    Ok(Json(profil))
 }
 
 #[derive(Debug, Deserialize)]
@@ -351,6 +374,11 @@ async fn update_me(
                         .map_err(|meldung| AppError::bad_request(&meldung))?;
                 }
             }
+            // Die Privatsphäre filtert der Server – ein kaputter Wert darf dort
+            // nicht still als „alle“ gelesen werden, ohne dass jemand es merkt.
+            if let Some(privat) = patch.get("privacy") {
+                privatsphaere_pruefen(privat)?;
+            }
             let mut merged = merge_settings(&current.settings);
             if let (Some(target), Some(source)) = (merged.as_object_mut(), patch.as_object()) {
                 for (key, value) in source {
@@ -397,10 +425,51 @@ async fn update_me(
         other => AppError::from(other),
     })?;
 
-    // Everyone sharing a chat sees the new profile instantly.
+    // Everyone sharing a chat sees the new profile instantly – jeder in der
+    // Fassung, die ihm zusteht: Kontakte sind sie alle (sie teilen einen
+    // Chat), also unterscheidet nur, ob ich jemanden blockiert habe.
     let contacts = contacts_of(&state.pool, user.id()).await?;
-    let dto = to_user_dto(&updated, &state.config);
-    state.hub.publish(contacts, Event::user_updated(&dto)).await;
+    let sperren =
+        crate::services::privatsphaere::sperren_von(&state.pool, user.id(), &contacts).await?;
+    let einstellungen = crate::services::privatsphaere::Privatsphaere::aus_einstellungen(
+        &merge_settings(&updated.settings),
+    );
+    let (gesperrt, offen): (Vec<Uuid>, Vec<Uuid>) = contacts
+        .into_iter()
+        .partition(|id| sperren.von_mir.contains(id));
+    for (empfaenger, sperrt) in [(offen, false), (gesperrt, true)] {
+        if empfaenger.is_empty() {
+            continue;
+        }
+        let mut dto = to_user_dto(&updated, &state.config);
+        crate::services::privatsphaere::maskieren(&mut dto, &einstellungen, true, sperrt);
+        state
+            .hub
+            .publish(empfaenger, Event::user_updated(&dto))
+            .await;
+    }
 
     Ok(Json(to_self_user_dto(&updated, &state.config)))
+}
+
+/// Nur bekannte Schlüssel mit gültigen Werten (siehe `privacySettingsSchema`).
+fn privatsphaere_pruefen(privat: &Value) -> AppResult<()> {
+    let Some(felder) = privat.as_object() else {
+        return Err(AppError::bad_request("`privacy` muss ein Objekt sein"));
+    };
+    for (schluessel, wert) in felder {
+        let gueltig = match schluessel.as_str() {
+            "lastSeen" | "online" => wert
+                .as_str()
+                .is_some_and(|w| ["alle", "kontakte", "niemand"].contains(&w)),
+            "readReceipts" | "typing" => wert.is_boolean(),
+            _ => false,
+        };
+        if !gueltig {
+            return Err(AppError::bad_request(format!(
+                "Ungültige Privatsphäre-Einstellung „{schluessel}“"
+            )));
+        }
+    }
+    Ok(())
 }

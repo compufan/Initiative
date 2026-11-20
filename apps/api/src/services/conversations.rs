@@ -55,6 +55,118 @@ pub async fn assert_can_moderate(
     Ok(membership)
 }
 
+/**
+ * Darf diese Person JETZT in diesen Chat schreiben?
+ *
+ * Die eine Prüfung vor dem Senden – an der Stelle, an der vorher nur die
+ * Mitgliedschaft geprüft wurde. Sie enthält die Mitgliedschaft und gibt sie
+ * zurück, damit niemand eine der beiden Prüfungen vergisst.
+ *
+ * * **Sperre** (nur Direktchat): Wer gesperrt wurde, kann nicht mehr
+ *   schreiben; wer selbst gesperrt hat, muss erst freigeben (sonst ginge eine
+ *   Nachricht an jemanden, dessen Antworten man nicht mehr annimmt).
+ * * **Nur Admins senden** (Gruppe): Mitglieder lesen nur.
+ * * **Langsamer Modus** (Gruppe): je Mitglied eine Nachricht je Zeitraum;
+ *   Admins sind ausgenommen, wie bei Telegram. Gesetzt wird `zuletzt_gesendet`
+ *   mit einem BEDINGTEN Update – zwei gleichzeitige Sendungen derselben
+ *   Person können so nicht beide durchrutschen.
+ *
+ * Eine **Wiederholung** (derselbe `clientId`, die Nachricht steht schon) geht
+ * immer durch: Die Outbox schickt nach einem Netzriss erneut, und sie muss
+ * das Original zurückbekommen statt „zu schnell“ – sonst hielte sie die
+ * längst gesendete Nachricht für gescheitert.
+ *
+ * Der langsame Modus verbraucht seinen Platz, bevor die Nachricht
+ * geschrieben ist. Scheitert sie danach (zu lang, Anhang fehlt), wartet die
+ * Person trotzdem – die Oberfläche prüft das vorher, und ein Platz, der erst
+ * nach dem Schreiben belegt würde, liesse wieder zwei gleichzeitige durch.
+ */
+pub async fn senden_erlaubt(
+    pool: &PgPool,
+    conversation_id: Uuid,
+    person: Uuid,
+    client_id: Option<&str>,
+) -> AppResult<ConversationMemberRow> {
+    let mitglied = assert_membership(pool, conversation_id, person).await?;
+    if let Some(client_id) = client_id {
+        let schon: bool = sqlx::query_scalar(
+            "select exists (select 1 from messages
+                             where conversation_id = $1 and sender_id = $2 and client_id = $3)",
+        )
+        .bind(conversation_id)
+        .bind(person)
+        .bind(client_id)
+        .fetch_one(pool)
+        .await?;
+        if schon {
+            return Ok(mitglied);
+        }
+    }
+    let chat = require_conversation(pool, conversation_id).await?;
+    if chat.r#type == "direct" {
+        let gegenueber: Option<Uuid> = sqlx::query_scalar(
+            "select user_id from conversation_members
+              where conversation_id = $1 and user_id <> $2 limit 1",
+        )
+        .bind(conversation_id)
+        .bind(person)
+        .fetch_optional(pool)
+        .await?;
+        if let Some(gegenueber) = gegenueber {
+            if super::privatsphaere::hat_gesperrt(pool, gegenueber, person).await? {
+                return Err(AppError::forbidden(
+                    "Du kannst dieser Person keine Nachrichten senden.",
+                ));
+            }
+            if super::privatsphaere::hat_gesperrt(pool, person, gegenueber).await? {
+                return Err(AppError::forbidden(
+                    "Du hast diese Person blockiert. Gib sie frei, um ihr zu schreiben.",
+                ));
+            }
+        }
+        return Ok(mitglied);
+    }
+
+    let einstellungen = crate::dto::GruppenEinstellungen::aus(&chat.settings);
+    let ist_admin = mitglied.role != "member";
+    if einstellungen.nur_admins_senden && !ist_admin {
+        return Err(AppError::forbidden(
+            "In dieser Gruppe dürfen nur Admins schreiben.",
+        ));
+    }
+    if einstellungen.langsamer_modus > 0 && !ist_admin {
+        let frei: Option<Uuid> = sqlx::query_scalar(
+            "update conversation_members set zuletzt_gesendet = now()
+              where conversation_id = $1 and user_id = $2
+                and (zuletzt_gesendet is null
+                     or zuletzt_gesendet <= now() - make_interval(secs => $3))
+              returning user_id",
+        )
+        .bind(conversation_id)
+        .bind(person)
+        .bind(f64::from(einstellungen.langsamer_modus))
+        .fetch_optional(pool)
+        .await?;
+        if frei.is_none() {
+            let rest: f64 = sqlx::query_scalar(
+                "select greatest(0, extract(epoch from
+                          zuletzt_gesendet + make_interval(secs => $3) - now()))::float8
+                   from conversation_members where conversation_id = $1 and user_id = $2",
+            )
+            .bind(conversation_id)
+            .bind(person)
+            .bind(f64::from(einstellungen.langsamer_modus))
+            .fetch_one(pool)
+            .await?;
+            return Err(AppError::too_many(format!(
+                "Langsamer Modus: Du kannst in {} s wieder schreiben.",
+                rest.ceil().max(1.0) as i64
+            )));
+        }
+    }
+    Ok(mitglied)
+}
+
 pub async fn member_ids(pool: &PgPool, conversation_id: Uuid) -> AppResult<Vec<Uuid>> {
     let rows: Vec<(Uuid,)> =
         sqlx::query_as("select user_id from conversation_members where conversation_id = $1")
@@ -109,8 +221,21 @@ pub async fn melde_gelesen(
     .execute(&state.pool)
     .await?;
 
+    // Wer liest, hat den Chat geöffnet: Die Markierung „ungelesen“ war ein
+    // Merkzettel für genau diesen Augenblick.
+    sqlx::query(
+        "update conversation_members set marked_unread = false
+          where conversation_id = $1 and user_id = $2 and marked_unread",
+    )
+    .bind(conversation_id)
+    .bind(user_id)
+    .execute(&state.pool)
+    .await?;
+
     let empfaenger =
         crate::services::verlauf::empfaenger_fuer_nachricht(&state.pool, message_id).await?;
+    let empfaenger =
+        lesebestaetigung_empfaenger(state, conversation_id, user_id, empfaenger).await?;
     state
         .hub
         .publish(
@@ -119,6 +244,49 @@ pub async fn melde_gelesen(
         )
         .await;
     Ok(())
+}
+
+/// Wer erfährt, bis wohin jemand gelesen hat?
+///
+/// Die eigenen Geräte immer (sie gleichen damit ihre Zähler ab). Andere nur,
+/// wenn keine Sperre zwischen beiden steht und – im Direktchat – beide die
+/// Lesebestätigungen an haben. Dieselbe Regel wie für `lastReadMessageId` in
+/// der Chatliste (`Sicht::lesezeichen_sichtbar`).
+async fn lesebestaetigung_empfaenger(
+    state: &AppState,
+    conversation_id: Uuid,
+    leser: Uuid,
+    empfaenger: Vec<Uuid>,
+) -> AppResult<Vec<Uuid>> {
+    let typ = require_conversation(&state.pool, conversation_id)
+        .await?
+        .r#type;
+    let andere: Vec<Uuid> = empfaenger
+        .iter()
+        .copied()
+        .filter(|id| *id != leser)
+        .collect();
+    let sperren = super::privatsphaere::sperren_von(&state.pool, leser, &andere).await?;
+    let privat = if typ == "direct" {
+        let mut alle = andere.clone();
+        alle.push(leser);
+        super::privatsphaere::laden(&state.pool, &alle).await?
+    } else {
+        HashMap::new()
+    };
+    let an = |id: &Uuid| {
+        privat
+            .get(id)
+            .copied()
+            .unwrap_or_default()
+            .lesebestaetigungen
+    };
+    Ok(empfaenger
+        .into_iter()
+        .filter(|id| {
+            *id == leser || (!sperren.irgendeine(id) && (typ != "direct" || (an(&leser) && an(id))))
+        })
+        .collect())
 }
 
 pub async fn touch_conversation(
@@ -151,6 +319,14 @@ struct ConversationListRow {
     updated_at: chrono::DateTime<chrono::Utc>,
     archived: bool,
     muted_until: Option<chrono::DateTime<chrono::Utc>>,
+    description: Option<String>,
+    gruppen_settings: serde_json::Value,
+    pinned_at: Option<chrono::DateTime<chrono::Utc>>,
+    marked_unread: bool,
+    cleared_until: Option<chrono::DateTime<chrono::Utc>>,
+    notify_level: String,
+    notify_preview: bool,
+    mitglied_settings: serde_json::Value,
 }
 
 /// Assembles the chat list in a fixed number of queries, regardless of size.
@@ -161,12 +337,21 @@ pub async fn load_conversation_dtos(
 ) -> AppResult<Vec<ConversationDto>> {
     let rows = sqlx::query_as::<_, ConversationListRow>(
         "select c.id, c.type, c.title, c.avatar_attachment_id, c.created_by, c.created_at,
-                c.updated_at, cm.archived, cm.muted_until
+                c.updated_at, cm.archived, cm.muted_until, c.description,
+                c.settings as gruppen_settings, cm.pinned_at, cm.marked_unread,
+                cm.cleared_until, cm.notify_level, cm.notify_preview,
+                cm.settings as mitglied_settings
          from conversations c
          join conversation_members cm on cm.conversation_id = c.id and cm.user_id = $1
          where ($2::uuid[] is null or c.id = any($2))
            and ($3 or cm.archived = false)
-         order by coalesce(c.last_message_at, c.created_at) desc
+           -- „Für mich gelöscht“ bleibt aus der Liste, bis wieder etwas kommt.
+           -- Über die Kennung bleibt der Chat erreichbar (neu anschreiben).
+           and ($2::uuid[] is not null or not cm.ausgeblendet
+                or coalesce(c.last_message_at, c.created_at) > cm.cleared_until)
+         -- Angeheftete zuerst, damit die Grenze von 300 sie nie abschneidet.
+         order by cm.pinned_at desc nulls last,
+                  coalesce(c.last_message_at, c.created_at) desc
          limit 300",
     )
     .bind(viewer_id)
@@ -275,6 +460,9 @@ pub async fn load_conversation_dtos(
                where m.conversation_id = cm.conversation_id
                  and m.deleted_at is null
                  and m.created_at < cm.sieht_ab
+                 -- Was man selbst geleert hat, ist nicht verdeckt: Dafür
+                 -- gibt es keinen Antrag (Migration 0039).
+                 and (cm.cleared_until is null or m.created_at > cm.cleared_until)
             )",
     )
     .bind(viewer_id)
@@ -317,30 +505,33 @@ pub async fn load_conversation_dtos(
         .collect()
     };
 
-    let user_ids: Vec<Uuid> = member_rows.iter().map(|row| row.user_id).collect();
+    let mut user_ids: Vec<Uuid> = member_rows.iter().map(|row| row.user_id).collect();
+    user_ids.sort();
+    user_ids.dedup();
     let users = super::users::load_users_by_ids(&state.pool, &user_ids, &state.config).await?;
+    let sicht = Sicht::laden(&state.pool, &user_ids).await?;
     let last_messages =
         super::messages::hydrate_messages(state, last_message_rows, viewer_id).await?;
 
+    let typ_von: HashMap<Uuid, &str> = rows
+        .iter()
+        .map(|row| (row.id, row.r#type.as_str()))
+        .collect();
     let mut members_by_conversation: HashMap<Uuid, Vec<ConversationMemberDto>> = HashMap::new();
     for row in member_rows {
+        let typ = typ_von
+            .get(&row.conversation_id)
+            .copied()
+            .unwrap_or("group");
+        let gelesen = row
+            .last_read_message_id
+            .filter(|id| sichtbar_gelesen.contains(id))
+            .filter(|_| sicht.lesezeichen_sichtbar(typ, row.user_id, viewer_id));
+        let profil = sicht.profil(&users, row.user_id, viewer_id);
         members_by_conversation
             .entry(row.conversation_id)
             .or_default()
-            .push(ConversationMemberDto {
-                user_id: row.user_id,
-                role: row.role.clone(),
-                joined_at: row.joined_at,
-                nickname: row.nickname.clone(),
-                last_read_message_id: row
-                    .last_read_message_id
-                    .filter(|id| sichtbar_gelesen.contains(id)),
-                sieht_ab: row.sieht_ab,
-                user: users
-                    .get(&row.user_id)
-                    .cloned()
-                    .unwrap_or_else(|| unknown_user(row.user_id)),
-            });
+            .push(mitglied_dto(&row, gelesen, profil));
     }
 
     let mut last_by_conversation: HashMap<Uuid, crate::dto::MessageDto> = HashMap::new();
@@ -367,8 +558,128 @@ pub async fn load_conversation_dtos(
             updated_at: row.updated_at,
             muted_until: row.muted_until,
             archived: row.archived,
+            settings: crate::dto::GruppenEinstellungen::aus(&row.gruppen_settings),
+            description: row.description,
+            pinned_at: row.pinned_at,
+            marked_unread: row.marked_unread,
+            cleared_until: row.cleared_until,
+            notify_level: row.notify_level,
+            notify_preview: row.notify_preview,
+            hintergrund: hintergrund_aus(&row.mitglied_settings),
         })
         .collect())
+}
+
+/// Die Mitgliederzeile, wie sie jeder Betrachter bekommt.
+///
+/// `siehtAb` ist die Grenze VOR dem Leeren: Wann jemand seinen Chat geleert
+/// hat, geht die anderen nichts an, und für Anträge auf den Verlauf zählt der
+/// Beitritt, nicht das Aufräumen (Migration 0039).
+fn mitglied_dto(
+    row: &ConversationMemberRow,
+    gelesen: Option<Uuid>,
+    profil: UserDto,
+) -> ConversationMemberDto {
+    ConversationMemberDto {
+        user_id: row.user_id,
+        role: row.role.clone(),
+        joined_at: row.joined_at,
+        nickname: row.nickname.clone(),
+        last_read_message_id: gelesen,
+        sieht_ab: if row.cleared_until.is_some() {
+            row.sieht_ab_vor_leeren
+        } else {
+            row.sieht_ab
+        },
+        user: profil,
+    }
+}
+
+/// Die Hintergründe, die ein Chat haben kann – eine kleine feste Auswahl, damit
+/// kein Client eine beliebige Zeichenkette (oder ein CSS-Stück) bei anderen
+/// Geräten desselben Menschen unterbringt. Die Oberfläche kennt dieselben
+/// Kennungen (`chatHintergrund.ts`).
+pub const HINTERGRUENDE: &[&str] = &[
+    "sand", "salbei", "himmel", "flieder", "nacht", "punkte", "wellen", "karo",
+];
+
+fn hintergrund_aus(settings: &serde_json::Value) -> Option<String> {
+    settings
+        .get("hintergrund")
+        .and_then(serde_json::Value::as_str)
+        .filter(|wert| HINTERGRUENDE.contains(wert))
+        .map(str::to_string)
+}
+
+/// Was ein Betrachter von den anderen Mitgliedern sieht: Profile nach deren
+/// Privatsphäre und Sperren, Lesezeichen nach den Lesebestätigungen.
+///
+/// Für beide Ladewege (Chatliste und Rundruf) dieselbe Regel – der Test
+/// `rundruf_gleichwertig` vergleicht sie Feld für Feld.
+struct Sicht {
+    privat: HashMap<Uuid, super::privatsphaere::Privatsphaere>,
+    /// (wer, wen) – wer hat wen gesperrt, unter diesen Personen.
+    sperren: std::collections::HashSet<(Uuid, Uuid)>,
+}
+
+impl Sicht {
+    async fn laden(pool: &PgPool, personen: &[Uuid]) -> AppResult<Self> {
+        let privat = super::privatsphaere::laden(pool, personen).await?;
+        let sperren = if personen.is_empty() {
+            Default::default()
+        } else {
+            sqlx::query_as::<_, (Uuid, Uuid)>(
+                "select blocker_id, blocked_id from user_blocks
+                  where blocker_id = any($1) and blocked_id = any($1)",
+            )
+            .bind(personen)
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .collect()
+        };
+        Ok(Self { privat, sperren })
+    }
+
+    fn von(&self, person: Uuid) -> super::privatsphaere::Privatsphaere {
+        self.privat.get(&person).copied().unwrap_or_default()
+    }
+
+    fn profil(&self, users: &HashMap<Uuid, UserDto>, person: Uuid, betrachter: Uuid) -> UserDto {
+        let mut profil = users
+            .get(&person)
+            .cloned()
+            .unwrap_or_else(|| unknown_user(person));
+        if person != betrachter {
+            // Wer den Chat mit mir teilt, ist Kontakt.
+            super::privatsphaere::maskieren(
+                &mut profil,
+                &self.von(person),
+                true,
+                self.sperren.contains(&(person, betrachter)),
+            );
+        }
+        profil
+    }
+
+    /// Darf der Betrachter sehen, bis wohin diese Person gelesen hat?
+    ///
+    /// Im Direktchat gegenseitig: Hat einer von beiden die Lesebestätigungen
+    /// aus, sieht keiner die des anderen. In Gruppen bleiben sie sichtbar
+    /// (siehe `services::privatsphaere`). Eine Sperre in irgendeiner Richtung
+    /// verbirgt sie immer.
+    fn lesezeichen_sichtbar(&self, typ: &str, person: Uuid, betrachter: Uuid) -> bool {
+        if person == betrachter {
+            return true;
+        }
+        if self.sperren.contains(&(person, betrachter))
+            || self.sperren.contains(&(betrachter, person))
+        {
+            return false;
+        }
+        typ != "direct"
+            || (self.von(person).lesebestaetigungen && self.von(betrachter).lesebestaetigungen)
+    }
 }
 
 fn unknown_user(user_id: Uuid) -> UserDto {
@@ -452,6 +763,8 @@ struct GespraechKopf {
     created_by: Option<Uuid>,
     created_at: chrono::DateTime<chrono::Utc>,
     updated_at: chrono::DateTime<chrono::Utc>,
+    description: Option<String>,
+    settings: serde_json::Value,
 }
 
 /**
@@ -488,7 +801,8 @@ pub async fn load_conversation_fuer_mitglieder(
         return Ok(ergebnis);
     }
     let Some(kopf) = sqlx::query_as::<_, GespraechKopf>(
-        "select id, type, title, avatar_attachment_id, created_by, created_at, updated_at
+        "select id, type, title, avatar_attachment_id, created_by, created_at, updated_at,
+                description, settings
            from conversations where id = $1",
     )
     .bind(conversation_id)
@@ -569,6 +883,9 @@ pub async fn load_conversation_fuer_mitglieder(
                where m.conversation_id = cm.conversation_id
                  and m.deleted_at is null
                  and m.created_at < cm.sieht_ab
+                 -- Was man selbst geleert hat, ist nicht verdeckt: Dafür
+                 -- gibt es keinen Antrag (Migration 0039).
+                 and (cm.cleared_until is null or m.created_at > cm.cleared_until)
             )",
     )
     .bind(conversation_id)
@@ -601,6 +918,7 @@ pub async fn load_conversation_fuer_mitglieder(
 
     let user_ids: Vec<Uuid> = member_rows.iter().map(|row| row.user_id).collect();
     let users = super::users::load_users_by_ids(&state.pool, &user_ids, &state.config).await?;
+    let sicht = Sicht::laden(&state.pool, &user_ids).await?;
 
     // Die letzten Nachrichten aufbereiten: einmal je Nachricht, wo das für
     // alle dasselbe ergibt; sonst je Betrachter.
@@ -639,21 +957,16 @@ pub async fn load_conversation_fuer_mitglieder(
         let grenze = eigene.sieht_ab;
         let members = member_rows
             .iter()
-            .map(|row| ConversationMemberDto {
-                user_id: row.user_id,
-                role: row.role.clone(),
-                joined_at: row.joined_at,
-                nickname: row.nickname.clone(),
-                last_read_message_id: row.last_read_message_id.filter(|id| {
-                    gelesen_zeit
-                        .get(id)
-                        .is_some_and(|zeit| grenze.is_none_or(|ab| *zeit >= ab))
-                }),
-                sieht_ab: row.sieht_ab,
-                user: users
-                    .get(&row.user_id)
-                    .cloned()
-                    .unwrap_or_else(|| unknown_user(row.user_id)),
+            .map(|row| {
+                let gelesen = row
+                    .last_read_message_id
+                    .filter(|id| {
+                        gelesen_zeit
+                            .get(id)
+                            .is_some_and(|zeit| grenze.is_none_or(|ab| *zeit >= ab))
+                    })
+                    .filter(|_| sicht.lesezeichen_sichtbar(&kopf.r#type, row.user_id, person));
+                mitglied_dto(row, gelesen, sicht.profil(&users, row.user_id, person))
             })
             .collect();
 
@@ -691,6 +1004,14 @@ pub async fn load_conversation_fuer_mitglieder(
                 verdeckter_verlauf: verdeckt.contains(&person),
                 muted_until: eigene.muted_until,
                 archived: eigene.archived,
+                description: kopf.description.clone(),
+                settings: crate::dto::GruppenEinstellungen::aus(&kopf.settings),
+                pinned_at: eigene.pinned_at,
+                marked_unread: eigene.marked_unread,
+                cleared_until: eigene.cleared_until,
+                notify_level: eigene.notify_level.clone(),
+                notify_preview: eigene.notify_preview,
+                hintergrund: hintergrund_aus(&eigene.settings),
             },
         );
     }
@@ -825,6 +1146,16 @@ pub async fn einzelchats_sichern(
             chat_von,
             neu: Vec::new(),
         });
+    }
+
+    // Die Sperrliste hängt sich hier ein, wie oben versprochen: Wer mich
+    // gesperrt hat, mit dem lege ich keinen neuen Chat an – weder direkt noch
+    // über eine Einladung. Ein bestehender bleibt (dort sperrt das Senden).
+    let sperren = super::privatsphaere::sperren_von(&mut **tx, ersteller, &fehlend).await?;
+    if !sperren.mich.is_empty() {
+        return Err(AppError::forbidden(
+            "Mit dieser Person kannst du keinen Chat beginnen.",
+        ));
     }
 
     let neue_ids: Vec<Uuid> = fehlend.iter().map(|_| Uuid::now_v7()).collect();
@@ -1011,5 +1342,58 @@ pub async fn konto_loeschen(state: &AppState, user_id: Uuid) -> AppResult<()> {
     let karten = uebernahmen_eintragen(&mut tx, &uebernahmen).await?;
     tx.commit().await?;
     uebernahmen_melden(state, &uebernahmen, karten).await;
+    Ok(())
+}
+
+/**
+ * „Chat leeren (für mich)“ – und mit `ausblenden` „Direktchat löschen (für
+ * mich)“.
+ *
+ * # Warum die Grenze `sieht_ab` mitzieht
+ *
+ * Jeder Lesepfad – Verlauf, Suche, Medien und ihre Auslieferung, Zähler der
+ * Ungelesenen, Vorschau in der Liste, Zitate, Umfrage- und Spielkarten,
+ * Ereignisse an die Empfänger – filtert schon an `sieht_ab`. Eine zweite
+ * Grenze müsste jeder dieser Pfade einzeln kennen, und der nächste neue
+ * vergäße sie. So gilt das Leeren überall, wo die Verlaufsgrenze gilt, ohne
+ * einen Pfad anzufassen. `cleared_until` hält fest, DASS geleert wurde
+ * (Antrag auf den Verlauf, Liste), `sieht_ab_vor_leeren` die Grenze von vorher,
+ * die die anderen weiter sehen.
+ *
+ * In einer Anweisung: Grenze, Merker und Lesezeichen gelten zusammen.
+ */
+pub async fn leeren(
+    conn: &mut sqlx::PgConnection,
+    conversation_id: Uuid,
+    person: Uuid,
+    ausblenden: bool,
+) -> AppResult<()> {
+    let getroffen = sqlx::query(
+        "update conversation_members set
+           sieht_ab_vor_leeren = case when cleared_until is null then sieht_ab
+                                      else sieht_ab_vor_leeren end,
+           cleared_until = now(),
+           sieht_ab = greatest(coalesce(sieht_ab, '-infinity'::timestamptz), now()),
+           marked_unread = false,
+           ausgeblendet = ausgeblendet or $3,
+           pinned_at = case when $3 then null else pinned_at end,
+           -- Das Lesezeichen auf die letzte Nachricht: Was weg ist, ist auch
+           -- nicht mehr ungelesen – auch nicht für Zähler, die das
+           -- Lesezeichen ohne Grenze lesen.
+           last_read_message_id = coalesce(
+             (select m.id from messages m where m.conversation_id = $1
+               order by m.id desc limit 1),
+             last_read_message_id)
+         where conversation_id = $1 and user_id = $2",
+    )
+    .bind(conversation_id)
+    .bind(person)
+    .bind(ausblenden)
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
+    if getroffen == 0 {
+        return Err(AppError::forbidden("Du bist kein Mitglied dieses Chats"));
+    }
     Ok(())
 }

@@ -16,6 +16,7 @@ pub mod miniatur;
 pub mod notify;
 pub mod permissions;
 pub mod polls;
+pub mod privatsphaere;
 pub mod pressen_statistik;
 pub mod rueckholen;
 pub mod stickers;

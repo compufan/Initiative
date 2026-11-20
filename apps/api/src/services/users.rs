@@ -47,9 +47,7 @@ pub fn merge_settings(stored: &Value) -> Value {
         for (key, value) in source {
             if key == "notifications" || key == "privacy" {
                 if let (Some(existing), Some(incoming)) = (
-                    target
-                        .get_mut(key.as_str())
-                        .and_then(Value::as_object_mut),
+                    target.get_mut(key.as_str()).and_then(Value::as_object_mut),
                     value.as_object(),
                 ) {
                     for (inner_key, inner_value) in incoming {

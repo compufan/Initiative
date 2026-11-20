@@ -119,13 +119,20 @@ pub async fn stellen(pool: &PgPool, conversation_id: Uuid, user_id: Uuid) -> App
      * über den alle anderen abstimmen, um ihm ein leeres Nichts freizugeben.
      */
     let verdeckt: bool = sqlx::query_scalar(
+        // Was man selbst geleert hat, ist nicht verdeckt (Migration 0039):
+        // Wer seinen Chat leert, beantragt ihn nicht zurück.
         "select exists (
-           select 1 from messages
-            where conversation_id = $1 and deleted_at is null and created_at < $2
+           select 1 from messages m
+            where m.conversation_id = $1 and m.deleted_at is null and m.created_at < $2
+              and not exists (
+                select 1 from conversation_members cm
+                 where cm.conversation_id = $1 and cm.user_id = $3
+                   and cm.cleared_until is not null and m.created_at <= cm.cleared_until)
          )",
     )
     .bind(conversation_id)
     .bind(grenze)
+    .bind(user_id)
     .fetch_one(pool)
     .await?;
     if !verdeckt {
@@ -281,7 +288,11 @@ pub async fn abstimmen(
         // Der ganze Verlauf mit einem Federstrich – eine Zeile, unabhängig
         // davon, wie viel darin liegt.
         sqlx::query(
-            "update conversation_members set sieht_ab = null
+            // Bis zum eigenen Leeren, nicht weiter: Was jemand für sich
+            // geleert hat, bringt keine Freigabe zurück (Migration 0039).
+            "update conversation_members set sieht_ab = cleared_until,
+                    sieht_ab_vor_leeren = case when cleared_until is null
+                                               then sieht_ab_vor_leeren end
               where conversation_id = $1 and user_id = $2",
         )
         .bind(zeile.conversation_id)

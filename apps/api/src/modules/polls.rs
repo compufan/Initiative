@@ -18,7 +18,7 @@ use crate::db::{PollOptionRow, PollPlacementRow, PollRow, PollVoteRow};
 use crate::dto::{CalendarEventDto, PollDto};
 use crate::error::{AppError, AppResult};
 use crate::services::calendar::{create_event, NewEvent};
-use crate::services::conversations::{assert_membership, get_membership};
+use crate::services::conversations::get_membership;
 use crate::services::polls::{
     assert_poll_access, best_option, broadcast_poll, create_poll, is_closed, load_poll_dto,
     place_poll, poll_conversation_ids, require_poll, set_votes, unplace_poll, NewPoll,
@@ -82,7 +82,15 @@ async fn create(
     user: AuthUser,
     Json(input): Json<CreatePollInput>,
 ) -> AppResult<(StatusCode, Json<PollDto>)> {
-    assert_membership(&state.pool, input.conversation_id, user.id()).await?;
+    // Eine Umfrage ist eine Nachricht: dieselben Gruppenrechte, Sperren und
+    // derselbe langsame Modus (`senden_erlaubt`).
+    crate::services::conversations::senden_erlaubt(
+        &state.pool,
+        input.conversation_id,
+        user.id(),
+        None,
+    )
+    .await?;
 
     let question = input.question.trim().to_string();
     let mut validator = Validator::new();
@@ -490,8 +498,14 @@ async fn add_placement(
     Json(input): Json<PlacementInput>,
 ) -> AppResult<(StatusCode, Json<serde_json::Value>)> {
     let poll = owned_poll(&state, id, user.id()).await?;
-    // Und nur in einen Chat, in dem man selbst ist.
-    assert_membership(&state.pool, input.conversation_id, user.id()).await?;
+    // Und nur in einen Chat, in dem man selbst ist – und schreiben darf.
+    crate::services::conversations::senden_erlaubt(
+        &state.pool,
+        input.conversation_id,
+        user.id(),
+        None,
+    )
+    .await?;
 
     let row = place_poll(&state, &poll, input.conversation_id, user.id()).await?;
     let dto = load_poll_dto(&state, id, user.id()).await?;

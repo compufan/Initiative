@@ -14,6 +14,11 @@ struct NotificationTarget {
     id: Uuid,
     settings: serde_json::Value,
     muted_until: Option<chrono::DateTime<chrono::Utc>>,
+    /// Je Chat (Migration 0039): `alle`, `erwaehnungen` oder `aus`.
+    notify_level: String,
+    /// Je Chat: Text in der Mitteilung zeigen – zusätzlich zur Einstellung
+    /// des Kontos; beide müssen an sein.
+    notify_preview: bool,
 }
 
 /// Push notification for a freshly created message.
@@ -31,7 +36,7 @@ pub async fn notify_new_message(state: &AppState, message: &MessageDto, member_i
     }
 
     let targets = match sqlx::query_as::<_, NotificationTarget>(
-        "select u.id, u.settings, cm.muted_until
+        "select u.id, u.settings, cm.muted_until, cm.notify_level, cm.notify_preview
          from users u
          join conversation_members cm on cm.user_id = u.id and cm.conversation_id = $1
          where u.id = any($2)",
@@ -71,11 +76,14 @@ pub async fn notify_new_message(state: &AppState, message: &MessageDto, member_i
         if target.muted_until.is_some_and(|until| until > now) {
             continue;
         }
+        if !stufe_erlaubt(&target.notify_level, target.id, &message.metadata) {
+            continue;
+        }
         let (push_enabled, previews) = benachrichtigungen(&target.settings);
         if !push_enabled {
             continue;
         }
-        if previews {
+        if previews && target.notify_preview {
             with_preview.push(target.id);
         } else {
             without_preview.push(target.id);
@@ -297,6 +305,27 @@ pub async fn notify_users(state: &AppState, user_ids: &[Uuid], payload: &PushPay
 
 /// Was jemand für Mitteilungen eingestellt hat: (Push an, Vorschau an).
 /// Beides ist ohne Angabe an.
+/// Lässt die Stufe eines Chats diese Mitteilung durch?
+///
+/// „Nur @Erwähnungen“ prüft `metadata.mentions` (Kennungen als Text). Solange
+/// keine Nachricht das Feld trägt, wirkt die Stufe wie „Aus“ – die Oberfläche
+/// sagt das dazu.
+pub fn stufe_erlaubt(stufe: &str, person: Uuid, metadata: &serde_json::Value) -> bool {
+    match stufe {
+        "aus" => false,
+        "erwaehnungen" => metadata
+            .get("mentions")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|liste| {
+                liste
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .any(|id| Uuid::parse_str(id).is_ok_and(|id| id == person))
+            }),
+        _ => true,
+    }
+}
+
 fn benachrichtigungen(settings: &serde_json::Value) -> (bool, bool) {
     let settings = super::users::merge_settings(settings);
     let notifications = settings.get("notifications");
@@ -876,6 +905,22 @@ mod tests {
     #[test]
     fn ohne_jede_karte_kommt_keine_mitteilung() {
         assert_eq!(push_ziel(None, &[], &stumm(&[])), None);
+    }
+
+    #[test]
+    fn die_stufe_je_chat() {
+        let ich = Uuid::from_u128(7);
+        let leer = serde_json::json!({});
+        assert!(stufe_erlaubt("alle", ich, &leer));
+        assert!(!stufe_erlaubt("aus", ich, &leer));
+        assert!(
+            !stufe_erlaubt("erwaehnungen", ich, &leer),
+            "ohne Erwähnung still"
+        );
+        let erwaehnt = serde_json::json!({ "mentions": [ich.to_string()] });
+        assert!(stufe_erlaubt("erwaehnungen", ich, &erwaehnt));
+        let andere = serde_json::json!({ "mentions": [Uuid::from_u128(8).to_string()] });
+        assert!(!stufe_erlaubt("erwaehnungen", ich, &andere));
     }
 
     #[test]

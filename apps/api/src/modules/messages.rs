@@ -248,7 +248,15 @@ async fn send_message(
     Path(id): Path<Uuid>,
     Json(input): Json<SendInput>,
 ) -> AppResult<(StatusCode, Json<MessageDto>)> {
-    assert_membership(&state.pool, id, user.id()).await?;
+    // Mitgliedschaft samt Gruppenrechten, langsamem Modus und Sperren – siehe
+    // `services::conversations::senden_erlaubt`.
+    crate::services::conversations::senden_erlaubt(
+        &state.pool,
+        id,
+        user.id(),
+        input.client_id.as_deref(),
+    )
+    .await?;
 
     let metadata = match input.metadata {
         None | Some(Value::Null) => json!({}),

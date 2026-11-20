@@ -15,6 +15,11 @@ pub struct Claims {
     pub typ: String,
     pub iat: i64,
     pub exp: i64,
+    /// Die Sitzung (Kette der Erneuerungs-Tokens), zu der ein Zugriffstoken
+    /// gehört. Fehlt bei Tokens von vor der Geräteliste und bei allen, die
+    /// keine Anmeldung sind (Medienkeks, Fernsehticket).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sid: Option<String>,
 }
 
 fn sign(data: &str, secret: &str) -> String {
@@ -24,12 +29,24 @@ fn sign(data: &str, secret: &str) -> String {
 }
 
 pub fn encode(subject: &str, token_type: &str, secret: &str, ttl_seconds: i64) -> String {
+    encode_mit_sitzung(subject, token_type, secret, ttl_seconds, None)
+}
+
+/// Wie [`encode`], mit der Sitzung, zu der das Token gehört (Geräteliste).
+pub fn encode_mit_sitzung(
+    subject: &str,
+    token_type: &str,
+    secret: &str,
+    ttl_seconds: i64,
+    sitzung: Option<&str>,
+) -> String {
     let issued_at = chrono::Utc::now().timestamp();
     let claims = Claims {
         sub: subject.to_string(),
         typ: token_type.to_string(),
         iat: issued_at,
         exp: issued_at + ttl_seconds,
+        sid: sitzung.map(str::to_string),
     };
     let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
     let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).expect("claims serialise"));
@@ -115,6 +132,7 @@ mod tests {
                 typ: "access".into(),
                 iat: 0,
                 exp: chrono::Utc::now().timestamp() + 600,
+                sid: None,
             })
             .unwrap(),
         );
