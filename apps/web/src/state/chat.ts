@@ -35,6 +35,7 @@ import {
   dateiHinterlegen,
   dropCachedMessage,
   enqueueOutbox,
+  outboxErledigt,
   readCachedConversations,
   readCachedMessages,
   readOutbox,
@@ -145,17 +146,39 @@ function sortMessages(messages: ChatMessage[]): ChatMessage[] {
   return messages.slice().sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
+/**
+ * Lokale Schatten einer gesendeten Nachricht entfernen.
+ *
+ * Eine Nachricht hat genau einen `clientId`. Steht sie schon vom Server da,
+ * ist jede lokale Fassung mit demselben Schlüssel („wird gesendet“) ein
+ * Schatten – etwa nach einem Absturz zwischen dem Commit beim Server und dem
+ * Abschluss in der Outbox. Ohne das stand dieselbe Nachricht nach dem
+ * Neuladen zweimal im Verlauf, bis der nächste Abgleich kam.
+ */
+function ohneSchatten(list: ChatMessage[]): ChatMessage[] {
+  const gesendet = new Set(
+    list
+      .filter((item) => !item.pending && !item.failed && item.clientId)
+      .map((item) => item.clientId),
+  );
+  if (gesendet.size === 0) return list;
+  return list.filter(
+    (item) => !(item.pending || item.failed) || !item.clientId || !gesendet.has(item.clientId),
+  );
+}
+
 function mergeMessage(list: ChatMessage[], message: ChatMessage): ChatMessage[] {
+  const byId = list.findIndex((item) => item.id === message.id);
   const byClientId = message.clientId
     ? list.findIndex((item) => item.clientId === message.clientId)
     : -1;
-  const index = byClientId >= 0 ? byClientId : list.findIndex((item) => item.id === message.id);
+  const index = byId >= 0 ? byId : byClientId;
   if (index >= 0) {
     const next = list.slice();
     next[index] = { ...list[index], ...message, pending: false, failed: false };
-    return sortMessages(next);
+    return sortMessages(ohneSchatten(next));
   }
-  return sortMessages([...list, message]);
+  return sortMessages(ohneSchatten([...list, message]));
 }
 
 export const useChat = create<ChatState>((set, get) => ({
@@ -609,13 +632,13 @@ async function eintragSenden(
           })
         : await uploadBlob(attachment);
       attachmentIds.push(uploaded.id);
-      if (gross) {
-        // Fertige grosse Anhänge merken: Scheitert danach die Nachricht
-        // selbst, soll nicht noch einmal ein Gigabyte hochgehen.
-        attachment.hochgeladenId = uploaded.id;
-        attachment.stueckSitzung = undefined;
-        if (!abbruch.signal.aborted) await updateOutbox(entry);
-      }
+      // Jeden fertigen Anhang merken, nicht nur grosse: Scheitert danach die
+      // Nachricht selbst (Netz weg, App zu), geht beim Neuversuch nichts
+      // noch einmal hoch – vorher entstand bei jedem Versuch ein weiterer
+      // Anhang beim Server, von denen nur einer je in die Nachricht kam.
+      attachment.hochgeladenId = uploaded.id;
+      attachment.stueckSitzung = undefined;
+      if (!abbruch.signal.aborted) await updateOutbox(entry);
     }
     if (abbruch.signal.aborted) return 'abgebrochen';
     const message = await api.messages.send(entry.conversationId, {
@@ -626,12 +649,20 @@ async function eintragSenden(
       attachmentIds,
       clientId: entry.clientId,
     });
-    await removeOutbox(entry.clientId);
+    // Outbox und Verlauf in einem Zug (siehe `outboxErledigt`).
+    await outboxErledigt(entry.clientId, message);
     useChat.getState().applyMessage(message);
     return 'ok';
   } catch (error) {
     if (abbruch.signal.aborted) return 'abgebrochen';
     if (error instanceof Error && error.name === 'DateiFehltError') return 'fehler';
+    // Der Server nimmt einen gemerkten Anhang nicht (mehr) an – etwa weil er
+    // inzwischen weggeräumt wurde. Dann beim nächsten Versuch neu hochladen,
+    // statt dreimal an derselben Kennung zu scheitern. Grosse bleiben: Ihr
+    // Neuversand kostet Gigabytes, und die Blase sagt, was los ist.
+    if (error instanceof ApiError && error.status === 400 && !gross) {
+      for (const anhang of entry.pendingAttachments) anhang.hochgeladenId = undefined;
+    }
     const offline =
       error instanceof ApiError &&
       (error.isOffline || (gross && error.status >= 500 && error.status !== 507));
@@ -673,7 +704,7 @@ function mergeList(existing: ChatMessage[] | undefined, incoming: MessageDto[]):
     if (previous) map.delete(previous.id);
     map.set(message.id, { ...message, pending: false, failed: false });
   }
-  return sortMessages([...map.values()]);
+  return sortMessages(ohneSchatten([...map.values()]));
 }
 
 /**
@@ -689,7 +720,7 @@ function vereinen(
   const nachId = new Map<string, ChatMessage>();
   for (const message of zwischenspeicher) nachId.set(message.id, message);
   for (const message of aktuell ?? []) nachId.set(message.id, message);
-  return sortMessages([...nachId.values()]);
+  return sortMessages(ohneSchatten([...nachId.values()]));
 }
 
 /** Die Termine, deren Karten in diesen Nachrichten stehen (nur sichtbare, nicht gelöschte). */

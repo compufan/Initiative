@@ -37,6 +37,7 @@ vi.mock('../lib/db.js', () => ({
   readOutbox: async () => [...outbox.values()].map((entry) => ({ ...entry })),
   removeCachedConversation: vi.fn(),
   removeOutbox: async (clientId: string) => void outbox.delete(clientId),
+  outboxErledigt: async (clientId: string) => void outbox.delete(clientId),
   trimMessageCache: vi.fn(),
   updateOutbox: async (entry: { clientId: string }) => void outbox.set(entry.clientId, entry),
 }));

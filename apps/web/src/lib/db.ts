@@ -230,10 +230,16 @@ export async function readCachedConversations(): Promise<ConversationDto[]> {
 export async function removeCachedConversation(id: string): Promise<void> {
   await safe(async () => {
     const db = await getDb();
-    await db.delete('conversations', id);
-    const keys = await db.getAllKeysFromIndex('messages', 'by-conversation', id);
-    const tx = db.transaction('messages', 'readwrite');
-    await Promise.all(keys.map((key) => tx.store.delete(key)));
+    // Chat und seine Nachrichten in EINER Transaktion: Vorher ging der Chat
+    // für sich, und ein Abbruch danach liess seine Nachrichten verwaist im
+    // Speicher – unsichtbar, aber auf dem Gerät.
+    const tx = db.transaction(['conversations', 'messages'], 'readwrite');
+    const nachrichten = tx.objectStore('messages');
+    const keys = await nachrichten.index('by-conversation').getAllKeys(id);
+    await Promise.all([
+      tx.objectStore('conversations').delete(id),
+      ...keys.map((key) => nachrichten.delete(key)),
+    ]);
     await tx.done;
   }, undefined);
 }
@@ -298,6 +304,34 @@ export async function updateOutbox(entry: OutboxEntry): Promise<void> {
   await enqueueOutbox(entry);
 }
 
+/**
+ * Eine gesendete Nachricht abschliessen: aus der Outbox nehmen UND in den
+ * Verlauf legen – in EINER IndexedDB-Transaktion über beide Speicher.
+ *
+ * # Warum zusammen
+ *
+ * Vorher waren es zwei Schritte (`removeOutbox`, dann `cacheMessages`). Ging
+ * die App dazwischen zu, war die Nachricht entweder lokal fort (nur noch beim
+ * Server – bis zum nächsten Abgleich fehlte sie offline), oder sie stand
+ * doppelt da: einmal gesendet im Verlauf, einmal „wird gesendet“ aus der
+ * Outbox. Jetzt gibt es nur „noch in der Outbox“ oder „im Verlauf“.
+ *
+ * Und eine Wiederholung ist harmlos: Der Server liefert für denselben
+ * `clientId` dieselbe Nachricht zurück, `put` überschreibt sie.
+ */
+export async function outboxErledigt(clientId: string, message: MessageDto): Promise<void> {
+  fluechtigVergessen(clientId);
+  await safe(async () => {
+    const db = await getDb();
+    const tx = db.transaction(['outbox', 'messages'], 'readwrite');
+    await Promise.all([
+      tx.objectStore('outbox').delete(clientId),
+      tx.objectStore('messages').put(message),
+    ]);
+    await tx.done;
+  }, undefined);
+}
+
 export async function removeOutbox(clientId: string): Promise<void> {
   fluechtigVergessen(clientId);
   await safe(async () => {
@@ -324,16 +358,23 @@ export async function writeMeta(key: string, value: unknown): Promise<void> {
 export async function clearOfflineData(): Promise<void> {
   await safe(async () => {
     const db = await getDb();
+    // Eine Transaktion über alle Speicher: Scheitert eines, bleibt nicht die
+    // Hälfte des alten Kontos für das nächste liegen.
+    const tx = db.transaction(
+      ['conversations', 'messages', 'outbox', 'meta', 'entwuerfe'],
+      'readwrite',
+    );
     await Promise.all([
-      db.clear('conversations'),
-      db.clear('messages'),
-      db.clear('outbox'),
-      db.clear('meta'),
+      tx.objectStore('conversations').clear(),
+      tx.objectStore('messages').clear(),
+      tx.objectStore('outbox').clear(),
+      tx.objectStore('meta').clear(),
       // Auch die Entwürfe: Sie tragen zwar kein Bild, aber sie verraten, was
       // jemand an einem Bild gemacht hat – wo ein Balken lag, was
       // weggeschnitten wurde.
-      db.clear('entwuerfe'),
+      tx.objectStore('entwuerfe').clear(),
     ]);
+    await tx.done;
   }, undefined);
 }
 

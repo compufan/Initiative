@@ -43,6 +43,7 @@ vi.mock('../lib/db.js', () => ({
   readOutbox: vi.fn().mockResolvedValue([]),
   removeCachedConversation: vi.fn(),
   removeOutbox: vi.fn(),
+  outboxErledigt: vi.fn(),
   trimMessageCache: vi.fn(),
   updateOutbox: vi.fn(),
 }));
