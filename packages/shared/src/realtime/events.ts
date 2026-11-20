@@ -5,6 +5,7 @@ import type { PollDto } from '../schemas/poll.js';
 import type { CalendarEventDto } from '../schemas/calendar.js';
 import type { GameSessionDto } from '../schemas/game.js';
 import type { UserDto } from '../schemas/user.js';
+import type { EntwurfDto, TippArt } from '../schemas/message.js';
 
 /**
  * Realtime protocol.
@@ -38,7 +39,33 @@ export type ServerEvent =
       type: 'read.updated';
       payload: { conversationId: string; userId: string; lastReadMessageId: string };
     }
-  | { type: 'typing'; payload: { conversationId: string; userId: string; until: string } }
+  | {
+      type: 'typing';
+      payload: {
+        conversationId: string;
+        userId: string;
+        until: string;
+        /** `audio`: nimmt eine Sprachnachricht auf. Ältere Server senden nichts (= Text). */
+        art?: TippArt;
+      };
+    }
+  /** Ein Gerät dieses Mitglieds hat den Chat bis hierhin empfangen. */
+  | {
+      type: 'delivery.updated';
+      payload: { conversationId: string; userId: string; deliveredMessageId: string };
+    }
+  /** Eigene Sternchen – an die eigenen anderen Geräte. */
+  | {
+      type: 'star.updated';
+      payload: { conversationId: string; messageId: string; starred: boolean };
+    }
+  /**
+   * Neue Beitrittsanfrage (Einladungslink mit Freigabe) – an die Admins des
+   * Chats. Ohne Inhalt: Die Liste holt der Client selbst.
+   */
+  | { type: 'beitritt.anfrage'; payload: { conversationId: string } }
+  /** Eigener Entwurf eines Chats – an die eigenen anderen Geräte. */
+  | { type: 'draft.updated'; payload: { draft: EntwurfDto } }
   | { type: 'presence'; payload: { userId: string; online: boolean; lastSeenAt: string | null } }
   | { type: 'poll.updated'; payload: { poll: PollDto } }
   | { type: 'event.updated'; payload: { event: CalendarEventDto } }
@@ -103,7 +130,7 @@ export type ServerEventType = ServerEvent['type'];
 
 export type ClientEvent =
   | { type: 'ping'; payload: Record<string, never> }
-  | { type: 'typing'; payload: { conversationId: string; typing: boolean } }
+  | { type: 'typing'; payload: { conversationId: string; typing: boolean; art?: TippArt } }
   | { type: 'read'; payload: { conversationId: string; messageId: string } }
   /** Welchen Chat diese Leitung gerade vor Augen hat; `null`: keinen. */
   | { type: 'chat.sichtbar'; payload: { conversationId: string | null } }

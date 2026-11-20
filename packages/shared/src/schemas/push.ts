@@ -25,5 +25,6 @@ export interface PushPayload {
   url: string;
   conversationId?: string;
   messageId?: string;
-  kind: 'message' | 'event' | 'poll' | 'game' | 'system';
+  /** `message-leise`: „Ohne Ton senden“ – zeigen, aber ohne Ton und Vibration. */
+  kind: 'message' | 'message-leise' | 'event' | 'poll' | 'game' | 'system';
 }

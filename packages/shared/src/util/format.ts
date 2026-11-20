@@ -1,5 +1,7 @@
 /** Small formatting helpers shared by client and server (notifications, ICS). */
 
+import { ohneFormatierung } from './formatierung.js';
+
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const units = ['KB', 'MB', 'GB'];
@@ -47,7 +49,10 @@ export function messagePreview(message: {
     case 'game':
       return '🎮 Spiel';
     default:
-      return message.body?.trim() ? message.body.trim() : 'Nachricht';
+      // Ohne Markierungen: In der Chatliste und der Mitteilung stünden sonst
+      // Sternchen und Unterstriche – und ein Spoiler verriete, was er
+      // verbergen soll.
+      return message.body?.trim() ? ohneFormatierung(message.body.trim()).trim() || 'Nachricht' : 'Nachricht';
   }
 }
 
