@@ -16,14 +16,19 @@ use crate::error::{AppError, AppResult};
 use crate::realtime::Event;
 use crate::services::conversations::assert_membership;
 use crate::services::messages::{
-    create_message, hydrate_messages, load_message, publish_message_update, require_message,
-    to_reaction_dtos, NewMessage,
+    ausliefern, hydrate_messages, load_message, nachricht_anlegen, publish_message_update,
+    require_message, to_reaction_dtos, NewMessage,
 };
 use crate::state::AppState;
 use crate::validate::Validator;
 
+mod funktionen;
+
+pub use funktionen::entwurf_nach_senden;
+
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(funktionen::router())
         .route(
             "/conversations/{id}/messages",
             get(list_messages).post(send_message),
@@ -41,7 +46,16 @@ struct ListQuery {
     limit: Option<i64>,
     before: Option<Uuid>,
     after: Option<Uuid>,
+    /// Springen zum Datum: die ersten Nachrichten ab diesem Zeitpunkt.
+    ab: Option<chrono::DateTime<chrono::Utc>>,
+    /// Mit `before`: alles von dieser Nachricht bis vor `before` auf einmal –
+    /// für einen Sprung (Suche, Sternchen, Datum) weit zurück, statt Seite um
+    /// Seite nachzuladen.
+    bis: Option<Uuid>,
 }
+
+/// Höchstens so viele Nachrichten liefert ein Sprung (`bis`) auf einmal.
+const SPRUNG_MAX: i64 = 2000;
 
 async fn list_messages(
     State(state): State<AppState>,
@@ -74,6 +88,56 @@ async fn list_messages(
                      and cm.user_id = $4
                      and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
                 )";
+
+    // Springen zum Datum: die ersten Nachrichten ab dem Zeitpunkt, über den
+    // Zeitindex (Migration 0029). Ein Fenster für sich – kein Blätterzeiger.
+    if let Some(ab) = query.ab {
+        let rows = sqlx::query_as::<_, MessageRow>(&format!(
+            "select * from messages m
+              where m.conversation_id = $1 and m.created_at >= $2
+                and not exists (
+                  select 1 from message_hidden h
+                   where h.message_id = m.id and h.user_id = $4
+                )
+                {AB_BEITRITT}
+              order by m.created_at asc, m.id asc limit $3"
+        ))
+        .bind(id)
+        .bind(ab)
+        .bind(limit)
+        .bind(user.id())
+        .fetch_all(&state.pool)
+        .await?;
+        let items = hydrate_messages(&state, rows, user.id()).await?;
+        return Ok(Json(ListResult::paged(items, None)));
+    }
+
+    // Ein Sprung weit zurück: alles von `bis` bis vor `before` in einem Zug.
+    if let Some(bis) = query.bis {
+        let mut rows = sqlx::query_as::<_, MessageRow>(&format!(
+            "select * from messages m
+              where m.conversation_id = $1 and m.id >= $2
+                and ($3::uuid is null or m.id < $3)
+                and not exists (
+                  select 1 from message_hidden h
+                   where h.message_id = m.id and h.user_id = $4
+                )
+                {AB_BEITRITT}
+              order by m.id desc limit $5"
+        ))
+        .bind(id)
+        .bind(bis)
+        .bind(query.before)
+        .bind(user.id())
+        .bind(SPRUNG_MAX)
+        .fetch_all(&state.pool)
+        .await?;
+        rows.reverse();
+        // Davor kann noch mehr liegen; ob wirklich, sagt die nächste Seite.
+        let next = rows.first().map(|row| row.id.to_string());
+        let items = hydrate_messages(&state, rows, user.id()).await?;
+        return Ok(Json(ListResult::paged(items, next)));
+    }
 
     // `after` walks forward (catching up), everything else walks backwards.
     let rows = if let Some(after) = query.after {
@@ -236,6 +300,9 @@ struct SendInput {
     reply_to_id: Option<Uuid>,
     client_id: Option<String>,
     metadata: Option<Value>,
+    /// „Ohne Ton senden“: Mitteilung leise, Chat trotzdem ungelesen.
+    #[serde(default)]
+    silent: bool,
 }
 
 fn default_message_type() -> String {
@@ -323,8 +390,9 @@ async fn send_message(
         )
         .finish()?;
 
-    let message = create_message(
-        &state,
+    let mut tx = state.pool.begin().await?;
+    let angelegt = nachricht_anlegen(
+        &mut tx,
         NewMessage {
             conversation_id: id,
             sender_id: Some(user.id()),
@@ -338,6 +406,15 @@ async fn send_message(
         },
     )
     .await?;
+    tx.commit().await?;
+    let neu = angelegt.ist_neu();
+    let message = ausliefern(&state, angelegt.ohne_ton(input.silent)).await?;
+    // Der Entwurf dieses Chats ist mit dem Senden erledigt – auch auf den
+    // anderen Geräten. Nicht bei einer Wiederholung: Da ist inzwischen
+    // womöglich schon ein neuer Entwurf getippt.
+    if neu {
+        entwurf_nach_senden(&state, id, user.id()).await;
+    }
 
     Ok((StatusCode::CREATED, Json(message)))
 }
@@ -423,7 +500,7 @@ fn client_metadaten_pruefen(typ: &str, metadata: &Value) -> AppResult<()> {
 /// öffentliche Pakete, eigene, installierte, und was in diesem Chat schon
 /// einmal gesendet wurde und für mich sichtbar ist (Antwort mit demselben
 /// Sticker).
-async fn sticker_pruefen(
+pub(crate) async fn sticker_pruefen(
     state: &AppState,
     sticker_id: Uuid,
     conversation_id: Uuid,
@@ -715,7 +792,10 @@ async fn add_reaction(
         return Err(AppError::not_found("Nachricht nicht gefunden"));
     }
     let emoji = input.emoji.trim().to_string();
-    Validator::new().length("emoji", &emoji, 1, 16).finish()?;
+    Validator::new()
+        .length("emoji", &emoji, 1, 16)
+        .require("emoji", emoji_gueltig(&emoji), "Reaktionen sind Emoji")
+        .finish()?;
 
     sqlx::query(
         "insert into reactions (message_id, user_id, emoji) values ($1, $2, $3)
@@ -752,23 +832,72 @@ async fn remove_reaction(
     publish_reactions(&state, id, row.conversation_id).await
 }
 
+/**
+ * Ist das eine Reaktion – also ein einzelnes Emoji?
+ *
+ * Vorher galt nur „1 bis 16 Zeichen“, und damit auch „hallo“. Ohne eine
+ * Bibliothek für Graphem-Grenzen (keine neuen Abhängigkeiten) prüft die
+ * Regel, was ein Emoji NICHT enthält: Buchstaben, Leerraum, Steuerzeichen,
+ * Satzzeichen. Ziffern, `#` und `*` nur als Tastenkappe (mit U+20E3).
+ *
+ * Die längsten Folgen nach Unicode (Kuss-Paare mit zwei Hautfarben, Familien)
+ * haben zehn Codepunkte; 16 lassen Luft, ohne Romane zu erlauben. Flaggen
+ * aus Tag-Zeichen (England, Schottland) haben sieben.
+ */
+pub fn emoji_gueltig(emoji: &str) -> bool {
+    let anzahl = emoji.chars().count();
+    if anzahl == 0 || anzahl > 16 || emoji.len() > 64 {
+        return false;
+    }
+    let tastenkappe = emoji.contains('\u{20E3}');
+    emoji.chars().all(|c| {
+        if c.is_whitespace() || c.is_control() || c.is_alphabetic() {
+            return false;
+        }
+        if c.is_ascii_digit() || c == '#' || c == '*' {
+            return tastenkappe;
+        }
+        !c.is_ascii()
+    })
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SearchQuery {
+    #[serde(default)]
     q: String,
     conversation_id: Option<Uuid>,
     limit: Option<i64>,
+    /// `medien`, `links`, `dateien` oder `audio`.
+    art: Option<String>,
+    sender_id: Option<Uuid>,
+    /// Weiterblättern: nur Treffer älter als diese Nachricht.
+    before: Option<Uuid>,
 }
 
+const SUCH_ARTEN: &[&str] = &["medien", "links", "dateien", "audio"];
+
+/**
+ * Volltextsuche, wahlweise gefiltert nach Art und Absender.
+ *
+ * Mit einem Filter darf der Suchbegriff fehlen („alle Links in diesem
+ * Chat“). Ganz ohne beides gibt es nichts – das wäre der ganze Verlauf.
+ */
 async fn search(
     State(state): State<AppState>,
     user: AuthUser,
     Query(query): Query<SearchQuery>,
 ) -> AppResult<Json<ListResult<MessageDto>>> {
     let needle = query.q.trim();
-    if needle.chars().count() < 2 {
+    if let Some(art) = query.art.as_deref() {
+        Validator::new().one_of("art", art, SUCH_ARTEN).finish()?;
+    }
+    let gefiltert = query.art.is_some() || query.sender_id.is_some();
+    if needle.chars().count() < 2 && !gefiltert {
         return Ok(Json(ListResult::new(Vec::new())));
     }
+    let begriff = (needle.chars().count() >= 2).then_some(needle);
+    let limit = query.limit.unwrap_or(30).clamp(1, 50);
 
     let rows = sqlx::query_as::<_, MessageRow>(
         "select m.*
@@ -776,23 +905,82 @@ async fn search(
          join conversation_members cm
            on cm.conversation_id = m.conversation_id and cm.user_id = $1
          where m.deleted_at is null
+           and m.type <> 'system'
            -- Die Grenze kostet hier nichts: `cm` steht schon im Verbund. Ohne
            -- sie waere die Suche der bequemste Weg in den Altverlauf – ein
            -- Wort eingeben statt seitenweise blaettern.
            and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
-           and to_tsvector('simple', coalesce(m.body, '')) @@ websearch_to_tsquery('simple', $2)
+           -- Was ich für mich gelöscht habe, finde ich auch nicht wieder.
+           and not exists (select 1 from message_hidden h
+                            where h.message_id = m.id and h.user_id = $1)
+           and ($2::text is null
+                or to_tsvector('simple', coalesce(m.body, '')) @@ websearch_to_tsquery('simple', $2))
            and ($3::uuid is null or m.conversation_id = $3)
+           and ($5::uuid is null or m.sender_id = $5)
+           and ($6::uuid is null or m.id < $6)
+           and (case $7::text
+                  when 'medien' then m.type in ('image', 'video', 'rezept')
+                       or exists (select 1 from attachments a
+                                   where a.message_id = m.id and a.kind in ('image', 'video'))
+                  when 'links' then coalesce(m.body, '') ~* '(https?://|www\\.)'
+                  when 'dateien' then m.type = 'file'
+                       or exists (select 1 from attachments a
+                                   where a.message_id = m.id and a.kind = 'file')
+                  when 'audio' then m.type = 'audio'
+                  else true
+                end)
          order by m.id desc
          limit $4",
     )
     .bind(user.id())
-    .bind(needle)
+    .bind(begriff)
     .bind(query.conversation_id)
-    .bind(query.limit.unwrap_or(30).clamp(1, 50))
+    .bind(limit)
+    .bind(query.sender_id)
+    .bind(query.before)
+    .bind(query.art.as_deref())
     .fetch_all(&state.pool)
     .await?;
 
-    Ok(Json(ListResult::new(
+    let next = if rows.len() as i64 == limit {
+        rows.last().map(|row| row.id.to_string())
+    } else {
+        None
+    };
+    Ok(Json(ListResult::paged(
         hydrate_messages(&state, rows, user.id()).await?,
+        next,
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::emoji_gueltig;
+
+    #[test]
+    fn emoji_und_zwj_folgen_sind_reaktionen() {
+        for emoji in [
+            "👍",
+            "❤️",
+            "👍🏽",
+            "👨‍👩‍👧‍👦",
+            "👩🏻‍❤️‍💋‍👩🏼",
+            "🏳️‍🌈",
+            "🇩🇪",
+            "🏴\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}",
+            "1️⃣",
+            "#️⃣",
+            "🧑‍🚀",
+        ] {
+            assert!(emoji_gueltig(emoji), "{emoji} sollte gehen");
+        }
+    }
+
+    #[test]
+    fn text_ist_keine_reaktion() {
+        for text in ["hallo", "a", "1", "👍 👍", "", ":)", "<b>", "#", "\u{0007}"] {
+            assert!(!emoji_gueltig(text), "{text:?} darf nicht gehen");
+        }
+        assert!(!emoji_gueltig(&"😀".repeat(17)));
+    }
 }

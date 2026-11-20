@@ -110,10 +110,21 @@ impl Event {
         )
     }
 
-    pub fn typing(conversation_id: uuid::Uuid, user_id: uuid::Uuid, until: String) -> Self {
+    /// `art`: `text` (tippt …) oder `audio` (nimmt Sprachnachricht auf …).
+    pub fn typing(
+        conversation_id: uuid::Uuid,
+        user_id: uuid::Uuid,
+        until: String,
+        art: &str,
+    ) -> Self {
         Self::new(
             "typing",
-            json!({ "conversationId": conversation_id, "userId": user_id, "until": until }),
+            json!({
+                "conversationId": conversation_id,
+                "userId": user_id,
+                "until": until,
+                "art": art,
+            }),
         )
     }
 

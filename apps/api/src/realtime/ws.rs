@@ -437,6 +437,11 @@ async fn handle_client_event(
                 .get("typing")
                 .and_then(Value::as_bool)
                 .unwrap_or(true);
+            // Nur zwei Arten; alles andere ist Text (ältere Clients senden keine).
+            let art = match payload.get("art").and_then(Value::as_str) {
+                Some("audio") => "audio",
+                _ => "text",
+            };
             let until = chrono::Utc::now()
                 + chrono::Duration::milliseconds(if typing { TYPING_TTL_MS } else { 0 });
             let audience: Vec<Uuid> = member_ids(&state.pool, conversation_id)
@@ -452,7 +457,7 @@ async fn handle_client_event(
                 .hub
                 .publish(
                     audience,
-                    Event::typing(conversation_id, user_id, until.to_rfc3339()),
+                    Event::typing(conversation_id, user_id, until.to_rfc3339(), art),
                 )
                 .await;
         }

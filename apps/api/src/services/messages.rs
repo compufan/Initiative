@@ -12,6 +12,10 @@ use crate::error::{AppError, AppResult};
 use crate::realtime::Event;
 use crate::state::AppState;
 
+pub mod formatierung;
+pub mod weiterleiten;
+pub mod zustellung;
+
 pub fn to_reaction_dtos(rows: &[ReactionRow]) -> Vec<ReactionDto> {
     let mut grouped: HashMap<String, Vec<Uuid>> = HashMap::new();
     for row in rows {
@@ -385,6 +389,10 @@ pub struct Angelegt {
     /// dann wurde nichts geschrieben und es gibt nichts zu melden.
     neu: bool,
     silent: bool,
+    /// „Ohne Ton senden“: Die Mitteilung kommt, aber leise (kein Ton, keine
+    /// Vibration). Ungelesen wird der Chat trotzdem – anders als `silent`,
+    /// das gar keine Mitteilung schickt.
+    ohne_ton: bool,
 }
 
 impl Angelegt {
@@ -394,6 +402,12 @@ impl Angelegt {
 
     pub fn ist_neu(&self) -> bool {
         self.neu
+    }
+
+    /// Die Mitteilung leise zustellen (siehe `ohne_ton`).
+    pub fn ohne_ton(mut self, ohne_ton: bool) -> Self {
+        self.ohne_ton = ohne_ton;
+        self
     }
 }
 
@@ -418,6 +432,7 @@ pub async fn nachricht_anlegen(
             row,
             neu: false,
             silent: input.silent,
+            ohne_ton: false,
         });
     }
 
@@ -472,6 +487,7 @@ pub async fn nachricht_anlegen(
             row,
             neu: false,
             silent: input.silent,
+            ohne_ton: false,
         });
     };
 
@@ -519,6 +535,7 @@ pub async fn nachricht_anlegen(
         row,
         neu: true,
         silent: input.silent,
+        ohne_ton: false,
     })
 }
 
@@ -528,7 +545,12 @@ pub async fn nachricht_anlegen(
 /// Bierjunge-Auslöser. Eine Wiederholung (`neu == false`) meldet nichts: Das
 /// Original wurde schon gemeldet, als es festgeschrieben wurde.
 pub async fn ausliefern(state: &AppState, angelegt: Angelegt) -> AppResult<MessageDto> {
-    let Angelegt { row, neu, silent } = angelegt;
+    let Angelegt {
+        row,
+        neu,
+        silent,
+        ohne_ton,
+    } = angelegt;
     let viewer = row.sender_id.unwrap_or_else(Uuid::nil);
     let message = hydrate_messages(state, vec![row], viewer)
         .await?
@@ -545,7 +567,7 @@ pub async fn ausliefern(state: &AppState, angelegt: Angelegt) -> AppResult<Messa
     let members = ausspielen(state, &message, Event::message_new).await?;
 
     if !silent {
-        super::notify::notify_new_message(state, &message, &members).await;
+        super::notify::notify_new_message_mit(state, &message, &members, ohne_ton).await;
     }
     // „Bierjunge“ / „hängt“ im Text startet ein Pressen-Spiel (erst NACH dem
     // Ausspielen: Die Nachricht steht im Chat, bevor die Spielkarte folgt).
@@ -564,6 +586,26 @@ pub async fn alle_ausliefern(state: &AppState, angelegte: Vec<Angelegt>) {
             tracing::warn!(%fehler, message_id = %id, "Nachricht festgeschrieben, Meldung gescheitert");
         }
     }
+}
+
+/// Wie [`alle_ausliefern`], gibt aber zurück, was ausgeliefert wurde – in
+/// der Reihenfolge der Eingabe. Eine Nachricht, deren Meldung scheiterte,
+/// fehlt im Ergebnis (geschrieben ist sie trotzdem).
+pub async fn alle_ausliefern_mit_ergebnis(
+    state: &AppState,
+    angelegte: Vec<Angelegt>,
+) -> Vec<MessageDto> {
+    let mut fertig = Vec::with_capacity(angelegte.len());
+    for angelegt in angelegte {
+        let id = angelegt.id();
+        match ausliefern(state, angelegt).await {
+            Ok(nachricht) => fertig.push(nachricht),
+            Err(fehler) => {
+                tracing::warn!(%fehler, message_id = %id, "Nachricht festgeschrieben, Meldung gescheitert")
+            }
+        }
+    }
+    fertig
 }
 
 /// Creates a message, broadcasts it and triggers push notifications.

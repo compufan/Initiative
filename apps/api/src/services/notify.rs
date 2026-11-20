@@ -23,6 +23,22 @@ struct NotificationTarget {
 
 /// Push notification for a freshly created message.
 pub async fn notify_new_message(state: &AppState, message: &MessageDto, member_ids: &[Uuid]) {
+    notify_new_message_mit(state, message, member_ids, false).await;
+}
+
+/// Wie [`notify_new_message`]; mit `ohne_ton` kommt die Mitteilung leise
+/// („Ohne Ton senden“): Sie erscheint, aber ohne Ton und Vibration. Das
+/// Kennzeichen reist als `kind: "message-leise"` – der Service Worker zeigt
+/// sie dann mit `silent: true`. Ein eigenes Feld in `PushPayload` hätte jede
+/// Stelle berührt, die eine Mitteilung baut; die Art sagt ohnehin, was für
+/// eine Mitteilung es ist.
+pub async fn notify_new_message_mit(
+    state: &AppState,
+    message: &MessageDto,
+    member_ids: &[Uuid],
+    ohne_ton: bool,
+) {
+    let art = if ohne_ton { "message-leise" } else { "message" };
     if !state.push.enabled() {
         return;
     }
@@ -124,10 +140,16 @@ pub async fn notify_new_message(state: &AppState, message: &MessageDto, member_i
         _ => sender_name,
     };
 
+    // Ohne Formatierungsmarken: „*Treffen*“ liest sich in einer Mitteilung
+    // als Treffen, und ein ||Spoiler|| bleibt verborgen.
+    let klartext = message
+        .body
+        .as_deref()
+        .map(crate::services::messages::formatierung::ohne_formatierung);
     let preview = truncate(
         &message_preview(
             &message.r#type,
-            message.body.as_deref(),
+            klartext.as_deref(),
             message.deleted_at.is_some(),
         ),
         140,
@@ -148,7 +170,7 @@ pub async fn notify_new_message(state: &AppState, message: &MessageDto, member_i
             url: format!("/chats/{}", message.conversation_id),
             conversation_id: Some(message.conversation_id),
             message_id: Some(message.id),
-            kind: "message".to_string(),
+            kind: art.to_string(),
         };
         ziele.push((with_preview, payload));
     }
@@ -161,7 +183,7 @@ pub async fn notify_new_message(state: &AppState, message: &MessageDto, member_i
             url: format!("/chats/{}", message.conversation_id),
             conversation_id: Some(message.conversation_id),
             message_id: None,
-            kind: "message".to_string(),
+            kind: art.to_string(),
         };
         ziele.push((without_preview, payload));
     }
