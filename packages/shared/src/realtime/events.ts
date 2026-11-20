@@ -109,6 +109,10 @@ export type ServerEvent =
    * denn die Antwort haengt davon ab, wer fragt.
    */
   | { type: 'verlauf.antrag'; payload: { conversationId: string } }
+  /** Die angehefteten Nachrichten eines Chats haben sich geändert – neu holen. */
+  | { type: 'conversation.angeheftet'; payload: { conversationId: string } }
+  /** Nur an die eigenen Geräte: die Liste „Geplant“ eines Chats hat sich geändert. */
+  | { type: 'geplant.updated'; payload: { conversationId: string } }
   | { type: 'user.updated'; payload: { user: UserDto } }
   /** Payload too large for the broadcast bus – clients should refetch. */
   | {

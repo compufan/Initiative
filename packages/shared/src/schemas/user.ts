@@ -39,6 +39,11 @@ export interface UserSettings {
   modules: Record<string, unknown>;
   /** Wer was von mir sieht. Der Server filtert danach – die Oberfläche zeigt es nur an. */
   privacy: PrivacySettings;
+  /**
+   * Link-Vorschauen erzeugen (Standard aus): Nur dann holt der Server Titel und
+   * Bild eines Links, den ICH sende. Die fremde Seite erfährt sonst nichts.
+   */
+  linkVorschauen?: boolean;
 }
 
 /**
@@ -89,6 +94,7 @@ export const userSettingsSchema = z.object({
     .optional(),
   modules: z.record(z.unknown()).optional(),
   privacy: privacySettingsSchema.optional(),
+  linkVorschauen: z.boolean().optional(),
 });
 
 export const updateProfileSchema = z.object({
@@ -111,6 +117,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   notifications: { push: true, sound: true, previews: true },
   modules: {},
   privacy: DEFAULT_PRIVACY,
+  linkVorschauen: false,
 };
 
 const ACCENTS = [

@@ -42,10 +42,19 @@ export interface PollDto {
   myVotes: PollVoteDto[];
   createdEventId: string | null;
   createdAt: string;
+  /** Quiz: Es gibt richtige Antworten. */
+  quiz?: boolean;
+  /**
+   * Die Auflösung – nur nach der eigenen Stimme, für die Erstellerin und nach
+   * dem Ende. Fehlt sonst (der Server gibt sie nicht heraus).
+   */
+  aufloesung?: { richtig: string[]; erklaerung: string | null };
 }
 
 const pollOptionInput = z
   .object({
+    /** Im Quiz: eine richtige Antwort. */
+    richtig: z.boolean().optional(),
     label: z.string().trim().min(1).max(LIMITS.pollOptionMax).optional(),
     startsAt: isoDateSchema.optional(),
     endsAt: isoDateSchema.optional(),
@@ -65,11 +74,27 @@ export const createPollSchema = z
     anonymous: z.boolean().default(false),
     allowAddOptions: z.boolean().default(false),
     closesAt: isoDateSchema.nullable().optional(),
+    quiz: z.boolean().optional(),
+    erklaerung: z.string().max(500).nullable().optional(),
   })
   .refine((v) => v.kind !== 'date' || v.options.every((o) => o.startsAt != null), {
     message: 'date polls require startsAt on every option',
     path: ['options'],
-  });
+  })
+  .refine(
+    (v) => {
+      const richtige = v.options.filter((o) => o.richtig).length;
+      if (!v.quiz) return richtige === 0;
+      return (
+        v.kind === 'choice' &&
+        richtige >= 1 &&
+        richtige < v.options.length &&
+        (v.multiple || richtige === 1) &&
+        !v.allowAddOptions
+      );
+    },
+    { message: 'Ein Quiz braucht richtige und falsche Antworten', path: ['options'] },
+  );
 export type CreatePollInput = z.infer<typeof createPollSchema>;
 
 export const votePollSchema = z.object({

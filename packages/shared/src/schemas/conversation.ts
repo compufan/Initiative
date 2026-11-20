@@ -73,6 +73,10 @@ export interface ConversationDto {
   notifyPreview: boolean;
   /** Hintergrund dieses Chats (Kennung aus `HINTERGRUENDE`) – je Betrachter. */
   hintergrund: Hintergrund | null;
+  /** Selbstlöschende Nachrichten: Lebensdauer in Sekunden, `null` aus. */
+  selbstloeschenS?: number | null;
+  /** Ungelesene Nachrichten, die mich erwähnen (auch „@alle“) – je Betrachter. */
+  ungeleseneErwaehnungen?: number;
 }
 
 /** Schalter einer Gruppe (`conversations.settings`). */
