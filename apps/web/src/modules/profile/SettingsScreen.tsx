@@ -4,6 +4,8 @@ import { Screen } from '../../components/Screen.js';
 import { AboutCard } from './AboutCard.js';
 import { AccountCard } from './AccountCard.js';
 import { PrivacyCard } from './PrivacyCard.js';
+import { PrivatsphaereCard } from './PrivatsphaereCard.js';
+import { GeraeteCard } from './GeraeteCard.js';
 import { AdminCard } from './AdminCard.js';
 import { CutoutCard } from './CutoutCard.js';
 import { SpieleCard } from './SpieleCard.js';
@@ -44,6 +46,8 @@ export function SettingsScreen() {
       <PaymentProfileCard />
       <PasskeyCard />
       <AdminCard />
+      <PrivatsphaereCard />
+      <GeraeteCard />
       <PrivacyCard />
       <AccountCard />
       <AboutCard />

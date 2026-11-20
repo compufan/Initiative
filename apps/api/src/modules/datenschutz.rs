@@ -290,8 +290,9 @@ angemeldete Sitzung oder einen Passkey.</p>
     <td>Damit dir andere aus der Gruppe Geld zurückschicken können, ohne jedes Mal
         zu fragen</td>
     <td>Bis du sie löschst oder dein Konto</td></tr>
-<tr><td>Anmelde-Sitzungen (Browserkennung des Geräts, Zeitpunkt)</td>
-    <td>Damit du angemeldet bleibst und Sitzungen beenden kannst</td>
+<tr><td>Anmelde-Sitzungen (Browserkennung des Geräts, Anmeldezeit, zuletzt aktiv)</td>
+    <td>Damit du angemeldet bleibst und unter „Einstellungen → Geräte“ siehst, wo
+        du angemeldet bist, und einzelne oder alle anderen Geräte abmelden kannst</td>
     <td>{tage} Tage ohne Nutzung; der Eintrag selbst wird spätestens eine Woche
         danach entfernt</td></tr>
 <tr><td>Passkeys, wenn du welche anlegst (öffentlicher Schlüssel, Kennung, Zähler)</td>
@@ -303,6 +304,21 @@ angemeldete Sitzung oder einen Passkey.</p>
 <tr><td>Push-Abonnement (Adresse beim Browserhersteller, Schlüssel)</td>
     <td>Nur wenn du Benachrichtigungen erlaubst</td>
     <td>Bis du sie abschaltest</td></tr>
+<tr><td>Deine Privatsphäre-Einstellungen, Einstellungen je Chat (stumm, Mitteilungen,
+        Vorschau, angeheftet, Ordner, Hintergrund, „geleert bis“)</td>
+    <td>Damit sie auf allen deinen Geräten gelten</td>
+    <td>Bis du sie änderst, den Chat verlässt oder dein Konto löschst</td></tr>
+<tr><td>Wen du blockiert hast</td>
+    <td>Damit die Sperre wirkt (siehe unten)</td>
+    <td>Bis du die Person freigibst oder eines der Konten gelöscht wird</td></tr>
+<tr><td>Meldungen (Grund, dein Freitext, bei einer Nachricht deren Text, wie du ihn
+        beim Melden sahst; wer gemeldet hat und wen)</td>
+    <td>Damit die Verwaltung Missbrauch nachgehen kann</td>
+    <td>Bis die Verwaltung sie löscht; wird ein Konto gelöscht, bleibt die Meldung ohne
+        dessen Namen bestehen</td></tr>
+<tr><td>Einladungslinks einer Gruppe und Beitrittsanfragen</td>
+    <td>Damit Admins Leute per Link einladen und Anfragen annehmen können</td>
+    <td>Bis der Link zurückgezogen wird oder die Gruppe verschwindet</td></tr>
 </table>
 
 <h2>Worauf sich das stützt</h2>
@@ -317,6 +333,9 @@ angemeldete Sitzung oder einen Passkey.</p>
         indem du die Angabe löschst</td></tr>
 <tr><td>Push-Benachrichtigungen</td>
     <td>Art. 6 Abs. 1 lit. a DSGVO – die Erlaubnis erteilst du im Browser</td></tr>
+<tr><td>Meldungen und ihre Bearbeitung durch die Verwaltung</td>
+    <td>Art. 6 Abs. 1 lit. f DSGVO – berechtigtes Interesse aller Mitglieder an einem
+        Dienst ohne Belästigung</td></tr>
 <tr><td>Begrenzung der Anmeldeversuche, Protokoll des Webservers</td>
     <td>Art. 6 Abs. 1 lit. f DSGVO – berechtigtes Interesse an einem Betrieb, der
         nicht überrannt wird</td></tr>
@@ -329,11 +348,30 @@ angemeldete Sitzung oder einen Passkey.</p>
 jeweiligen Chats. Dafür sind sie da.</li>
 <li><strong>Dein Profil ist für alle Konten sichtbar</strong>, nicht nur für deine
 Chatpartner: Wer deinen Namen kennt, findet dich über die Personensuche und sieht
-Anzeigename, Bild, Kurzbeschreibung und wann du zuletzt da warst.</li>
-<li><strong>Dein Online-Status</strong> wird jedem gemeldet, mit dem du mindestens
-einen Chat teilst – automatisch, sobald die App eine Verbindung hat.</li>
-<li><strong>Dein Lesestand</strong> geht an alle Mitglieder eines Chats, sobald du
-den Verlauf bis unten gelesen hast. Beides lässt sich derzeit nicht abschalten.</li>
+Anzeigename, Bild und Kurzbeschreibung. <em>Wann du zuletzt da warst</em>, sieht nur,
+wem du es unter „Einstellungen → Privatsphäre“ erlaubst (alle, Kontakte – also wer
+mit dir einen Chat teilt – oder niemand).</li>
+<li><strong>Dein Online-Status</strong> wird denen gemeldet, mit denen du mindestens
+einen Chat teilst – es sei denn, du stellst ihn auf „niemand“.</li>
+<li><strong>Dein Lesestand</strong> geht an die Mitglieder eines Chats, sobald du
+den Verlauf bis unten gelesen hast. Im Direktchat kannst du die Lesebestätigungen
+abschalten; das gilt gegenseitig – du siehst dann auch die der anderen nicht. In
+Gruppen bleiben sie sichtbar. Ebenso gegenseitig abschaltbar ist die Tipp-Anzeige.
+Gefiltert wird auf dem Server: Wer etwas nicht sehen soll, bekommt es gar nicht erst
+geschickt.</li>
+<li><strong>Wen du blockierst</strong>, der kann dir im Direktchat nicht mehr
+schreiben, dich nicht in Gruppen holen, findet dich nicht in der Personensuche und
+sieht weder dein Bild noch deinen Online-Status, „zuletzt online“ oder ob du tippst.
+Die Person wird über die Sperre nicht benachrichtigt. In gemeinsamen Gruppen bleibt
+ihr beide Mitglied.</li>
+<li><strong>Wenn du jemanden meldest</strong>, sieht die Verwaltung dieser Instanz
+die Meldung samt Grund, Freitext und – bei einer Nachricht – deren Text. Die
+gemeldete Person erfährt nicht, wer sie gemeldet hat.</li>
+<li><strong>Über einen Einladungslink</strong> sieht, wer ihn hat, vor dem Beitritt
+nur Name, Bild, Beschreibung und Mitgliederzahl der Gruppe – keine Nachrichten und
+keine Mitglieder. Nach dem Beitritt sieht man den Verlauf ab dem Beitritt.</li>
+<li><strong>„Chat leeren“ und „für mich löschen“</strong> wirken nur bei dir: Die
+anderen behalten den Verlauf, und sie erfahren nicht, dass du geleert hast.</li>
 <li><strong>Deine Zahlungsangaben sieht jeder</strong>, mit dem du mindestens eine
 Ausgabengruppe teilst – dafür sind sie gedacht, aber es ist gut, es zu wissen,
 bevor man eine IBAN einträgt.</li>

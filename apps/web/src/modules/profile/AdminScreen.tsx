@@ -8,6 +8,7 @@ import { useSession } from '../../state/session.js';
 import { toast } from '../../state/ui.js';
 import { ConfirmDialog } from './ConfirmDialog.js';
 import { KaltablageCheck } from './KaltablageCheck.js';
+import { MeldungenVerwaltung } from './MeldungenVerwaltung.js';
 import { errorMessage } from './helpers.js';
 
 /**
@@ -352,6 +353,8 @@ export function AdminScreen() {
           </>
         )}
       </section>
+
+      <MeldungenVerwaltung />
 
       <section className="card stack" aria-labelledby="adm-members-title">
         <h2 className="prf-block-title" id="adm-members-title">
