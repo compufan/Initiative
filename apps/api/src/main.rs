@@ -157,6 +157,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
      */
     initiative_api::services::messages::geplant::starten(state.clone());
     initiative_api::services::messages::selbstloeschen::starten(state.clone());
+    // Klingeln über das Zeitlimit hinaus abschliessen, auch wenn die Instanz
+    // mit dem Zeitgeber nicht mehr läuft.
+    initiative_api::services::anrufe::starten(state.clone());
 
     let router = app::build(state.clone());
     let listener = tokio::net::TcpListener::bind(addr).await?;

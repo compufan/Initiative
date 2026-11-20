@@ -348,6 +348,10 @@ pub mod regeln {
     /// dass jemand den Server mit Gigabyte-Strömen beschäftigt.
     pub const CHAT_EXPORT: Regel = Regel::neu(3, Duration::from_secs(3600));
 
+    /// Anrufe beginnen: Jeder Anruf weckt die Geräte des anderen per Push.
+    /// Zwanzig in zehn Minuten sind für Verwählen und Wiederholen genug.
+    pub const ANRUF: Regel = Regel::neu(20, Duration::from_secs(600));
+
     /// Mitteilungen über Änderungen an einem Termin: drei je zehn Minuten und
     /// Termin.
     ///

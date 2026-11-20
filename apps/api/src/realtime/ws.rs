@@ -505,6 +505,11 @@ async fn handle_client_event(
             )
             .await;
         }
+        // 1:1-Anrufe: Der Server prüft und leitet nur zwischen den beiden
+        // Mitgliedern eines Direktchats weiter (`services::anrufe`).
+        typ if typ.starts_with("anruf.") => {
+            crate::services::anrufe::ereignis(state, user_id, connection_id, typ, &payload).await?;
+        }
         // Unknown events are ignored so new clients can talk to old servers.
         _ => {}
     }

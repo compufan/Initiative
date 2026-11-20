@@ -7,6 +7,7 @@
 
 pub mod admin;
 pub mod anhaenge;
+pub mod anrufe;
 pub mod auth;
 pub mod beitritt;
 pub mod calendar;
@@ -51,6 +52,7 @@ pub fn router() -> Router<AppState> {
         .merge(stuecke::router())
         .merge(stickers::router())
         .merge(anhaenge::router())
+        .merge(anrufe::router())
         .merge(collections::router())
         .merge(fernsehen::router())
         .merge(calendar::router())

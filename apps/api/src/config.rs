@@ -243,6 +243,24 @@ pub struct Config {
      */
     pub rate_limit: bool,
     /**
+     * ICE-Server für 1:1-Anrufe (WebRTC), siehe `docs/DEPLOYMENT.md` („coturn“).
+     *
+     * `STUN_URLS` und `TURN_URLS` sind kommagetrennte Listen
+     * (`stun:turn.example.org:3478`, `turn:turn.example.org:3478?transport=udp`,
+     * `turns:turn.example.org:5349`). `TURN_SECRET` ist das gemeinsame
+     * Geheimnis mit coturn (`use-auth-secret`, `static-auth-secret`): Daraus
+     * stellt `GET /anrufe/ice` zeitlich begrenzte Zugangsdaten aus – das
+     * Geheimnis selbst verlässt den Server nie.
+     *
+     * Ohne Angaben gibt es keine ICE-Server: Anrufe gehen dann nur, wo sich
+     * die Geräte direkt erreichen (gleiches Netz). Bewusst kein öffentlicher
+     * STUN-Server als Vorgabe – der erführe bei jedem Anruf die Adressen
+     * beider Seiten.
+     */
+    pub stun_urls: Vec<String>,
+    pub turn_urls: Vec<String>,
+    pub turn_secret: Option<String>,
+    /**
      * Der Name, an den Passkeys gebunden werden – die „Relying Party ID“.
      *
      * Ohne Angabe ist es der Hostname aus `PUBLIC_APP_URL`. Das ist bequem und
@@ -606,6 +624,9 @@ impl Config {
 
             trust_proxy: flag("TRUST_PROXY", false),
             rate_limit: flag("RATE_LIMIT", true),
+            stun_urls: list("STUN_URLS"),
+            turn_urls: list("TURN_URLS"),
+            turn_secret: var("TURN_SECRET").filter(|geheim| !geheim.trim().is_empty()),
             webauthn_rp_id: var("WEBAUTHN_RP_ID"),
 
             // Ein unbekannter Wert ist ein harter Startfehler, kein stiller
