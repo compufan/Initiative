@@ -32,6 +32,7 @@ import { geleertAnwenden } from './leeren.js';
 import './verwaltung.css';
 
 import { FernsehSheet } from '../fernseher/FernsehSheet.js';
+import { ChatExport, MedienUebersicht } from '../media/MedienUebersicht.js';
 
 /** Was addMembersSchema erlaubt (packages/shared/src/schemas/conversation.ts). */
 const HINZU_MAX = 100;
@@ -48,6 +49,7 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
   const presence = useChat((state) => state.presence);
   const conversations = useChat((state) => state.conversations);
   const [aufFernseher, setAufFernseher] = useState(false);
+  const [medienOffen, setMedienOffen] = useState(false);
   const [adding, setAdding] = useState(false);
   const [picked, setPicked] = useState<string[]>([]);
 
@@ -280,6 +282,20 @@ export function ChatInfoSheet({ open, conversation, onClose }: ChatInfoSheetProp
       {isGroup && <GruppenInfo chat={conversation} myId={myId} />}
 
       <ChatMitteilungen chat={conversation} />
+
+      {/* Medien, Dokumente, Links, Sprachnachrichten – und der Export. */}
+      <section className="stack" aria-label="Medien und Export">
+        <button type="button" className="btn btn-block" onClick={() => setMedienOffen(true)}>
+          🖼️ Medien, Links und Dokumente
+        </button>
+        <ChatExport conversation={conversation} />
+      </section>
+      <MedienUebersicht
+        conversation={conversation}
+        open={medienOffen}
+        onClose={() => setMedienOffen(false)}
+        onSprung={onClose}
+      />
 
       {/*
           „Auf den Fernseher" im Chat-Menü.

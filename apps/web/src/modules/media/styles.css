@@ -1201,85 +1201,6 @@
   opacity: 0.5;
 }
 
-/* ---------- Sprachnachricht: gedrückt halten ---------- */
-.media-halten {
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-touch-callout: none;
-}
-
-.media-halten.is-recording {
-  background: #dc2626;
-  color: #fff;
-  transform: scale(1.25);
-}
-
-.media-halten-leiste {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 120;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4) calc(env(safe-area-inset-bottom, 0px) + var(--space-3));
-  /* Platz für den Mikrofonknopf rechts daneben, solange gehalten wird. */
-  padding-right: 72px;
-  background: var(--bg-elevated);
-  border-top: 1px solid var(--border);
-  color: var(--text);
-  pointer-events: none;
-}
-
-.media-halten-leiste.is-gesperrt {
-  padding-right: var(--space-4);
-  pointer-events: auto;
-}
-
-.media-halten-punkt {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #dc2626;
-  animation: media-halten-blinken 1s steps(2) infinite;
-}
-
-@keyframes media-halten-blinken {
-  50% {
-    opacity: 0.2;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .media-halten-punkt {
-    animation: none;
-  }
-}
-
-.media-halten-zeit {
-  font-variant-numeric: tabular-nums;
-  font-weight: 650;
-}
-
-.media-halten-hinweis {
-  flex: 1;
-  min-width: 0;
-  color: var(--text-muted);
-  font-size: 0.88rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.media-halten-schloss {
-  text-align: center;
-  font-size: 0.8rem;
-  line-height: 1.1;
-  color: var(--text-muted);
-}
-
 /* ---------- HD ---------- */
 .media-hd-abzeichen {
   display: inline-flex;
@@ -1479,4 +1400,253 @@
   .vn-ring-lauf {
     transition: none;
   }
+}
+
+/* ---------- Sprachnachricht: gedrückt halten ---------- */
+.media-halten {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.media-halten.is-recording {
+  background: #dc2626;
+  color: #fff;
+  transform: scale(1.25);
+}
+
+.media-halten-leiste {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 120;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4) calc(env(safe-area-inset-bottom, 0px) + var(--space-3));
+  /* Platz für den Mikrofonknopf rechts daneben, solange gehalten wird. */
+  padding-right: 72px;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  pointer-events: none;
+}
+
+.media-halten-leiste.is-gesperrt {
+  padding-right: var(--space-4);
+  pointer-events: auto;
+}
+
+.media-halten-punkt {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #dc2626;
+  animation: media-halten-blinken 1s steps(2) infinite;
+}
+
+@keyframes media-halten-blinken {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .media-halten-punkt {
+    animation: none;
+  }
+}
+
+.media-halten-zeit {
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.media-halten-hinweis {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.media-halten-schloss {
+  text-align: center;
+  font-size: 0.8rem;
+  line-height: 1.1;
+  color: var(--text-muted);
+}
+
+/* ---------- Medienübersicht (Chat-Info) ---------- */
+.mu-reiter {
+  display: flex;
+  gap: var(--space-1);
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: none;
+}
+
+.mu-tab {
+  flex: 1 0 auto;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mu-tab.is-active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  font-weight: 650;
+}
+
+.mu-tab:focus-visible,
+.mu-kachel-knopf:focus-visible,
+.mu-sprung:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mu-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+}
+
+.mu-leer {
+  text-align: center;
+  margin: var(--space-6) 0;
+}
+
+.mu-raster {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 3px;
+}
+
+.mu-kachel {
+  position: relative;
+  aspect-ratio: 1 / 1;
+}
+
+.mu-kachel-knopf {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  background: var(--surface-2);
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.mu-vorschau,
+.mu-bild {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mu-vorschau {
+  filter: blur(4px);
+}
+
+.mu-video-marke {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 0.7rem;
+}
+
+.mu-sprung {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+}
+
+.mu-liste {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mu-zeile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.mu-symbol {
+  font-size: 1.3rem;
+  width: 32px;
+  text-align: center;
+}
+
+.mu-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.mu-titel {
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+a.mu-titel {
+  color: var(--accent);
+}
+
+.mu-unter {
+  font-size: 0.78rem;
+}
+
+.mu-video {
+  position: fixed;
+  inset: 0;
+  z-index: 160;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  background: rgba(0, 0, 0, 0.92);
+  padding: var(--space-4);
+}
+
+.mu-video-element {
+  max-width: 100%;
+  max-height: 80dvh;
 }
