@@ -24,6 +24,13 @@ Startbildschirm legen und funktioniert auch ohne Netz weiter.
   heraus. Wer kein Bild hinterlegt, bekommt automatisch
   Initialen in einer festen eigenen Farbe.
 - **Passwort ändern** in den Einstellungen, mit Bestätigung des alten Passworts.
+- **Geräte** (Einstellungen → Geräte): alle Anmeldungen mit Gerätename
+  („Firefox auf Linux“), zuletzt aktiv und Anmeldezeit; das aktuelle Gerät ist
+  markiert. Einzelne Geräte oder **alle anderen** lassen sich abmelden. Das
+  wirkt sofort: Die Kette der Erneuerungs-Tokens des Geräts wird entfernt, sein
+  Zugriffstoken abgewiesen und seine Echtzeit-Leitung geschlossen (bei mehreren
+  Server-Maschinen auf den übrigen spätestens nach einer Minute bzw. beim
+  nächsten Erneuern).
 - **Anmelden ohne Passwort** mit Face ID, Fingerabdruck oder Geräte-PIN
   (Passkeys). Mehrere Geräte lassen sich hinterlegen und einzeln wieder
   entfernen. Der private Schlüssel verlässt das Gerät nie – beim Server liegt
@@ -38,18 +45,19 @@ Startbildschirm legen und funktioniert auch ohne Netz weiter.
 ## Chats
 
 - **Direktchats** mit einer Person und **Gruppen** mit beliebig vielen.
-- Gruppen haben **Name, Bild und Rollen**: Besitzer, Admin, Mitglied. Admins
-  laden ein und entfernen; jeder kann selbst gehen.
+- Gruppen haben **Name, Bild, Beschreibung und Rollen**: Besitzer, Admin,
+  Mitglied. Admins laden ein und entfernen; jeder kann selbst gehen.
 - Die Chatliste zeigt **letzte Nachricht, Uhrzeit und Anzahl ungelesener
-  Nachrichten**; der aktuellste Chat steht oben.
+  Nachrichten**; angeheftete Chats stehen oben, darunter der aktuellste.
 - **Personen suchen** über den Benutzernamen, um einen neuen Chat zu beginnen.
   Ein zweiter Direktchat mit derselben Person entsteht nicht – du landest im
   bestehenden.
 
 ### Stummschalten
 
-- Ein Chat lässt sich **auf Zeit stumm schalten** – für ein paar Stunden, bis
-  morgen oder dauerhaft.
+- Ein Chat lässt sich **stumm schalten**: **8 Stunden**, **1 Woche** oder
+  **Immer – bis ich es wieder einschalte** (gespeichert als fernes Datum; der
+  Server nimmt Zeitpunkte in der Vergangenheit als „nicht stumm“).
 - Stumm heißt: **keine Push-Benachrichtigung**. Neue Nachrichten kommen weiter
   an, der Chat wird weiter als ungelesen markiert, es bleibt nur still.
 - In der Chatliste steht ein Symbol daneben, damit klar ist, warum es ruhig ist.
@@ -61,10 +69,105 @@ Startbildschirm legen und funktioniert auch ohne Netz weiter.
   **Archiv**.
 - Archivierte Chats verschwinden aus der Hauptliste und **zählen nicht mehr in
   den Ungelesen-Zähler** der unteren Leiste.
-- Sie bleiben vollständig erhalten und lassen sich jederzeit zurückholen: Das
-  Symbol 🗄️ oben in der Chatliste zeigt das Archiv, von dort führt der Weg
-  zurück über die Chat-Info.
+- Sie bleiben vollständig erhalten und lassen sich jederzeit zurückholen: Der
+  Filter „Archiv“ (oder das Symbol 🗄️ oben) zeigt das Archiv, zurück geht es
+  über das Menü der Zeile oder die Chat-Info.
 - Auch das gilt nur für dich.
+
+### Chatliste: Filter, Ordner, Anheften, Menü und Wischen
+
+- **Filter** über der Liste: Alle, Ungelesen, Gruppen, Direkt, Archiv – dazu
+  **eigene Ordner** (Name und gewählte Chats, höchstens zehn). Ein Ordner ist
+  ein Filter, kein Umzug: Ein Chat kann in mehreren stehen und bleibt unter
+  „Alle“. Ein gewählter Ordner-Chip öffnet beim zweiten Tippen das Bearbeiten.
+  Der zuletzt gewählte Filter bleibt auf dem Gerät gemerkt (das Archiv nicht).
+- **Anheften**: bis zu **fünf** Chats oben, mit „nach oben/nach unten“ im Menü
+  umzuordnen. Archivieren nimmt die Nadel heraus.
+- **Als ungelesen markieren**: ein Punkt statt einer Zahl; zählt im Filter
+  „Ungelesen“ und als eins am Reiter „Chats“. Beim Öffnen des Chats fällt er.
+- **Menü einer Zeile**: langes Drücken, Rechtsklick, Umschalt+F10/Kontextmenü-
+  Taste oder der Knopf „⋯“ – anheften, archivieren, stummschalten, gelesen/
+  ungelesen, in Ordner legen, leeren, löschen.
+- **Wischen** (Finger): nach links archivieren, nach rechts gelesen/ungelesen.
+  Tastatur: **Entf** archiviert, **U** schaltet gelesen/ungelesen.
+
+### Chat leeren und für mich löschen
+
+- **Chat leeren** (Chat-Info oder Menü): Alle Nachrichten verschwinden **nur
+  bei dir**; die anderen behalten alles und erfahren nichts davon. Neues kommt
+  wie gewohnt an.
+- **Direktchat löschen (für mich)**: geleert und aus deiner Liste, bis die
+  Person wieder schreibt (oder du sie neu anschreibst). Eine Gruppe „löscht“ man,
+  indem man sie verlässt.
+- Technisch zieht das Leeren die eigene Verlaufsgrenze (`sieht_ab`) mit: Verlauf,
+  Suche, Medien, Zähler, Vorschau, Zitate und Karten filtern alle schon daran.
+  Ein Antrag auf den Verlauf holt Geleertes nicht zurück. Andere Geräte
+  löschen ihren Zwischenspeicher beim nächsten Abgleich.
+
+### Gruppen verwalten
+
+- In der **Chat-Info**: Name, Bild (hochladen oder entfernen) und
+  **Beschreibung** (bis 512 Zeichen). Jede Änderung steht als Systemzeile im
+  Verlauf („Anna hat die Gruppe in „Grillrunde“ umbenannt“).
+- Tippen auf ein Mitglied öffnet sein Blatt: **zum Admin machen**, **Admin
+  entziehen**, **Besitz übergeben** (nur der Besitzer; er bleibt Admin),
+  **entfernen**, **Spitzname** in dieser Gruppe, außerdem blockieren und
+  melden. Es gilt die Rangordnung des Servers: Niemand ändert Gleich- oder
+  Höherrangige, Admins ernennen höchstens Admins; den eigenen Spitznamen setzt
+  jeder selbst.
+- **Gruppeneinstellungen** (Admins): **Nur Admins dürfen senden**, **Nur Admins
+  dürfen die Gruppeninfo ändern** (Voreinstellung an – so war es vorher) und
+  **langsamer Modus** (10 s bis 1 h je Mitglied; Admins ausgenommen). Der Server
+  prüft beides beim Senden – auch Umfragen und Spiele –, eine Wiederholung
+  derselben Nachricht (Outbox) geht immer durch.
+- **Einladungslinks** (Admins): mit Gültigkeit (1 Stunde bis 30 Tage oder bis
+  zum Zurückziehen), höchstens N Nutzungen und optional **„Beitritt nur nach
+  Freigabe“**. Teilen über das Teilen-Menü des Geräts oder Kopieren;
+  zurückziehen wirkt sofort.
+- **`/join/…`** zeigt vor dem Beitritt nur **Name, Bild, Beschreibung und
+  Mitgliederzahl** – keine Nachricht, keine Mitglieder. Wer beitritt, sieht den
+  Verlauf **ab dem Beitritt** (wie jeder, der dazukommt). Bei Freigabe entsteht
+  eine **Beitrittsanfrage**, die Admins in der Chat-Info annehmen oder
+  ablehnen. Ein unbekannter, abgelaufener oder ausgeschöpfter Link bekommt
+  immer dieselbe Antwort, und Vorschau/Beitritt sind je Konto gebremst.
+
+### Mitteilungen und Hintergrund je Chat
+
+- Je Chat: **Alle**, **Nur @Erwähnungen** oder **Aus**, und **Vorschau
+  anzeigen** (zusätzlich zur Einstellung des Kontos). „Nur @Erwähnungen“ prüft
+  `metadata.mentions` der Nachricht; solange Erwähnungen noch nicht geschrieben
+  werden, wirkt die Stufe wie „Aus“ – die Chat-Info sagt das dazu.
+- **Hintergrund** je Chat aus einer kleinen Auswahl (Farben und Muster, jeweils
+  für Hell und Dunkel). Gilt nur für dich, auf allen deinen Geräten.
+
+### Blockieren und Melden
+
+- **Blockieren** (Chat-Info eines Direktchats, Blatt eines Mitglieds):
+  Die Person kann dir im Direktchat nicht mehr schreiben (du ihr auch nicht,
+  bis du freigibst), dich nicht in Gruppen holen oder neu anschreiben, findet
+  dich nicht in der Personensuche (und du sie nicht) und sieht weder dein Bild
+  noch „zuletzt online“, deinen Online-Status oder ob du tippst. Gemeinsame
+  Gruppen bleiben. Die Liste der Blockierten steht unter Einstellungen →
+  Privatsphäre.
+- **Melden** einer Person (Chat-Info, Mitglied) oder einer Nachricht (Menü der
+  Nachricht) mit Grund und Freitext. Die **Verwaltung** sieht die Meldungen samt
+  Auszug der Nachricht und setzt einen Status (offen, in Bearbeitung, erledigt,
+  abgewiesen) mit Notiz. Gemeldet werden kann nur, was man sehen darf.
+
+### Privatsphäre
+
+- Einstellungen → Privatsphäre: **Zuletzt online** und **Online-Status** für
+  alle, Kontakte (wer mit dir einen Chat teilt) oder niemand; **Lesebestätigungen**
+  und **Tipp-Anzeige** an/aus.
+- Lesebestätigungen und Tipp-Anzeige sind **gegenseitig** wie bei WhatsApp. Die
+  Lesebestätigungen gelten **nur im Direktchat**; in Gruppen bleiben sie
+  sichtbar – entschieden, weil eine Gruppe ein gemeinsamer Raum ist und „wer
+  hat es gelesen“ dort Organisation ist. „Zuletzt online“ ist nicht
+  gegenseitig.
+- Gefiltert wird **auf dem Server**: Profile (`lastSeenAt`, bei Sperren auch
+  Bild und Text), Lesezeichen in der Chatliste, Ereignisse `presence`,
+  `typing` und `read.updated`. Wer „online“ verbirgt, ist für andere nie online;
+  sein Gehen meldet nur „zuletzt online“, falls das erlaubt ist.
 
 ## Nachrichten
 

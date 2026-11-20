@@ -271,11 +271,37 @@ machen.
 | GET     | `/conversations`                       | Bearer | Query `archived` (`true`/`false`)                                       | `200` `{ items: Conversation[] }`                                 |
 | POST    | `/conversations`                       | Bearer | `{ type: 'direct'\|'group', memberIds[], title?, avatarAttachmentId? }` | `201` `Conversation` (`200`, wenn der Direktchat schon existiert) |
 | GET     | `/conversations/{id}`                  | Bearer | –                                                                       | `200` `Conversation`                                              |
-| PATCH   | `/conversations/{id}`                  | Bearer | `{ title?, avatarAttachmentId?, mutedUntil?, archived? }`               | `200` `Conversation`                                              |
+| PATCH   | `/conversations/{id}`                  | Bearer | `{ title?, avatarAttachmentId?, description?, settings?, mutedUntil?, archived?, pinned?, markedUnread?, notifyLevel?, notifyPreview?, hintergrund? }` | `200` `Conversation`                                              |
 | POST    | `/conversations/{id}/members`          | Bearer | `{ memberIds[] }`                                                       | `200` `Conversation`                                              |
 | PATCH   | `/conversations/{id}/members/{userId}` | Bearer | `{ role?, nickname? }`                                                  | `200` `Conversation`                                              |
 | DELETE  | `/conversations/{id}/members/{userId}` | Bearer | –                                                                       | `204`                                                             |
 | POST    | `/conversations/{id}/read`             | Bearer | `{ messageId }`                                                         | `200` `{ ok: true }`                                              |
+| POST    | `/conversations/{id}/leeren`           | Bearer | –                                                                       | `200` `Conversation` (geleert, nur für mich)                      |
+| POST    | `/conversations/{id}/ausblenden`       | Bearer | – (nur Direktchat)                                                      | `204` – geleert und aus der Liste, bis Neues kommt                |
+| PUT     | `/conversations/angeheftet`            | Bearer | `{ ids[] }` (oben zuerst, höchstens 5)                                  | `204`                                                             |
+| GET/POST | `/chat-ordner`                        | Bearer | `{ name, chats[] }`                                                     | `200` `{ items: Ordner[] }` / `201` `Ordner`                      |
+| PATCH/DELETE | `/chat-ordner/{id}`               | Bearer | `{ name?, chats?, position? }`                                          | `200` `Ordner` / `204`                                            |
+| GET/POST | `/conversations/{id}/einladungen`     | Bearer (Admin) | `{ gueltigStunden?, maxUses?, freigabe }`                       | `200` Liste / `201` Link                                          |
+| DELETE  | `/conversations/{id}/einladungen/{linkId}` | Bearer (Admin) | –                                                               | `204`                                                             |
+| GET     | `/conversations/{id}/anfragen`         | Bearer (Admin) | –                                                               | `200` `{ items: Anfrage[] }`                                      |
+| POST    | `/conversations/{id}/anfragen/{anfrageId}` | Bearer (Admin) | `{ annehmen }`                                                  | `204`                                                             |
+| GET     | `/beitritt/{token}`                    | Bearer | – (gebremst)                                                            | `200` Vorschau (Name, Bild, Beschreibung, Mitgliederzahl) / `404` |
+| POST    | `/beitritt/{token}`                    | Bearer | – (gebremst)                                                            | `200` `{ status: 'beigetreten'\|'angefragt'\|'mitglied', conversationId? }` |
+
+**Je Mitglied** (nur für mich, Rundruf nur an meine Geräte): `mutedUntil`,
+`archived`, `pinned` (höchstens 5, sonst `409`), `markedUnread` (fällt beim
+Lesen), `notifyLevel` (`alle`/`erwaehnungen`/`aus`), `notifyPreview`,
+`hintergrund` (Kennung aus `HINTERGRUENDE`). **Je Gruppe**: `description` (≤ 512)
+und `settings` `{ nurAdminsSenden, nurAdminsInfo, langsamerModus }` – die
+Schalter nur Admins; Titel/Bild/Beschreibung bei `nurAdminsInfo: false` auch
+Mitglieder. Jede Gruppenänderung schreibt eine Systemzeile
+(`conversation.renamed`, `conversation.avatar`, `conversation.avatar.removed`,
+`conversation.description`, `conversation.settings`, `member.promoted`,
+`member.demoted`, `owner.transferred`, `member.joined`, `member.approved`).
+
+**Senden** (`POST …/messages`, Umfragen, Spiele) prüft `senden_erlaubt`:
+`403` bei „nur Admins senden“ oder einer Sperre im Direktchat, `429` im
+langsamen Modus; eine Wiederholung mit bekanntem `clientId` geht immer durch.
 
 `mutedUntil` und `archived` gelten **pro Mitglied**, nicht für den ganzen Chat:
 Wer stummschaltet, stört damit niemanden sonst. `mutedUntil: null` hebt die
@@ -322,6 +348,25 @@ Besitzer nicht selbst – abgeben geht nur als Übergabe oder durch Austritt.
   "archived": false
 }
 ```
+
+## Sperren, Meldungen, Geräte
+
+| Methode | Pfad                         | Auth    | Request                                      | Antwort                                  |
+| ------- | ---------------------------- | ------- | -------------------------------------------- | ---------------------------------------- |
+| GET     | `/blockiert`                 | Bearer  | –                                            | `200` `{ items: User[] }`                |
+| PUT     | `/users/{id}/block`          | Bearer  | –                                            | `204`                                    |
+| DELETE  | `/users/{id}/block`          | Bearer  | –                                            | `204`                                    |
+| POST    | `/meldungen`                 | Bearer  | `{ userId?, messageId?, grund, freitext? }`  | `201`                                    |
+| GET     | `/admin/meldungen`           | Admin   | Query `status`                               | `200` `{ items: Meldung[] }`             |
+| PATCH   | `/admin/meldungen/{id}`      | Admin   | `{ status?, notiz? }`                        | `200` `Meldung`                          |
+| GET     | `/auth/sitzungen`            | Bearer  | –                                            | `200` `{ items: Sitzung[] }` (aktuelle zuerst) |
+| DELETE  | `/auth/sitzungen/{id}`       | Bearer  | –                                            | `204`                                    |
+| POST    | `/auth/sitzungen/andere`     | Bearer  | –                                            | `200` `{ beendet }`                      |
+
+Privatsphäre steht in `settings.privacy` (`PATCH /users/me`):
+`{ lastSeen, online: 'alle'|'kontakte'|'niemand', readReceipts, typing: boolean }`.
+Der Server filtert danach Profile, Lesezeichen und die Ereignisse `presence`,
+`typing`, `read.updated`.
 
 ## Nachrichten
 

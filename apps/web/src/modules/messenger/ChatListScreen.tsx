@@ -27,6 +27,7 @@ import { verwaltung } from '../../lib/verwaltungApi.js';
 import { ChatAktionenSheet, archivUmschalten, lesenUmschalten } from './ChatAktionenSheet.js';
 import { OrdnerSheet } from './OrdnerSheet.js';
 import { useLongPress } from './useLongPress.js';
+import { systemText } from './SystemBubble.js';
 import {
   abzeichen,
   FESTE_FILTER,
@@ -56,7 +57,9 @@ const FILTER_SPEICHER = 'initiative.chatliste.filter';
 
 function gemerkterFilter(): ListenFilter {
   try {
-    return filterAusSchluessel(window.localStorage.getItem(FILTER_SPEICHER));
+    const filter = filterAusSchluessel(window.localStorage.getItem(FILTER_SPEICHER));
+    // Das Archiv ist ein Abstecher, kein Zuhause: Wer zurückkommt, sieht die Chats.
+    return filter.art === 'archiv' ? { art: 'alle' } : filter;
   } catch {
     return { art: 'alle' };
   }
@@ -612,7 +615,11 @@ function ChatRow({
           : conversation.type === 'group'
             ? `${senderName(conversation, last.senderId)}: `
             : '';
-    preview = `${prefix}${messagePreview(last)}`;
+    // Systemzeilen als Satz („Anna hat die Gruppe umbenannt“) statt „Nachricht“.
+    preview =
+      last.type === 'system'
+        ? systemText(last, conversation, myId)
+        : `${prefix}${messagePreview(last)}`;
   }
 
   function runter(event: ReactPointerEvent) {

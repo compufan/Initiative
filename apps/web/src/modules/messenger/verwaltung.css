@@ -303,3 +303,7 @@
 .msg-body.hat-hintergrund {
   background: var(--hg);
 }
+
+.gv-hintergrund.hg-nacht {
+  color: #f5f6fb;
+}

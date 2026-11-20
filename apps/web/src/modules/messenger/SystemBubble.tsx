@@ -3,7 +3,11 @@ import type { MessageRendererProps } from '../types.js';
 import { useMyId } from '../../state/session.js';
 import { memberName } from './helpers.js';
 
-function nameOf(conversation: ConversationDto | null, userId: string | null, myId: string): string {
+export function nameOf(
+  conversation: ConversationDto | null,
+  userId: string | null,
+  myId: string,
+): string {
   if (!userId) return 'Jemand';
   if (userId === myId) return 'Du';
   const member = conversation?.members.find((item) => item.userId === userId);
@@ -70,6 +74,22 @@ export function describe(
     default:
       return '';
   }
+}
+
+/** Die Zeile als Text – auch für die Vorschau in der Chatliste. */
+export function systemText(
+  message: MessageRendererProps['message'],
+  conversation: ConversationDto | null,
+  myId: string,
+): string {
+  const system = message.metadata.system;
+  const actor = nameOf(conversation, system?.actorId ?? message.senderId, myId);
+  const targets = (system?.targetIds ?? []).map((id) => nameOf(conversation, id, myId));
+  return (
+    (system ? describe(system.kind, actor, targets, conversation, message.body) : '') ||
+    message.body?.trim() ||
+    'Der Chat wurde aktualisiert'
+  );
 }
 
 /** Centered, quiet line for membership and lifecycle events. */
