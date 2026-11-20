@@ -4,14 +4,59 @@ import { expect, request, test, type Page } from '@playwright/test';
  * Verwaltung → „Kalte Ablage (Storage Box)“: die zwei Knöpfe.
  *
  * Läuft gegen eine API mit `KALT_TREIBER=lokal` (ein zweites Verzeichnis statt
- * der Box) und `ADMIN_PASSWORD`. Das Passwort steht in `E2E_ADMIN_PASSWORD`.
- * Geprüft wird, was die Oberfläche leistet: beide Läufe starten, das Ergebnis
- * zeigt Befunde, Zeiten und die Rate – und ein Nicht-Admin kommt gar nicht erst
- * in die Verwaltung.
+ * der Box) und `ADMIN_PASSWORD`. Das Passwort steht in `E2E_ADMIN_PASSWORT`
+ * (Vorgabe `admin-passwort-e2e`). Geprüft wird, was die Oberfläche leistet:
+ * beide Läufe starten, das Ergebnis zeigt Befunde, Zeiten und die Rate – und
+ * ein Nicht-Admin kommt gar nicht erst in die Verwaltung.
+ *
+ * # Umgebung
+ *
+ * Eine eigene API, etwa:
+ *
+ *     ADMIN_PASSWORD=admin-passwort-e2e KALT_TREIBER=lokal \
+ *     KALT_LOKAL_DIR=/tmp/kalt RATE_LIMIT=false ./target/debug/initiative-api
+ *
+ * und `E2E_API_URL` auf sie. Die gewöhnliche Test-API hat weder Passwort noch
+ * kalte Ablage; dort überspringt sich der erste Test mit Grund, statt rot zu
+ * werden. Erkannt wird das per Abfrage an der API, nicht per Schalter.
  */
 const API_URL = process.env.E2E_API_URL ?? 'http://localhost:8080';
 const API = `${API_URL}/api/v1`;
 const PASSWORT = process.env.E2E_ADMIN_PASSWORT ?? 'admin-passwort-e2e';
+
+/**
+ * Warum die API für den Box-Test nicht taugt – oder `null`, wenn sie taugt.
+ *
+ * Fragt nach, statt zu raten: ob ein Admin-Passwort hinterlegt ist, ob es
+ * unseres ist und ob eine kalte Ablage eingerichtet ist (Probe mit 1 MiB).
+ */
+async function kaltUmgebungFehlt(): Promise<string | null> {
+  const http = await request.newContext();
+  try {
+    const suffix = Math.random().toString(36).slice(2, 8);
+    const antwort = await http.post(`${API}/auth/register`, {
+      data: { username: `prb${suffix}`, password: 'passwort123', displayName: `Probe ${suffix}` },
+    });
+    if (!antwort.ok()) return `API unter ${API_URL} nicht nutzbar (${antwort.status()})`;
+    const kopf = { authorization: `Bearer ${(await antwort.json()).accessToken}` };
+    const stand = await (await http.get(`${API}/admin/status`, { headers: kopf })).json();
+    if (!stand.available) return 'API ohne ADMIN_PASSWORD – siehe Kopf dieser Datei';
+    const auf = await http.post(`${API}/admin/unlock`, {
+      headers: kopf,
+      data: { password: PASSWORT },
+    });
+    if (!auf.ok()) return `ADMIN_PASSWORD der API ist nicht E2E_ADMIN_PASSWORT (${auf.status()})`;
+    const probe = await (
+      await http.get(`${API}/admin/storage-check/kalt?mib=1`, { headers: kopf })
+    ).json();
+    if (probe.driver === 'keine') return 'API ohne KALT_TREIBER – siehe Kopf dieser Datei';
+    return null;
+  } catch (fehler) {
+    return `API unter ${API_URL} nicht erreichbar: ${String(fehler)}`;
+  } finally {
+    await http.dispose();
+  }
+}
 
 async function admin(page: Page, baseURL: string) {
   const http = await request.newContext();
@@ -41,6 +86,8 @@ test('Verwaltung: Box prüfen (64 MiB) und Konsistenz prüfen zeigen Befunde, Ze
   baseURL,
 }) => {
   test.setTimeout(240_000);
+  const grund = await kaltUmgebungFehlt();
+  test.skip(grund !== null, grund ?? '');
   const wurzel = baseURL ?? 'http://localhost:5173';
   await admin(page, wurzel);
   await page.goto(`${wurzel}/verwaltung`);

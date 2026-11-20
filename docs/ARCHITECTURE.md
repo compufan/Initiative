@@ -307,6 +307,17 @@ pnpm -r test                                              # Vitest
 pnpm --filter @initiative/web e2e                         # Playwright im Browser
 ```
 
+Zwei Browser-Tests brauchen eine besondere Umgebung und überspringen sich ohne
+sie mit Grund (sie fragen nach, statt zu raten):
+
+- `e2e/medienAnrufe.spec.ts` (Anruf, Sprach- und Videonachricht): Chromium mit
+  `--use-fake-ui-for-media-stream --use-fake-device-for-media-stream` und den
+  Rechten `camera`/`microphone`. `playwright.config.ts` setzt das; eine eigene
+  Konfiguration muss es selbst tun.
+- `e2e/adminKalt.spec.ts` (Box- und Konsistenzprüfung): eine API mit
+  `ADMIN_PASSWORD=admin-passwort-e2e` (oder `E2E_ADMIN_PASSWORT` passend) und
+  `KALT_TREIBER=lokal` samt `KALT_LOKAL_DIR`, erreichbar über `E2E_API_URL`.
+
 Der End-to-End-Test fährt den gesamten Router gegen eine echte Postgres-Datenbank
 (ohne Netzwerk-Port): Registrierung, Token-Rotation, Chats, Idempotenz,
 Ungelesen-Zähler, Reaktionen, Berechtigungen, Medien-Upload inklusive

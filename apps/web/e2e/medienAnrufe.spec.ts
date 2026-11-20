@@ -4,7 +4,47 @@ import { expect, test, type Browser, type Page } from '@playwright/test';
  * Anrufe zwischen zwei Browsern, Medienübersicht, globaler Spieler und
  * Videonachricht – gegen den echten Server. Kamera und Mikrofon kommen aus
  * Chromiums Testgeräten (`--use-fake-device-for-media-stream`).
+ *
+ * # Umgebung
+ *
+ * Anruf, Sprach- und Videonachricht brauchen Chromium mit
+ * `--use-fake-ui-for-media-stream --use-fake-device-for-media-stream` und den
+ * Rechten `camera`/`microphone`. `playwright.config.ts` setzt beides. Eine
+ * eigene Konfiguration ohne die Schalter (etwa gegen einen zweiten Server)
+ * hat in einem Container keine Kamera – dann überspringen sich diese drei
+ * Tests mit Grund, statt rot zu werden. Erkannt wird das per Abfrage
+ * (`getUserMedia`), nicht per Schalter: Wer eine echte Kamera hat, testet
+ * eben mit der.
  */
+
+const OHNE_GERAETE =
+  'Kein Mikrofon/keine Kamera im Browser – Chromium mit --use-fake-ui-for-media-stream ' +
+  '--use-fake-device-for-media-stream starten (playwright.config.ts tut das)';
+
+let geraeteDa: boolean | undefined;
+
+/** Ob der Browser Kamera und Mikrofon liefert. Einmal je Lauf gefragt. */
+async function medienGeraeteDa(browser: Browser): Promise<boolean> {
+  if (geraeteDa !== undefined) return geraeteDa;
+  const context = await browser.newContext({ permissions: ['camera', 'microphone'] });
+  try {
+    const page = await context.newPage();
+    // Eine Seite der App: getUserMedia gibt es nur in einem sicheren Kontext.
+    await page.goto('/');
+    geraeteDa = await page.evaluate(async () => {
+      try {
+        const strom = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        strom.getTracks().forEach((spur) => spur.stop());
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  } finally {
+    await context.close();
+  }
+  return geraeteDa;
+}
 
 const PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
@@ -56,6 +96,7 @@ async function chatOeffnen(page: Page, name: string): Promise<void> {
 const anrufStatus = (page: Page) => page.locator('#anruf-status');
 
 test('zwei Browser telefonieren: verbunden, auflegen, verpasster Anruf', async ({ browser }) => {
+  test.skip(!(await medienGeraeteDa(browser)), OHNE_GERAETE);
   const anna = konto('anna');
   const bodo = konto('bodo');
   const annaSeite = await registrieren(browser, anna);
@@ -205,6 +246,7 @@ test('Medien-Reiter in der Chat-Info: Fotos, Links, Sprung zur Nachricht', async
 test('Sprachnachricht: gedrückt halten, spielt nach dem Chatwechsel weiter', async ({
   browser,
 }) => {
+  test.skip(!(await medienGeraeteDa(browser)), OHNE_GERAETE);
   const anna = konto('sara');
   const bodo = konto('sven');
   const annaSeite = await registrieren(browser, anna);
@@ -254,6 +296,7 @@ test('Sprachnachricht: gedrückt halten, spielt nach dem Chatwechsel weiter', as
 });
 
 test('Videonachricht im Kreis aufnehmen und senden', async ({ browser }) => {
+  test.skip(!(await medienGeraeteDa(browser)), OHNE_GERAETE);
   const anna = konto('vera');
   const bodo = konto('vito');
   const annaSeite = await registrieren(browser, anna);

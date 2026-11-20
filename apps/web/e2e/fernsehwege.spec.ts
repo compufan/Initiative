@@ -248,15 +248,16 @@ async function film(tv: Page) {
   });
 }
 
-async function langAntippen(page: Page, text: string) {
-  const blase = page.locator('.msg-col').filter({ hasText: text }).first();
-  await expect(blase).toBeVisible({ timeout: 15_000 });
-  const kasten = await blase.boundingBox();
-  if (!kasten) throw new Error('Die Nachricht hat keine Fläche');
-  await page.mouse.move(kasten.x + kasten.width / 2, kasten.y + kasten.height / 2);
-  await page.mouse.down();
-  await page.waitForTimeout(800);
-  await page.mouse.up();
+/**
+ * Öffnet das Menü einer Nachricht über „⋯“ in ihrer Zeile. WARUM nicht mehr
+ * langes Antippen: Das startet seit der Mehrfachauswahl (wie bei WhatsApp)
+ * die Auswahl; das Menü einer einzelnen Nachricht liegt hinter „⋯“.
+ */
+async function nachrichtenMenue(page: Page, text: string) {
+  const zeile = page.locator('.msg-row').filter({ hasText: text }).first();
+  await expect(zeile).toBeVisible({ timeout: 15_000 });
+  await zeile.hover();
+  await zeile.getByRole('button', { name: 'Nachrichtenoptionen' }).click();
 }
 
 async function gespraechMit(http: APIRequestContext, kopf: Kopf, mitId: string): Promise<string> {
@@ -490,7 +491,7 @@ test('Code-Weg: „Stattdessen dies zeigen" – ohne Beenden und ohne neuen Code
   const telefon = await seiteFuer(browser, anna, wurzel);
   await telefon.goto(`${wurzel}/chats/${chat}`);
 
-  await langAntippen(telefon, 'Das erste Bild');
+  await nachrichtenMenue(telefon, 'Das erste Bild');
   await telefon.getByText('Auf den Fernseher').click();
   await telefon.locator('.tv-code-eingabe').fill(code);
   await telefon.getByRole('button', { name: 'Starten' }).click();
@@ -498,7 +499,7 @@ test('Code-Weg: „Stattdessen dies zeigen" – ohne Beenden und ohne neuen Code
   await telefon.keyboard.press('Escape');
 
   // Das nächste Foto auf DENSELBEN Fernseher – ein Tipp, kein Code.
-  await langAntippen(telefon, 'Das zweite Bild');
+  await nachrichtenMenue(telefon, 'Das zweite Bild');
   await telefon.getByText('Auf den Fernseher').click();
   await expect(telefon.locator('.tv-code-eingabe')).toHaveCount(0);
   /*
@@ -694,7 +695,7 @@ test('Fernsehansicht: aus dem Nachrichtenmenü, mit Warnung vorab – blättert 
 
   const telefon = await seiteFuer(browser, anna, wurzel);
   await telefon.goto(`${wurzel}/chats/${chat}`);
-  await langAntippen(telefon, 'Zwei vom Abend');
+  await nachrichtenMenue(telefon, 'Zwei vom Abend');
   await telefon.getByText('Auf den Fernseher').click();
 
   // Im Blatt des Code-Wegs steht der dritte Weg – für Fernseher ohne Browser.

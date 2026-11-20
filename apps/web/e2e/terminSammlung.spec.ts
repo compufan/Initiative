@@ -209,7 +209,15 @@ test.describe('Sammlung zum Termin: neu anlegen', () => {
     const bodosKnopf = bodoPage.getByRole('link', { name: `… › ${titel}` });
     await expect(bodosKnopf).toBeVisible({ timeout: 15_000 });
     await bodosKnopf.click();
-    await expect(bodoPage.getByRole('heading', { name: titel })).toBeVisible({ timeout: 15_000 });
+    /*
+     * Erst den Seitenwechsel abwarten, dann die Kopfzeile der Sammlung. WARUM:
+     * Die Terminseite trägt den Titel selbst zweimal (Kopfzeile und Karte) –
+     * prüft man zu früh, trifft die Suche nach der Überschrift noch sie.
+     */
+    await expect(bodoPage).toHaveURL(new RegExp(`/dateien/${neu!.id}`), { timeout: 15_000 });
+    await expect(bodoPage.getByRole('heading', { level: 1, name: titel })).toBeVisible({
+      timeout: 15_000,
+    });
 
     await http.dispose();
     await annaPage.context().close();

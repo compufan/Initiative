@@ -356,18 +356,15 @@ test('die Auslieferung schreibt `/tv` wirklich auf `tv.html` um', () => {
 });
 
 /**
- * Langes Antippen auf einer Nachricht – die Handler hängen an `.msg-col`,
- * und es braucht die Pause zwischen Drücken und Loslassen.
+ * Öffnet das Menü einer Nachricht über „⋯“ in ihrer Zeile. WARUM nicht mehr
+ * langes Antippen: Das startet seit der Mehrfachauswahl (wie bei WhatsApp)
+ * die Auswahl; das Menü einer einzelnen Nachricht liegt hinter „⋯“.
  */
-async function langAntippen(page: Page, text: string) {
-  const blase = page.locator('.msg-col').filter({ hasText: text }).first();
-  await expect(blase).toBeVisible({ timeout: 15_000 });
-  const kasten = await blase.boundingBox();
-  if (!kasten) throw new Error('Die Nachricht hat keine Fläche');
-  await page.mouse.move(kasten.x + kasten.width / 2, kasten.y + kasten.height / 2);
-  await page.mouse.down();
-  await page.waitForTimeout(800);
-  await page.mouse.up();
+async function nachrichtenMenue(page: Page, text: string) {
+  const zeile = page.locator('.msg-row').filter({ hasText: text }).first();
+  await expect(zeile).toBeVisible({ timeout: 15_000 });
+  await zeile.hover();
+  await zeile.getByRole('button', { name: 'Nachrichtenoptionen' }).click();
 }
 
 test('ein Foto aus dem Chat geht denselben Weg', async ({ browser, baseURL }) => {
@@ -407,7 +404,7 @@ test('ein Foto aus dem Chat geht denselben Weg', async ({ browser, baseURL }) =>
 
   const telefon = await seiteFuer(browser, anna, wurzel);
   await telefon.goto(`${wurzel}/chats/${chat.id}`);
-  await langAntippen(telefon, 'Gruss vom Berg');
+  await nachrichtenMenue(telefon, 'Gruss vom Berg');
   await telefon.getByText('Auf den Fernseher').click();
   await telefon.locator('.tv-code-eingabe').fill(code);
   await telefon.getByRole('button', { name: 'Starten' }).click();

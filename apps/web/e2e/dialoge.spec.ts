@@ -51,6 +51,12 @@ test('Zurück schliesst den offenen Dialog, nicht den Chat', async ({ browser })
 
   await page.getByRole('button', { name: 'Mehr hinzufügen' }).click();
   await expect(page.getByRole('heading', { name: 'Hinzufügen' })).toBeVisible();
+  // Der Verlaufseintrag kommt aufgeschoben (siehe lib/dialogVerlauf.ts). Ein
+  // Mensch drückt nie in derselben Millisekunde Zurück, ein Test unter Last
+  // schon – und träfe dann den Eintrag des Chats statt den des Blatts.
+  await page.waitForFunction(
+    () => (window.history.state as { initiativeDialog?: boolean } | null)?.initiativeDialog === true,
+  );
 
   await page.goBack();
 
