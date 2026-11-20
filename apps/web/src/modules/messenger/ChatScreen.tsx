@@ -54,8 +54,8 @@ import {
 } from './helpers.js';
 
 const NO_MESSAGES: ChatMessage[] = [];
-const NO_TYPING: { userId: string; until: number; art: 'text' | 'audio' }[] = [];
 const KEINE_GEPLANTEN: never[] = [];
+const NO_TYPING: { userId: string; until: number; art: 'text' | 'audio' }[] = [];
 
 type RenderItem =
   | { kind: 'day'; key: string; label: string }
@@ -205,13 +205,13 @@ export function ChatScreen() {
     setBearbeiten(null);
     setAuswahl(null);
     setSucheOffen(false);
-    suchbegriffSetzen(null, null);
     setGeplantOffen(false);
     setSelbstloeschenOffen(false);
     erwaehnungStelle.current = 0;
-    void useChat.getState().ensureConversation(conversationId);
+    suchbegriffSetzen(null, null);
     chatZusatzVerdrahten();
     void geplantLaden(conversationId);
+    void useChat.getState().ensureConversation(conversationId);
     void useChat.getState().staendeLaden(conversationId);
     useChat
       .getState()
@@ -614,7 +614,6 @@ export function ChatScreen() {
       : formatLastSeen(gegenueberPraesenz?.lastSeenAt ?? counterpart.user.lastSeenAt);
   }
 
-  return (
   /** Zur nächsten ungelesenen Erwähnung springen – Tipp für Tipp weiter. */
   async function zurErwaehnung() {
     try {
@@ -632,6 +631,7 @@ export function ChatScreen() {
     }
   }
 
+  return (
     <div className="app-main msg-screen" style={{ paddingBottom: keyboardInset }}>
       {auswahl ? (
         <AuswahlLeiste
@@ -722,14 +722,14 @@ export function ChatScreen() {
 
       <VerlaufsAntraege conversation={conversation} myId={myId} />
 
-      {/* Hintergrund je Chat: die Klasse setzt `--hg` (verwaltung.css). */}
-      <div
       <AngeheftetBanner
         conversationId={conversationId}
         conversation={conversation}
         onSprung={(id) => void jumpTo(id)}
       />
 
+      {/* Hintergrund je Chat: die Klasse setzt `--hg` (verwaltung.css). */}
+      <div
         className={`msg-body${conversation?.hintergrund ? ` hg-${conversation.hintergrund} hat-hintergrund` : ''}`}
       >
         <div className="msg-scroll" ref={scrollRef} onScroll={onScroll}>
@@ -811,8 +811,6 @@ export function ChatScreen() {
           </div>
         </div>
 
-        {showJump && (
-          <button
         {(conversation?.ungeleseneErwaehnungen ?? 0) > 0 && (
           <button
             type="button"
@@ -826,6 +824,8 @@ export function ChatScreen() {
           </button>
         )}
 
+        {showJump && (
+          <button
             type="button"
             className="msg-jump"
             aria-label="Zu den neuesten Nachrichten"
@@ -839,8 +839,6 @@ export function ChatScreen() {
         )}
       </div>
 
-      <Composer
-        conversationId={conversationId}
       {(geplantAnzahl > 0 || conversation?.selbstloeschenS) && (
         <div className="msg-zusatzleiste">
           {geplantAnzahl > 0 && (
@@ -861,6 +859,8 @@ export function ChatScreen() {
         </div>
       )}
 
+      <Composer
+        conversationId={conversationId}
         conversation={conversation}
         replyTo={replyTo}
         onCancelReply={() => setReplyTo(null)}
@@ -932,8 +932,6 @@ export function ChatScreen() {
         onSuche={() => setSucheOffen(true)}
         onSprung={jumpTo}
         onUnten={() => scrollToBottom(true)}
-      />
-
         onGeplant={() => setGeplantOffen(true)}
         onSelbstloeschen={() => setSelbstloeschenOffen(true)}
       />
@@ -954,6 +952,8 @@ export function ChatScreen() {
           (conversation.type === 'direct' || darfInfoAendern(conversation, myId))
         }
         onClose={() => setSelbstloeschenOffen(false)}
+      />
+
       <ChatInfoSheet
         open={infoOpen}
         conversation={conversation}
