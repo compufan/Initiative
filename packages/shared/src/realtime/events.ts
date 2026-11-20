@@ -6,6 +6,7 @@ import type { CalendarEventDto } from '../schemas/calendar.js';
 import type { GameSessionDto } from '../schemas/game.js';
 import type { UserDto } from '../schemas/user.js';
 import type { EntwurfDto, TippArt } from '../schemas/message.js';
+import type { AnrufClientEreignis, AnrufServerEreignis } from '../schemas/anruf.js';
 
 /**
  * Realtime protocol.
@@ -124,7 +125,9 @@ export type ServerEvent =
         scope: string;
       };
     }
-  | { type: 'error'; payload: { code: string; message: string } };
+  | { type: 'error'; payload: { code: string; message: string } }
+  /** 1:1-Anrufe (`schemas/anruf.ts`). */
+  | AnrufServerEreignis;
 
 export type ServerEventType = ServerEvent['type'];
 
@@ -134,7 +137,8 @@ export type ClientEvent =
   | { type: 'read'; payload: { conversationId: string; messageId: string } }
   /** Welchen Chat diese Leitung gerade vor Augen hat; `null`: keinen. */
   | { type: 'chat.sichtbar'; payload: { conversationId: string | null } }
-  | { type: 'subscribe'; payload: { conversationIds: string[] } };
+  | { type: 'subscribe'; payload: { conversationIds: string[] } }
+  | AnrufClientEreignis;
 
 export type ClientEventType = ClientEvent['type'];
 

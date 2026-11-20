@@ -23,6 +23,8 @@ export * from './schemas/poll.js';
 export * from './schemas/game.js';
 export * from './schemas/pressen-statistik.js';
 export * from './schemas/push.js';
+export * from './schemas/anhaenge.js';
+export * from './schemas/anruf.js';
 
 export * from './realtime/events.js';
 

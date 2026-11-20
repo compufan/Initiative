@@ -26,5 +26,18 @@ export interface PushPayload {
   conversationId?: string;
   messageId?: string;
   /** `message-leise`: „Ohne Ton senden“ – zeigen, aber ohne Ton und Vibration. */
-  kind: 'message' | 'message-leise' | 'event' | 'poll' | 'game' | 'system';
+  /**
+   * `anruf`: „Anruf von …“ (klingelt, bleibt stehen); `anruf-ende`: anderswo
+   * angenommen/abgelehnt (ersetzt und verschwindet); `anruf-verpasst`.
+   */
+  kind:
+    | 'message'
+    | 'message-leise'
+    | 'event'
+    | 'poll'
+    | 'game'
+    | 'system'
+    | 'anruf'
+    | 'anruf-ende'
+    | 'anruf-verpasst';
 }
