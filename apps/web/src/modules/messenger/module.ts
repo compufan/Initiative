@@ -11,11 +11,14 @@ import { BeitrittScreen } from './BeitrittScreen.js';
 import { MeldenAktion } from './MeldenAktion.js';
 import { reiterZahl } from './chatliste.js';
 import { leerenVerdrahten } from './leeren.js';
+import { KontaktBubble, KontaktTeilenAktion } from './Kontaktkarte.js';
+import { StandortBubble, StandortTeilenAktion } from './Standort.js';
+import { EinmalSendenAktion } from './EinmalSendenAktion.js';
 import './styles.css';
+import './welle2.css';
 
 /**
  * Messenger – the first feature module of Initiative.
-import './welle2.css';
  *
  * It owns the chat list, the chat view and the composer, and it contributes the
  * two message renderers every other module can rely on as a fallback.
@@ -61,5 +64,12 @@ export default defineWebModule({
   messageRenderers: {
     text: TextBubble,
     system: SystemBubble,
+    contact: KontaktBubble,
+    location: StandortBubble,
   },
+  composerActions: [
+    { key: 'einmal', label: 'Einmal ansehen', icon: '①', order: 25, render: EinmalSendenAktion },
+    { key: 'standort', label: 'Standort', icon: '📍', order: 45, render: StandortTeilenAktion },
+    { key: 'kontakt', label: 'Kontakt', icon: '👤', order: 46, render: KontaktTeilenAktion },
+  ],
 });
