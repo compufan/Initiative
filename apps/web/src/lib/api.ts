@@ -26,6 +26,10 @@ import type {
   PressenLaufDto,
   PressenStatistikDto,
   MessageDto,
+  NachrichteninfoDto,
+  StandDto,
+  EntwurfDto,
+  SuchArt,
   ExpenseDto,
   PaymentProfileDto,
   PaymentProfileInput,
@@ -665,8 +669,47 @@ export const api = {
       del<{ reactions: MessageDto['reactions'] }>(`/messages/${id}/reactions`, {
         query: { emoji },
       }),
-    search: (q: string, conversationId?: string) =>
-      get<ListResult<MessageDto>>('/search/messages', { query: { q, conversationId } }),
+    search: (
+      q: string,
+      conversationId?: string,
+      filter: { art?: SuchArt; senderId?: string; before?: string; limit?: number } = {},
+    ) =>
+      get<ListResult<MessageDto>>('/search/messages', {
+        query: { q, conversationId, ...filter },
+      }),
+    /** Springen zum Datum: die ersten Nachrichten ab diesem Zeitpunkt. */
+    ab: (conversationId: string, ab: string, limit = 1) =>
+      get<ListResult<MessageDto>>(`/conversations/${conversationId}/messages`, {
+        query: { ab, limit },
+      }),
+    /** Alles von `bis` bis vor `before` in einem Zug – für weite Sprünge. */
+    bis: (conversationId: string, bis: string, before?: string) =>
+      get<ListResult<MessageDto>>(`/conversations/${conversationId}/messages`, {
+        query: { bis, before },
+      }),
+    /** Bis hierhin empfangen – gebündelt für mehrere Chats. */
+    zugestellt: (eintraege: { conversationId: string; messageId: string }[]) =>
+      post<{ vorgerueckt: number }>('/messages/zugestellt', { eintraege }),
+    staende: (conversationId: string) =>
+      get<ListResult<StandDto>>(`/conversations/${conversationId}/staende`),
+    info: (id: string) => get<NachrichteninfoDto>(`/messages/${id}/info`),
+    weiterleiten: (
+      id: string,
+      body: { conversationIds: string[]; herkunft: boolean; clientId?: string },
+    ) => post<ListResult<MessageDto>>(`/messages/${id}/weiterleiten`, body),
+    sternSetzen: (id: string) => put<void>(`/messages/${id}/stern`, {}),
+    sternEntfernen: (id: string) => del<void>(`/messages/${id}/stern`),
+    sterne: (before?: string) => get<ListResult<MessageDto>>('/sterne', { query: { before } }),
+    sternKennungen: () => get<ListResult<string>>('/sterne/kennungen'),
+    entwuerfe: () => get<ListResult<EntwurfDto>>('/entwuerfe'),
+    entwurfSetzen: (
+      conversationId: string,
+      body: { text: string | null; replyToId: string | null; stand: string },
+    ) =>
+      put<{ entwurf: EntwurfDto; uebernommen: boolean }>(
+        `/conversations/${conversationId}/entwurf`,
+        body,
+      ),
   },
   media: {
     createUpload: (body: { kind: string; mime: string; size: number; fileName?: string }) =>

@@ -10,6 +10,8 @@ import {
   type MessageMetadata,
   type MessageType,
   type ReactionDto,
+  type StandDto,
+  type TippArt,
 } from '@initiative/shared';
 import { ApiError, api, getTokens } from '../lib/api.js';
 import { aboAuffrischen } from '../lib/push.js';
@@ -38,16 +40,27 @@ import {
   outboxErledigt,
   readCachedConversations,
   readCachedMessages,
+  readMeta,
   readOutbox,
   removeCachedConversation,
   removeOutbox,
   trimMessageCache,
   updateOutbox,
+  writeMeta,
   type OutboxAttachment,
   type OutboxEntry,
 } from '../lib/db.js';
 import { uploadBlob } from '../lib/upload.js';
 import { hochladeAbbruch, useHochladen } from './hochladen.js';
+import { einreihen, ueberlagern, type Aktion, type AktionsEintrag } from './aktionen.js';
+import { zustellungVormerken } from './zustellung.js';
+import { sternSetzenLokal, sterneLaden } from './sterne.js';
+import {
+  entwurfErledigt,
+  entwurfVomServer,
+  entwuerfeAbgleichen,
+  entwuerfeLaden,
+} from './entwuerfe.js';
 
 /**
  * A message plus client-only delivery state.
@@ -78,12 +91,19 @@ export interface Draft {
   attachmentIds?: string[];
   /** Files that still have to be uploaded (works offline). */
   attachments?: OutboxAttachment[];
+  /** „Ohne Ton senden“: die Mitteilung kommt leise. */
+  silent?: boolean;
 }
 
 interface TypingEntry {
   userId: string;
   until: number;
+  /** `audio`: nimmt gerade eine Sprachnachricht auf. */
+  art: TippArt;
 }
+
+/** Gelesen-/Zustellstand je Mitglied eines Chats (siehe `staendeLaden`). */
+export type Staende = Record<string, { gelesen: string | null; zugestellt: string | null }>;
 
 interface ChatState {
   conversations: ConversationDto[];
@@ -102,6 +122,8 @@ interface ChatState {
   loaded: Record<string, boolean>;
   typing: Record<string, TypingEntry[]>;
   presence: Record<string, { online: boolean; lastSeenAt: string | null }>;
+  /** Je Chat die Gelesen- und Zustellstände der Mitglieder – für die Häkchen. */
+  staende: Record<string, Staende>;
   initialised: boolean;
   /**
    * Ob die Chatliste wirklich schon vom Server kam. `initialised` gilt schon,
@@ -135,16 +157,38 @@ interface ChatState {
   flushOutbox: () => Promise<void>;
   deleteMessage: (message: MessageDto, scope?: 'me' | 'all') => Promise<void>;
   toggleReaction: (message: MessageDto, emoji: string, mine: boolean) => Promise<void>;
+  /** Bearbeiten – sofort sichtbar, beim Server über die Aktionswarteschlange. */
+  editMessage: (message: MessageDto, body: string) => Promise<void>;
+  /** Sternchen setzen oder entfernen. */
+  toggleStern: (message: MessageDto, setzen: boolean) => Promise<void>;
+  /** Die Häkchen-Stände eines Chats vom Server holen. */
+  staendeLaden: (conversationId: string) => Promise<void>;
+  /**
+   * Holt, was zwischen der ältesten geladenen Nachricht und `messageId` liegt –
+   * in einem Zug. Für Sprünge aus Suche, Sternchen und Datum. `false`, wenn die
+   * Nachricht danach nicht im Verlauf steht.
+   */
+  ladenBis: (conversationId: string, messageId: string) => Promise<boolean>;
   markRead: (conversationId: string) => void;
-  setTyping: (conversationId: string, typing: boolean) => void;
+  setTyping: (conversationId: string, typing: boolean, art?: TippArt) => void;
   upsertConversation: (conversation: ConversationDto) => void;
   removeConversation: (conversationId: string) => void;
   applyMessage: (message: MessageDto) => void;
 }
 
 function sortMessages(messages: ChatMessage[]): ChatMessage[] {
-  return messages.slice().sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  // Ausstehende Änderungen (offline bearbeitet, gelöscht, reagiert) liegen
+  // über allem, was vom Server oder aus dem Zwischenspeicher kommt – bis der
+  // Server sie bestätigt hat. Siehe `state/aktionen.ts`.
+  return ueberlagern(
+    messages.slice().sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+    ausstehendeAktionen,
+  );
 }
+
+/** Was in der Aktionswarteschlange steht – im Speicher gespiegelt. */
+let ausstehendeAktionen: AktionsEintrag[] = [];
+const AKTIONEN_META = 'aktionen';
 
 /**
  * Lokale Schatten einer gesendeten Nachricht entfernen.
@@ -189,12 +233,21 @@ export const useChat = create<ChatState>((set, get) => ({
   loaded: {},
   typing: {},
   presence: {},
+  staende: {},
   initialised: false,
   conversationsLoaded: false,
   conversationsFailed: false,
 
   async hydrate() {
-    const [conversations, outbox] = await Promise.all([readCachedConversations(), readOutbox()]);
+    const [conversations, outbox, aktionen] = await Promise.all([
+      readCachedConversations(),
+      readOutbox(),
+      // Ohne Speicher (privater Modus) gibt es eben keine ausstehenden Aktionen.
+      Promise.resolve()
+        .then(() => readMeta<AktionsEintrag[]>(AKTIONEN_META))
+        .catch(() => null),
+    ]);
+    ausstehendeAktionen = aktionen ?? [];
     if (conversations.length > 0) set({ conversations });
     if (outbox.length > 0) {
       const grouped: Record<string, ChatMessage[]> = {};
@@ -215,6 +268,9 @@ export const useChat = create<ChatState>((set, get) => ({
     set({ initialised: true });
     void get().loadConversations();
     void get().flushOutbox();
+    void aktionenAbarbeiten();
+    void sterneLaden();
+    void entwuerfeLaden();
   },
 
   async loadConversations() {
@@ -223,6 +279,9 @@ export const useChat = create<ChatState>((set, get) => ({
       const abgeglichen = items.map(ungelesenAbgleichen);
       set({ conversations: abgeglichen, conversationsLoaded: true, conversationsFailed: false });
       void cacheConversations(abgeglichen);
+      // Was die Liste an neuen fremden Nachrichten zeigt, ist auf diesem Gerät
+      // angekommen – auch in Chats, die nie geöffnet werden.
+      for (const item of abgeglichen) zustellungMelden(item.lastMessage);
     } catch (error) {
       set({ conversationsFailed: true });
       if (!(error instanceof ApiError && error.isOffline)) throw error;
@@ -270,6 +329,7 @@ export const useChat = create<ChatState>((set, get) => ({
       }));
       void cacheMessages(items);
       void trimMessageCache(conversationId);
+      zustellungMelden(neuesteFremde(items));
       // Nur die erste Seite kam frisch vom Server. Karten dahinter stammen aus
       // dem Zwischenspeicher und zeigen den Stand vom letzten Öffnen – ihre
       // Termine werden einmal je Sitzung nachgeprüft.
@@ -306,6 +366,9 @@ export const useChat = create<ChatState>((set, get) => ({
 
   async sendMessage(conversationId, draft) {
     const clientId = uuidv7();
+    // Gesendet ist der Entwurf erledigt – hier sofort, auf den anderen
+    // Geräten über den Server (er leert ihn beim Senden).
+    if (draft.type == null || draft.type === 'text') entwurfErledigt(conversationId);
     const entry: OutboxEntry = {
       clientId,
       conversationId,
@@ -318,6 +381,7 @@ export const useChat = create<ChatState>((set, get) => ({
       createdAt: Date.now(),
       attempts: 0,
       lastError: null,
+      ...(draft.silent ? { silent: true } : {}),
     };
 
     set((state) => ({
@@ -426,23 +490,86 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   async deleteMessage(message, scope = 'all') {
-    await api.messages.remove(message.id, scope);
     void dropCachedMessage(message.id);
-    set((state) => ({
-      messages: {
-        ...state.messages,
-        [message.conversationId]: (state.messages[message.conversationId] ?? []).filter(
-          (item) => item.id !== message.id,
-        ),
-      },
-    }));
+    await aktionEinreihen({
+      art: 'loeschen',
+      messageId: message.id,
+      conversationId: message.conversationId,
+      scope,
+    });
   },
 
   async toggleReaction(message, emoji, mine) {
-    const result = mine
-      ? await api.messages.unreact(message.id, emoji)
-      : await api.messages.react(message.id, emoji);
-    applyReactions(set, message.conversationId, message.id, result.reactions);
+    await aktionEinreihen({
+      art: 'reaktion',
+      messageId: message.id,
+      conversationId: message.conversationId,
+      emoji,
+      setzen: !mine,
+      ich: eigeneKennung() ?? '',
+    });
+  },
+
+  async editMessage(message, body) {
+    await aktionEinreihen({
+      art: 'bearbeiten',
+      messageId: message.id,
+      conversationId: message.conversationId,
+      body,
+      am: new Date().toISOString(),
+    });
+  },
+
+  async toggleStern(message, setzen) {
+    sternSetzenLokal(message.id, setzen);
+    await aktionEinreihen({
+      art: 'stern',
+      messageId: message.id,
+      conversationId: message.conversationId,
+      setzen,
+    });
+  },
+
+  async staendeLaden(conversationId) {
+    try {
+      const { items } = await api.messages.staende(conversationId);
+      set((state) => ({
+        staende: { ...state.staende, [conversationId]: staendeAus(items) },
+      }));
+    } catch {
+      /* offline – die Häkchen bleiben, wie sie waren */
+    }
+  },
+
+  async ladenBis(conversationId, messageId) {
+    const liste = () => get().messages[conversationId] ?? [];
+    if (liste().some((item) => item.id === messageId)) return true;
+    const aelteste = liste().find((item) => !item.pending && !item.id.startsWith('local:'));
+    // Neuer als alles Geladene: Der Chat ist noch gar nicht geladen, oder die
+    // Nachricht kam eben erst. Die erste Seite reicht dann.
+    if (aelteste && messageId > aelteste.id) {
+      await get().loadMessages(conversationId, { force: true });
+      return liste().some((item) => item.id === messageId);
+    }
+    try {
+      const { items, nextCursor } = await api.messages.bis(
+        conversationId,
+        messageId,
+        aelteste?.id,
+      );
+      set((state) => ({
+        messages: {
+          ...state.messages,
+          [conversationId]: mergeList(state.messages[conversationId], items),
+        },
+        hasMore: { ...state.hasMore, [conversationId]: Boolean(nextCursor) && items.length > 0 },
+        loaded: aelteste ? state.loaded : { ...state.loaded, [conversationId]: true },
+      }));
+      void cacheMessages(items);
+    } catch {
+      return false;
+    }
+    return liste().some((item) => item.id === messageId);
   },
 
   markRead(conversationId) {
@@ -482,8 +609,8 @@ export const useChat = create<ChatState>((set, get) => ({
     });
   },
 
-  setTyping(conversationId, typing) {
-    realtime.send({ type: 'typing', payload: { conversationId, typing } });
+  setTyping(conversationId, typing, art = 'text') {
+    realtime.send({ type: 'typing', payload: { conversationId, typing, art } });
   },
 
   upsertConversation(roh) {
@@ -648,6 +775,7 @@ async function eintragSenden(
       metadata: entry.metadata,
       attachmentIds,
       clientId: entry.clientId,
+      ...(entry.silent ? { silent: true } : {}),
     });
     // Outbox und Verlauf in einem Zug (siehe `outboxErledigt`).
     await outboxErledigt(entry.clientId, message);
@@ -820,6 +948,7 @@ async function refreshMessages(
   try {
     const { items } = await api.messages.list(conversationId, newest ? { after: newest.id } : {});
     if (items.length === 0) return;
+    zustellungMelden(neuesteFremde(items));
     set((state) => ({
       messages: {
         ...state.messages,
@@ -1070,6 +1199,188 @@ function ungelesenMitzaehlen(message: MessageDto): void {
   }));
 }
 
+/* ---------- Häkchen: Stände ---------- */
+
+function staendeAus(items: StandDto[]): Staende {
+  const aus: Staende = {};
+  for (const item of items) aus[item.userId] = { gelesen: item.gelesen, zugestellt: item.zugestellt };
+  return aus;
+}
+
+/** Ein Stand rückt vor – nie zurück (UUIDv7, zeitlich sortiert). */
+function standVorruecken(
+  conversationId: string,
+  userId: string,
+  art: 'gelesen' | 'zugestellt',
+  messageId: string,
+): void {
+  useChat.setState((state) => {
+    const chat = state.staende[conversationId];
+    // Nur Chats, deren Stände geladen sind: Ein einzelner Stand ohne die
+    // übrigen liesse eine Gruppe „von allen gelesen“ aussehen.
+    if (!chat) return {};
+    const bisher = chat[userId] ?? { gelesen: null, zugestellt: null };
+    if (bisher[art] && bisher[art] >= messageId) return {};
+    return {
+      staende: {
+        ...state.staende,
+        [conversationId]: { ...chat, [userId]: { ...bisher, [art]: messageId } },
+      },
+    };
+  });
+}
+
+/**
+ * Die eigene Kennung, ohne je zu werfen: Die Zustellmeldung ist eine
+ * Nebensache und darf das Laden eines Chats nie aufhalten.
+ */
+function kennungOderNull(): string | null {
+  try {
+    return eigeneKennung();
+  } catch {
+    return null;
+  }
+}
+
+/** Die neueste Nachricht, die nicht von mir ist. */
+function neuesteFremde(items: readonly MessageDto[]): MessageDto | null {
+  const ich = kennungOderNull();
+  if (!ich) return null;
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const item = items[i];
+    if (item.senderId && item.senderId !== ich) return item;
+  }
+  return null;
+}
+
+/** Eine fremde, angekommene Nachricht als „zugestellt“ vormerken. */
+function zustellungMelden(message: MessageDto | null | undefined): void {
+  if (!message || !message.senderId || message.deletedAt) return;
+  const ich = kennungOderNull();
+  if (!ich || message.senderId === ich) return;
+  zustellungVormerken(message.conversationId, message.id);
+}
+
+/* ---------- Aktionswarteschlange (siehe `state/aktionen.ts`) ---------- */
+
+let aktionenLaufen = false;
+let aktionenNochmal = false;
+
+function aktionenSpeichern(): void {
+  try {
+    void writeMeta(AKTIONEN_META, ausstehendeAktionen).catch(() => {});
+  } catch {
+    /* ohne Speicher: nur im Arbeitsspeicher */
+  }
+}
+
+/** Die Listen der betroffenen Chats neu überlagern. */
+function neuUeberlagern(conversationIds: Iterable<string>): void {
+  useChat.setState((state) => {
+    const messages = { ...state.messages };
+    for (const id of conversationIds) {
+      if (messages[id]) messages[id] = sortMessages(messages[id]);
+    }
+    return { messages };
+  });
+}
+
+/**
+ * Eine Änderung einreihen: sofort sichtbar, dann zum Server. Kehrt erst
+ * zurück, wenn der Versuch gelaufen ist – Fehler, die nicht am Netz liegen,
+ * kommen beim Aufrufer an (er zeigt sie).
+ */
+export async function aktionEinreihen(aktion: Aktion): Promise<void> {
+  ausstehendeAktionen = einreihen(ausstehendeAktionen, aktion);
+  aktionenSpeichern();
+  neuUeberlagern([aktion.conversationId]);
+  await aktionenAbarbeiten();
+  const fehler = aktionsFehler.get(aktion.messageId);
+  if (fehler) {
+    aktionsFehler.delete(aktion.messageId);
+    throw fehler;
+  }
+}
+
+/** Gescheiterte (nicht offline) Aktionen je Nachricht, für den Aufrufer. */
+const aktionsFehler = new Map<string, unknown>();
+
+export async function aktionenAbarbeiten(): Promise<void> {
+  if (aktionenLaufen) {
+    aktionenNochmal = true;
+    return;
+  }
+  aktionenLaufen = true;
+  try {
+    do {
+      aktionenNochmal = false;
+      for (const eintrag of [...ausstehendeAktionen]) {
+        if (!ausstehendeAktionen.includes(eintrag)) continue;
+        try {
+          await aktionSenden(eintrag.aktion);
+        } catch (error) {
+          if (error instanceof ApiError && error.isOffline) return;
+          // Der Server lehnt ab (kein Recht mehr, gelöscht …): nicht ewig
+          // wiederholen. Die Ansicht holt den wahren Stand.
+          aktionsFehler.set(eintrag.aktion.messageId, error);
+          aktionEntfernen(eintrag);
+          void useChat.getState().loadMessages(eintrag.aktion.conversationId, { force: true });
+          if (eintrag.aktion.art === 'stern') void sterneLaden();
+          continue;
+        }
+        aktionEntfernen(eintrag);
+      }
+    } while (aktionenNochmal);
+  } finally {
+    aktionenLaufen = false;
+  }
+}
+
+function aktionEntfernen(eintrag: AktionsEintrag): void {
+  ausstehendeAktionen = ausstehendeAktionen.filter((item) => item !== eintrag);
+  aktionenSpeichern();
+}
+
+async function aktionSenden(aktion: Aktion): Promise<void> {
+  switch (aktion.art) {
+    case 'bearbeiten': {
+      const neu = await api.messages.edit(aktion.messageId, aktion.body);
+      // Erst aus der Warteschlange, dann anwenden – sonst überlagerte die
+      // ausstehende Fassung die bestätigte.
+      ausstehendeAktionen = ausstehendeAktionen.filter((item) => item.aktion !== aktion);
+      useChat.getState().applyMessage(neu);
+      return;
+    }
+    case 'loeschen':
+      await api.messages.remove(aktion.messageId, aktion.scope);
+      void dropCachedMessage(aktion.messageId);
+      return;
+    case 'reaktion': {
+      const ergebnis = aktion.setzen
+        ? await api.messages.react(aktion.messageId, aktion.emoji)
+        : await api.messages.unreact(aktion.messageId, aktion.emoji);
+      ausstehendeAktionen = ausstehendeAktionen.filter((item) => item.aktion !== aktion);
+      applyReactions(useChat.setState, aktion.conversationId, aktion.messageId, ergebnis.reactions);
+      return;
+    }
+    case 'stern':
+      if (aktion.setzen) await api.messages.sternSetzen(aktion.messageId);
+      else await api.messages.sternEntfernen(aktion.messageId);
+      return;
+  }
+}
+
+/** Nur für Tests: die Warteschlange leeren. */
+export function aktionenZuruecksetzen(): void {
+  ausstehendeAktionen = [];
+  aktionsFehler.clear();
+}
+
+/** Nur für Tests: was gerade aussteht. */
+export function ausstehend(): readonly AktionsEintrag[] {
+  return ausstehendeAktionen;
+}
+
 /** Wire realtime events into the store exactly once. */
 let wired = false;
 /** Wie oft höchstens nachgeholt wird – siehe `gedrosselt`. */
@@ -1087,6 +1398,12 @@ const NACHHOL_FENSTER_MS = 2_000;
 export function chatsNachholen(): void {
   const state = useChat.getState();
   void state.loadConversations();
+  void entwuerfeAbgleichen();
+  void sterneLaden();
+  void aktionenAbarbeiten();
+  // Die Häkchen offener Chats: Lese- und Zustellmeldungen in der Lücke kamen
+  // nie an.
+  for (const conversationId of Object.keys(state.staende)) void state.staendeLaden(conversationId);
   for (const [conversationId, geladen] of Object.entries(state.loaded)) {
     if (geladen) void state.loadMessages(conversationId, { force: true });
   }
@@ -1125,6 +1442,7 @@ export function connectChatRealtime(): void {
 
   realtime.on('message.new', ({ message }) => {
     ungelesenMitzaehlen(message);
+    zustellungMelden(message);
     useChat.getState().applyMessage(message);
     // Eine Nachricht in einem Chat, den die Liste noch nicht kennt (gerade
     // erst angelegt, in der Lücke dazugekommen): ohne Nachholen erschiene er
@@ -1154,13 +1472,15 @@ export function connectChatRealtime(): void {
   realtime.on('conversation.removed', ({ conversationId }) =>
     useChat.getState().removeConversation(conversationId),
   );
-  realtime.on('typing', ({ conversationId, userId, until }) => {
+  realtime.on('typing', ({ conversationId, userId, until, art }) => {
     const expires = new Date(until).getTime();
     useChat.setState((state) => {
       const current = (state.typing[conversationId] ?? []).filter(
         (entry) => entry.userId !== userId && entry.until > Date.now(),
       );
-      if (expires > Date.now()) current.push({ userId, until: expires });
+      if (expires > Date.now()) {
+        current.push({ userId, until: expires, art: art === 'audio' ? 'audio' : 'text' });
+      }
       return { typing: { ...state.typing, [conversationId]: current } };
     });
   });
@@ -1175,6 +1495,7 @@ export function connectChatRealtime(): void {
     // hier alles bis dahin erledigt, der Zähler fällt, und die Mitteilung zu
     // diesem Chat verschwindet.
     const selbst = ich !== null && userId === ich;
+    standVorruecken(conversationId, userId, 'gelesen', lastReadMessageId);
     useChat.setState((state) => ({
       conversations: state.conversations.map((conversation) => {
         if (conversation.id !== conversationId) return conversation;
@@ -1205,6 +1526,11 @@ export function connectChatRealtime(): void {
       }
     }
   });
+  realtime.on('delivery.updated', ({ conversationId, userId, deliveredMessageId }) => {
+    standVorruecken(conversationId, userId, 'zugestellt', deliveredMessageId);
+  });
+  realtime.on('star.updated', ({ messageId, starred }) => sternSetzenLokal(messageId, starred));
+  realtime.on('draft.updated', ({ draft }) => entwurfVomServer(draft));
   realtime.on('sync.hint', ({ conversationId, eventId }) => {
     if (conversationId) void useChat.getState().loadMessages(conversationId, { force: true });
     // Ein Hinweis auf einen Termin gehört dem Trichter (`terminEreignisse`); die
@@ -1219,6 +1545,7 @@ export function connectChatRealtime(): void {
     if (state === 'offline') warWeg = true;
     if (state !== 'online') return;
     void useChat.getState().flushOutbox();
+    void aktionenAbarbeiten();
     if (warWeg) {
       warWeg = false;
       nachholen();
@@ -1226,7 +1553,10 @@ export function connectChatRealtime(): void {
   });
 
   if (typeof window !== 'undefined') {
-    window.addEventListener('online', () => void useChat.getState().flushOutbox());
+    window.addEventListener('online', () => {
+      void useChat.getState().flushOutbox();
+      void aktionenAbarbeiten();
+    });
 
     /*
      * Zurück im Vordergrund: Chatliste und offene Chats nachholen – unabhängig

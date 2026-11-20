@@ -119,6 +119,8 @@ export interface OutboxEntry {
   createdAt: number;
   attempts: number;
   lastError: string | null;
+  /** „Ohne Ton senden“ – reist bis zum Server mit. */
+  silent?: boolean;
 }
 
 /**
