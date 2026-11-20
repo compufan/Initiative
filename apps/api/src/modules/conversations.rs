@@ -15,9 +15,10 @@ use crate::services::attachments::require_eigener_anhang;
 use crate::services::conversations::{
     assert_can_moderate, assert_membership, besitz_nachfolgen, broadcast_conversation,
     einzelchats_sichern, gespraeche_sperren, get_membership, load_conversation_dto,
-    load_conversation_dtos, member_ids, require_conversation, uebernahmen_melden, ListOptions,
+    load_conversation_dtos, member_ids, require_conversation, uebernahmen_eintragen,
+    uebernahmen_melden, ListOptions,
 };
-use crate::services::messages::{create_message, NewMessage};
+use crate::services::messages::{ausliefern, nachricht_anlegen, NewMessage};
 use crate::state::AppState;
 use crate::validate::Validator;
 
@@ -202,19 +203,29 @@ async fn create(
         .execute(&mut *tx)
         .await?;
     }
+    // Die Systemzeile gehört zur Gründung: Vorher kam sie nach dem Commit, und
+    // ein Abbruch dazwischen liess eine Gruppe ohne „… hat die Gruppe
+    // erstellt“ zurück (und ohne `last_message_at`, also unten in der Liste).
+    let gruendung = if input.r#type == "group" {
+        Some(
+            nachricht_anlegen(
+                &mut tx,
+                NewMessage::system(
+                    conversation_id,
+                    user.id(),
+                    "conversation.created",
+                    Vec::new(),
+                ),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     tx.commit().await?;
 
-    if input.r#type == "group" {
-        create_message(
-            &state,
-            NewMessage::system(
-                conversation_id,
-                user.id(),
-                "conversation.created",
-                Vec::new(),
-            ),
-        )
-        .await?;
+    if let Some(gruendung) = gruendung {
+        ausliefern(&state, gruendung).await?;
     }
 
     broadcast_conversation(&state, conversation_id, Some(members)).await?;
@@ -276,6 +287,12 @@ async fn update(
         if let Some(Some(anhang)) = input.avatar_attachment_id {
             require_eigener_anhang(&state.pool, anhang, user.id()).await?;
         }
+    }
+
+    // Beides in einer Transaktion: Eine Anfrage, die Titel UND Stummschalten
+    // trägt, gilt ganz oder gar nicht.
+    let mut tx = state.pool.begin().await?;
+    if input.title.is_some() || input.avatar_attachment_id.is_some() {
         sqlx::query(
             "update conversations set
                title = case when $2 then $3 else title end,
@@ -288,7 +305,7 @@ async fn update(
         .bind(input.title.clone().flatten())
         .bind(input.avatar_attachment_id.is_some())
         .bind(input.avatar_attachment_id.flatten())
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
     }
 
@@ -304,9 +321,10 @@ async fn update(
         .bind(input.muted_until.is_some())
         .bind(input.muted_until.flatten())
         .bind(input.archived)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
     }
+    tx.commit().await?;
 
     broadcast_conversation(&state, id, None).await?;
     Ok(Json(load_conversation_dto(&state, user.id(), id).await?))
@@ -341,6 +359,10 @@ async fn add_members(
         return Err(AppError::bad_request("Unbekannte Mitglieder"));
     }
 
+    // Mitglieder und Systemzeile zusammen: Vorher stand jede Zeile für sich,
+    // und ein Abbruch mittendrin liess die Hälfte der Gewählten drin – ohne
+    // Systemzeile, also ohne dass die Gruppe davon erfuhr.
+    let mut tx = state.pool.begin().await?;
     for member_id in &ids {
         sqlx::query(
             /*
@@ -361,15 +383,17 @@ async fn add_members(
         )
         .bind(id)
         .bind(member_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
     }
-
-    create_message(
-        &state,
+    let zeile = nachricht_anlegen(
+        &mut tx,
         NewMessage::system(id, user.id(), "members.added", ids),
     )
     .await?;
+    tx.commit().await?;
+
+    ausliefern(&state, zeile).await?;
     broadcast_conversation(&state, id, None).await?;
     Ok(Json(load_conversation_dto(&state, user.id(), id).await?))
 }
@@ -502,18 +526,23 @@ async fn remove_member(
         .execute(&mut *tx)
         .await?;
     let uebernahmen = besitz_nachfolgen(&mut tx, &[id]).await?;
-    tx.commit().await?;
-
     let kind = if target_id == user.id() {
         "member.left"
     } else {
         "member.removed"
     };
-    create_message(
-        &state,
+    // Die Systemzeile in derselben Transaktion: Ein Austritt ohne Zeile im
+    // Verlauf (Abbruch nach dem Commit) liess die Übrigen rätseln, wohin
+    // jemand verschwunden ist.
+    let zeile = nachricht_anlegen(
+        &mut tx,
         NewMessage::system(id, user.id(), kind, vec![target_id]),
     )
     .await?;
+    let karten = uebernahmen_eintragen(&mut tx, &uebernahmen).await?;
+    tx.commit().await?;
+
+    ausliefern(&state, zeile).await?;
 
     state
         .hub
@@ -527,7 +556,7 @@ async fn remove_member(
         broadcast_conversation(&state, id, Some(remaining)).await?;
     } else {
         // Systemzeile „… ist jetzt Besitzer“ und neue Fassung an alle.
-        uebernahmen_melden(&state, &uebernahmen).await;
+        uebernahmen_melden(&state, &uebernahmen, karten).await;
     }
 
     Ok(StatusCode::NO_CONTENT)

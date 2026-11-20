@@ -505,13 +505,41 @@ async fn edit(
         .length("body", &body, 1, MESSAGE_BODY_MAX)
         .finish()?;
 
+    /*
+     * Die Prüfungen oben noch einmal in der Anweisung selbst.
+     *
+     * Zwischen dem Lesen oben und diesem Schreiben konnte die Nachricht für
+     * alle gelöscht werden – das Bearbeiten schrieb dann den Text in eine
+     * gelöschte Nachricht zurück (die `body = null` gerade geleert hatte),
+     * und das Ereignis spielte ihn allen wieder aus.
+     *
+     * Und derselbe Text noch einmal (ein wiederholter Versuch) ändert nichts
+     * und meldet nichts – ein Neuversuch ist damit folgenlos.
+     */
     let updated = sqlx::query_as::<_, MessageRow>(
-        "update messages set body = $2, edited_at = now() where id = $1 returning *",
+        "update messages set body = $2, edited_at = now()
+          where id = $1 and sender_id = $3 and deleted_at is null and type = 'text'
+            and body is distinct from $2
+          returning *",
     )
     .bind(id)
     .bind(&body)
-    .fetch_one(&state.pool)
+    .bind(user.id())
+    .fetch_optional(&state.pool)
     .await?;
+    let Some(updated) = updated else {
+        let jetzt = require_message(&state.pool, id).await?;
+        if jetzt.deleted_at.is_some() {
+            return Err(AppError::bad_request(
+                "Gelöschte Nachrichten können nicht bearbeitet werden",
+            ));
+        }
+        // Unverändert: der Stand, wie er ist, ohne neues Ereignis.
+        return load_message(&state, id, user.id())
+            .await?
+            .map(Json)
+            .ok_or_else(|| AppError::not_found("Nachricht nicht gefunden"));
+    };
 
     let message = hydrate_messages(&state, vec![updated], user.id())
         .await?
@@ -599,12 +627,20 @@ async fn remove(
     // stand eine gelöschte Nachricht mit ihren Anhängen da (die weiter
     // auslieferbar waren) oder eine Termin-Platzierung, deren Karte fort ist.
     let mut tx = state.pool.begin().await?;
-    sqlx::query(
-        "update messages set deleted_at = now(), body = null, metadata = '{}'::jsonb where id = $1",
+    // Nur eine noch nicht gelöschte Nachricht: Ein Neuversuch (Antwort ging
+    // verloren) ist dann folgenlos – kein neuer Zeitstempel, kein zweites
+    // Ereignis.
+    let geloescht = sqlx::query(
+        "update messages set deleted_at = now(), body = null, metadata = '{}'::jsonb
+          where id = $1 and deleted_at is null",
     )
     .bind(id)
     .execute(&mut *tx)
-    .await?;
+    .await?
+    .rows_affected();
+    if geloescht == 0 {
+        return Ok(StatusCode::NO_CONTENT);
+    }
     sqlx::query("delete from attachments where message_id = $1")
         .bind(id)
         .execute(&mut *tx)

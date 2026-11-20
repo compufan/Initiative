@@ -361,11 +361,51 @@ impl NewMessage {
     }
 }
 
-/// Creates a message, broadcasts it and triggers push notifications.
+/// Eine Nachricht, die in einer Transaktion steht, aber noch niemandem
+/// gemeldet wurde.
 ///
-/// Feature modules (polls, calendar, games …) call this so their cards behave
-/// exactly like any other message.
-pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<MessageDto> {
+/// # Warum es diesen Zwischenschritt gibt
+///
+/// `create_message` schrieb früher drei Anweisungen einzeln (Nachricht,
+/// Anhänge, Chat-Zeitstempel) und spielte danach aus. Brach etwas dazwischen
+/// ab, stand eine Nachricht ohne ihre Anhänge da – und weil der
+/// Wiederholungsschlüssel (`client_id`) schon vergeben war, bekam der Client
+/// beim nächsten Versuch genau diese halbe Nachricht als „schon gesendet“
+/// zurück. Eine Umfrage, eine Partie oder ein Chat legten ihre Karte bzw.
+/// Systemzeile sogar erst NACH ihrem eigenen Commit an.
+///
+/// Jetzt gilt: [`nachricht_anlegen`] schreibt nur, in der Transaktion des
+/// Aufrufers; [`ausliefern`] meldet (Echtzeit, Push, Bierjunge) und darf erst
+/// nach dem Commit laufen. Was nie festgeschrieben wurde, wird nie gemeldet.
+#[must_use = "eine angelegte Nachricht muss nach dem Commit ausgeliefert werden"]
+#[derive(Debug)]
+pub struct Angelegt {
+    row: MessageRow,
+    /// `false`, wenn der Wiederholungsschlüssel schon eine Nachricht kannte –
+    /// dann wurde nichts geschrieben und es gibt nichts zu melden.
+    neu: bool,
+    silent: bool,
+}
+
+impl Angelegt {
+    pub fn id(&self) -> Uuid {
+        self.row.id
+    }
+
+    pub fn ist_neu(&self) -> bool {
+        self.neu
+    }
+}
+
+/// Schreibt eine Nachricht samt Anhängen und Chat-Zeitstempel – nur in der
+/// übergebenen Verbindung bzw. Transaktion, ohne jede Meldung nach außen.
+///
+/// Alle Schreibvorgänge gelten zusammen oder gar nicht, sobald der Aufrufer
+/// sie in einer Transaktion bündelt (`create_message` tut das selbst).
+pub async fn nachricht_anlegen(
+    conn: &mut sqlx::PgConnection,
+    input: NewMessage,
+) -> AppResult<Angelegt> {
     let body = input
         .body
         .as_ref()
@@ -373,8 +413,12 @@ pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<Me
         .filter(|value| !value.is_empty());
 
     // Idempotency: a retried send returns the original message.
-    if let Some(dto) = schon_gesendet(state, &input).await? {
-        return Ok(dto);
+    if let Some(row) = schon_gesendet(&mut *conn, &input).await? {
+        return Ok(Angelegt {
+            row,
+            neu: false,
+            silent: input.silent,
+        });
     }
 
     if let Some(reply_to_id) = input.reply_to_id {
@@ -382,7 +426,7 @@ pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<Me
             sqlx::query_as("select id from messages where id = $1 and conversation_id = $2")
                 .bind(reply_to_id)
                 .bind(input.conversation_id)
-                .fetch_optional(&state.pool)
+                .fetch_optional(&mut *conn)
                 .await?;
         if exists.is_none() {
             return Err(AppError::bad_request(
@@ -399,8 +443,9 @@ pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<Me
      * Zwei gleichzeitige (die Outbox in zwei Tabs, ein Neuversuch, während der
      * erste noch läuft) sahen beide nichts, und der zweite scheiterte am
      * eindeutigen Index mit einem Fehler – der Client hielt die Nachricht für
-     * nicht gesendet und versuchte es weiter. Jetzt bekommt er die Nachricht
-     * zurück, die gewonnen hat.
+     * nicht gesendet und versuchte es weiter. Jetzt wartet der zweite, bis der
+     * erste festgeschrieben (oder zurückgerollt) ist, und bekommt die
+     * Nachricht zurück, die gewonnen hat.
      */
     let row = sqlx::query_as::<_, MessageRow>(
         "insert into messages (id, conversation_id, sender_id, type, body, reply_to_id, metadata, client_id)
@@ -417,43 +462,89 @@ pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<Me
     .bind(input.reply_to_id)
     .bind(&input.metadata)
     .bind(&input.client_id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *conn)
     .await?;
     let Some(row) = row else {
-        return schon_gesendet(state, &input).await?.ok_or_else(|| {
+        let row = schon_gesendet(&mut *conn, &input).await?.ok_or_else(|| {
             AppError::internal("Nachricht mit diesem Schlüssel verschwand beim Senden")
+        })?;
+        return Ok(Angelegt {
+            row,
+            neu: false,
+            silent: input.silent,
         });
     };
 
     if !input.attachment_ids.is_empty() {
-        sqlx::query(
+        let mut gewuenscht = input.attachment_ids.clone();
+        gewuenscht.sort();
+        gewuenscht.dedup();
+        /*
+         * Alle Anhänge oder keine Nachricht.
+         *
+         * Vorher band diese Anweisung, was sie fand, und überging den Rest
+         * still: Ein Anhang, der noch hochlud (`pending`), wurde trotzdem auf
+         * `ready` gesetzt – eine Nachricht mit einer Datei ohne Bytes –, und
+         * ein fremder oder schon vergebener verschwand einfach aus der
+         * Nachricht. Mit dem Wiederholungsschlüssel war das endgültig: Jeder
+         * weitere Versuch bekam die unvollständige Nachricht zurück.
+         *
+         * Jetzt muss jeder genannte Anhang fertig, eigen und frei sein. Sonst
+         * scheitert die ganze Nachricht (die Transaktion rollt zurück, der
+         * Schlüssel bleibt frei), und der Client kann nach dem Hochladen
+         * erneut senden.
+         */
+        let gebunden = sqlx::query(
             "update attachments
-             set message_id = $1, status = 'ready'
-             where id = any($2) and message_id is null
+             set message_id = $1
+             where id = any($2) and message_id is null and status = 'ready'
                and ($3::uuid is null or uploader_id = $3)",
         )
         .bind(id)
-        .bind(&input.attachment_ids)
+        .bind(&gewuenscht)
         .bind(input.sender_id)
-        .execute(&state.pool)
-        .await?;
+        .execute(&mut *conn)
+        .await?
+        .rows_affected();
+        if gebunden != gewuenscht.len() as u64 {
+            return Err(AppError::bad_request(
+                "Mindestens ein Anhang ist nicht (fertig) hochgeladen oder schon vergeben",
+            ));
+        }
     }
 
-    super::conversations::touch_conversation(&state.pool, input.conversation_id).await?;
+    super::conversations::touch_conversation(&mut *conn, input.conversation_id).await?;
 
-    let viewer = input.sender_id.unwrap_or_else(Uuid::nil);
+    Ok(Angelegt {
+        row,
+        neu: true,
+        silent: input.silent,
+    })
+}
+
+/// Meldet eine angelegte Nachricht – NACH dem Commit.
+///
+/// Echtzeit an alle, die sie sehen dürfen, Push (außer bei stummen) und der
+/// Bierjunge-Auslöser. Eine Wiederholung (`neu == false`) meldet nichts: Das
+/// Original wurde schon gemeldet, als es festgeschrieben wurde.
+pub async fn ausliefern(state: &AppState, angelegt: Angelegt) -> AppResult<MessageDto> {
+    let Angelegt { row, neu, silent } = angelegt;
+    let viewer = row.sender_id.unwrap_or_else(Uuid::nil);
     let message = hydrate_messages(state, vec![row], viewer)
         .await?
         .into_iter()
         .next()
         .ok_or_else(|| AppError::internal("Nachricht konnte nicht geladen werden"))?;
+    if !neu {
+        return Ok(message);
+    }
 
     // Eine frisch geschriebene Nachricht liegt hinter jeder Grenze, also
     // bekommt sie jedes Mitglied – das ZITAT darin aber nicht, wenn es älter
     // als der eigene Beitritt ist.
     let members = ausspielen(state, &message, Event::message_new).await?;
 
-    if !input.silent {
+    if !silent {
         super::notify::notify_new_message(state, &message, &members).await;
     }
     // „Bierjunge“ / „hängt“ im Text startet ein Pressen-Spiel (erst NACH dem
@@ -464,13 +555,38 @@ pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<Me
     Ok(message)
 }
 
-/// Die Nachricht, die unter diesem Wiederholungsschlüssel schon steht – in der
-/// Fassung des Absenders.
-async fn schon_gesendet(state: &AppState, input: &NewMessage) -> AppResult<Option<MessageDto>> {
+/// Mehrere angelegte Nachrichten nach dem Commit melden. Ein Fehler bei einer
+/// hält die übrigen nicht auf – geschrieben sind sie ohnehin.
+pub async fn alle_ausliefern(state: &AppState, angelegte: Vec<Angelegt>) {
+    for angelegt in angelegte {
+        let id = angelegt.id();
+        if let Err(fehler) = ausliefern(state, angelegt).await {
+            tracing::warn!(%fehler, message_id = %id, "Nachricht festgeschrieben, Meldung gescheitert");
+        }
+    }
+}
+
+/// Creates a message, broadcasts it and triggers push notifications.
+///
+/// Feature modules (polls, calendar, games …) that write more than the
+/// message itself use [`nachricht_anlegen`] in their own transaction and
+/// [`ausliefern`] after the commit instead.
+pub async fn create_message(state: &AppState, input: NewMessage) -> AppResult<MessageDto> {
+    let mut tx = state.pool.begin().await?;
+    let angelegt = nachricht_anlegen(&mut tx, input).await?;
+    tx.commit().await?;
+    ausliefern(state, angelegt).await
+}
+
+/// Die Nachricht, die unter diesem Wiederholungsschlüssel schon steht.
+async fn schon_gesendet(
+    conn: &mut sqlx::PgConnection,
+    input: &NewMessage,
+) -> AppResult<Option<MessageRow>> {
     let (Some(client_id), Some(sender_id)) = (input.client_id.as_ref(), input.sender_id) else {
         return Ok(None);
     };
-    let existing = sqlx::query_as::<_, MessageRow>(
+    Ok(sqlx::query_as::<_, MessageRow>(
         "select * from messages
          where conversation_id = $1 and sender_id = $2 and client_id = $3
          limit 1",
@@ -478,15 +594,8 @@ async fn schon_gesendet(state: &AppState, input: &NewMessage) -> AppResult<Optio
     .bind(input.conversation_id)
     .bind(sender_id)
     .bind(client_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    match existing {
-        Some(row) => Ok(hydrate_messages(state, vec![row], sender_id)
-            .await?
-            .into_iter()
-            .next()),
-        None => Ok(None),
-    }
+    .fetch_optional(conn)
+    .await?)
 }
 
 /// Eine Nachricht ausspielen – an die, die sie sehen dürfen, und jedem in der

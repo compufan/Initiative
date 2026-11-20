@@ -371,7 +371,10 @@ pub async fn darf_nachricht_sehen(
 /// Für Ereignisse, die an ein Gespräch gehen und eine Nachricht betreffen –
 /// eine Reaktion etwa. Ohne diese Einschränkung bekäme ein Neuzugang die
 /// Kennung einer Nachricht gemeldet, die er nie sehen darf.
-pub async fn empfaenger_fuer_nachricht(pool: &PgPool, message_id: Uuid) -> AppResult<Vec<Uuid>> {
+pub async fn empfaenger_fuer_nachricht<'e, E>(executor: E, message_id: Uuid) -> AppResult<Vec<Uuid>>
+where
+    E: sqlx::PgExecutor<'e>,
+{
     let ids: Vec<Uuid> = sqlx::query_scalar(
         "select cm.user_id
            from messages m
@@ -380,7 +383,7 @@ pub async fn empfaenger_fuer_nachricht(pool: &PgPool, message_id: Uuid) -> AppRe
             and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)",
     )
     .bind(message_id)
-    .fetch_all(pool)
+    .fetch_all(executor)
     .await?;
     Ok(ids)
 }

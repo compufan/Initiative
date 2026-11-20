@@ -121,12 +121,15 @@ pub async fn melde_gelesen(
     Ok(())
 }
 
-pub async fn touch_conversation(pool: &PgPool, conversation_id: Uuid) -> AppResult<()> {
+pub async fn touch_conversation(
+    conn: &mut sqlx::PgConnection,
+    conversation_id: Uuid,
+) -> AppResult<()> {
     sqlx::query(
         "update conversations set last_message_at = now(), updated_at = now() where id = $1",
     )
     .bind(conversation_id)
-    .execute(pool)
+    .execute(conn)
     .await?;
     Ok(())
 }
@@ -949,15 +952,32 @@ pub async fn gespraeche_sperren(
     Ok(())
 }
 
-/// Nach dem Commit: Systemzeile „… ist jetzt Besitzer“ und neue Fassung an
-/// alle Mitglieder. Scheitert etwas, steht der Besitz trotzdem – nur die
-/// Meldung fehlt, und die nächste Chatliste zeigt ihn.
-pub async fn uebernahmen_melden(state: &AppState, uebernahmen: &[Uebernahme]) {
+/// In der Transaktion des Austritts: die Systemzeile „… ist jetzt Besitzer“
+/// je Übernahme. Steht mit dem Besitzwechsel fest oder gar nicht – vorher kam
+/// sie erst nach dem Commit, und ein Abbruch dazwischen hinterliess einen
+/// Besitzwechsel ohne jede Spur im Verlauf.
+pub async fn uebernahmen_eintragen(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    uebernahmen: &[Uebernahme],
+) -> AppResult<Vec<super::messages::Angelegt>> {
+    let mut karten = Vec::with_capacity(uebernahmen.len());
     for (chat, besitzer) in uebernahmen {
         let karte = super::messages::NewMessage::system(*chat, *besitzer, "owner.changed", vec![]);
-        if let Err(fehler) = super::messages::create_message(state, karte).await {
-            tracing::warn!(%fehler, %chat, "Besitzwechsel: Systemzeile gescheitert");
-        }
+        karten.push(super::messages::nachricht_anlegen(tx, karte).await?);
+    }
+    Ok(karten)
+}
+
+/// Nach dem Commit: die Systemzeilen ausspielen und die neue Fassung an alle
+/// Mitglieder. Scheitert die Meldung, steht der Besitz trotzdem samt Zeile –
+/// die nächste Chatliste zeigt ihn.
+pub async fn uebernahmen_melden(
+    state: &AppState,
+    uebernahmen: &[Uebernahme],
+    karten: Vec<super::messages::Angelegt>,
+) {
+    super::messages::alle_ausliefern(state, karten).await;
+    for (chat, _) in uebernahmen {
         if let Err(fehler) = broadcast_conversation(state, *chat, None).await {
             tracing::warn!(%fehler, %chat, "Besitzwechsel: Rundruf gescheitert");
         }
@@ -988,7 +1008,8 @@ pub async fn konto_loeschen(state: &AppState, user_id: Uuid) -> AppResult<()> {
         .execute(&mut *tx)
         .await?;
     let uebernahmen = besitz_nachfolgen(&mut tx, &besessen).await?;
+    let karten = uebernahmen_eintragen(&mut tx, &uebernahmen).await?;
     tx.commit().await?;
-    uebernahmen_melden(state, &uebernahmen).await;
+    uebernahmen_melden(state, &uebernahmen, karten).await;
     Ok(())
 }
