@@ -799,11 +799,12 @@ async fn abschliessen(
     // Schon fertig? Dann ist die Antwort nur unterwegs verloren gegangen.
     if sitzung.status == "fertig" {
         let row = load_attachment(&state.pool, sitzung.attachment_id).await?;
-        let summe: Option<String> = sqlx::query_scalar("select sha256 from attachments where id = $1")
-            .bind(sitzung.attachment_id)
-            .fetch_optional(&state.pool)
-            .await?
-            .flatten();
+        let summe: Option<String> =
+            sqlx::query_scalar("select sha256 from attachments where id = $1")
+                .bind(sitzung.attachment_id)
+                .fetch_optional(&state.pool)
+                .await?
+                .flatten();
         return Ok(Json(mit_pruefsumme(
             &to_attachment_dto(&row, &state.config),
             summe,
@@ -966,30 +967,43 @@ async fn abschluss_durchfuehren(
         .await
         .map_err(behalten)?;
 
-    let dto = fertig_melden(state, sitzung.attachment_id, input)
-        .await
-        .map_err(behalten)?;
-    // Scheitert das Festhalten, ist die Datei trotzdem in Ordnung – nur ohne
-    // Vergleichssumme. Darum kein Abbruch, aber eine laute Zeile im Protokoll.
-    if let Err(fehler) = sqlx::query("update attachments set sha256 = $2 where id = $1")
-        .bind(sitzung.attachment_id)
-        .bind(&ist)
-        .execute(&state.pool)
-        .await
-    {
-        tracing::warn!(%fehler, "Gesamt-Prüfsumme nicht gespeichert");
-    }
-    let _ = sqlx::query(
-        "update upload_sitzungen set status = 'fertig', aktualisiert_at = now() where id = $1",
-    )
-    .bind(sitzung.id)
-    .execute(&state.pool)
-    .await;
-    // Die Stückliste braucht niemand mehr; die Sitzung bleibt als Quittung.
-    let _ = sqlx::query("delete from upload_stuecke where sitzung_id = $1")
+    /*
+     * Ab hier liegen die Bytes am Ziel. Was folgt, gilt zusammen oder gar
+     * nicht: Anhang `ready` samt Prüfsumme, Sitzung `fertig`, Stücke weg.
+     *
+     * Vorher waren es vier Anweisungen, drei davon mit verschluckten Fehlern.
+     * Ein Abbruch nach dem ersten liess den Anhang fertig und die Sitzung im
+     * `abschluss` stehen; der Neuversuch nach einer Stunde fand die Teildatei
+     * nicht mehr (sie war ja verschoben) und meldete „neu beginnen“ für eine
+     * Datei, die längst bereitstand.
+     *
+     * Scheitert diese Transaktion, bleibt die Sitzung im `abschluss`, und der
+     * Aufrufer setzt sie auf `offen` zurück; die Bytes am Ziel gehören dann
+     * zu einer `pending`-Zeile, die das Aufräumen samt Datei entfernt.
+     */
+    let dto = async {
+        let mut tx = state.pool.begin().await?;
+        let dto = fertig_melden(&mut tx, &state.config, sitzung.attachment_id, input).await?;
+        sqlx::query("update attachments set sha256 = $2 where id = $1")
+            .bind(sitzung.attachment_id)
+            .bind(&ist)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "update upload_sitzungen set status = 'fertig', aktualisiert_at = now() where id = $1",
+        )
         .bind(sitzung.id)
-        .execute(&state.pool)
-        .await;
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("delete from upload_stuecke where sitzung_id = $1")
+            .bind(sitzung.id)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok::<_, AppError>(dto)
+    }
+    .await
+    .map_err(behalten)?;
     /*
      * Wird die Platte knapp, soll die neue Datei (oder eine ältere) nicht erst
      * in einer Viertelstunde auf die Box wandern: Der Dienst wird gleich

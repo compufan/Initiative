@@ -212,7 +212,7 @@ async fn upload_data(
     }
 
     let limit = max_upload_bytes(&attachment.kind);
-    let mut stored = false;
+    let mut stored: Option<i64> = None;
     let mut original_name: Option<String> = None;
 
     // Ab hier wird gepuffert – erst der Platz, dann die Bytes.
@@ -261,12 +261,10 @@ async fn upload_data(
                 .storage
                 .put(&attachment.storage_key, bytes.clone(), &attachment.mime)
                 .await?;
-            sqlx::query("update attachments set size = $2 where id = $1")
-                .bind(id)
-                .bind(bytes.len() as i64)
-                .execute(&state.pool)
-                .await?;
-            stored = true;
+            // Die Grösse kommt mit `ready` unten in EINER Anweisung – vorher
+            // zwei, und dazwischen stand eine Zeile mit der neuen Grösse, aber
+            // noch `pending`.
+            stored = Some(bytes.len() as i64);
             break;
         }
         Ok::<(), AppError>(())
@@ -274,16 +272,20 @@ async fn upload_data(
     .await
     .map_err(|_| AppError::bad_request("Upload-Timeout: Anfrage dauerte zu lange"))??;
 
-    if !stored {
+    let Some(groesse) = stored else {
         return Err(AppError::bad_request("Es wurde keine Datei übertragen"));
-    }
+    };
 
+    // Erst die Bytes (oben), dann die Zeile: Bricht es dazwischen ab, liegt
+    // eine Datei zu einer `pending`-Zeile, die das Aufräumen nach einem Tag
+    // samt Datei (Müll-Auslöser) entfernt – nie eine `ready`-Zeile ohne Datei.
     let row = sqlx::query_as::<_, AttachmentRow>(
-        "update attachments set status = 'ready', file_name = coalesce(file_name, $2)
+        "update attachments set status = 'ready', size = $3, file_name = coalesce(file_name, $2)
          where id = $1 returning *",
     )
     .bind(id)
     .bind(original_name)
+    .bind(groesse)
     .fetch_one(&state.pool)
     .await?;
 
@@ -312,7 +314,10 @@ async fn complete_upload(
 ) -> AppResult<Json<AttachmentDto>> {
     require_own(&state, id, user.id()).await?;
     metadaten_pruefen(&input)?;
-    Ok(Json(fertig_melden(&state, id, input).await?))
+    let mut conn = state.pool.acquire().await?;
+    Ok(Json(
+        fertig_melden(&mut conn, &state.config, id, input).await?,
+    ))
 }
 
 /// Wellenform und Vorschau prüfen – für beide Upload-Wege dieselbe Regel.
@@ -345,7 +350,8 @@ pub(crate) fn metadaten_pruefen(input: &CompleteUploadInput) -> AppResult<()> {
 
 /// Den Anhang auf `ready` setzen und die Masse nachtragen.
 pub(crate) async fn fertig_melden(
-    state: &AppState,
+    conn: &mut sqlx::PgConnection,
+    config: &crate::config::Config,
     id: Uuid,
     input: CompleteUploadInput,
 ) -> AppResult<AttachmentDto> {
@@ -366,10 +372,10 @@ pub(crate) async fn fertig_melden(
     .bind(input.duration_ms)
     .bind(input.waveform.map(|values| serde_json::json!(values)))
     .bind(input.preview_data_url)
-    .fetch_one(&state.pool)
+    .fetch_one(conn)
     .await?;
 
-    Ok(to_attachment_dto(&row, &state.config))
+    Ok(to_attachment_dto(&row, config))
 }
 
 fn parse_range(header: Option<&str>, total: Option<u64>) -> Option<ByteRange> {
@@ -1031,31 +1037,40 @@ async fn remove(
         ));
     }
     /*
-     * Die Bytes nur wegräumen, wenn sie niemandem sonst gehören.
+     * Erst die Zeile, dann die Bytes – und die Zeile nur, wenn sie noch frei ist.
      *
-     * Seit Migration 0020 kann eine zweite Zeile denselben `storage_key`
-     * tragen – eine in einen Chat weitergegebene Datei ist dieselbe Datei,
-     * nicht eine Kopie davon. Wer hier ohne Rückfrage löschte, nähme dem
-     * anderen das Bild unter den Füssen weg: Die Zeile stünde noch, die Bytes
-     * wären fort.
+     * Vorher: nachsehen, ob die Datei geteilt ist, die Bytes löschen, dann die
+     * Zeile. Wurde der Anhang dazwischen gesendet (die Outbox im anderen Tab),
+     * waren die Bytes einer gesendeten Nachricht fort; und eine Weitergabe in
+     * diesem Augenblick sah die Rückfrage „geteilt?“ zu früh.
      *
-     * Der Auslöser aus 0020 stellt dieselbe Frage für den Aufräumdienst. Hier
-     * wird sie noch einmal gestellt, weil diese Route die Bytes SOFORT
-     * wegräumt und nicht auf ihn wartet.
+     * Jetzt entscheidet eine Anweisung: Die Zeile geht nur, wenn sie an keiner
+     * Nachricht hängt. Ob die Bytes noch jemand hält, beantwortet der
+     * Müll-Auslöser (Migration 0020) in derselben Anweisung – steht danach ein
+     * Müll-Eintrag, gehören sie niemandem mehr. Der Aufräumdienst erledigt
+     * sie dann sicher; hier wird nur versucht, sie gleich loszuwerden.
      */
-    let geteilt: Option<(Uuid,)> =
-        sqlx::query_as("select id from attachments where storage_key = $1 and id <> $2 limit 1")
+    let geloescht = sqlx::query(
+        "delete from attachments where id = $1 and uploader_id = $2 and message_id is null",
+    )
+    .bind(id)
+    .bind(user.id())
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+    if geloescht == 0 {
+        return Err(AppError::forbidden(
+            "Bereits gesendete Anhänge können nicht gelöscht werden",
+        ));
+    }
+    let im_muell: bool =
+        sqlx::query_scalar("select exists (select 1 from storage_muell where storage_key = $1)")
             .bind(&attachment.storage_key)
-            .bind(id)
-            .fetch_optional(&state.pool)
+            .fetch_one(&state.pool)
             .await?;
-    if geteilt.is_none() {
+    if im_muell {
         state.storage.delete(&attachment.storage_key).await.ok();
     }
-    sqlx::query("delete from attachments where id = $1")
-        .bind(id)
-        .execute(&state.pool)
-        .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1198,6 +1213,20 @@ async fn in_chat_teilen(
     )
     .await?;
 
+    /*
+     * Kopien und Nachricht in EINER Transaktion.
+     *
+     * Vorher entstand jede Kopie für sich, und die Nachricht kam danach.
+     * Scheiterte die Nachricht, blieben Zeilen ohne Nachricht zurück, die
+     * dieselbe Datei hielten wie das Original.
+     *
+     * Und das Original wird `for share` gesperrt: Löscht jemand es zugleich,
+     * fragt der Müll-Auslöser (Migration 0020), ob noch jemand denselben
+     * `storage_key` hält – und sah die noch nicht festgeschriebene Kopie
+     * nicht. Die Bytes wanderten in den Müll, die Kopie zeigte ins Leere.
+     * Mit der Sperre wartet das Löschen, bis die Kopie steht (oder nicht).
+     */
+    let mut tx = state.pool.begin().await?;
     let mut neue: Vec<Uuid> = Vec::new();
     let mut arten: Vec<String> = Vec::new();
     for id in &input.ids {
@@ -1206,7 +1235,12 @@ async fn in_chat_teilen(
                 "Auf mindestens eine dieser Dateien hast du keinen Zugriff",
             ));
         }
-        let row = load_attachment(&state.pool, *id).await?;
+        let row =
+            sqlx::query_as::<_, AttachmentRow>("select * from attachments where id = $1 for share")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?
+                .ok_or_else(|| AppError::not_found("Datei nicht gefunden"))?;
         if row.status != "ready" {
             return Err(AppError::bad_request(
                 "Diese Datei ist noch nicht fertig hochgeladen",
@@ -1237,7 +1271,7 @@ async fn in_chat_teilen(
         .bind(&row.prioritaet)
         .bind(row.ausgelagert_at)
         .bind(row.quelle_id.unwrap_or(row.id))
-        .execute(&state.pool)
+        .execute(&mut *tx)
         .await?;
         neue.push(neu);
         arten.push(row.kind.clone());
@@ -1270,8 +1304,8 @@ async fn in_chat_teilen(
         _ => "file".to_string(),
     };
 
-    let nachricht = crate::services::messages::create_message(
-        &state,
+    let angelegt = crate::services::messages::nachricht_anlegen(
+        &mut tx,
         crate::services::messages::NewMessage {
             conversation_id: input.conversation_id,
             sender_id: Some(user.id()),
@@ -1285,6 +1319,8 @@ async fn in_chat_teilen(
         },
     )
     .await?;
+    tx.commit().await?;
+    let nachricht = crate::services::messages::ausliefern(&state, angelegt).await?;
     Ok(Json(nachricht))
 }
 
