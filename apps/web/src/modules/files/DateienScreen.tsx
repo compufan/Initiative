@@ -436,7 +436,7 @@ export function DateienScreen() {
           title={collectionId ? 'Noch nichts drin' : 'Noch keine Sammlung'}
           description={
             collectionId
-              ? 'Lade Dateien direkt hoch – oder tippe im Chat eine Nachricht lange an und wähle „Zur Sammlung hinzufügen“.'
+              ? 'Lade Dateien direkt hoch – oder öffne im Chat bei einer Nachricht „⋯“ und wähle „Zur Sammlung hinzufügen“.'
               : 'Leg eine Sammlung an. Dateien kommen dann direkt hinein oder aus einem Chat dazu.'
           }
           action={

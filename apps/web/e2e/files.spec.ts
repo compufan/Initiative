@@ -66,21 +66,12 @@ async function seiteFuer(browser: Browser, sitzung: Sitzung, baseURL: string): P
   return page;
 }
 
-/**
- * Langes Antippen auf einer Nachricht.
- *
- * Die Handler hängen an `.msg-col`; ein Klick reicht nicht, es braucht die
- * Pause zwischen Drücken und Loslassen.
- */
-async function langAntippen(page: Page, text: string) {
-  const blase = page.locator('.msg-col').filter({ hasText: text }).first();
-  await expect(blase).toBeVisible({ timeout: 15_000 });
-  const kasten = await blase.boundingBox();
-  if (!kasten) throw new Error('Die Nachricht hat keine Fläche');
-  await page.mouse.move(kasten.x + kasten.width / 2, kasten.y + kasten.height / 2);
-  await page.mouse.down();
-  await page.waitForTimeout(800);
-  await page.mouse.up();
+/** Öffnet das Menü einer Nachricht über „⋯“ (langes Drücken startet die Auswahl). */
+async function nachrichtenMenue(page: Page, text: string) {
+  const zeile = page.locator('.msg-row').filter({ hasText: text }).first();
+  await expect(zeile).toBeVisible({ timeout: 15_000 });
+  await zeile.hover();
+  await zeile.getByRole('button', { name: 'Nachrichtenoptionen' }).click();
 }
 
 test('eine Datei aus dem Chat in eine Sammlung legen', async ({ browser, baseURL }) => {
@@ -122,13 +113,15 @@ test('eine Datei aus dem Chat in eine Sammlung legen', async ({ browser, baseURL
 
   // ---- Ben legt die Datei aus dem Chat in eine neue Sammlung --------------
   await benPage.goto(`${wurzel}/chats/${chat.id}`);
-  await langAntippen(benPage, 'Vom Urlaub');
+  // Langes Drücken startet seit der Mehrfachauswahl die Auswahl (wie bei
+  // WhatsApp); das Menü einer Nachricht liegt hinter „⋯“.
+  await nachrichtenMenue(benPage, 'Vom Urlaub');
 
   await benPage.getByText('Zur Sammlung hinzufügen').click();
   await benPage.getByText('Neue Sammlung anlegen').click();
   const name = `Urlaubsbilder ${Date.now()}`;
   await benPage.locator('#col-name').fill(name);
-  await benPage.getByRole('button', { name: 'Speichern' }).click();
+  await benPage.getByRole('button', { name: 'Speichern', exact: true }).click();
   await expect(benPage.getByText('Zur Sammlung hinzugefügt.')).toBeVisible({ timeout: 15_000 });
 
   // ---- Ben besitzt sie ---------------------------------------------------
