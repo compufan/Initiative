@@ -4,6 +4,7 @@ import { Sheet } from '../../components/Sheet.js';
 import { EmptyState } from '../../components/Feedback.js';
 import { waveformFromBlob } from '../../lib/upload.js';
 import type { ComposerActionProps } from '../types.js';
+import { useChat } from '../../state/chat.js';
 import { toast } from '../../state/ui.js';
 import { TonWerkstatt } from './TonWerkstatt.js';
 import {
@@ -113,6 +114,22 @@ export function VoiceSheet({ conversationId, onClose }: ComposerActionProps) {
       teardown();
     };
   }, [teardown]);
+
+  /*
+   * „nimmt Sprachnachricht auf …“ bei den anderen. Dasselbe Ereignis wie
+   * „tippt …“, nur mit `art: 'audio'`, und wie dort alle paar Sekunden
+   * erneuert – es verfällt von selbst, falls die Leitung abreisst.
+   */
+  useEffect(() => {
+    if (!recording) return undefined;
+    const melden = () => useChat.getState().setTyping(conversationId, true, 'audio');
+    melden();
+    const id = window.setInterval(melden, 2500);
+    return () => {
+      window.clearInterval(id);
+      useChat.getState().setTyping(conversationId, false, 'audio');
+    };
+  }, [recording, conversationId]);
 
   useEffect(() => {
     if (!recording) return undefined;

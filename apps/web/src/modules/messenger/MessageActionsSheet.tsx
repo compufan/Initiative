@@ -2,24 +2,42 @@ import { createElement, useMemo, useState } from 'react';
 import { REACTION_EMOJIS, type ConversationDto } from '@initiative/shared';
 import { Sheet } from '../../components/Sheet.js';
 import { messageActions } from '../registry.js';
-import { api } from '../../lib/api.js';
 import { useChat, type ChatMessage } from '../../state/chat.js';
+import { useSterne } from '../../state/sterne.js';
 import { useMyId } from '../../state/session.js';
 import { canModerate } from './helpers.js';
 import { toast } from '../../state/ui.js';
+import { weiterleitbar } from './WeiterleitenSheet.js';
 
-interface MessageActionsSheetProps {
+/** Was das Blatt an den Chat zurückgibt – der Chat öffnet die Folgeblätter. */
+export interface NachrichtenHandlungen {
+  onReply: (message: ChatMessage) => void;
+  /** Bearbeiten in der Eingabezeile (wie bei WhatsApp), nicht im Blatt. */
+  onEdit: (message: ChatMessage) => void;
+  onForward: (message: ChatMessage) => void;
+  onInfo: (message: ChatMessage) => void;
+  onReaktionen: (message: ChatMessage) => void;
+  /** Mehrfachauswahl mit dieser Nachricht beginnen. */
+  onAuswaehlen: (message: ChatMessage) => void;
+  /**
+   * „＋“: die volle Emoji-Auswahl. Sie öffnet der Chat als eigenes Blatt –
+   * ein Blatt im Blatt schloss beim ersten Tipp das äussere und nahm das
+   * innere mit.
+   */
+  onEmojiWahl: (message: ChatMessage) => void;
+}
+
+interface MessageActionsSheetProps extends NachrichtenHandlungen {
   message: ChatMessage | null;
   conversation: ConversationDto | null;
   onClose: () => void;
-  onReply: (message: ChatMessage) => void;
 }
 
 export function MessageActionsSheet({
   message,
   conversation,
   onClose,
-  onReply,
+  ...handlungen
 }: MessageActionsSheetProps) {
   return (
     <Sheet open={message != null} onClose={onClose} title="Nachricht">
@@ -29,7 +47,7 @@ export function MessageActionsSheet({
           message={message}
           conversation={conversation}
           onClose={onClose}
-          onReply={onReply}
+          {...handlungen}
         />
       )}
     </Sheet>
@@ -41,17 +59,21 @@ function Actions({
   conversation,
   onClose,
   onReply,
-}: {
+  onEdit,
+  onForward,
+  onInfo,
+  onReaktionen,
+  onAuswaehlen,
+  onEmojiWahl,
+}: NachrichtenHandlungen & {
   message: ChatMessage;
   conversation: ConversationDto | null;
   onClose: () => void;
-  onReply: (message: ChatMessage) => void;
 }) {
   const myId = useMyId();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(message.body ?? '');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
+  const gespeichert = useSterne((state) => Boolean(state.ids[message.id]));
 
   const isMine = message.senderId == null || message.senderId === myId;
   const isLocal = Boolean(message.pending || message.failed);
@@ -120,23 +142,20 @@ function Actions({
     }
   }
 
-  async function saveEdit() {
-    const body = draft.trim();
-    if (body.length === 0 || body === message.body) {
-      setEditing(false);
-      return;
-    }
-    setBusy(true);
+  async function sternUmschalten() {
     try {
-      const updated = await api.messages.edit(message.id, body);
-      useChat.getState().applyMessage(updated);
+      await useChat.getState().toggleStern(message, !gespeichert);
+      toast(gespeichert ? 'Nicht mehr gespeichert' : 'Gespeichert', 'success');
       onClose();
     } catch {
-      toast('Nachricht konnte nicht bearbeitet werden', 'error');
-    } finally {
-      setBusy(false);
+      toast('Speichern hat nicht geklappt', 'error');
     }
   }
+
+  const kannWeiterleiten = weiterleitbar(message);
+  const kannSpeichern = !isLocal && !message.deletedAt && message.type !== 'system';
+  const kannInfo = isMine && !isLocal && !message.deletedAt;
+  const hatReaktionen = message.reactions.length > 0;
 
   async function remove(scope: 'me' | 'all') {
     setBusy(true);
@@ -152,37 +171,6 @@ function Actions({
     } finally {
       setBusy(false);
     }
-  }
-
-  if (editing) {
-    return (
-      <div className="stack">
-        <div className="field">
-          <label htmlFor="msg-edit">Nachricht bearbeiten</label>
-          <textarea
-            id="msg-edit"
-            className="textarea"
-            value={draft}
-            autoFocus
-            onChange={(event) => setDraft(event.target.value)}
-          />
-        </div>
-        <div className="row" style={{ gap: 'var(--space-2)' }}>
-          <button type="button" className="btn btn-ghost" onClick={() => setEditing(false)}>
-            Abbrechen
-          </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            style={{ flex: 1 }}
-            disabled={busy || draft.trim().length === 0}
-            onClick={() => void saveEdit()}
-          >
-            Speichern
-          </button>
-        </div>
-      </div>
-    );
   }
 
   return (
@@ -214,6 +202,18 @@ function Actions({
             </button>
           );
         })}
+        <button
+          type="button"
+          className="msg-reaction-choice msg-reaction-mehr"
+          aria-label="Weitere Emoji"
+          data-tipp="Alle Emoji mit Suche"
+          onClick={() => {
+            onEmojiWahl(message);
+            onClose();
+          }}
+        >
+          ＋
+        </button>
       </div>
 
       <div className="list msg-action-list">
@@ -236,17 +236,75 @@ function Actions({
             <span>Kopieren</span>
           </button>
         )}
+        {kannWeiterleiten && (
+          <button
+            type="button"
+            className="list-row"
+            onClick={() => {
+              onForward(message);
+              onClose();
+            }}
+          >
+            <span aria-hidden="true">↪️</span>
+            <span>Weiterleiten</span>
+          </button>
+        )}
+        {kannSpeichern && (
+          <button type="button" className="list-row" onClick={() => void sternUmschalten()}>
+            <span aria-hidden="true">{gespeichert ? '☆' : '⭐'}</span>
+            <span>{gespeichert ? 'Nicht mehr speichern' : 'Speichern (Stern)'}</span>
+          </button>
+        )}
         {canEdit && (
           <button
             type="button"
             className="list-row"
             onClick={() => {
-              setDraft(message.body ?? '');
-              setEditing(true);
+              onEdit(message);
+              onClose();
             }}
           >
             <span aria-hidden="true">✏️</span>
             <span>Bearbeiten</span>
+          </button>
+        )}
+        {hatReaktionen && (
+          <button
+            type="button"
+            className="list-row"
+            onClick={() => {
+              onReaktionen(message);
+              onClose();
+            }}
+          >
+            <span aria-hidden="true">😊</span>
+            <span>Wer hat reagiert?</span>
+          </button>
+        )}
+        {kannInfo && (
+          <button
+            type="button"
+            className="list-row"
+            onClick={() => {
+              onInfo(message);
+              onClose();
+            }}
+          >
+            <span aria-hidden="true">ℹ️</span>
+            <span>Info (gelesen, zugestellt)</span>
+          </button>
+        )}
+        {!isLocal && (
+          <button
+            type="button"
+            className="list-row"
+            onClick={() => {
+              onAuswaehlen(message);
+              onClose();
+            }}
+          >
+            <span aria-hidden="true">☑️</span>
+            <span>Auswählen</span>
           </button>
         )}
         {weitere.map((action) => (

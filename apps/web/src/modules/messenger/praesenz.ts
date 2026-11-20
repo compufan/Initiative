@@ -1,4 +1,4 @@
-import type { ConversationDto } from '@initiative/shared';
+import type { ConversationDto, Haken } from '@initiative/shared';
 import type { ChatMessage } from '../../state/chat.js';
 import { counterpartOf } from './helpers.js';
 
@@ -69,6 +69,16 @@ export interface BlasenProps {
   showAvatar: boolean;
   onOpenActions: (message: ChatMessage) => void;
   onJumpTo: (messageId: string) => void;
+  /** Lesehäkchen eigener Nachrichten; `null` bei fremden. */
+  haken?: Haken | null;
+  /** `null`: keine Auswahl läuft; sonst ob diese Nachricht ausgewählt ist. */
+  auswahl?: boolean | null;
+  /** Langes Drücken / Tipp in der Auswahl: diese Nachricht umschalten. */
+  onAuswahl?: (message: ChatMessage) => void;
+  /** Wischen nach rechts: antworten. */
+  onReply?: (message: ChatMessage) => void;
+  /** „Wer hat reagiert?“ öffnen. */
+  onReaktionen?: (message: ChatMessage) => void;
 }
 
 /**
@@ -91,6 +101,11 @@ export function blasenPropsGleich(vorher: BlasenProps, nachher: BlasenProps): bo
     vorher.showAvatar === nachher.showAvatar &&
     vorher.onOpenActions === nachher.onOpenActions &&
     vorher.onJumpTo === nachher.onJumpTo &&
+    vorher.haken === nachher.haken &&
+    vorher.auswahl === nachher.auswahl &&
+    vorher.onAuswahl === nachher.onAuswahl &&
+    vorher.onReply === nachher.onReply &&
+    vorher.onReaktionen === nachher.onReaktionen &&
     chatFuerBlaseGleich(vorher.conversation, nachher.conversation)
   );
 }

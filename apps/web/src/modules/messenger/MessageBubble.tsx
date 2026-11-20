@@ -1,5 +1,5 @@
-import { memo, useState, type ComponentType } from 'react';
-import { messagePreview } from '@initiative/shared';
+import { memo, useState, type ComponentType, type PointerEvent as ReactPointerEvent } from 'react';
+import { hakenText, messagePreview, ohneFormatierung, type Haken } from '@initiative/shared';
 import { messageRenderers } from '../registry.js';
 import type { MessageRendererProps } from '../types.js';
 import { Avatar } from '../../components/Avatar.js';
@@ -11,6 +11,8 @@ import { formatTime, senderName } from './helpers.js';
 import { useLongPress } from './useLongPress.js';
 import { blasenPropsGleich, type BlasenProps } from './praesenz.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
+import { useSterne } from '../../state/sterne.js';
+import { useWischenZumAntworten } from './wischen.js';
 
 let rendererCache: Record<string, ComponentType<MessageRendererProps>> | null = null;
 
@@ -37,11 +39,30 @@ function MessageBubbleInnen({
   showAvatar,
   onOpenActions,
   onJumpTo,
+  haken = null,
+  auswahl = null,
+  onAuswahl,
+  onReply,
+  onReaktionen,
 }: BlasenProps) {
   const myId = useMyId();
   const isMine = message.senderId == null || message.senderId === myId;
   const Renderer = rendererFor(message.type);
-  const longPress = useLongPress(() => onOpenActions(message));
+  const istLokal = Boolean(message.pending || message.failed) || message.id.startsWith('local:');
+  /*
+   * Langes Drücken beginnt die Auswahl (wie bei WhatsApp); in der Auswahl
+   * schaltet es um. Das Menü einer einzelnen Nachricht bleibt über „⋯“
+   * erreichbar – auch mit der Tastatur. Lokale (noch nicht gesendete)
+   * Nachrichten lassen sich nicht auswählen; für sie gibt es das Menü.
+   */
+  const longPress = useLongPress(() => {
+    if (onAuswahl && !istLokal) onAuswahl(message);
+    else onOpenActions(message);
+  });
+  const wischen = useWischenZumAntworten(
+    onReply && auswahl === null && !istLokal && !message.deletedAt ? () => onReply(message) : null,
+  );
+  const gespeichert = useSterne((state) => Boolean(state.ids[message.id]));
   // Vor der frühen Rückkehr für Systemnachrichten: Ein Haken darf nicht
   // manchmal laufen und manchmal nicht.
   const [verwerfenFrage, setVerwerfenFrage] = useState(false);
@@ -80,11 +101,54 @@ function MessageBubbleInnen({
     }
   }
 
+  const imAuswahlModus = auswahl !== null;
+  const weitergeleitet = message.metadata?.weitergeleitet;
+
+  // Beide Gesten am selben Element: langes Drücken und Wischen.
+  const gesten = {
+    ...longPress,
+    onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+      longPress.onPointerDown(event);
+      wischen.onPointerDown(event);
+    },
+    onPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+      longPress.onPointerMove(event);
+      wischen.onPointerMove(event);
+    },
+    onPointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+      longPress.onPointerUp();
+      wischen.onPointerUp(event);
+    },
+    onPointerCancel(event: ReactPointerEvent<HTMLDivElement>) {
+      longPress.onPointerCancel();
+      wischen.onPointerCancel(event);
+    },
+  };
+
   return (
     <div
-      className={`msg-row ${isMine ? 'msg-row-mine' : 'msg-row-theirs'}${showAvatar ? ' msg-row-start' : ''}`}
+      className={`msg-row ${isMine ? 'msg-row-mine' : 'msg-row-theirs'}${showAvatar ? ' msg-row-start' : ''}${auswahl ? ' msg-row-ausgewaehlt' : ''}`}
       data-message-id={message.id}
+      // In der Auswahl schaltet ein Tipp irgendwo auf die Zeile um.
+      onClickCapture={
+        imAuswahlModus && onAuswahl && !istLokal
+          ? (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onAuswahl(message);
+            }
+          : undefined
+      }
     >
+      {imAuswahlModus && !istLokal && (
+        <input
+          type="checkbox"
+          className="msg-auswahl"
+          checked={auswahl}
+          aria-label={`Nachricht auswählen: ${ohneFormatierung(messagePreview(message)).slice(0, 60)}`}
+          onChange={() => onAuswahl?.(message)}
+        />
+      )}
       {!isMine && (
         <span className="msg-avatar-slot">
           {showAvatar && isGroup && (
@@ -101,9 +165,16 @@ function MessageBubbleInnen({
         </span>
       )}
 
-      <div className="msg-col" {...longPress}>
+      <div className="msg-col" {...gesten}>
         {showName && (
           <span className="msg-sender">{senderName(conversation, message.senderId)}</span>
+        )}
+
+        {weitergeleitet && (
+          <span className="msg-weitergeleitet">
+            <span aria-hidden="true">↪ </span>
+            {weitergeleitet.von ? `Weitergeleitet von ${weitergeleitet.von}` : 'Weitergeleitet'}
+          </span>
         )}
 
         {message.replyTo && (
@@ -122,6 +193,11 @@ function MessageBubbleInnen({
         <Renderer message={message} conversation={conversation} isMine={isMine} />
 
         <div className="msg-meta">
+          {gespeichert && (
+            <span className="msg-stern" aria-label="gespeichert" title="gespeichert">
+              ⭐
+            </span>
+          )}
           {message.editedAt && <span>bearbeitet</span>}
           <span>{formatTime(message.createdAt)}</span>
           {isMine && message.pending && <span aria-label="wird gesendet">⏳</span>}
@@ -155,7 +231,9 @@ function MessageBubbleInnen({
               </button>
             </>
           )}
-          {isMine && !message.pending && !message.failed && <span aria-label="gesendet">✓</span>}
+          {isMine && !message.pending && !message.failed && (
+            <Haekchen haken={haken ?? 'gesendet'} />
+          )}
         </div>
 
         {message.reactions.length > 0 && (
@@ -191,18 +269,31 @@ function MessageBubbleInnen({
                 </button>
               );
             })}
+            {onReaktionen && (
+              <button
+                type="button"
+                className="msg-reaction msg-reaction-wer"
+                aria-label="Wer hat reagiert?"
+                data-tipp="Zeigt, wer womit reagiert hat"
+                onClick={() => onReaktionen(message)}
+              >
+                <span aria-hidden="true">⋯</span>
+              </button>
+            )}
           </div>
         )}
       </div>
 
-      <button
-        type="button"
-        className="msg-more icon-btn"
-        aria-label="Nachrichtenoptionen"
-        onClick={() => onOpenActions(message)}
-      >
-        ⋯
-      </button>
+      {!imAuswahlModus && (
+        <button
+          type="button"
+          className="msg-more icon-btn"
+          aria-label="Nachrichtenoptionen"
+          onClick={() => onOpenActions(message)}
+        >
+          ⋯
+        </button>
+      )}
 
       {verwerfenFrage && (
         <ConfirmDialog
@@ -230,5 +321,27 @@ function MessageBubbleInnen({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * ✓ gesendet, ✓✓ zugestellt, ✓✓ blau gelesen.
+ *
+ * Nicht nur die Farbe unterscheidet „gelesen“: Für Vorlesehilfen steht es im
+ * Namen, und wer Blau nicht sieht, erkennt es am kräftigeren Strich.
+ */
+export function Haekchen({ haken }: { haken: Haken }) {
+  if (haken === 'wartet') return null;
+  const doppelt = haken !== 'gesendet';
+  return (
+    <span
+      className={`msg-haken${haken === 'gelesen' ? ' msg-haken-gelesen' : ''}`}
+      role="img"
+      aria-label={hakenText(haken)}
+      title={hakenText(haken)}
+      data-haken={haken}
+    >
+      {doppelt ? '✓✓' : '✓'}
+    </span>
   );
 }

@@ -420,14 +420,17 @@ self.addEventListener('push', (event) => {
           client.url.includes(payload.conversationId as string),
       );
       const tag = payload.tag ?? payload.kind;
+      // „Ohne Ton senden“: Die Mitteilung kommt, aber ohne Ton und Vibration
+      // (`notify_new_message_mit` im Server).
+      const leise = payload.kind === 'message-leise';
 
       await self.registration.showNotification(payload.title, {
         body: payload.body,
         icon: payload.icon ?? SYMBOL_ICON,
         badge: payload.badge ?? SYMBOL_BADGE,
         tag,
-        renotify: Boolean(payload.tag) && !imChat,
-        silent: imChat,
+        renotify: Boolean(payload.tag) && !imChat && !leise,
+        silent: imChat || leise,
         data: { url: payload.url ?? '/' },
       } as NotificationOptions);
 

@@ -165,7 +165,13 @@ export function isGrouped(previous: MessageDto | undefined, message: MessageDto)
   return Number.isFinite(gap) && gap < 5 * 60_000;
 }
 
-export function typingLabel(names: string[]): string {
+/**
+ * „tippt …“ oder „nimmt Sprachnachricht auf …“. Nimmt jemand auf, gewinnt
+ * das: Es dauert länger und sagt mehr darüber, was gleich kommt.
+ */
+export function typingLabel(names: string[], aufnehmend: string[] = []): string {
+  if (aufnehmend.length === 1) return `${aufnehmend[0]} nimmt Sprachnachricht auf …`;
+  if (aufnehmend.length > 1) return `${aufnehmend.length} Personen nehmen Sprachnachrichten auf …`;
   if (names.length === 0) return '';
   if (names.length === 1) return `${names[0]} tippt …`;
   if (names.length === 2) return `${names[0]} und ${names[1]} tippen …`;

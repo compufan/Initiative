@@ -1,5 +1,7 @@
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
+import { formatierungParsen, hatFormatierung, type FormatKnoten } from '@initiative/shared';
 import type { MessageRendererProps } from '../types.js';
+import { useSuchbegriff } from './suchbegriff.js';
 
 const URL_PATTERN = /(https?:\/\/[^\s<>()]+|www\.[^\s<>()]+)/gi;
 
@@ -14,7 +16,36 @@ function splitTrailing(match: string): [string, string] {
   return [match.slice(0, match.length - trailing[0].length), trailing[0]];
 }
 
-function withLinks(text: string): ReactNode[] {
+/**
+ * Den Suchbegriff markieren – ohne regulären Ausdruck aus Nutzereingabe
+ * (Sonderzeichen wie `(` oder `*` wären sonst Syntax). Gross-/Kleinschreibung
+ * egal, wie die Suche.
+ */
+function mitTreffern(text: string, begriff: string | null, schluessel: string): ReactNode[] {
+  if (!begriff) return [text];
+  const klein = text.toLocaleLowerCase('de');
+  const nadel = begriff.toLocaleLowerCase('de');
+  const aus: ReactNode[] = [];
+  let ab = 0;
+  let stelle = klein.indexOf(nadel);
+  // Nur wenn die Kleinschreibung die Länge nicht ändert (sonst verrutschen die
+  // Stellen, etwa beim türkischen İ) – dann eben ohne Markierung.
+  if (klein.length !== text.length) return [text];
+  while (stelle >= 0 && nadel.length > 0) {
+    if (stelle > ab) aus.push(text.slice(ab, stelle));
+    aus.push(
+      <mark key={`${schluessel}-${stelle}`} className="msg-treffer">
+        {text.slice(stelle, stelle + nadel.length)}
+      </mark>,
+    );
+    ab = stelle + nadel.length;
+    stelle = klein.indexOf(nadel, ab);
+  }
+  if (ab < text.length) aus.push(text.slice(ab));
+  return aus;
+}
+
+function withLinks(text: string, begriff: string | null = null): ReactNode[] {
   const nodes: ReactNode[] = [];
   let lastIndex = 0;
   let key = 0;
@@ -22,7 +53,9 @@ function withLinks(text: string): ReactNode[] {
   let match = URL_PATTERN.exec(text);
   while (match) {
     const [url, trailing] = splitTrailing(match[0]);
-    if (match.index > lastIndex) nodes.push(text.slice(lastIndex, match.index));
+    if (match.index > lastIndex) {
+      nodes.push(...mitTreffern(text.slice(lastIndex, match.index), begriff, `t${lastIndex}`));
+    }
     if (url.length > 0) {
       nodes.push(
         <a key={`link-${key}`} href={href(url)} target="_blank" rel="noreferrer noopener">
@@ -35,8 +68,75 @@ function withLinks(text: string): ReactNode[] {
     lastIndex = match.index + match[0].length;
     match = URL_PATTERN.exec(text);
   }
-  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
+  if (lastIndex < text.length) nodes.push(...mitTreffern(text.slice(lastIndex), begriff, `t${lastIndex}`));
   return nodes.map((node, index) => <Fragment key={index}>{node}</Fragment>);
+}
+
+/**
+ * Ein Spoiler: verdeckt, bis man ihn antippt (oder mit Enter/Leertaste
+ * aufdeckt). Für Vorlesehilfen ist der Inhalt bis dahin verborgen, sonst
+ * läse sie vor, was Sehende nicht sehen sollen.
+ */
+function Spoiler({ children }: { children: ReactNode }) {
+  const [offen, setOffen] = useState(false);
+  if (offen) return <span className="msg-spoiler msg-spoiler-offen">{children}</span>;
+  return (
+    <span
+      className="msg-spoiler"
+      role="button"
+      tabIndex={0}
+      aria-label="Spoiler – antippen zum Aufdecken"
+      onClick={(event) => {
+        event.stopPropagation();
+        setOffen(true);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          setOffen(true);
+        }
+      }}
+    >
+      <span aria-hidden="true">{children}</span>
+    </span>
+  );
+}
+
+/** Formatierungsknoten als React-Elemente – nie als HTML. */
+function knotenRendern(knoten: FormatKnoten[], begriff: string | null, pfad = 'k'): ReactNode[] {
+  return knoten.map((k, index) => {
+    const schluessel = `${pfad}-${index}`;
+    switch (k.art) {
+      case 'text':
+        return <Fragment key={schluessel}>{withLinks(k.text, begriff)}</Fragment>;
+      case 'mono':
+        return (
+          <code key={schluessel} className="msg-mono">
+            {mitTreffern(k.text, begriff, schluessel)}
+          </code>
+        );
+      case 'block':
+        return (
+          <pre key={schluessel} className="msg-block">
+            <code>{mitTreffern(k.text, begriff, schluessel)}</code>
+          </pre>
+        );
+      case 'fett':
+        return <strong key={schluessel}>{knotenRendern(k.kinder, begriff, schluessel)}</strong>;
+      case 'kursiv':
+        return <em key={schluessel}>{knotenRendern(k.kinder, begriff, schluessel)}</em>;
+      case 'durch':
+        return <s key={schluessel}>{knotenRendern(k.kinder, begriff, schluessel)}</s>;
+      case 'spoiler':
+        return <Spoiler key={schluessel}>{knotenRendern(k.kinder, begriff, schluessel)}</Spoiler>;
+    }
+  });
+}
+
+/** Text mit Formatierung, Links und markiertem Suchbegriff. */
+export function FormatierterText({ text, begriff = null }: { text: string; begriff?: string | null }) {
+  if (!hatFormatierung(text)) return <>{withLinks(text, begriff)}</>;
+  return <>{knotenRendern(formatierungParsen(text), begriff)}</>;
 }
 
 /**
@@ -63,6 +163,7 @@ function emojiOnlyCount(text: string): number {
 /** Default chat bubble: links, line breaks and oversized emoji-only messages. */
 export function TextBubble({ message, isMine }: MessageRendererProps) {
   const tone = isMine ? 'msg-bubble-mine' : 'msg-bubble-theirs';
+  const begriff = useSuchbegriff(message.conversationId);
 
   if (message.deletedAt) {
     return (
@@ -110,5 +211,9 @@ export function TextBubble({ message, isMine }: MessageRendererProps) {
     );
   }
 
-  return <div className={`msg-bubble ${tone}`}>{withLinks(body)}</div>;
+  return (
+    <div className={`msg-bubble ${tone}`}>
+      <FormatierterText text={body} begriff={begriff} />
+    </div>
+  );
 }

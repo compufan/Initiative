@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { hakenFuer, type Haken, type MitgliedStand } from '@initiative/shared';
 import { Avatar } from '../../components/Avatar.js';
 import { EmptyState, Spinner } from '../../components/Feedback.js';
 import { useChat, type ChatMessage } from '../../state/chat.js';
-import { useMyId } from '../../state/session.js';
+import { useMyId, useSession } from '../../state/session.js';
+import { useEntwuerfe } from '../../state/entwuerfe.js';
 import { toast, useHideNav } from '../../state/ui.js';
 import { ChatInfoSheet } from './ChatInfoSheet.js';
 import { Composer } from './Composer.js';
@@ -11,6 +13,14 @@ import { MessageActionsSheet } from './MessageActionsSheet.js';
 import { MessageBubble } from './MessageBubble.js';
 import { VerlaufsAntraege, VerlaufsGrenze, useVerlaufsantraege } from './VerlaufBand.js';
 import { praesenzVon } from './praesenz.js';
+import { WeiterleitenSheet } from './WeiterleitenSheet.js';
+import { NachrichtenInfoSheet } from './NachrichtenInfoSheet.js';
+import { ReaktionenSheet } from './ReaktionenSheet.js';
+import { AuswahlLeiste } from './AuswahlLeiste.js';
+import { ChatSuche } from './ChatSuche.js';
+import { ChatMenue } from './ChatMenue.js';
+import { EmojiPicker } from './EmojiPicker.js';
+import { suchbegriffSetzen } from './suchbegriff.js';
 import { chatOffenSetzen, untenSetzen } from '../../state/sichtbarkeit.js';
 import {
   conversationAvatar,
@@ -26,7 +36,7 @@ import {
 } from './helpers.js';
 
 const NO_MESSAGES: ChatMessage[] = [];
-const NO_TYPING: { userId: string; until: number }[] = [];
+const NO_TYPING: { userId: string; until: number; art: 'text' | 'audio' }[] = [];
 
 type RenderItem =
   | { kind: 'day'; key: string; label: string }
@@ -37,6 +47,7 @@ type RenderItem =
       message: ChatMessage;
       showSender: boolean;
       showAvatar: boolean;
+      haken: Haken | null;
     };
 
 /** Keeps the composer above the on-screen keyboard on iOS (100dvh stays put). */
@@ -107,6 +118,27 @@ export function ChatScreen() {
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [actionsFor, setActionsFor] = useState<ChatMessage | null>(null);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [bearbeiten, setBearbeiten] = useState<ChatMessage | null>(null);
+  const [weiterleiten, setWeiterleiten] = useState<ChatMessage[]>([]);
+  const [infoFuer, setInfoFuer] = useState<ChatMessage | null>(null);
+  const [reaktionenFuer, setReaktionenFuer] = useState<ChatMessage | null>(null);
+  const [emojiFuer, setEmojiFuer] = useState<ChatMessage | null>(null);
+  /** Mehrfachauswahl: `null` heisst „keine läuft“. */
+  const [auswahl, setAuswahl] = useState<Set<string> | null>(null);
+  const [sucheOffen, setSucheOffen] = useState(false);
+  const [menueOffen, setMenueOffen] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sprungZiel = searchParams.get('m');
+  const staende = useChat((state) => state.staende[conversationId]);
+  /*
+   * Lesebestätigungen ausgeschaltet (Einstellungen → Privatsphäre): Im
+   * Einzelchat sieht man dann auch die der anderen nicht – gegenseitig wie
+   * bei WhatsApp. Der Server gibt die Stände dann schon nicht heraus; das hier
+   * hält die Häkchen auch dann grau, wenn ein Ereignis sie doch brächte.
+   */
+  const lesebestaetigungenAus = useSession(
+    (state) => state.user?.settings?.privacy?.readReceipts === false,
+  );
 
   // Dieser Chat liegt jetzt vor Augen: Der Server schickt dafür keine
   // Mitteilungen, und die Liste zählt hier nichts hoch (`state/sichtbarkeit.ts`).
@@ -125,7 +157,12 @@ export function ChatScreen() {
     setReplyTo(null);
     setActionsFor(null);
     setInfoOpen(false);
+    setBearbeiten(null);
+    setAuswahl(null);
+    setSucheOffen(false);
+    suchbegriffSetzen(null, null);
     void useChat.getState().ensureConversation(conversationId);
+    void useChat.getState().staendeLaden(conversationId);
     useChat
       .getState()
       .loadMessages(conversationId)
@@ -142,6 +179,32 @@ export function ChatScreen() {
       lastReadId: me?.lastReadMessageId ?? null,
     };
   }
+
+  /*
+   * Die Stände aller anderen – für die Häkchen. Geladen aus `/staende`, mit
+   * den Lesezeichen aus der Chatliste als Rückfall, solange das noch läuft.
+   */
+  const mitgliedStaende = useMemo<MitgliedStand[]>(
+    () =>
+      (conversation?.members ?? []).map((member) => ({
+        userId: member.userId,
+        siehtAb: member.siehtAb,
+        gelesen: staende?.[member.userId]?.gelesen ?? member.lastReadMessageId,
+        zugestellt: staende?.[member.userId]?.zugestellt ?? null,
+      })),
+    [conversation?.members, staende],
+  );
+  const lesebestaetigungen = !(lesebestaetigungenAus && conversation?.type === 'direct');
+
+  // Den Antwortbezug eines Entwurfs wiederherstellen, sobald die Nachricht da ist.
+  const entwurfAntwort = useEntwuerfe((state) => state.entwuerfe[conversationId]?.replyToId ?? null);
+  useEffect(() => {
+    if (!entwurfAntwort || replyTo?.id === entwurfAntwort) return;
+    const ziel = messages.find((item) => item.id === entwurfAntwort);
+    if (ziel) setReplyTo(ziel);
+    // Nur beim Öffnen und wenn die Nachricht nachkommt – nicht nach „✕“.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entwurfAntwort, messages.length > 0, conversationId]);
 
   const items = useMemo<RenderItem[]>(() => {
     const out: RenderItem[] = [];
@@ -167,17 +230,21 @@ export function ChatScreen() {
         breakGroup = true;
       }
       const grouped = !breakGroup && isGrouped(previous, message);
+      const meine = message.senderId == null || message.senderId === myId;
       out.push({
         kind: 'message',
         key: message.id,
         message,
         showSender: !grouped,
         showAvatar: !grouped,
+        haken: meine
+          ? hakenFuer(message, myId, mitgliedStaende, { lesebestaetigungen })
+          : null,
       });
       previous = message;
     }
     return out;
-  }, [messages, myId, conversationId, conversation]);
+  }, [messages, myId, conversationId, conversation, mitgliedStaende, lesebestaetigungen]);
 
   useLayoutEffect(() => {
     const element = scrollRef.current;
@@ -272,6 +339,18 @@ export function ChatScreen() {
     const suchen = () => scrollRef.current?.querySelector(selector) ?? null;
     const liste = () => useChat.getState().messages[zielChat] ?? [];
     const geladen = () => liste().some((item) => item.id === messageId);
+
+    /*
+     * Erst in EINEM Zug holen, was bis zur Nachricht fehlt (`?bis=`). Ein
+     * Treffer aus der Suche, ein Sternchen oder ein Datum liegen oft
+     * hunderte Nachrichten zurück – Seite um Seite wären das viele Anfragen
+     * und am Ende die Obergrenze unten. Die Schleife bleibt als Rückfall.
+     */
+    if (!suchen() && !geladen()) {
+      atBottom.current = false;
+      await useChat.getState().ladenBis(zielChat, messageId);
+      if (aktuellerChat.current !== zielChat) return;
+    }
     const aelteste = () => liste().find((item) => !item.pending)?.id ?? null;
     const bild = () => new Promise<void>((weiter) => requestAnimationFrame(() => weiter()));
     const warten = (ms: number) => new Promise<void>((weiter) => window.setTimeout(weiter, ms));
@@ -352,10 +431,108 @@ export function ChatScreen() {
       );
       return;
     }
+    // Nicht mehr „unten“: Sonst zöge das nächste Bild (oder eine neue
+    // Nachricht) den Verlauf wieder ans Ende, weg vom Ziel.
+    atBottom.current = false;
+    untenSetzen(false);
+    setShowJump(true);
     target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    /*
+     * Liegt das Ziel ganz oben, löst das Scrollen dorthin das Nachladen
+     * älterer Seiten aus (`onScroll`), und das Zurücksetzen der Position
+     * danach schob es wieder aus dem Bild. Kurz danach also noch einmal
+     * nachsehen und – ohne Animation – zurechtrücken.
+     */
+    window.setTimeout(() => {
+      if (aktuellerChat.current !== zielChat) return;
+      const jetzt = suchen();
+      const rahmen = scrollRef.current?.getBoundingClientRect();
+      if (!jetzt || !rahmen) return;
+      const lage = jetzt.getBoundingClientRect();
+      if (lage.bottom < rahmen.top || lage.top > rahmen.bottom) {
+        atBottom.current = false;
+        jetzt.scrollIntoView({ block: 'center' });
+      }
+    }, 900);
     target.classList.add('msg-row-flash');
     window.setTimeout(() => target.classList.remove('msg-row-flash'), 1400);
   }, []);
+
+  // Aus der globalen Suche oder den gespeicherten Nachrichten: `?m=<Kennung>`.
+  useEffect(() => {
+    if (!sprungZiel || !conversationId) return;
+    // Den Parameter gleich entfernen: Zurück und Neuladen springen nicht erneut.
+    setSearchParams(
+      (vorher) => {
+        const neu = new URLSearchParams(vorher);
+        neu.delete('m');
+        return neu;
+      },
+      { replace: true },
+    );
+    void (async () => {
+      // Erst die erste Seite, dann springen – sonst sucht der Sprung im Leeren.
+      await useChat
+        .getState()
+        .loadMessages(conversationId)
+        .catch(() => {});
+      atBottom.current = false;
+      didInitialScroll.current = true;
+      await jumpTo(sprungZiel);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sprungZiel, conversationId]);
+
+  /* ---------- Auswahl, Antworten, Bearbeiten ---------- */
+
+  const auswahlUmschalten = useCallback((message: ChatMessage) => {
+    setAuswahl((bisher) => {
+      const neu = new Set(bisher ?? []);
+      if (neu.has(message.id)) neu.delete(message.id);
+      else neu.add(message.id);
+      return neu.size === 0 ? null : neu;
+    });
+  }, []);
+
+  const antworten = useCallback((message: ChatMessage) => {
+    setBearbeiten(null);
+    setReplyTo(message);
+    window.requestAnimationFrame(() =>
+      document.querySelector<HTMLTextAreaElement>('.msg-composer-input')?.focus(),
+    );
+  }, []);
+
+  const reaktionenZeigen = useCallback((message: ChatMessage) => setReaktionenFuer(message), []);
+
+  /** ↑ in der leeren Zeile: die letzte eigene Textnachricht, die noch geht. */
+  function letzteBearbeiten() {
+    const eigene = [...messages]
+      .reverse()
+      .find(
+        (item) =>
+          item.senderId === myId &&
+          item.type === 'text' &&
+          !item.deletedAt &&
+          !item.pending &&
+          !item.failed,
+      );
+    if (eigene) setBearbeiten(eigene);
+  }
+
+  const ausgewaehlt = useMemo(
+    () => (auswahl ? messages.filter((item) => auswahl.has(item.id)) : []),
+    [auswahl, messages],
+  );
+
+  // Esc beendet die Auswahl (die Suche schliesst ihre eigene Leiste).
+  useEffect(() => {
+    if (!auswahl) return undefined;
+    const beiTaste = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setAuswahl(null);
+    };
+    window.addEventListener('keydown', beiTaste);
+    return () => window.removeEventListener('keydown', beiTaste);
+  }, [auswahl]);
 
   /** Ob hinter meiner Grenze wirklich etwas liegt – ändert zwei Texte. */
   const hatGrenze = conversation?.verdeckterVerlauf ?? false;
@@ -372,7 +549,13 @@ export function ChatScreen() {
 
   let status = 'Chat wird geladen …';
   if (typingNames.length > 0) {
-    status = typingLabel(typingNames);
+    const aufnehmend = typingEntries
+      .filter((entry) => entry.userId !== myId && entry.art === 'audio')
+      .map((entry) => {
+        const member = conversation?.members.find((item) => item.userId === entry.userId);
+        return member ? memberName(member) : 'Jemand';
+      });
+    status = typingLabel(typingNames, aufnehmend);
   } else if (conversation?.type === 'group') {
     status = memberCountLabel(conversation);
   } else if (counterpart) {
@@ -383,6 +566,22 @@ export function ChatScreen() {
 
   return (
     <div className="app-main msg-screen" style={{ paddingBottom: keyboardInset }}>
+      {auswahl ? (
+        <AuswahlLeiste
+          nachrichten={ausgewaehlt}
+          conversation={conversation}
+          onAbbrechen={() => setAuswahl(null)}
+          onAntworten={(message) => {
+            setAuswahl(null);
+            antworten(message);
+          }}
+          onWeiterleiten={(liste) => setWeiterleiten(liste)}
+          onMehr={(message) => {
+            setAuswahl(null);
+            setActionsFor(message);
+          }}
+        />
+      ) : (
       <header className="app-header msg-header">
         <button
           type="button"
@@ -423,12 +622,35 @@ export function ChatScreen() {
         <button
           type="button"
           className="icon-btn"
-          aria-label="Chat-Info"
-          onClick={() => setInfoOpen(true)}
+          aria-label="Im Chat suchen"
+          aria-expanded={sucheOffen}
+          onClick={() => setSucheOffen((offen) => !offen)}
+        >
+          🔍
+        </button>
+        <button
+          type="button"
+          className="icon-btn"
+          aria-label="Chat-Menü"
+          aria-haspopup="dialog"
+          onClick={() => setMenueOffen(true)}
         >
           ⋮
         </button>
       </header>
+      )}
+
+      {sucheOffen && !auswahl && (
+        <ChatSuche
+          conversationId={conversationId}
+          conversation={conversation}
+          onSprung={jumpTo}
+          onSchliessen={() => {
+            setSucheOffen(false);
+            suchbegriffSetzen(null, null);
+          }}
+        />
+      )}
 
       <VerlaufsAntraege conversation={conversation} myId={myId} />
 
@@ -504,6 +726,11 @@ export function ChatScreen() {
                   showAvatar={item.showAvatar}
                   onOpenActions={setActionsFor}
                   onJumpTo={jumpTo}
+                  haken={item.haken}
+                  auswahl={auswahl ? auswahl.has(item.message.id) : null}
+                  onAuswahl={auswahlUmschalten}
+                  onReply={antworten}
+                  onReaktionen={reaktionenZeigen}
                 />
               );
             })}
@@ -531,13 +758,73 @@ export function ChatScreen() {
         replyTo={replyTo}
         onCancelReply={() => setReplyTo(null)}
         onScrollToBottom={() => scrollToBottom()}
+        bearbeiten={bearbeiten}
+        onBearbeitenEnde={() => setBearbeiten(null)}
+        onLetzteBearbeiten={letzteBearbeiten}
       />
 
       <MessageActionsSheet
         message={actionsFor}
         conversation={conversation}
         onClose={() => setActionsFor(null)}
-        onReply={setReplyTo}
+        onReply={antworten}
+        onEdit={(message) => {
+          setReplyTo(null);
+          setBearbeiten(message);
+        }}
+        onForward={(message) => setWeiterleiten([message])}
+        onInfo={setInfoFuer}
+        onReaktionen={setReaktionenFuer}
+        onAuswaehlen={(message) => setAuswahl(new Set([message.id]))}
+        onEmojiWahl={setEmojiFuer}
+      />
+
+      <EmojiPicker
+        open={emojiFuer != null}
+        onClose={() => setEmojiFuer(null)}
+        titel="Reagieren mit …"
+        onWaehlen={(emoji) => {
+          const ziel = emojiFuer;
+          setEmojiFuer(null);
+          if (!ziel) return;
+          const aktuell =
+            useChat.getState().messages[ziel.conversationId]?.find((m) => m.id === ziel.id) ?? ziel;
+          const meins = aktuell.reactions.some(
+            (r) => r.emoji === emoji && r.userIds.includes(myId),
+          );
+          useChat
+            .getState()
+            .toggleReaction(aktuell, emoji, meins)
+            .catch(() => toast('Reaktion konnte nicht gespeichert werden', 'error'));
+        }}
+      />
+
+      <WeiterleitenSheet
+        nachrichten={weiterleiten}
+        onClose={() => setWeiterleiten([])}
+        onFertig={() => setAuswahl(null)}
+      />
+
+      <NachrichtenInfoSheet
+        message={infoFuer}
+        conversation={conversation}
+        onClose={() => setInfoFuer(null)}
+      />
+
+      <ReaktionenSheet
+        message={reaktionenFuer}
+        conversation={conversation}
+        onClose={() => setReaktionenFuer(null)}
+      />
+
+      <ChatMenue
+        open={menueOffen}
+        conversationId={conversationId}
+        onClose={() => setMenueOffen(false)}
+        onInfo={() => setInfoOpen(true)}
+        onSuche={() => setSucheOffen(true)}
+        onSprung={jumpTo}
+        onUnten={() => scrollToBottom(true)}
       />
 
       <ChatInfoSheet

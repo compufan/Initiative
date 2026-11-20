@@ -90,6 +90,28 @@ const SCHRIFTEN_LIZENZ = [
   hinweis: `In der App als „${rolle}“, auf Latin gekürzt und als woff2 mitgeliefert.`,
 }));
 
+/**
+ * Mitgelieferte Daten, die kein Paket sind.
+ *
+ * Die Emoji-Auswahl im Chat (`modules/messenger/emojiDaten.json`) ist eine
+ * eigene Zusammenstellung mit eigenen deutschen Namen. Die englischen Namen
+ * stammen aus der Unicode Character Database (über Pythons `unicodedata`
+ * beim Erzeugen) – die steht unter der Unicode License v3, die Nennung
+ * verlangt. Die Emoji-Zeichen selbst sind Unicode-Codepunkte; gezeichnet
+ * werden sie von der Schrift des Geräts, es liegen keine Bilder bei.
+ */
+const DATEN = [
+  {
+    name: 'Unicode Character Database (Emoji-Namen, englisch)',
+    lizenz: 'Unicode-3.0',
+    urheber: 'Unicode, Inc.',
+    quelle: 'https://www.unicode.org/ucd/',
+    teil: 'daten',
+    hinweis:
+      'Englische Namen der Emoji in der Reaktionsauswahl, damit auch englische Suchwörter treffen. Deutsche Namen und die Auswahl sind eigene Arbeit.',
+  },
+];
+
 const EINGEBAUT = [
   {
     name: 'Eigen',
@@ -377,6 +399,7 @@ const liste = {
     },
     { teil: 'wasm', titel: 'Fest in den Rechenwerken', eintraege: eingebaut },
     { teil: 'schrift', titel: 'Schriften', eintraege: schriften },
+    { teil: 'daten', titel: 'Daten', eintraege: DATEN },
     { teil: 'modell', titel: 'Modelle', eintraege: await modellEintraege() },
     {
       teil: 'api',

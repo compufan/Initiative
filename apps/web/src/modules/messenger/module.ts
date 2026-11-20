@@ -3,6 +3,7 @@ import { defineWebModule } from '../types.js';
 import { useChat } from '../../state/chat.js';
 import { ChatListScreen } from './ChatListScreen.js';
 import { ChatScreen } from './ChatScreen.js';
+import { GespeichertScreen } from './GespeichertScreen.js';
 import { ShareTargetScreen } from './ShareTargetScreen.js';
 import { SystemBubble } from './SystemBubble.js';
 import { TextBubble } from './TextBubble.js';
@@ -35,6 +36,8 @@ export default defineWebModule({
   routes: [
     { path: '/chats', element: createElement(ChatListScreen) },
     { path: '/chats/:conversationId', element: createElement(ChatScreen) },
+    // Gespeicherte Nachrichten über alle Chats (aus dem Chat-Menü und der Chatliste).
+    { path: '/gespeichert', element: createElement(GespeichertScreen) },
     // Ziel des System-Teilen-Dialogs (share_target im Manifest).
     { path: '/teilen', element: createElement(ShareTargetScreen) },
     // Einladungslink einer Gruppe – Vorschau ohne Inhalt, dann beitreten.
