@@ -13,6 +13,10 @@ use crate::realtime::Event;
 use crate::state::AppState;
 
 pub mod formatierung;
+pub mod geplant;
+pub mod linkvorschau;
+pub mod regeln;
+pub mod selbstloeschen;
 pub mod weiterleiten;
 pub mod zustellung;
 
@@ -58,6 +62,7 @@ fn base_dto(row: &MessageRow) -> MessageDto {
         created_at: row.created_at,
         edited_at: row.edited_at,
         deleted_at: row.deleted_at,
+        expires_at: row.expires_at,
         poll: None,
         event: None,
         game: None,
@@ -156,7 +161,7 @@ pub async fn hydrate_messages(
     let mut expansions = super::expanders::run(state, viewer_id, &rows).await;
     let mut attachments = attachments;
 
-    Ok(rows
+    let mut fertig: Vec<MessageDto> = rows
         .into_iter()
         .map(|row| {
             let mut dto = base_dto(&row);
@@ -185,7 +190,140 @@ pub async fn hydrate_messages(
                 .unwrap_or_default();
             dto
         })
-        .collect())
+        .collect();
+    nachbereiten(state, viewer_id, &mut fertig).await?;
+    Ok(fertig)
+}
+
+/// Ist das ein einmal ansehbares Foto oder Video?
+pub fn ist_einmal(metadata: &Value) -> bool {
+    metadata.get("einmalAnsehen").and_then(Value::as_bool) == Some(true)
+}
+
+/**
+ * Was die zweite Welle an einer fertigen Nachricht je Betrachter ergänzt.
+ *
+ * * **Einmal ansehen**: keine Adresse, keine Vorschau, keine Miniatur – nur die
+ *   Kennung und die Maße. Die Bytes gibt es genau einmal je Person über
+ *   `/messages/{id}/einmal/{anhang}`; die Medienroute verweigert sie
+ *   (`services::zugriff`). Dazu `einmalStatus`: ob ICH sie schon geöffnet
+ *   habe und wie viele andere.
+ * * **Link-Vorschau**: Das Vorschaubild ist ein Anhang der Nachricht im
+ *   eigenen Speicher; es wandert aus der Anhangsliste (sonst stünde es als
+ *   Foto in der Blase) in `linkVorschau.bildUrl`.
+ * * **Kontaktkarte**: Name und Bild der geteilten Person, so wie DIESER
+ *   Betrachter sie sehen darf (Privatsphäre, Sperren).
+ */
+async fn nachbereiten(
+    state: &AppState,
+    viewer_id: Uuid,
+    nachrichten: &mut [MessageDto],
+) -> AppResult<()> {
+    let einmal_ids: Vec<Uuid> = nachrichten
+        .iter()
+        .filter(|m| m.deleted_at.is_none() && ist_einmal(&m.metadata))
+        .map(|m| m.id)
+        .collect();
+    let mut geoeffnet: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+    if !einmal_ids.is_empty() {
+        let zeilen: Vec<(Uuid, Uuid)> = sqlx::query_as(
+            "select distinct a.message_id, e.user_id
+               from einmal_ansichten e
+               join attachments a on a.id = e.attachment_id
+              where a.message_id = any($1)",
+        )
+        .bind(&einmal_ids)
+        .fetch_all(&state.pool)
+        .await?;
+        for (nachricht, person) in zeilen {
+            geoeffnet.entry(nachricht).or_default().push(person);
+        }
+    }
+
+    let kontakt_ids: Vec<Uuid> = nachrichten
+        .iter()
+        .filter(|m| m.deleted_at.is_none() && m.r#type == "contact")
+        .filter_map(|m| m.metadata.get("kontakt").and_then(|k| k.get("userId")))
+        .filter_map(|v| v.as_str().and_then(|t| Uuid::parse_str(t).ok()))
+        .collect();
+    let mut kontakte = if kontakt_ids.is_empty() {
+        HashMap::new()
+    } else {
+        super::users::load_users_by_ids(&state.pool, &kontakt_ids, &state.config).await?
+    };
+    if !kontakte.is_empty() {
+        super::privatsphaere::fuer_betrachter(&state.pool, viewer_id, kontakte.values_mut(), false)
+            .await?;
+    }
+
+    for nachricht in nachrichten.iter_mut() {
+        if nachricht.deleted_at.is_some() {
+            continue;
+        }
+        if ist_einmal(&nachricht.metadata) {
+            for anhang in &mut nachricht.attachments {
+                anhang.url = String::new();
+                anhang.preview_data_url = None;
+            }
+            let wer = geoeffnet.get(&nachricht.id).cloned().unwrap_or_default();
+            let andere = wer
+                .iter()
+                .filter(|p| Some(**p) != nachricht.sender_id)
+                .count();
+            if let Some(felder) = nachricht.metadata.as_object_mut() {
+                felder.insert(
+                    "einmalStatus".into(),
+                    json!({ "ichGeoeffnet": wer.contains(&viewer_id), "geoeffnet": andere }),
+                );
+            }
+        }
+        let bild_id = nachricht
+            .metadata
+            .get("linkVorschau")
+            .and_then(|v| v.get("bildId"))
+            .and_then(Value::as_str)
+            .and_then(|t| Uuid::parse_str(t).ok());
+        if let Some(bild_id) = bild_id {
+            let stelle = nachricht.attachments.iter().position(|a| a.id == bild_id);
+            let adresse = stelle.map(|i| nachricht.attachments.remove(i).url);
+            if let Some(vorschau) = nachricht
+                .metadata
+                .get_mut("linkVorschau")
+                .and_then(Value::as_object_mut)
+            {
+                match adresse {
+                    Some(url) => {
+                        vorschau.insert("bildUrl".into(), json!(url));
+                    }
+                    None => {
+                        vorschau.remove("bildId");
+                    }
+                }
+            }
+        }
+        if nachricht.r#type == "contact" {
+            let profil = nachricht
+                .metadata
+                .get("kontakt")
+                .and_then(|k| k.get("userId"))
+                .and_then(Value::as_str)
+                .and_then(|t| Uuid::parse_str(t).ok())
+                .and_then(|id| kontakte.get(&id));
+            let karte = profil.map(|p| {
+                json!({
+                    "id": p.id,
+                    "displayName": p.display_name,
+                    "username": p.username,
+                    "avatarUrl": p.avatar_url,
+                    "accent": p.accent,
+                })
+            });
+            if let Some(felder) = nachricht.metadata.as_object_mut() {
+                felder.insert("kontaktProfil".into(), karte.unwrap_or(Value::Null));
+            }
+        }
+    }
+    Ok(())
 }
 
 pub async fn load_message(
@@ -462,9 +600,20 @@ pub async fn nachricht_anlegen(
      * erste festgeschrieben (oder zurückgerollt) ist, und bekommt die
      * Nachricht zurück, die gewonnen hat.
      */
+    /*
+     * Selbstlöschend: Der Ablauf hängt an der Einstellung des Chats IM
+     * Augenblick des Schreibens – in derselben Anweisung gelesen, damit eine
+     * gleichzeitige Änderung der Einstellung keine Nachricht „dazwischen“
+     * ohne Ablauf durchlässt. Systemzeilen laufen nicht ab: Sie sagen, wer
+     * die Einstellung geändert hat, und das soll stehen bleiben.
+     */
     let row = sqlx::query_as::<_, MessageRow>(
-        "insert into messages (id, conversation_id, sender_id, type, body, reply_to_id, metadata, client_id)
-         values ($1, $2, $3, $4, $5, $6, $7, $8)
+        "insert into messages (id, conversation_id, sender_id, type, body, reply_to_id, metadata,
+                               client_id, expires_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8,
+                 (select case when $4 <> 'system' and c.selbstloeschen_s is not null
+                              then now() + make_interval(secs => c.selbstloeschen_s) end
+                    from conversations c where c.id = $2))
          on conflict (conversation_id, sender_id, client_id) where client_id is not null
            do nothing
          returning *",
@@ -709,6 +858,59 @@ async fn ausspielen(
         None => None,
     };
 
+    /*
+     * Umfragekarten tragen die Umfrage in der Fassung DES ABSENDERS (eigene
+     * Stimmen, bei anonymen Umfragen die Einzelstimmen, bei einem Quiz die
+     * richtige Antwort). Das ging so an alle – die Auflösung eines Quiz also
+     * auch an die, die noch nicht abgestimmt haben. Wie bei den Spielkarten:
+     * einmal laden, je Empfänger aus denselben Zeilen rechnen.
+     */
+    let umfragen = match message.poll.as_ref() {
+        Some(umfrage) => match super::polls::require_poll(state, umfrage.id).await {
+            Ok(zeile) => {
+                let (optionen, stimmen) =
+                    super::polls::optionen_und_stimmen(state, umfrage.id).await?;
+                Some(
+                    empfaenger
+                        .iter()
+                        .map(|id| {
+                            (
+                                *id,
+                                super::polls::to_poll_dto(&zeile, &optionen, &stimmen, *id),
+                            )
+                        })
+                        .collect::<std::collections::HashMap<Uuid, crate::dto::PollDto>>(),
+                )
+            }
+            Err(_) => None,
+        },
+        None => None,
+    };
+
+    /*
+     * Kontaktkarte und einmal ansehbare Medien hängen am Betrachter (Profil
+     * nach dessen Privatsphäre, „schon geöffnet“). Beide sind selten genug,
+     * um je Empfänger frisch aufzubereiten – einfacher und sicher richtig.
+     */
+    if message.deleted_at.is_none()
+        && (message.r#type == "contact" || ist_einmal(&message.metadata))
+    {
+        let zeile = require_message(&state.pool, message.id).await?;
+        for id in &empfaenger {
+            if let Some(mut eigene) = hydrate_messages(state, vec![zeile.clone()], *id)
+                .await?
+                .into_iter()
+                .next()
+            {
+                if darf_zitat.as_ref().is_some_and(|kreis| !kreis.contains(id)) {
+                    eigene.reply_to = None;
+                }
+                state.hub.publish(vec![*id], ereignis(&eigene)).await;
+            }
+        }
+        return Ok(empfaenger);
+    }
+
     // Zwei Merkmale, höchstens vier Fassungen: einmal laden, dann kürzen –
     // nicht je Empfänger neu hydrieren.
     let mut gruppen: std::collections::HashMap<(bool, bool), Vec<Uuid>> =
@@ -727,15 +929,22 @@ async fn ausspielen(
             gekuerzt.event = None;
             gekuerzt.metadata = json!({});
         }
-        match &spielkarten {
-            Some(sichten) => {
+        match (&spielkarten, &umfragen) {
+            (Some(sichten), _) => {
                 for id in ids {
                     let mut eigene = gekuerzt.clone();
                     eigene.game = sichten.get(&id).cloned();
                     state.hub.publish(vec![id], ereignis(&eigene)).await;
                 }
             }
-            None => state.hub.publish(ids, ereignis(&gekuerzt)).await,
+            (None, Some(sichten)) => {
+                for id in ids {
+                    let mut eigene = gekuerzt.clone();
+                    eigene.poll = sichten.get(&id).cloned();
+                    state.hub.publish(vec![id], ereignis(&eigene)).await;
+                }
+            }
+            (None, None) => state.hub.publish(ids, ereignis(&gekuerzt)).await,
         }
     }
     Ok(empfaenger)

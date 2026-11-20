@@ -109,7 +109,22 @@ pub fn to_poll_dto(
         .collect::<HashSet<_>>()
         .len();
 
+    // Die Auflösung eines Quiz sieht, wer abgestimmt hat, wer es angelegt
+    // hat – und alle, sobald es beendet ist.
+    let aufloesung = (poll.quiz
+        && (!my_votes.is_empty() || poll.created_by == Some(viewer_id) || is_closed(poll)))
+    .then(|| crate::dto::QuizAufloesung {
+        richtig: {
+            let mut richtige: Vec<&PollOptionRow> = options.iter().filter(|o| o.richtig).collect();
+            richtige.sort_by_key(|o| o.position);
+            richtige.into_iter().map(|o| o.id).collect()
+        },
+        erklaerung: poll.erklaerung.clone(),
+    });
+
     PollDto {
+        quiz: poll.quiz,
+        aufloesung,
         id: poll.id,
         conversation_id: poll.conversation_id,
         message_id: poll.message_id,
@@ -228,7 +243,15 @@ pub struct NewPollOption {
     pub ends_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// Was eine Umfrage zum Quiz macht: die Stellen der richtigen Optionen (in der
+/// Reihenfolge von `options`) und eine optionale Erklärung.
+pub struct QuizEingabe {
+    pub richtig: Vec<usize>,
+    pub erklaerung: Option<String>,
+}
+
 pub struct NewPoll {
+    pub quiz: Option<QuizEingabe>,
     pub conversation_id: Uuid,
     pub created_by: Uuid,
     pub kind: String,
@@ -247,8 +270,8 @@ pub async fn create_poll(state: &AppState, input: NewPoll) -> AppResult<PollDto>
 
     sqlx::query(
         "insert into polls (id, conversation_id, created_by, kind, question, description,
-                            multiple, anonymous, allow_add_options, closes_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                            multiple, anonymous, allow_add_options, closes_at, quiz, erklaerung)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
     )
     .bind(poll_id)
     .bind(input.conversation_id)
@@ -260,13 +283,20 @@ pub async fn create_poll(state: &AppState, input: NewPoll) -> AppResult<PollDto>
     .bind(input.anonymous)
     .bind(input.allow_add_options)
     .bind(input.closes_at)
+    .bind(input.quiz.is_some())
+    .bind(input.quiz.as_ref().and_then(|q| q.erklaerung.clone()))
     .execute(&mut *tx)
     .await?;
 
     for (position, option) in input.options.iter().enumerate() {
+        let richtig = input
+            .quiz
+            .as_ref()
+            .is_some_and(|q| q.richtig.contains(&position));
         sqlx::query(
-            "insert into poll_options (id, poll_id, label, starts_at, ends_at, position, created_by)
-             values ($1, $2, $3, $4, $5, $6, $7)",
+            "insert into poll_options (id, poll_id, label, starts_at, ends_at, position, created_by,
+                                       richtig)
+             values ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(Uuid::now_v7())
         .bind(poll_id)
@@ -275,6 +305,7 @@ pub async fn create_poll(state: &AppState, input: NewPoll) -> AppResult<PollDto>
         .bind(option.ends_at)
         .bind(position as i32)
         .bind(input.created_by)
+        .bind(richtig)
         .execute(&mut *tx)
         .await?;
     }
@@ -354,6 +385,26 @@ pub async fn set_votes(
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
+    // Im Quiz zählt die erste Antwort. Danach sieht man die Auflösung – eine
+    // zweite Stimme wäre abgeschrieben. Geprüft unter der Sperre oben, damit
+    // zwei gleichzeitige Erststimmen nicht beide durchkommen.
+    if poll.quiz {
+        let schon: bool = sqlx::query_scalar(
+            "select exists (select 1 from poll_votes where poll_id = $1 and user_id = $2)",
+        )
+        .bind(poll.id)
+        .bind(user_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if schon {
+            return Err(crate::error::AppError::conflict(
+                "Im Quiz zählt die erste Antwort.",
+            ));
+        }
+        if accepted.is_empty() {
+            return Err(crate::error::AppError::bad_request("Wähle eine Antwort."));
+        }
+    }
     sqlx::query("delete from poll_votes where poll_id = $1 and user_id = $2")
         .bind(poll.id)
         .bind(user_id)

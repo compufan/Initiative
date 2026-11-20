@@ -311,6 +311,7 @@ pub struct ListOptions {
 #[derive(sqlx::FromRow)]
 struct ConversationListRow {
     id: Uuid,
+    selbstloeschen_s: Option<i32>,
     r#type: String,
     title: Option<String>,
     avatar_attachment_id: Option<Uuid>,
@@ -340,7 +341,7 @@ pub async fn load_conversation_dtos(
                 c.updated_at, cm.archived, cm.muted_until, c.description,
                 c.settings as gruppen_settings, cm.pinned_at, cm.marked_unread,
                 cm.cleared_until, cm.notify_level, cm.notify_preview,
-                cm.settings as mitglied_settings
+                cm.settings as mitglied_settings, c.selbstloeschen_s
          from conversations c
          join conversation_members cm on cm.conversation_id = c.id and cm.user_id = $1
          where ($2::uuid[] is null or c.id = any($2))
@@ -406,8 +407,13 @@ pub async fn load_conversation_dtos(
     .fetch_all(&state.pool)
     .await?;
 
-    let unread_rows: Vec<(Uuid, i64)> = sqlx::query_as(
-        "select cm.conversation_id, count(m.id)::bigint
+    // Mit den ungelesenen Erwähnungen in derselben Abfrage (`filter`): Sie
+    // sind eine Teilmenge der Ungelesenen und laufen über denselben
+    // Indexbereich – eine zweite Abfrage läse ihn ein zweites Mal.
+    let unread_rows: Vec<(Uuid, i64, i64)> = sqlx::query_as(
+        "select cm.conversation_id, count(m.id)::bigint,
+                count(m.id) filter (where (m.metadata -> 'mentions') ? cm.user_id::text
+                                       or m.metadata ->> 'mentionsAlle' = 'true')::bigint
          from conversation_members cm
          join messages m
            on m.conversation_id = cm.conversation_id
@@ -538,7 +544,10 @@ pub async fn load_conversation_dtos(
     for message in last_messages {
         last_by_conversation.insert(message.conversation_id, message);
     }
-    let unread_by_conversation: HashMap<Uuid, i64> = unread_rows.into_iter().collect();
+    let erwaehnt_by_conversation: HashMap<Uuid, i64> =
+        unread_rows.iter().map(|(id, _, e)| (*id, *e)).collect();
+    let unread_by_conversation: HashMap<Uuid, i64> =
+        unread_rows.into_iter().map(|(id, n, _)| (id, n)).collect();
 
     Ok(rows
         .into_iter()
@@ -549,6 +558,8 @@ pub async fn load_conversation_dtos(
             members: members_by_conversation.remove(&row.id).unwrap_or_default(),
             last_message: last_by_conversation.remove(&row.id),
             unread_count: unread_by_conversation.get(&row.id).copied().unwrap_or(0),
+            ungelesene_erwaehnungen: erwaehnt_by_conversation.get(&row.id).copied().unwrap_or(0),
+            selbstloeschen_s: row.selbstloeschen_s,
             verdeckter_verlauf: verdeckt.contains(&row.id),
             id: row.id,
             r#type: row.r#type,
@@ -765,6 +776,7 @@ struct GespraechKopf {
     updated_at: chrono::DateTime<chrono::Utc>,
     description: Option<String>,
     settings: serde_json::Value,
+    selbstloeschen_s: Option<i32>,
 }
 
 /**
@@ -802,7 +814,7 @@ pub async fn load_conversation_fuer_mitglieder(
     }
     let Some(kopf) = sqlx::query_as::<_, GespraechKopf>(
         "select id, type, title, avatar_attachment_id, created_by, created_at, updated_at,
-                description, settings
+                description, settings, selbstloeschen_s
            from conversations where id = $1",
     )
     .bind(conversation_id)
@@ -852,8 +864,10 @@ pub async fn load_conversation_fuer_mitglieder(
     .fetch_all(&state.pool)
     .await?;
 
-    let ungelesen: HashMap<Uuid, i64> = sqlx::query_as::<_, (Uuid, i64)>(
-        "select cm.user_id, count(m.id)::bigint
+    let ungelesen_zeilen: Vec<(Uuid, i64, i64)> = sqlx::query_as::<_, (Uuid, i64, i64)>(
+        "select cm.user_id, count(m.id)::bigint,
+                count(m.id) filter (where (m.metadata -> 'mentions') ? cm.user_id::text
+                                       or m.metadata ->> 'mentionsAlle' = 'true')::bigint
          from conversation_members cm
          join messages m
            on m.conversation_id = cm.conversation_id
@@ -868,9 +882,15 @@ pub async fn load_conversation_fuer_mitglieder(
     .bind(conversation_id)
     .bind(&leser)
     .fetch_all(&state.pool)
-    .await?
-    .into_iter()
-    .collect();
+    .await?;
+    let erwaehnt: HashMap<Uuid, i64> = ungelesen_zeilen
+        .iter()
+        .map(|(id, _, e)| (*id, *e))
+        .collect();
+    let ungelesen: HashMap<Uuid, i64> = ungelesen_zeilen
+        .into_iter()
+        .map(|(id, n, _)| (id, n))
+        .collect();
 
     let verdeckt: HashSet<Uuid> = sqlx::query_scalar::<_, Uuid>(
         "select cm.user_id
@@ -1001,6 +1021,8 @@ pub async fn load_conversation_fuer_mitglieder(
                 members,
                 last_message,
                 unread_count: ungelesen.get(&person).copied().unwrap_or(0),
+                ungelesene_erwaehnungen: erwaehnt.get(&person).copied().unwrap_or(0),
+                selbstloeschen_s: kopf.selbstloeschen_s,
                 verdeckter_verlauf: verdeckt.contains(&person),
                 muted_until: eigene.muted_until,
                 archived: eigene.archived,

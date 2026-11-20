@@ -1266,6 +1266,7 @@ async fn create_planning(
     let poll = create_poll(
         &state,
         NewPoll {
+            quiz: None,
             conversation_id: input.conversation_id,
             created_by: user.id(),
             kind: "date".to_string(),

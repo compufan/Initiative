@@ -236,6 +236,11 @@ async fn stern_setzen(
     if !sichtbar_fuer(&state, id, user.id()).await? {
         return Err(AppError::not_found("Nachricht nicht gefunden"));
     }
+    if crate::services::messages::ist_einmal(&row.metadata) {
+        return Err(AppError::bad_request(
+            "Einmal ansehbare Fotos und Videos lassen sich nicht speichern",
+        ));
+    }
     let neu = sqlx::query(
         "insert into message_stars (user_id, message_id) values ($1, $2)
          on conflict do nothing",

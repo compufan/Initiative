@@ -478,6 +478,11 @@ async fn serve(
     }
 
     /*
+    // Einmal ansehbar: nie über diesen Weg – auch nicht ohne `media_auth`
+    // (siehe `zugriff::einmal_gebunden`).
+    if crate::services::zugriff::einmal_gebunden(&state.pool, attachment.id).await? {
+        return Err(AppError::not_found("Datei nicht gefunden"));
+    }
      * Ein unbestätigter Upload gehört nur dem, der ihn hochlädt.
      *
      * Der Fall ist schmal, aber er existiert: Beim Hochladen über eine

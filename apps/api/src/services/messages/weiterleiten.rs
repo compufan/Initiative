@@ -98,6 +98,13 @@ pub async fn weiterleiten(
     if !sichtbar {
         return Err(AppError::not_found("Nachricht nicht gefunden"));
     }
+    // Einmal ansehbar heisst: bei genau diesem Empfänger, genau einmal. Eine
+    // Weiterleitung wäre eine zweite, dauerhafte Kopie.
+    if super::ist_einmal(&original.metadata) {
+        return Err(AppError::bad_request(
+            "Einmal ansehbare Fotos und Videos lassen sich nicht weiterleiten",
+        ));
+    }
     if !WEITERLEITBAR.contains(&original.r#type.as_str()) {
         return Err(AppError::bad_request(
             "Umfragen, Termine, Spiele und Systemhinweise lassen sich nicht weiterleiten",

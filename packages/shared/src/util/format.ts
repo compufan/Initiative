@@ -48,6 +48,10 @@ export function messagePreview(message: {
       return message.metadata?.erinnerung ? '🔔 Erinnerung' : '📅 Termin';
     case 'game':
       return '🎮 Spiel';
+    case 'location':
+      return '📍 Standort';
+    case 'contact':
+      return '👤 Kontakt';
     default:
       // Ohne Markierungen: In der Chatliste und der Mitteilung stünden sonst
       // Sternchen und Unterstriche – und ein Spoiler verriete, was er

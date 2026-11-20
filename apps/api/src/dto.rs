@@ -142,6 +142,10 @@ pub struct MessageDto {
     pub created_at: DateTime<Utc>,
     pub edited_at: Option<DateTime<Utc>>,
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Selbstlöschend: Ab hier ist die Nachricht fort (der Client entfernt sie
+    /// selbst, der Server räumt sie kurz danach weg).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<DateTime<Utc>>,
     /// Entities embedded by feature modules (see `services::expanders`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub poll: Option<PollDto>,
@@ -207,6 +211,12 @@ pub struct ConversationDto {
     /// Hintergrund dieses Chats (Kennung aus einer kleinen festen Auswahl,
     /// siehe `HINTERGRUENDE`); `None` heisst Standard. Je Betrachter.
     pub hintergrund: Option<String>,
+    /// Selbstlöschende Nachrichten: Lebensdauer neuer Nachrichten in
+    /// Sekunden; `None` heisst aus. Gilt für alle Mitglieder gleich.
+    pub selbstloeschen_s: Option<i32>,
+    /// Wie viele ungelesene Nachrichten mich erwähnen (auch „@alle“) – für das
+    /// „@“ in der Chatliste. Je Betrachter.
+    pub ungelesene_erwaehnungen: i64,
 }
 
 /// Die Schalter einer Gruppe, gespeichert in `conversations.settings`.
@@ -329,6 +339,20 @@ pub struct PollDto {
     pub my_votes: Vec<PollVoteDto>,
     pub created_event_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    /// Quiz-Umfrage: Es gibt richtige Antworten.
+    pub quiz: bool,
+    /// Die Auflösung – nur für den, der abgestimmt hat, die Erstellerin und
+    /// nach dem Ende. Sonst `None`: Vorher zu sehen, was richtig ist, machte
+    /// aus dem Quiz ein Abschreiben.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aufloesung: Option<QuizAufloesung>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuizAufloesung {
+    pub richtig: Vec<Uuid>,
+    pub erklaerung: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

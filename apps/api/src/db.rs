@@ -102,6 +102,10 @@ pub struct MessageRow {
     pub created_at: DateTime<Utc>,
     pub edited_at: Option<DateTime<Utc>>,
     pub deleted_at: Option<DateTime<Utc>>,
+    /// Selbstlöschende Nachrichten (Migration 0045): danach räumt der Dienst
+    /// sie weg. `default`, damit Abfragen mit eigener Spaltenliste weiter passen.
+    #[sqlx(default)]
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -180,6 +184,11 @@ pub struct PollRow {
     pub closed_at: Option<DateTime<Utc>>,
     pub created_event_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
+    /// Quiz-Umfrage (Migration 0047).
+    #[sqlx(default)]
+    pub quiz: bool,
+    #[sqlx(default)]
+    pub erklaerung: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow)]
@@ -191,6 +200,9 @@ pub struct PollOptionRow {
     pub ends_at: Option<DateTime<Utc>>,
     pub position: i32,
     pub created_by: Option<Uuid>,
+    /// Im Quiz: eine richtige Antwort (Migration 0047).
+    #[sqlx(default)]
+    pub richtig: bool,
 }
 
 #[derive(Debug, Clone, FromRow)]

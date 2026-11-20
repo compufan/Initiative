@@ -22,7 +22,7 @@ use crate::services::conversations::get_membership;
 use crate::services::polls::{
     assert_poll_access, best_option, broadcast_poll, create_poll, is_closed, load_poll_dto,
     place_poll, poll_conversation_ids, require_poll, set_votes, unplace_poll, NewPoll,
-    NewPollOption,
+    NewPollOption, QuizEingabe,
 };
 use crate::state::AppState;
 use crate::validate::Validator;
@@ -50,6 +50,9 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OptionInput {
+    /// Im Quiz: eine richtige Antwort.
+    #[serde(default)]
+    richtig: bool,
     label: Option<String>,
     starts_at: Option<DateTime<Utc>>,
     ends_at: Option<DateTime<Utc>>,
@@ -71,7 +74,15 @@ struct CreatePollInput {
     #[serde(default)]
     allow_add_options: bool,
     closes_at: Option<DateTime<Utc>>,
+    /// Quiz-Umfrage: mindestens eine Option `richtig`.
+    #[serde(default)]
+    quiz: bool,
+    /// Optional: warum die Antwort richtig ist – erscheint mit der Auflösung.
+    erklaerung: Option<String>,
 }
+
+/// Wie lang die Erklärung eines Quiz sein darf.
+const QUIZ_ERKLAERUNG_MAX: usize = 500;
 
 fn default_kind() -> String {
     "choice".to_string()
@@ -129,11 +140,69 @@ async fn create(
             validator.length("options", label.trim(), 0, POLL_OPTION_MAX);
         }
     }
+    let richtige: Vec<usize> = input
+        .options
+        .iter()
+        .enumerate()
+        .filter(|(_, option)| option.richtig)
+        .map(|(stelle, _)| stelle)
+        .collect();
+    let erklaerung = input
+        .erklaerung
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_string);
+    if input.quiz {
+        validator
+            .require(
+                "kind",
+                input.kind == "choice",
+                "Ein Quiz ist eine Auswahl-Umfrage",
+            )
+            .require(
+                "options",
+                !richtige.is_empty(),
+                "Ein Quiz braucht mindestens eine richtige Antwort",
+            )
+            .require(
+                "options",
+                input.multiple || richtige.len() == 1,
+                "Mit nur einer Antwort gibt es genau eine richtige",
+            )
+            .require(
+                "options",
+                richtige.len() < input.options.len(),
+                "Mindestens eine Antwort muss falsch sein",
+            )
+            .require(
+                "allowAddOptions",
+                !input.allow_add_options,
+                "In einem Quiz ergänzt niemand Antworten",
+            )
+            .require(
+                "erklaerung",
+                erklaerung
+                    .as_deref()
+                    .is_none_or(|text| text.chars().count() <= QUIZ_ERKLAERUNG_MAX),
+                "Die Erklärung ist zu lang",
+            );
+    } else {
+        validator.require(
+            "options",
+            richtige.is_empty(),
+            "Richtige Antworten gibt es nur im Quiz",
+        );
+    }
     validator.finish()?;
 
     let poll = create_poll(
         &state,
         NewPoll {
+            quiz: input.quiz.then(|| QuizEingabe {
+                richtig: richtige.clone(),
+                erklaerung: erklaerung.clone(),
+            }),
             conversation_id: input.conversation_id,
             created_by: user.id(),
             // Date polls always allow one answer per slot.
@@ -257,6 +326,12 @@ async fn add_option(
     let poll = readable_poll(&state, id, user.id()).await?;
     if is_closed(&poll) {
         return Err(AppError::bad_request("Die Umfrage ist beendet"));
+    }
+    // Ein Quiz bekommt keine Antworten dazu – auch nicht von der Erstellerin:
+    // Wer schon abgestimmt hat, sähe sonst eine Option, die es beim
+    // Abstimmen nicht gab.
+    if poll.quiz {
+        return Err(AppError::bad_request("Ein Quiz lässt sich nicht ergänzen"));
     }
     if !poll.allow_add_options && poll.created_by != Some(user.id()) {
         return Err(AppError::forbidden(

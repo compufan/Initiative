@@ -16,19 +16,36 @@ use crate::error::{AppError, AppResult};
 use crate::realtime::Event;
 use crate::services::conversations::assert_membership;
 use crate::services::messages::{
-    ausliefern, hydrate_messages, load_message, nachricht_anlegen, publish_message_update,
+    ausliefern, hydrate_messages, load_message, nachricht_anlegen, publish_message_update, regeln,
     require_message, to_reaction_dtos, NewMessage,
 };
 use crate::state::AppState;
 use crate::validate::Validator;
 
+mod anheften;
+mod einmal;
 mod funktionen;
+mod geplant;
+mod linkvorschau;
+mod selbstloeschen;
+mod standort;
 
 pub use funktionen::entwurf_nach_senden;
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(funktionen::router())
+        .merge(anheften::router())
+        .merge(einmal::router())
+        .merge(geplant::router())
+        .merge(linkvorschau::router())
+        .merge(selbstloeschen::router())
+        .merge(standort::router())
+        .route("/messages/{id}/bearbeitungen", get(bearbeitungen))
+        .route(
+            "/conversations/{id}/erwaehnungen",
+            get(ungelesene_erwaehnungen),
+        )
         .route(
             "/conversations/{id}/messages",
             get(list_messages).post(send_message),
@@ -325,11 +342,12 @@ async fn send_message(
     )
     .await?;
 
-    let metadata = match input.metadata {
+    let mut metadata = match input.metadata {
         None | Some(Value::Null) => json!({}),
         Some(metadata) => metadata,
     };
     client_metadaten_pruefen(&input.r#type, &metadata)?;
+    let mut attachment_ids = input.attachment_ids;
     if let Some(client_id) = input.client_id.as_deref() {
         // Der Doppelpunkt gehört den Schlüsseln, die der Server selbst
         // vergibt (`karte:…`, `erinnerung:…`, `vorab:…`). Ein Client, der so
@@ -354,14 +372,31 @@ async fn send_message(
             .map_err(|_| AppError::bad_request("Sticker nicht verfügbar"))?;
         sticker_pruefen(&state, sticker_id, id, user.id()).await?;
     }
-    let has_entity = ["stickerId", "pollId", "eventId", "gameSessionId"]
-        .iter()
-        .any(|key| metadata.get(*key).is_some());
+    let has_entity = [
+        "stickerId",
+        "pollId",
+        "eventId",
+        "gameSessionId",
+        "standort",
+        "kontakt",
+    ]
+    .iter()
+    .any(|key| metadata.get(*key).is_some());
     let body = input
         .body
         .as_ref()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
+    metadaten_im_chat(
+        &state,
+        id,
+        user.id(),
+        &input.r#type,
+        body.as_deref(),
+        &mut metadata,
+        &mut attachment_ids,
+    )
+    .await?;
 
     Validator::new()
         .one_of("type", &input.r#type, MESSAGE_TYPES)
@@ -372,7 +407,7 @@ async fn send_message(
         )
         .require(
             "body",
-            body.is_some() || !input.attachment_ids.is_empty() || has_entity,
+            body.is_some() || !attachment_ids.is_empty() || has_entity,
             "Nachricht braucht Text, Anhang oder Bezug",
         )
         .require(
@@ -385,7 +420,7 @@ async fn send_message(
         )
         .require(
             "attachmentIds",
-            input.attachment_ids.len() <= crate::constants::ATTACHMENTS_PER_MESSAGE,
+            attachment_ids.len() <= crate::constants::ATTACHMENTS_PER_MESSAGE,
             "zu viele Anhänge",
         )
         .finish()?;
@@ -398,7 +433,7 @@ async fn send_message(
             sender_id: Some(user.id()),
             r#type: input.r#type,
             body,
-            attachment_ids: input.attachment_ids,
+            attachment_ids,
             reply_to_id: input.reply_to_id,
             client_id: input.client_id,
             metadata,
@@ -427,9 +462,25 @@ async fn send_message(
 /// Namen eines anderen), `erinnerung` und was künftig dazukommt. Die
 /// Oberfläche schickt `stickerId` (Sticker-Auswahl); `forwardedFrom` und
 /// `module` stehen im gemeinsamen Schema als Angaben des Clients.
-const CLIENT_METADATEN: &[&str] = &["stickerId", "forwardedFrom", "module"];
+///
+/// Dazu kamen (zweite Welle): `mentions` (Kennungen der Erwähnten),
+/// `mentionsAlle` („@alle“, nur Admins in Gruppen), `einmalAnsehen`,
+/// `linkVorschau`, `kontakt` (Kontaktkarte) und `standort`. Was davon im Chat
+/// geprüft werden muss (Mitglieder, Rechte, Anhänge), prüft
+/// [`metadaten_im_chat`].
+const CLIENT_METADATEN: &[&str] = &[
+    "stickerId",
+    "forwardedFrom",
+    "module",
+    "mentions",
+    "mentionsAlle",
+    "einmalAnsehen",
+    "linkVorschau",
+    "kontakt",
+    "standort",
+];
 
-fn client_metadaten_pruefen(typ: &str, metadata: &Value) -> AppResult<()> {
+pub(crate) fn client_metadaten_pruefen(typ: &str, metadata: &Value) -> AppResult<()> {
     let Some(felder) = metadata.as_object() else {
         return Err(AppError::bad_request(
             "Zusatzangaben müssen ein Objekt sein",
@@ -486,6 +537,190 @@ fn client_metadaten_pruefen(typ: &str, metadata: &Value) -> AppResult<()> {
     }
     if felder.get("module").is_some_and(|modul| !modul.is_object()) {
         return Err(AppError::bad_request("`module` muss ein Objekt sein"));
+    }
+    regeln::erwaehnungen_lesen(metadata).map_err(AppError::bad_request)?;
+    if felder
+        .get("mentionsAlle")
+        .is_some_and(|wert| wert != &Value::Bool(true))
+    {
+        return Err(AppError::bad_request("`mentionsAlle` ist nur `true`"));
+    }
+    if let Some(einmal) = felder.get("einmalAnsehen") {
+        if einmal != &Value::Bool(true) || !matches!(typ, "image" | "video") {
+            return Err(AppError::bad_request(
+                "Einmal ansehen gibt es nur für Fotos und Videos",
+            ));
+        }
+        if felder.contains_key("forwardedFrom") {
+            return Err(AppError::bad_request(
+                "Einmal ansehbare Medien lassen sich nicht weiterleiten",
+            ));
+        }
+    }
+    // Kontaktkarte und Standort sind eigene Nachrichtenarten – ihr Feld nur
+    // dort, und dort immer.
+    if (typ == "contact") != felder.contains_key("kontakt") {
+        return Err(AppError::bad_request(
+            "Eine Kontaktkarte ist eine Nachricht der Art „contact“ mit `kontakt`",
+        ));
+    }
+    if let Some(kontakt) = felder.get("kontakt") {
+        regeln::kontakt_lesen(kontakt).map_err(AppError::bad_request)?;
+    }
+    if (typ == "location") != felder.contains_key("standort") {
+        return Err(AppError::bad_request(
+            "Ein Standort ist eine Nachricht der Art „location“ mit `standort`",
+        ));
+    }
+    Ok(())
+}
+
+/// Wie oft eine Person in einem Chat „@alle“ rufen darf: dreimal, dann etwa
+/// einmal in zwanzig Minuten. „@alle“ durchbricht die Stufe „Nur
+/// @Erwähnungen“ bei jedem Mitglied – ohne Bremse wäre es der Weg, eine
+/// stillgestellte Gruppe doch wieder laut zu machen.
+const ALLE_ERWAEHNEN: crate::drossel::Regel =
+    crate::drossel::Regel::neu(3, std::time::Duration::from_secs(3600));
+
+/**
+ * Was an den Zusatzangaben nur im Chat zu prüfen ist – nach
+ * [`client_metadaten_pruefen`], vor dem Schreiben.
+ *
+ * * **Erwähnungen**: nur Mitglieder dieses Chats (sonst ließe sich über die
+ *   Kennung eines Fremden dessen Mitteilung auslösen, sobald er beitritt, und
+ *   die Liste verriete, wen der Absender kennt). Doppelte fallen weg.
+ * * **@alle**: nur Admins einer Gruppe, gebremst.
+ * * **Einmal ansehen**: nur Fotos/Videos, ohne Text (eine Bildunterschrift
+ *   bliebe stehen und gäbe preis, was nur einmal zu sehen sein sollte).
+ * * **Kontaktkarte**: nur eigene Kontakte (wer mit mir einen Chat teilt) und
+ *   niemand, der mich gesperrt hat oder den ich gesperrt habe.
+ * * **Standort**: geprüft und in die gespeicherte Form gebracht (Live-Ende
+ *   setzt der Server).
+ * * **Link-Vorschau**: gehört zu einem Link im Text; das Vorschaubild ist ein
+ *   eigener, noch freier Anhang und wird mit der Nachricht verbunden.
+ */
+pub(crate) async fn metadaten_im_chat(
+    state: &AppState,
+    chat: Uuid,
+    absender: Uuid,
+    typ: &str,
+    body: Option<&str>,
+    metadata: &mut Value,
+    attachment_ids: &mut Vec<Uuid>,
+) -> AppResult<()> {
+    let erwaehnt = regeln::erwaehnungen_lesen(metadata).map_err(AppError::bad_request)?;
+    if !erwaehnt.is_empty() {
+        let mitglieder: i64 = sqlx::query_scalar(
+            "select count(*) from conversation_members
+              where conversation_id = $1 and user_id = any($2)",
+        )
+        .bind(chat)
+        .bind(&erwaehnt)
+        .fetch_one(&state.pool)
+        .await?;
+        if mitglieder != erwaehnt.len() as i64 {
+            return Err(AppError::bad_request(
+                "Erwähnen lassen sich nur Mitglieder dieses Chats",
+            ));
+        }
+        metadata["mentions"] = json!(erwaehnt);
+    } else if let Some(felder) = metadata.as_object_mut() {
+        felder.remove("mentions");
+    }
+
+    if metadata.get("mentionsAlle").is_some() {
+        let chat_zeile =
+            crate::services::conversations::require_conversation(&state.pool, chat).await?;
+        let mitglied = assert_membership(&state.pool, chat, absender).await?;
+        if chat_zeile.r#type != "group" || mitglied.role == "member" {
+            return Err(AppError::forbidden(
+                "„@alle“ dürfen nur Admins in Gruppen verwenden",
+            ));
+        }
+        if !state
+            .drossel
+            .erlaubt(&format!("alle:{chat}:{absender}"), ALLE_ERWAEHNEN)
+        {
+            return Err(AppError::too_many(
+                "„@alle“ war gerade erst. Warte ein wenig.",
+            ));
+        }
+    }
+
+    if crate::services::messages::ist_einmal(metadata) {
+        if body.is_some() {
+            return Err(AppError::bad_request(
+                "Einmal ansehbare Medien haben keine Bildunterschrift",
+            ));
+        }
+        let passend: i64 = sqlx::query_scalar(
+            "select count(*) from attachments where id = any($1) and kind in ('image', 'video')",
+        )
+        .bind(&*attachment_ids)
+        .fetch_one(&state.pool)
+        .await?;
+        if attachment_ids.is_empty() || passend != attachment_ids.len() as i64 {
+            return Err(AppError::bad_request(
+                "Einmal ansehen gibt es nur für Fotos und Videos",
+            ));
+        }
+    }
+
+    if let Some(kontakt) = metadata.get("kontakt") {
+        let person = regeln::kontakt_lesen(kontakt).map_err(AppError::bad_request)?;
+        let erlaubt: bool = sqlx::query_scalar(
+            "select exists (select 1 from users u where u.id = $2)
+                and ($1 = $2 or exists (
+                  select 1 from conversation_members a
+                    join conversation_members b on b.conversation_id = a.conversation_id
+                   where a.user_id = $1 and b.user_id = $2))
+                and not exists (
+                  select 1 from user_blocks
+                   where (blocker_id = $1 and blocked_id = $2)
+                      or (blocker_id = $2 and blocked_id = $1))",
+        )
+        .bind(absender)
+        .bind(person)
+        .fetch_one(&state.pool)
+        .await?;
+        if !erlaubt {
+            return Err(AppError::bad_request(
+                "Teilen lassen sich nur eigene Kontakte",
+            ));
+        }
+    }
+
+    if let Some(standort) = metadata.get("standort") {
+        let angenommen = regeln::standort_annehmen(standort, chrono::Utc::now())
+            .map_err(AppError::bad_request)?;
+        metadata["standort"] = angenommen;
+    }
+
+    if let Some(vorschau) = metadata.get("linkVorschau") {
+        if typ != "text" {
+            return Err(AppError::bad_request(
+                "Link-Vorschauen gibt es nur bei Textnachrichten",
+            ));
+        }
+        if let Some(bild) =
+            regeln::link_vorschau_pruefen(vorschau, body).map_err(AppError::bad_request)?
+        {
+            let frei: bool = sqlx::query_scalar(
+                "select exists (select 1 from attachments
+                                 where id = $1 and uploader_id = $2 and kind = 'image'
+                                   and status = 'ready' and message_id is null)",
+            )
+            .bind(bild)
+            .bind(absender)
+            .fetch_one(&state.pool)
+            .await?;
+            if !frei {
+                return Err(AppError::bad_request("Vorschaubild nicht verfügbar"));
+            }
+            if !attachment_ids.contains(&bild) {
+                attachment_ids.push(bild);
+            }
+        }
     }
     Ok(())
 }
@@ -561,8 +796,32 @@ async fn by_id(
 #[derive(Debug, Deserialize)]
 struct EditInput {
     body: String,
+    /// Die Erwähnungen im neuen Text. Fehlt das Feld, bleiben die alten
+    /// stehen (ältere Clients schicken nur den Text).
+    #[serde(default)]
+    mentions: Option<Vec<Uuid>>,
 }
 
+/// Welche Arten sich bearbeiten lassen: Text, und bei Fotos, Videos, Dateien
+/// und Sprachnachrichten die Bildunterschrift.
+const BEARBEITBAR: &[&str] = &["text", "image", "video", "file", "audio"];
+
+/**
+ * Bearbeiten – innerhalb des Zeitfensters, mit Verlauf.
+ *
+ * * **Zeitfenster** ([`crate::constants::BEARBEITEN_FENSTER_MIN`]): Der Server
+ *   prüft es in der Anweisung selbst, nicht nur davor – ein Client mit
+ *   falscher Uhr oder eine Aktion aus der Warteschlange, die nach Stunden
+ *   offline ankommt, ändert nichts mehr.
+ * * **Verlauf**: Der Text davor kommt in `message_edits`, in derselben
+ *   Transaktion wie die Änderung. Alle, die die Nachricht sehen, können ihn
+ *   sehen (`/messages/{id}/bearbeitungen`).
+ * * **Bildunterschriften**: Bei Medien darf der Text auch leer werden.
+ *   Einmal ansehbare Medien haben keine, Standort und Kontakt sind keine
+ *   Texte.
+ * * Eine **Link-Vorschau**, deren Link nicht mehr im Text steht, fällt weg –
+ *   sie gehörte zu einem Link, den es nicht mehr gibt.
+ */
 async fn edit(
     State(state): State<AppState>,
     user: AuthUser,
@@ -580,15 +839,61 @@ async fn edit(
             "Gelöschte Nachrichten können nicht bearbeitet werden",
         ));
     }
-    if row.r#type != "text" {
+    let ist_text = row.r#type == "text";
+    if !BEARBEITBAR.contains(&row.r#type.as_str())
+        || crate::services::messages::ist_einmal(&row.metadata)
+    {
         return Err(AppError::bad_request(
-            "Nur Textnachrichten können bearbeitet werden",
+            "Nur Text und Bildunterschriften können bearbeitet werden",
         ));
+    }
+    if !regeln::bearbeiten_erlaubt(row.created_at, chrono::Utc::now()) {
+        return Err(AppError::forbidden(format!(
+            "Bearbeiten geht nur {} Minuten nach dem Senden",
+            crate::constants::BEARBEITEN_FENSTER_MIN
+        )));
     }
     let body = input.body.trim().to_string();
     Validator::new()
-        .length("body", &body, 1, MESSAGE_BODY_MAX)
+        .length("body", &body, usize::from(ist_text), MESSAGE_BODY_MAX)
         .finish()?;
+    let neuer_text = (!body.is_empty()).then_some(body.clone());
+
+    // Die neuen Zusatzangaben: Erwähnungen nach dem neuen Text, eine
+    // Link-Vorschau nur, solange ihr Link noch dasteht.
+    let mut metadata = row.metadata.clone();
+    if let Some(erwaehnt) = input.mentions {
+        let mut probe = json!({ "mentions": erwaehnt });
+        let mut keine_anhaenge = Vec::new();
+        metadaten_im_chat(
+            &state,
+            row.conversation_id,
+            user.id(),
+            &row.r#type,
+            neuer_text.as_deref(),
+            &mut probe,
+            &mut keine_anhaenge,
+        )
+        .await?;
+        match probe.get("mentions") {
+            Some(liste) => metadata["mentions"] = liste.clone(),
+            None => {
+                if let Some(felder) = metadata.as_object_mut() {
+                    felder.remove("mentions");
+                }
+            }
+        }
+    }
+    let vorschau_weg = metadata
+        .get("linkVorschau")
+        .and_then(|v| v.get("url"))
+        .and_then(Value::as_str)
+        .is_some_and(|url| !body.contains(url));
+    if vorschau_weg {
+        if let Some(felder) = metadata.as_object_mut() {
+            felder.remove("linkVorschau");
+        }
+    }
 
     /*
      * Die Prüfungen oben noch einmal in der Anweisung selbst.
@@ -596,35 +901,68 @@ async fn edit(
      * Zwischen dem Lesen oben und diesem Schreiben konnte die Nachricht für
      * alle gelöscht werden – das Bearbeiten schrieb dann den Text in eine
      * gelöschte Nachricht zurück (die `body = null` gerade geleert hatte),
-     * und das Ereignis spielte ihn allen wieder aus.
+     * und das Ereignis spielte ihn allen wieder aus. Ebenso das Zeitfenster.
      *
      * Und derselbe Text noch einmal (ein wiederholter Versuch) ändert nichts
      * und meldet nichts – ein Neuversuch ist damit folgenlos.
+     *
+     * Der Text davor kommt in derselben Transaktion in den Verlauf, gelesen
+     * unter der Zeilensperre (`for update`): Zwei gleichzeitige Bearbeitungen
+     * schreiben so beide ihren wirklichen Vorgänger auf.
      */
-    let updated = sqlx::query_as::<_, MessageRow>(
-        "update messages set body = $2, edited_at = now()
-          where id = $1 and sender_id = $3 and deleted_at is null and type = 'text'
-            and body is distinct from $2
-          returning *",
+    let mut tx = state.pool.begin().await?;
+    let vorher: Option<(Option<String>,)> = sqlx::query_as(
+        "select body from messages
+          where id = $1 and sender_id = $2 and deleted_at is null
+            and created_at >= now() - make_interval(mins => $3)
+          for update",
     )
     .bind(id)
-    .bind(&body)
     .bind(user.id())
-    .fetch_optional(&state.pool)
+    .bind(crate::constants::BEARBEITEN_FENSTER_MIN as i32)
+    .fetch_optional(&mut *tx)
     .await?;
-    let Some(updated) = updated else {
+    let Some((vorher,)) = vorher else {
+        tx.rollback().await?;
         let jetzt = require_message(&state.pool, id).await?;
         if jetzt.deleted_at.is_some() {
             return Err(AppError::bad_request(
                 "Gelöschte Nachrichten können nicht bearbeitet werden",
             ));
         }
+        return Err(AppError::forbidden(format!(
+            "Bearbeiten geht nur {} Minuten nach dem Senden",
+            crate::constants::BEARBEITEN_FENSTER_MIN
+        )));
+    };
+    if vorher == neuer_text && metadata == row.metadata {
+        tx.rollback().await?;
         // Unverändert: der Stand, wie er ist, ohne neues Ereignis.
         return load_message(&state, id, user.id())
             .await?
             .map(Json)
             .ok_or_else(|| AppError::not_found("Nachricht nicht gefunden"));
-    };
+    }
+    if vorher != neuer_text {
+        sqlx::query("insert into message_edits (id, message_id, body_vorher) values ($1, $2, $3)")
+            .bind(Uuid::now_v7())
+            .bind(id)
+            .bind(&vorher)
+            .execute(&mut *tx)
+            .await?;
+    }
+    let updated = sqlx::query_as::<_, MessageRow>(
+        "update messages set body = $2, metadata = $3,
+                edited_at = case when body is distinct from $2 then now() else edited_at end
+          where id = $1
+          returning *",
+    )
+    .bind(id)
+    .bind(&neuer_text)
+    .bind(&metadata)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
 
     let message = hydrate_messages(&state, vec![updated], user.id())
         .await?
@@ -633,6 +971,88 @@ async fn edit(
         .ok_or_else(|| AppError::internal("Nachricht konnte nicht geladen werden"))?;
     publish_message_update(&state, &message).await?;
     Ok(Json(message))
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Fassung {
+    body: Option<String>,
+    /// Bis wann diese Fassung galt (bei der aktuellen: seit wann sie gilt).
+    am: chrono::DateTime<chrono::Utc>,
+}
+
+/**
+ * Der Bearbeitungsverlauf: alle früheren Fassungen, älteste zuerst, dazu die
+ * aktuelle.
+ *
+ * Für jeden, der die Nachricht sehen darf – nicht nur den Absender. Gerade
+ * die anderen müssen nachsehen können, was vorher dastand. Eine gelöschte
+ * Nachricht hat keinen Verlauf mehr (er wurde mit ihr entfernt).
+ */
+async fn bearbeitungen(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<Value>> {
+    let row = require_message(&state.pool, id).await?;
+    assert_membership(&state.pool, row.conversation_id, user.id()).await?;
+    if !crate::services::verlauf::darf_nachricht_sehen(&state.pool, id, user.id()).await?
+        || row.deleted_at.is_some()
+    {
+        return Err(AppError::not_found("Nachricht nicht gefunden"));
+    }
+    let zeilen: Vec<(Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "select body_vorher, bearbeitet_at from message_edits
+          where message_id = $1 order by bearbeitet_at asc, id asc",
+    )
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await?;
+    let frueher: Vec<Fassung> = zeilen
+        .into_iter()
+        .map(|(body, am)| Fassung { body, am })
+        .collect();
+    Ok(Json(json!({
+        "items": frueher,
+        "aktuell": Fassung { body: row.body, am: row.edited_at.unwrap_or(row.created_at) },
+        "gesendetAm": row.created_at,
+    })))
+}
+
+/**
+ * Die ungelesenen Nachrichten, die mich erwähnen – für „Zur nächsten
+ * Erwähnung“ im Chat. Höchstens fünfzig, älteste zuerst; dieselbe Bedingung
+ * wie der Zähler in der Chatliste.
+ */
+async fn ungelesene_erwaehnungen(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<ListResult<Uuid>>> {
+    assert_membership(&state.pool, id, user.id()).await?;
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        "select m.id
+           from conversation_members cm
+           join messages m
+             on m.conversation_id = cm.conversation_id
+            and m.deleted_at is null
+            and (m.sender_id is null or m.sender_id <> cm.user_id)
+            and m.id > coalesce(cm.last_read_message_id,
+                                '00000000-0000-0000-0000-000000000000'::uuid)
+            and (cm.sieht_ab is null or m.created_at >= cm.sieht_ab)
+          where cm.conversation_id = $1 and cm.user_id = $2
+            and ((m.metadata -> 'mentions') ? cm.user_id::text
+                 or m.metadata ->> 'mentionsAlle' = 'true')
+            and not exists (select 1 from message_hidden h
+                             where h.message_id = m.id and h.user_id = $2)
+          order by m.id asc
+          limit 50",
+    )
+    .bind(id)
+    .bind(user.id())
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(ListResult::new(ids)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -701,6 +1121,14 @@ async fn remove(
             "Für alle löschen kann man nur eigene Nachrichten",
         ));
     }
+    // Eigene Nachrichten nur innerhalb der Frist – Admins einer Gruppe ohne
+    // (Moderation, wie bisher).
+    if !regeln::fuer_alle_loeschen_erlaubt(row.created_at, chrono::Utc::now(), darf_moderieren) {
+        return Err(AppError::forbidden(format!(
+            "Für alle löschen geht nur {} Stunden nach dem Senden – „Nur für mich löschen“ geht immer",
+            crate::constants::LOESCHEN_FENSTER_STD
+        )));
+    }
 
     // Der Empfängerkreis wird VOR dem Löschen bestimmt: Er hängt am
     // Erstellungszeitpunkt der Nachricht, und die Meldung geht nur an die, für
@@ -738,12 +1166,26 @@ async fn remove(
         .bind(id)
         .execute(&mut *tx)
         .await?;
+    // Was gelöscht ist, hat keinen Verlauf mehr und ist nicht mehr angeheftet.
+    sqlx::query("delete from message_edits where message_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    let war_angeheftet = sqlx::query("delete from conversation_pins where message_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected()
+        > 0;
     tx.commit().await?;
 
     state
         .hub
         .publish(members, Event::message_deleted(row.conversation_id, id))
         .await;
+    if war_angeheftet {
+        anheften::angeheftet_melden(&state, row.conversation_id).await;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

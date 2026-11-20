@@ -116,6 +116,24 @@ fn zu_grund(zeile: GrundZeile) -> Grund {
 }
 
 /**
+ * Hängt dieser Anhang an einem einmal ansehbaren Foto/Video?
+ *
+ * Dann gibt es ihn über KEINEN der allgemeinen Wege – weder dem Absender
+ * (Besitz) noch dem Chat (Gespräch), noch über Sammlung oder Fernseher. Die
+ * einzige Auslieferung ist `/messages/{id}/einmal/{anhang}`, die je Person
+ * genau einmal zählt (`modules::messages::einmal`).
+ */
+pub async fn einmal_gebunden(pool: &PgPool, attachment_id: Uuid) -> AppResult<bool> {
+    Ok(sqlx::query_scalar(
+        "select exists (select 1 from attachments a join messages m on m.id = a.message_id
+                         where a.id = $1 and m.metadata ->> 'einmalAnsehen' = 'true')",
+    )
+    .bind(attachment_id)
+    .fetch_one(pool)
+    .await?)
+}
+
+/**
  * Darf diese Person diesen Anhang sehen – und warum?
  *
  * Eine Abfrage, weil sie vor jedem Bild im Verlauf steht. Die Zweige stehen in
@@ -133,6 +151,12 @@ fn zu_grund(zeile: GrundZeile) -> Grund {
  * * **Sticker** sind Medien wie andere und bekommen keinen Freibrief.
  */
 pub async fn anhang(pool: &PgPool, attachment_id: Uuid, user_id: Uuid) -> AppResult<Auskunft> {
+    if einmal_gebunden(pool, attachment_id).await? {
+        return Ok(Auskunft {
+            besitzer: None,
+            grund: Grund::Keins,
+        });
+    }
     let zeile = sqlx::query_as::<_, GrundZeile>(
         r#"
 select art, bezug from (

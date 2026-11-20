@@ -11,8 +11,28 @@ pub const PROTOCOL_VERSION: u8 = 1;
 /// eingerechnet zu sein – siehe `rezept.ts` im Web-Fotoeditor.
 pub const MESSAGE_TYPES: &[&str] = &[
     "text", "image", "video", "audio", "file", "sticker", "rezept", "poll", "event", "game",
-    "system",
+    "system", "location", "contact",
 ];
+
+/// Wie lange nach dem Senden eine Nachricht bearbeitet werden darf, in
+/// Minuten – wie bei WhatsApp. Danach steht sie fest: Eine Zusage, auf die sich
+/// andere schon eingestellt haben, soll nicht still zur Absage werden. Der
+/// Bearbeitungsverlauf macht frühere Fassungen trotzdem für alle sichtbar.
+/// Gespiegelt in `LIMITS.bearbeitenFensterMin` im gemeinsamen Paket.
+pub const BEARBEITEN_FENSTER_MIN: i64 = 15;
+/// Wie lange „Für alle löschen“ bei eigenen Nachrichten geht, in Stunden.
+/// Admins einer Gruppe dürfen fremde Nachrichten weiter ohne Frist entfernen
+/// (Moderation). Gespiegelt in `LIMITS.loeschenFensterStd`.
+pub const LOESCHEN_FENSTER_STD: i64 = 48;
+/// Höchstens so viele Personen erwähnt eine Nachricht.
+pub const ERWAEHNUNGEN_MAX: usize = 50;
+/// Höchstens so viele angeheftete Nachrichten je Chat.
+pub const ANGEHEFTET_MAX: i64 = 3;
+/// Die erlaubten Lebensdauern selbstlöschender Nachrichten in Sekunden:
+/// 24 Stunden, 7 Tage, 90 Tage. Feste Stufen statt freier Zahl – die
+/// Oberfläche nennt sie beim Namen, und ein „3 Sekunden“-Chat wäre ein Spiel
+/// mit dem Aufräumdienst, keine Einstellung.
+pub const SELBSTLOESCHEN_STUFEN: &[i32] = &[86_400, 604_800, 7_776_000];
 pub const ATTACHMENT_KINDS: &[&str] = &["image", "video", "audio", "file", "sticker"];
 pub const CONVERSATION_TYPES: &[&str] = &["direct", "group"];
 pub const MEMBER_ROLES: &[&str] = &["owner", "admin", "member"];
@@ -240,6 +260,8 @@ pub fn message_preview(message_type: &str, body: Option<&str>, deleted: bool) ->
         "poll" => "📊 Umfrage".to_string(),
         "event" => "📅 Termin".to_string(),
         "game" => "🎮 Spiel".to_string(),
+        "location" => "📍 Standort".to_string(),
+        "contact" => "👤 Kontakt".to_string(),
         _ => match body.map(str::trim) {
             Some(text) if !text.is_empty() => text.to_string(),
             _ => "Nachricht".to_string(),

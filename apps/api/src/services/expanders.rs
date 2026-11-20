@@ -78,6 +78,10 @@ pub fn metadata_id(message: &MessageRow, key: &str) -> Option<Uuid> {
  */
 pub fn betrachterabhaengig(message: &MessageRow) -> bool {
     message.reply_to_id.is_some()
+        // Kontaktkarte (Profil nach Privatsphäre) und „einmal ansehen“
+        // („schon geöffnet“) bereitet `messages::nachbereiten` je Betrachter auf.
+        || message.r#type == "contact"
+        || message.metadata.get("einmalAnsehen").is_some()
         || EXPANDERS.iter().any(|expander| {
             message
                 .metadata

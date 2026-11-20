@@ -89,7 +89,14 @@ pub async fn notify_new_message_mit(
         if !noch.contains(&target.id) {
             continue;
         }
-        if target.muted_until.is_some_and(|until| until > now) {
+        // Eine persönliche @Erwähnung kommt auch in einem stummgeschalteten
+        // Chat an – wie bei WhatsApp: Stumm heisst „nicht jede Nachricht“,
+        // nicht „auch nicht, wenn jemand MICH meint“. „@alle“ gilt dafür
+        // nicht (sonst hebelte ein Admin jede Stummschaltung aus), und die
+        // Stufe „Aus“ bleibt aus.
+        if target.muted_until.is_some_and(|until| until > now)
+            && !persoenlich_erwaehnt(target.id, &message.metadata)
+        {
             continue;
         }
         if !stufe_erlaubt(&target.notify_level, target.id, &message.metadata) {
@@ -335,17 +342,27 @@ pub async fn notify_users(state: &AppState, user_ids: &[Uuid], payload: &PushPay
 pub fn stufe_erlaubt(stufe: &str, person: Uuid, metadata: &serde_json::Value) -> bool {
     match stufe {
         "aus" => false,
-        "erwaehnungen" => metadata
-            .get("mentions")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|liste| {
-                liste
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .any(|id| Uuid::parse_str(id).is_ok_and(|id| id == person))
-            }),
+        // „@alle“ (nur Admins, gebremst) zählt hier als Erwähnung jedes
+        // Mitglieds – dafür ist es da.
+        "erwaehnungen" => {
+            persoenlich_erwaehnt(person, metadata)
+                || metadata.get("mentionsAlle") == Some(&serde_json::Value::Bool(true))
+        }
         _ => true,
     }
+}
+
+/// Steht diese Person in `metadata.mentions`?
+pub fn persoenlich_erwaehnt(person: Uuid, metadata: &serde_json::Value) -> bool {
+    metadata
+        .get("mentions")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|liste| {
+            liste
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .any(|id| Uuid::parse_str(id).is_ok_and(|id| id == person))
+        })
 }
 
 fn benachrichtigungen(settings: &serde_json::Value) -> (bool, bool) {
@@ -943,6 +960,17 @@ mod tests {
         assert!(stufe_erlaubt("erwaehnungen", ich, &erwaehnt));
         let andere = serde_json::json!({ "mentions": [Uuid::from_u128(8).to_string()] });
         assert!(!stufe_erlaubt("erwaehnungen", ich, &andere));
+        let alle = serde_json::json!({ "mentionsAlle": true });
+        assert!(
+            stufe_erlaubt("erwaehnungen", ich, &alle),
+            "@alle meint mich auch"
+        );
+        assert!(!stufe_erlaubt("aus", ich, &erwaehnt), "Aus bleibt aus");
+        assert!(persoenlich_erwaehnt(ich, &erwaehnt));
+        assert!(
+            !persoenlich_erwaehnt(ich, &alle),
+            "@alle ist keine persönliche Erwähnung"
+        );
     }
 
     #[test]

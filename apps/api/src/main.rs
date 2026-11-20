@@ -150,6 +150,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
      */
     initiative_api::services::erinnern::starten(state.clone());
 
+    /*
+     * Geplante Nachrichten und selbstlöschende Nachrichten – beide erst nach
+     * den Migrationen (`scheduled_messages`, `messages.expires_at`). Mehrere
+     * Instanzen dürfen laufen: Beansprucht wird mit `skip locked`.
+     */
+    initiative_api::services::messages::geplant::starten(state.clone());
+    initiative_api::services::messages::selbstloeschen::starten(state.clone());
+
     let router = app::build(state.clone());
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(

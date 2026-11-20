@@ -25,8 +25,18 @@ export const MESSAGE_TYPES = [
   'event',
   'game',
   'system',
+  /** Ein Standort – einmalig oder live (`metadata.standort`). */
+  'location',
+  /** Eine Kontaktkarte (`metadata.kontakt.userId`). */
+  'contact',
 ] as const;
 export type MessageType = (typeof MESSAGE_TYPES)[number];
+
+/**
+ * Lebensdauer selbstlöschender Nachrichten in Sekunden: 24 Stunden, 7 Tage,
+ * 90 Tage – `SELBSTLOESCHEN_STUFEN` im Server. `null` heisst aus.
+ */
+export const SELBSTLOESCHEN_STUFEN = [86_400, 604_800, 7_776_000] as const;
 
 export const ATTACHMENT_KINDS = ['image', 'video', 'audio', 'file', 'sticker'] as const;
 export type AttachmentKind = (typeof ATTACHMENT_KINDS)[number];
@@ -61,6 +71,17 @@ export const LIMITS = {
    * `MESSAGE_METADATA_MAX` im Server.
    */
   messageMetadataMax: 4096,
+  /**
+   * So viele Minuten nach dem Senden lässt sich eine Nachricht bearbeiten –
+   * `BEARBEITEN_FENSTER_MIN` im Server (der entscheidet).
+   */
+  bearbeitenFensterMin: 15,
+  /** So viele Stunden geht „Für alle löschen“ bei eigenen Nachrichten – `LOESCHEN_FENSTER_STD`. */
+  loeschenFensterStd: 48,
+  /** Höchstens so viele Erwähnungen je Nachricht – `ERWAEHNUNGEN_MAX`. */
+  erwaehnungenMax: 50,
+  /** Höchstens so viele angeheftete Nachrichten je Chat – `ANGEHEFTET_MAX`. */
+  angeheftetMax: 3,
   conversationTitleMax: 80,
   pollQuestionMax: 300,
   pollOptionMax: 120,

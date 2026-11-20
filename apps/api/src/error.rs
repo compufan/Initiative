@@ -59,6 +59,12 @@ impl AppError {
         Self::api(StatusCode::NOT_FOUND, "not_found", message)
     }
 
+    /// 410 – es gab das hier, aber es ist endgültig vorbei (etwa ein einmal
+    /// ansehbares Foto, das schon geöffnet wurde).
+    pub fn gone(message: impl Into<String>) -> Self {
+        Self::api(StatusCode::GONE, "gone", message)
+    }
+
     pub fn conflict(message: impl Into<String>) -> Self {
         Self::api(StatusCode::CONFLICT, "conflict", message)
     }

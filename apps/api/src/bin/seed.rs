@@ -71,6 +71,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let poll = create_poll(
         &state,
         NewPoll {
+            quiz: None,
             conversation_id: group,
             created_by: anna,
             kind: "choice".into(),
@@ -98,6 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let date_poll = create_poll(
         &state,
         NewPoll {
+            quiz: None,
             conversation_id: group,
             created_by: anna,
             kind: "date".into(),

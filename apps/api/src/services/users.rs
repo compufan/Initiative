@@ -32,6 +32,9 @@ pub fn merge_settings(stored: &Value) -> Value {
         "marke": "dezent",
         "locale": "de",
         "notifications": { "push": true, "sound": true, "previews": true },
+        // Link-Vorschauen holt der Server nur auf Wunsch (Datenschutz): Die
+        // fremde Seite erfährt sonst, dass jemand ihren Link teilt.
+        "linkVorschauen": false,
         "modules": {},
         // Wer was von mir sieht. Voreinstellung: alles offen wie bisher – wer
         // nie etwas eingestellt hat, soll nicht ploetzlich unsichtbar werden.

@@ -45,7 +45,9 @@ use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/orte/suche", get(suchen))
+    Router::new()
+        .route("/orte/suche", get(suchen))
+        .route("/orte/rueckwaerts", get(rueckwaerts))
 }
 
 /// Wie lang eine Anfrage höchstens ist – länger ist kein Ort mehr.
@@ -122,7 +124,11 @@ async fn suchen(
     }
 
     let (rest, plz) = plz_herausloesen(&q);
-    let mut suche = if rest.is_empty() { q.clone() } else { rest.clone() };
+    let mut suche = if rest.is_empty() {
+        q.clone()
+    } else {
+        rest.clone()
+    };
     // Eine Postleitzahl allein führt Photon nicht zur Strasse in DIESER Stadt:
     // „Willy-Brandt-Platz“ gibt es dutzendfach. Darum wird die Zahl erst zum
     // Ort aufgelöst und der Ort an die Suche gehängt.
@@ -142,6 +148,82 @@ async fn suchen(
     }))
 }
 
+#[derive(Debug, Deserialize)]
+struct Punkt {
+    lat: f64,
+    lon: f64,
+}
+
+/// Aus `GEO_URL` (…/api/) die Adresse der Rückwärtssuche (…/reverse) – so
+/// heisst sie bei Photon, öffentlich wie selbst betrieben.
+pub fn rueckwaerts_url(geo_url: &str) -> Option<String> {
+    let basis = geo_url.trim_end_matches('/');
+    basis
+        .strip_suffix("/api")
+        .map(|anfang| format!("{anfang}/reverse"))
+}
+
+/**
+ * Rückwärtssuche: Welche Adresse liegt an diesem Punkt? Für einen geteilten
+ * Standort („📍 Hauptstrasse 3, Musterstadt“).
+ *
+ * Wie die Suche über den eigenen Server: Photon sieht nur diesen Server und
+ * einen Punkt, nicht wer ihn teilt. Der Punkt wird auf vier Nachkommastellen
+ * (gut zehn Meter) gerundet, bevor er hinausgeht – für eine Adresse reicht
+ * das, und der Dienst bekommt nicht den genauen Standort.
+ */
+async fn rueckwaerts(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Query(punkt): Query<Punkt>,
+) -> AppResult<Json<Value>> {
+    if !(-90.0..=90.0).contains(&punkt.lat) || !(-180.0..=180.0).contains(&punkt.lon) {
+        return Err(AppError::bad_request("Ungültiger Punkt"));
+    }
+    let Some(adresse) = rueckwaerts_url(&state.config.geo_url) else {
+        return Ok(Json(serde_json::json!({ "item": null, "quelle": QUELLE })));
+    };
+    if !state
+        .drossel
+        .erlaubt(&format!("orte:{}", user.id()), regeln::SUCHEN)
+    {
+        return Err(AppError::too_many(
+            "Zu viele Suchanfragen. Warte einen Moment.",
+        ));
+    }
+    let runden = |wert: f64| format!("{:.4}", wert);
+    let client = reqwest::Client::builder()
+        .timeout(WARTEZEIT)
+        .user_agent(format!("Initiative/{} (Ortssuche)", state.config.git_sha))
+        .build()
+        .map_err(|_| AppError::internal("Ortssuche nicht bereit"))?;
+    let url = reqwest::Url::parse_with_params(
+        &adresse,
+        &[
+            ("lat", runden(punkt.lat)),
+            ("lon", runden(punkt.lon)),
+            ("lang", "de".to_string()),
+            ("limit", "1".to_string()),
+        ],
+    )
+    .map_err(|_| AppError::internal("GEO_URL ist keine Adresse"))?;
+    let roh: Value = match client.get(url).send().await {
+        Ok(antwort) if antwort.status().is_success() => antwort
+            .json()
+            .await
+            .map_err(|_| AppError::upstream("Die Ortssuche ist gerade nicht erreichbar."))?,
+        _ => {
+            return Err(AppError::upstream(
+                "Die Ortssuche ist gerade nicht erreichbar.",
+            ))
+        }
+    };
+    let treffer = treffer_lesen(&roh).into_iter().next();
+    Ok(Json(
+        serde_json::json!({ "item": treffer, "quelle": QUELLE }),
+    ))
+}
+
 async fn beim_dienst_fragen(state: &AppState, suche: &str) -> AppResult<Value> {
     let client = reqwest::Client::builder()
         .timeout(WARTEZEIT)
@@ -153,14 +235,10 @@ async fn beim_dienst_fragen(state: &AppState, suche: &str) -> AppResult<Value> {
         &[("q", suche), ("lang", "de"), ("limit", &HOLEN.to_string())],
     )
     .map_err(|_| AppError::internal("GEO_URL ist keine Adresse"))?;
-    let antwort = client
-        .get(adresse)
-        .send()
-        .await
-        .map_err(|fehler| {
-            tracing::warn!(%fehler, "Ortssuche: Dienst nicht erreichbar");
-            AppError::upstream("Die Ortssuche ist gerade nicht erreichbar.")
-        })?;
+    let antwort = client.get(adresse).send().await.map_err(|fehler| {
+        tracing::warn!(%fehler, "Ortssuche: Dienst nicht erreichbar");
+        AppError::upstream("Die Ortssuche ist gerade nicht erreichbar.")
+    })?;
     if !antwort.status().is_success() {
         tracing::warn!(status = %antwort.status(), "Ortssuche: Dienst lehnt ab");
         return Err(AppError::upstream(
@@ -217,7 +295,12 @@ pub fn stadt_aus_plz_antwort(roh: &Value, plz: &str, bevorzugt: &[String]) -> Op
                 .or_else(|| text_feld(eigen, "town"))
                 .or_else(|| text_feld(eigen, "village"))
                 .or_else(|| text_feld(eigen, "locality"))?;
-            Some((text_feld(eigen, "countrycode").unwrap_or_default().to_uppercase(), ort))
+            Some((
+                text_feld(eigen, "countrycode")
+                    .unwrap_or_default()
+                    .to_uppercase(),
+                ort,
+            ))
         })
         .collect();
     kandidaten
@@ -301,7 +384,10 @@ pub fn plz_herausloesen(q: &str) -> (String, Option<String>) {
         .filter(|(i, _)| *i != stelle)
         .map(|(_, w)| *w)
         .collect();
-    (rest.join(" ").trim_matches(',').trim().to_string(), Some(plz))
+    (
+        rest.join(" ").trim_matches(',').trim().to_string(),
+        Some(plz),
+    )
 }
 
 fn text_feld(eigen: &Value, name: &str) -> Option<String> {
@@ -446,6 +532,19 @@ mod tests {
     }
 
     #[test]
+    fn die_rueckwaertssuche_liegt_neben_der_suche() {
+        assert_eq!(
+            rueckwaerts_url("https://photon.komoot.io/api/").as_deref(),
+            Some("https://photon.komoot.io/reverse")
+        );
+        assert_eq!(
+            rueckwaerts_url("http://photon:2322/api").as_deref(),
+            Some("http://photon:2322/reverse")
+        );
+        assert_eq!(rueckwaerts_url("https://anders.example/suche"), None);
+    }
+
+    #[test]
     fn eine_getippte_anfrage_trifft_nie_den_schluessel_einer_plz() {
         assert_ne!(suchschluessel("plz:64283"), plz_schluessel("64283"));
         assert_ne!(suchschluessel("64283"), plz_schluessel("64283"));
@@ -459,7 +558,10 @@ mod tests {
         );
         assert_eq!(
             plz_herausloesen("Willy-Brandt-Platz 1 64283 Darmstadt"),
-            ("Willy-Brandt-Platz 1 Darmstadt".into(), Some("64283".into()))
+            (
+                "Willy-Brandt-Platz 1 Darmstadt".into(),
+                Some("64283".into())
+            )
         );
         assert_eq!(
             plz_herausloesen("Willy-Brandt-Platz 1, 64283"),
@@ -473,7 +575,10 @@ mod tests {
         assert_eq!(plz_herausloesen("Willy 1"), ("Willy 1".into(), None));
         assert_eq!(plz_herausloesen("B 462"), ("B 462".into(), None));
         // Ein Wort und fünf Ziffern: eher eine Hausnummer als eine Postleitzahl.
-        assert_eq!(plz_herausloesen("Hauptstr 12345"), ("Hauptstr 12345".into(), None));
+        assert_eq!(
+            plz_herausloesen("Hauptstr 12345"),
+            ("Hauptstr 12345".into(), None)
+        );
     }
 
     #[test]
@@ -542,9 +647,30 @@ mod tests {
     #[test]
     fn ordnet_die_plz_zuerst_und_dann_die_bevorzugten_laender() {
         let mut t = vec![
-            Treffer { text: "A, 99999 X".into(), titel: "A".into(), zeile: "".into(), lat: 0.0, lon: 0.0, land: Some("PL".into()) },
-            Treffer { text: "B, 11111 Y".into(), titel: "B".into(), zeile: "".into(), lat: 0.0, lon: 0.0, land: Some("DE".into()) },
-            Treffer { text: "C, 64283 Darmstadt".into(), titel: "C".into(), zeile: "".into(), lat: 0.0, lon: 0.0, land: Some("DE".into()) },
+            Treffer {
+                text: "A, 99999 X".into(),
+                titel: "A".into(),
+                zeile: "".into(),
+                lat: 0.0,
+                lon: 0.0,
+                land: Some("PL".into()),
+            },
+            Treffer {
+                text: "B, 11111 Y".into(),
+                titel: "B".into(),
+                zeile: "".into(),
+                lat: 0.0,
+                lon: 0.0,
+                land: Some("DE".into()),
+            },
+            Treffer {
+                text: "C, 64283 Darmstadt".into(),
+                titel: "C".into(),
+                zeile: "".into(),
+                lat: 0.0,
+                lon: 0.0,
+                land: Some("DE".into()),
+            },
         ];
         einordnen(&mut t, Some("64283"), &["DE".into()]);
         assert_eq!(
