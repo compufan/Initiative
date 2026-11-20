@@ -364,6 +364,73 @@ Startbildschirm legen und funktioniert auch ohne Netz weiter.
 - Aufnahme ist auch **ohne Netz** möglich; die Nachricht geht raus, sobald du
   wieder Empfang hast.
 
+### Foto-Qualität: HD und „Als Datei“
+
+- In Galerie und Kamera gibt es den Schalter **HD**: Standard sind 1920
+  Punkte an der langen Kante, HD die Originalauflösung bis **4096 Punkte**
+  mit höherer Güte. Die Wahl merkt sich das Gerät. Fotos über 1920 Punkte
+  tragen im Chat ein **HD-Abzeichen**.
+- Auch in HD wird das Foto neu geschrieben: Die Kameradatei trägt Angaben
+  wie den **Ort der Aufnahme** mit, und die sollen nicht nebenbei mitgehen.
+- **„Als Datei senden (Original)“** in der Galerie schickt Fotos und Videos
+  unverändert als Dokument – in voller Grösse und mit allen Angaben; der
+  Knopf sagt das dazu.
+
+### Sprachnachrichten: gedrückt halten und weiterhören
+
+- Das **Mikrofon** sitzt in der Eingabezeile: **gedrückt halten** nimmt auf,
+  **loslassen** sendet, **nach links wischen** bricht ab, **nach oben
+  wischen** sperrt die Aufnahme (dann mit „Senden“ und „Verwerfen“). Ein
+  kurzer Tipp, die Eingabe- oder Leertaste öffnen wie bisher das
+  Aufnahmeblatt – der Weg ohne Halten für Tastatur und Maus.
+- Gespielt wird in **einem** Spieler für die ganze App: Wer den Chat
+  verlässt, hört weiter. Oben erscheint eine **Mini-Leiste** mit Pause/Weiter,
+  10 Sekunden zurück, **Geschwindigkeit** (1×, 1,5×, 2×) und Schliessen; ein
+  Tipp auf den Namen springt zur Nachricht.
+- Danach kommt die **nächste Sprachnachricht** des Chats von selbst.
+- Wo man aufgehört hat, merkt sich das Gerät – beim nächsten Abspielen geht
+  es dort weiter.
+- Auf dem **Sperrbildschirm** und an Kopfhörern stehen Absender und Chat mit
+  Abspielen, Pause und Spulen (Media Session).
+- **iPhone, ehrlich:** Safari spielt erst nach einer Berührung. Die nächste
+  Sprachnachricht startet meist von selbst, bei gesperrtem Telefon nicht
+  immer – dann steht sie in der Leiste bereit. In der installierten App
+  (Home-Bildschirm) kann der Ton je nach iOS-Stand beim Sperren aufhören; im
+  Safari-Tab läuft er weiter.
+
+### Videonachricht im Kreis
+
+- Im Menü „＋“ → **Videonachricht**: Frontkamera, quadratisch, höchstens
+  **eine Minute**, mit Fortschrittsring. Die **Kamera lässt sich mitten in
+  der Aufnahme wechseln**; danach Vorschau, „Neu aufnehmen“, „Verwerfen“ oder
+  „Senden“.
+- Im Chat erscheint sie **rund**, läuft stumm im Kreis, solange sie zu sehen
+  ist; ein Tipp spielt sie **mit Ton von vorn**, der Ring zeigt den
+  Fortschritt.
+- Wer „Bewegung reduzieren“ eingestellt hat, sieht sie erst nach dem Tipp
+  laufen.
+
+### Medien, Links und Dokumente eines Chats
+
+- In der **Chat-Info** → „Medien, Links und Dokumente“: Reiter für
+  **Medien** (Raster, Fotos in der Lightbox zum Durchblättern), **Dokumente**,
+  **Links** (aus allen Nachrichtentexten) und **Sprachnachrichten** (spielen
+  im Spieler oben). Jeder Eintrag springt auf Wunsch **zur Nachricht**.
+- Zu sehen ist, was du auch im Verlauf siehst: nichts vor deinem Beitritt
+  oder vor „Chat leeren“, nichts Gelöschtes, nichts Abgelaufenes und keine
+  einmal ansehbaren Fotos und Videos.
+
+### Chat exportieren
+
+- In der **Chat-Info** → „Chat exportieren“: eine **ZIP-Datei** mit
+  `chat.txt` im bekannten Format (`20.11.26, 14:03 - Anna: Hallo`) und auf
+  Wunsch allen Fotos, Videos und Dateien im Ordner `medien/` (bis 2 GB, was
+  darüber liegt, ist in `chat.txt` vermerkt).
+- Exportiert wird **dein** Blick auf den Chat – dieselben Grenzen wie oben.
+  Uhrzeiten in der Zeitzone deines Geräts.
+- Der Browser lädt die Datei selbst herunter; die Adresse dafür gilt fünf
+  Minuten. Höchstens drei Exporte je Stunde.
+
 ### Dateien
 
 - Beliebige Dateien bis **4 GB**, mit Name, Größe und Symbol nach Dateityp.
@@ -397,6 +464,31 @@ Startbildschirm legen und funktioniert auch ohne Netz weiter.
 | Sticker                 | 4 MB           |
 
 Bis zu 10 Anhänge pro Nachricht.
+
+## Anrufe
+
+- Im Kopf eines **Direktchats**: 📞 **Anrufen** und 🎥 **Videoanruf**.
+- **Eingehend** klingelt es mit einer eigenen kleinen Tonfolge, mit
+  **Annehmen** und **Ablehnen** – auch wenn du gerade woanders in der App
+  bist. Ist die App zu, kommt eine Mitteilung **„Anruf von …“** auf alle
+  deine Geräte; nimmst du auf einem an, hören die anderen auf zu klingeln.
+- **Im Gespräch:** Stumm, Kamera aus, Kamera wechseln, Lautsprecher (wo der
+  Browser das kann), Auflegen, die **Dauer** und eine Anzeige der
+  **Verbindungsqualität**.
+- Im Chat bleibt eine Zeile: **„Verpasster Anruf“** (beim Anrufer „Anruf
+  nicht angenommen“) oder **„Anruf, 3:12“**. Nach 45 Sekunden ohne Antwort
+  gilt ein Anruf als verpasst; wer gerade telefoniert, ist **besetzt**.
+- Wer blockiert ist oder blockiert hat, kann nicht anrufen – dieselbe Regel
+  wie beim Schreiben.
+- Ton und Bild gehen direkt von Gerät zu Gerät; der Server vermittelt nur.
+  Für Anrufe übers Internet braucht der Betreiber einen TURN-Server
+  ([DEPLOYMENT.md](DEPLOYMENT.md#anrufe-coturn-turn-server)).
+- **Grenzen, ehrlich:** nur zu zweit (Gruppenanrufe bräuchten einen
+  Medienserver); auf dem **iPhone** kein Klingeln wie beim Telefon (kein
+  CallKit) – bei geschlossener App nur die Mitteilung, erst ein Tipp öffnet
+  den Anruf; kein Umschalten zwischen Hörmuschel und Lautsprecher in Safari.
+  Ein Klingelton braucht eine Berührung der Seite; frisch aus der Mitteilung
+  geöffnet vibriert das Gerät stattdessen, wo es das kann.
 
 ## Fotos bearbeiten
 
@@ -1569,7 +1661,7 @@ Am Rechner genügt es, mit der Maus darauf zu zeigen.
 
 Ehrlichkeitshalber:
 
-- Keine **Sprach- oder Videoanrufe**.
+- **Anrufe nur zu zweit** – keine Gruppenanrufe (siehe [Anrufe](#anrufe)).
 - Keine **Ende-zu-Ende-Verschlüsselung** – der Server kann Inhalte lesen.
   Transport und Speicherung sind gesichert, aber das ist etwas anderes.
 - Keine **Statusmeldungen/Stories**.
@@ -1585,7 +1677,8 @@ Ehrlichkeitshalber:
 - Der **Datenexport** unter „Deine Daten" gibt dein Konto, deine Chats,
   **deine eigenen** Nachrichten, Ausgaben und Termine als JSON heraus. Was
   andere in gemeinsamen Chats geschrieben haben, ist nicht dabei – das gehört
-  ihnen. Ein vollständiger, lesbarer Verlauf zum Archivieren ist es also nicht.
+  ihnen. Den lesbaren Verlauf eines Chats gibt es über
+  [Chat exportieren](#chat-exportieren).
 - **Anhänge sind im Export gar nicht enthalten** – weder als Datei noch als
   Verweis. Fotos und Sprachnachrichten holst du dir aus dem Chat.
 - In **Sammlungen** und bei **Ausgaben** gibt es keinen Papierkorb: Entferntes

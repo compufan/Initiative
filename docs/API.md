@@ -630,6 +630,44 @@ nichts – dieselbe Adresse, dieselben Rechte, `Range` funktioniert genauso. Nur
 das erste Laden dauert bei `fern` länger, und die Oberfläche kann das sagen,
 statt langsam auszusehen.
 
+## Medienübersicht und Export
+
+| Methode | Pfad | Zweck |
+| ------- | ---- | ----- |
+| `GET`  | `/conversations/{id}/anhaenge?art=medien\|dokumente\|links\|audio&vor=&limit=` | Eine Seite der Medienübersicht (neueste zuerst, `nextCursor` → `vor`). |
+| `POST` | `/conversations/{id}/export` | `{ mitMedien, zeitzoneVersatz }` → `{ url, gueltigBis }` – fünf Minuten gültig. |
+| `GET`  | `/chat-export/{karte}?medien=0\|1&tz=` | Das ZIP im Strom (ohne Kopf: die Karte in der Adresse genügt). |
+
+Sichtbar ist, was die fragende Person im Verlauf sieht: ab ihrer
+Verlaufsgrenze (`sieht_ab`, auch nach „Chat leeren“), ohne „für mich
+gelöscht“, ohne Gelöschtes, Abgelaufenes (`expires_at`) und einmal
+Ansehbares (`metadata.einmalAnsehen`). `medien` sind Fotos und Videos,
+`dokumente` Dateien, `audio` Sprachnachrichten und Audio; ein Eintrag ist
+`{ messageId, senderId, createdAt, attachment }`. `links` liefert
+`{ messageId, senderId, createdAt, url, text }` – Links werden beim Lesen aus
+den Texten gezogen (`http(s)://`, `www.`). Der Export ist ein ZIP ohne
+Kompression mit `chat.txt` (`TT.MM.JJ, HH:MM - Name: Text`) und optional
+`medien/0001-name.ext` (höchstens 2 GiB); drei je Stunde und Person, zwei
+gleichzeitig (sonst 429). Nichtmitglieder: 403; eine abgelaufene oder fremde
+Karte: 401.
+
+## Anrufe (1:1, WebRTC)
+
+| Methode | Pfad | Zweck |
+| ------- | ---- | ----- |
+| `GET` | `/anrufe/ice` | `{ iceServers, gueltigBis, klingelnS }` für `RTCPeerConnection`; TURN mit Benutzer `Ablauf:Kennung` und Passwort `base64(HMAC-SHA1(TURN_SECRET, Benutzer))` (coturn `use-auth-secret`, 4 h). |
+| `GET` | `/anrufe/{id}` | Zustand und SDPs eines Anrufs – nur für die beiden Beteiligten (sonst 404). |
+
+Die Signalisierung läuft über die Echtzeit-Leitung (siehe unten). Der Server
+leitet nur zwischen den beiden Mitgliedern eines **Direktchats** weiter, die
+einander schreiben dürfen (Sperren in beide Richtungen). Zustände:
+`klingelt → verbunden → beendet`, `klingelt → verpasst | abgelehnt`,
+`besetzt`. Jeder Endzustand schreibt **genau eine** Systemzeile
+(`metadata.system.kind = "anruf"`, `metadata.anruf = { id, status, video,
+dauerS }`, Text „Verpasster Anruf“ oder „Anruf, 3:12“). Nach 45 s Klingeln ist
+ein Anruf verpasst. Push: `kind: "anruf"` mit `tag: "anruf:{id}"` an alle
+Geräte des Angerufenen; `anruf-ende`/`anruf-verpasst` ersetzen sie.
+
 ## Sticker
 
 | Methode | Pfad                                        | Auth   | Request                                 | Antwort                                                  |
@@ -1277,6 +1315,14 @@ Verbindung tot und der Client baut sie neu auf.
 | `user.updated`         | `{ user }`                                       | Ein Kontakt hat sein Profil geändert                                               |
 | `sync.hint`            | `{ scope, conversationId?, eventId? }`           | Nutzlast war zu groß für den Bus – bitte per REST nachladen                        |
 | `error`                | `{ code, message }`                              | Fehler in einem Client-Ereignis                                                    |
+| `anruf.angebot`        | `{ anrufId, conversationId, von, video, begonnenAt }` | Eingehender Anruf (SDP über `GET /anrufe/{id}`)                                  |
+| `anruf.antwort`        | `{ anrufId }`                                    | Angenommen – die Antwort-SDP liegt bereit                                          |
+| `anruf.angenommen`     | `{ anrufId, verbindung }`                        | An alle Geräte des Angerufenen: Klingeln beenden (ausser der Leitung `verbindung`) |
+| `anruf.ice`            | `{ anrufId, candidate }`                         | ICE-Kandidat des Gegenübers                                                        |
+| `anruf.ende`           | `{ anrufId, grund, status }`                     | Vorbei (`aufgelegt`, `abgebrochen`, `abgelehnt`, `zeitlimit`, `getrennt`)          |
+| `anruf.abgelehnt`      | `{ anrufId }`                                    | An den Anrufer: abgelehnt                                                          |
+| `anruf.besetzt`        | `{ anrufId }`                                    | An den Anrufer: das Gegenüber telefoniert                                          |
+| `anruf.fehler`         | `{ anrufId, grund, text }`                       | Nur an die fragende Leitung: `gesperrt`, `nur_direkt`, `gedrosselt`, `vorbei` …    |
 
 ### Client → Server
 
@@ -1286,6 +1332,11 @@ Verbindung tot und der Client baut sie neu auf.
 | `typing`    | `{ conversationId, typing }`    | Tipp-Anzeige an oder aus (läuft nach 6 s ab)                                       |
 | `read`      | `{ conversationId, messageId }` | Lesestand setzen – wirkt wie `POST /conversations/{id}/read`, aber ohne HTTP-Runde |
 | `subscribe` | `{ conversationIds }`           | Interesse an bestimmten Chats bekunden                                             |
+| `anruf.angebot`   | `{ anrufId, conversationId, video, sdp }` | Anruf beginnen (`anrufId` vom Gerät, Wiederholung ändert nichts)      |
+| `anruf.antwort`   | `{ anrufId, sdp }`              | Annehmen – wer zuerst annimmt, gewinnt                                             |
+| `anruf.ice`       | `{ anrufId, candidate }`        | ICE-Kandidat an das Gegenüber                                                      |
+| `anruf.ende`      | `{ anrufId }`                   | Auflegen bzw. Anruf abbrechen                                                      |
+| `anruf.abgelehnt` | `{ anrufId }`                   | Eingehenden Anruf ablehnen                                                         |
 
 Der Server prüft bei jedem Ereignis die Mitgliedschaft; Ereignisse für fremde
 Chats werden still verworfen. `read` setzt den Lesestand nur vorwärts – ein

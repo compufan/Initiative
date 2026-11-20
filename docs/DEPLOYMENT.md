@@ -234,6 +234,19 @@ Für den Betrieb heisst das:
 | `VAPID_PRIVATE_KEY` | leer                       | siehe oben. Nur einer von beiden gesetzt ist ein Fehler (steht im Log), dann gilt das Paar aus der Datenbank. |
 | `VAPID_SUBJECT`     | `mailto:$OPERATOR_EMAIL`, sonst `PUBLIC_APP_URL` (wenn https), sonst `mailto:admin@example.com` | Kontakt für die Push-Dienste. Apple lehnt offensichtliche Platzhalter teils ab – eine echte Adresse eintragen. |
 
+### Anrufe (WebRTC)
+
+| Variable      | Standard | Bedeutung |
+| ------------- | -------- | --------- |
+| `STUN_URLS`   | leer     | Kommagetrennt, z. B. `stun:turn.example.org:3478`. Leer: kein STUN – bewusst kein öffentlicher Dienst als Vorgabe, der erführe bei jedem Anruf die Adressen beider Seiten. |
+| `TURN_URLS`   | leer     | Kommagetrennt, z. B. `turn:turn.example.org:3478?transport=udp,turn:turn.example.org:3478?transport=tcp,turns:turn.example.org:5349`. |
+| `TURN_SECRET` | leer     | Das gemeinsame Geheimnis mit coturn (`static-auth-secret`). Daraus stellt `GET /api/v1/anrufe/ice` für jede Person **zeitlich begrenzte** Zugangsdaten aus (4 Stunden, HMAC-SHA1 nach coturns `use-auth-secret`). Das Geheimnis verlässt den Server nie. |
+
+Ohne STUN/TURN telefonieren nur Geräte, die sich direkt erreichen (gleiches
+WLAN). Für Anrufe über das Internet – vor allem aus dem Mobilfunknetz, das fast
+immer hinter einem NAT liegt – gehört ein TURN-Server dazu, siehe
+[Anrufe: coturn](#anrufe-coturn-turn-server).
+
 ### Impressum und Datenschutzerklärung
 
 Beide Seiten werden vom Server gerendert und sind **ohne Anmeldung** unter
@@ -1198,6 +1211,93 @@ Android/Chrome braucht keine Installation, nur https und die erteilte
 Berechtigung.
 
 ---
+
+## Anrufe: coturn (TURN-Server)
+
+1:1-Anrufe gehen per WebRTC von Gerät zu Gerät. Finden die beiden keinen
+direkten Weg (NAT, Mobilfunk, Firmen-WLAN), leitet ein **TURN-Server** Ton und
+Bild weiter. Die App bringt keinen mit; coturn ist der übliche, freie.
+
+**Ports und Firewall** (am Server und bei der Hosting-Firewall freigeben):
+
+| Port            | Protokoll | Wofür                                                     |
+| --------------- | --------- | --------------------------------------------------------- |
+| 3478            | UDP + TCP | STUN/TURN                                                 |
+| 5349            | TCP       | TURN über TLS (`turns:`), kommt durch strenge Firewalls   |
+| 49152–49252     | UDP       | Weitergeleitete Medien (Bereich in `min-port`/`max-port`) |
+
+**Geheimnis erzeugen** und in die `.env` der API und in coturn eintragen:
+
+```bash
+openssl rand -hex 32    # → TURN_SECRET
+```
+
+**Compose-Dienst** (Ergänzung zur mitgelieferten `docker-compose.yml`; coturn
+braucht das Host-Netz, sonst stimmen die Adressen in den Kandidaten nicht):
+
+```yaml
+  coturn:
+    image: coturn/coturn:4.6
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./deploy/turnserver.conf:/etc/coturn/turnserver.conf:ro
+      # Für turns: dieselben Zertifikate wie die Domain (Pfad anpassen).
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+```
+
+`deploy/turnserver.conf`:
+
+```ini
+listening-port=3478
+tls-listening-port=5349
+min-port=49152
+max-port=49252
+realm=turn.example.org
+use-auth-secret
+static-auth-secret=HIER_TURN_SECRET
+# Öffentliche Adresse des Servers (hinter NAT: öffentlich/privat).
+external-ip=203.0.113.10
+cert=/etc/letsencrypt/live/turn.example.org/fullchain.pem
+pkey=/etc/letsencrypt/live/turn.example.org/privkey.pem
+# Kein Weiterleiten ins eigene Netz – sonst wird der TURN-Server zum Tunnel.
+no-multicast-peers
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+denied-peer-ip=127.0.0.0-127.255.255.255
+no-cli
+fingerprint
+```
+
+Und in der `.env` der API:
+
+```ini
+STUN_URLS=stun:turn.example.org:3478
+TURN_URLS=turn:turn.example.org:3478?transport=udp,turn:turn.example.org:3478?transport=tcp,turns:turn.example.org:5349
+TURN_SECRET=HIER_TURN_SECRET
+```
+
+**Prüfen:** `curl -H "Authorization: Bearer …" https://…/api/v1/anrufe/ice`
+liefert `iceServers` mit `username` (`Ablauf:Kennung`) und `credential`. Mit
+diesen Werten zeigt die „Trickle ICE“-Seite von WebRTC (samples) einen
+`relay`-Kandidaten, wenn coturn erreichbar ist.
+
+**Grenzen, ehrlich:**
+
+- **Nur 1:1.** Gruppenanrufe bräuchten einen Medienserver (SFU, etwa
+  LiveKit oder Janus), der Ströme verteilt; Vollvermaschung trägt ab drei
+  Personen kein Telefon. Das ist ein eigener Dienst und nicht eingebaut.
+- **iPhone (iOS):** Kein CallKit – eine Web-App kann sich nicht als Telefon
+  anmelden. Bei geschlossener App kommt nur die **Mitteilung** „Anruf von …“
+  (Web Push, installierte App ab iOS 16.4); erst ein Tipp darauf öffnet die
+  App, und klingeln kann sie erst dann. Gesperrter Bildschirm heisst: kein
+  Klingelton, nur der Ton der Mitteilung. Im Gespräch lässt sich zwischen
+  Hörmuschel und Lautsprecher nicht umschalten (`setSinkId` fehlt in Safari).
+- **Android/Chrome:** Die Mitteilung bleibt stehen und vibriert; ein
+  dauerhaftes Klingeln wie beim Telefon gibt es auch hier nicht.
+- Wechselt das Gerät mitten im Gespräch das Netz (WLAN → Mobilfunk), bricht
+  die Verbindung meist ab und muss neu aufgebaut werden.
 
 ## f) Nach dem Deploy
 
