@@ -1,5 +1,17 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { messagePreview, type ConversationDto } from '@initiative/shared';
+import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import {
+  alleErwaehnt,
+  erwaehnungEinfuegen,
+  erwaehnungenImText,
+  erwaehnungsAnfrage,
+  erwaehnungsVorschlaege,
+  messagePreview,
+  type ClientMessageMetadata,
+  type ConversationDto,
+  type ErwaehnbarePerson,
+  type ErwaehnungsAnfrage,
+  type LinkVorschau,
+} from '@initiative/shared';
 import { Sheet } from '../../components/Sheet.js';
 import { composerActions } from '../registry.js';
 import type { ComposerAction } from '../types.js';
@@ -9,7 +21,12 @@ import { toast } from '../../state/ui.js';
 import { senderName } from './helpers.js';
 import { umschliessen, type Umschliessen } from './formathilfe.js';
 import { darfModerieren, darfSchreiben, istGruppe } from './gruppenRechte.js';
-import { useMyId } from '../../state/session.js';
+import { useMyId, useSession } from '../../state/session.js';
+import { ErwaehnungsVorschlaege } from './ErwaehnungsVorschlaege.js';
+import { erwaehnbare, erwaehnteIn } from './erwaehnungshilfe.js';
+import { LinkVorschauKarte, ersterLink } from './LinkVorschauKarte.js';
+import { PlanenSheet } from './GeplantSheet.js';
+import { api } from '../../lib/api.js';
 
 const TYPING_THROTTLE_MS = 2500;
 const TYPING_IDLE_MS = 3000;
@@ -60,6 +77,22 @@ export function Composer({
   const langGedrueckt = useRef(false);
   /** Der Text vor dem Bearbeiten – er kommt danach zurück. */
   const vorBearbeiten = useRef<string | null>(null);
+  /*
+   * Erwähnungen: wen ich in diesem Entwurf über die Vorschläge gewählt habe.
+   * Gesendet wird nur, wessen „@Name“ noch im Text steht.
+   */
+  const gewaehlt = useRef<ErwaehnbarePerson[]>([]);
+  const [anfrage, setAnfrage] = useState<ErwaehnungsAnfrage | null>(null);
+  const [aktivIndex, setAktivIndex] = useState(0);
+  const listeId = useId();
+  /** Link-Vorschau des ersten Links (nur mit eingeschalteter Einstellung). */
+  const [vorschau, setVorschau] = useState<LinkVorschau | null>(null);
+  const verworfeneVorschau = useRef<string | null>(null);
+  const [planen, setPlanen] = useState<{
+    body: string;
+    replyToId: string | null;
+    metadata: ClientMessageMetadata;
+  } | null>(null);
 
   const entwurf = useEntwuerfe((state) => state.entwuerfe[conversationId]);
 
@@ -74,6 +107,12 @@ export function Composer({
    * Quelle, ein 429 kommt im Zweifel trotzdem).
    */
   const myId = useMyId();
+  const linkVorschauenAn = useSession((state) => state.user?.settings?.linkVorschauen === true);
+  const personen = useMemo(() => erwaehnbare(conversation, myId), [conversation, myId]);
+  const vorschlaege = useMemo(
+    () => (anfrage ? erwaehnungsVorschlaege(personen, anfrage.suche, myId) : []),
+    [anfrage, personen, myId],
+  );
   const nurAdminsGesperrt = conversation != null && !darfSchreiben(conversation, myId);
   const langsam =
     conversation && istGruppe(conversation) && !darfModerieren(conversation, myId)
@@ -124,6 +163,9 @@ export function Composer({
   useEffect(() => {
     setText(useEntwuerfe.getState().entwuerfe[conversationId]?.text ?? '');
     setAuswahl(null);
+    setAnfrage(null);
+    setVorschau(null);
+    gewaehlt.current = [];
     vorBearbeiten.current = null;
     window.requestAnimationFrame(resize);
   }, [conversationId]);
@@ -164,6 +206,7 @@ export function Composer({
     if (!bearbeiten) return;
     vorBearbeiten.current = text;
     setText(bearbeiten.body ?? '');
+    gewaehlt.current = erwaehnteIn(bearbeiten.metadata, conversation);
     window.requestAnimationFrame(() => {
       resize();
       const feld = textareaRef.current;
@@ -186,9 +229,77 @@ export function Composer({
     element.style.overflowY = element.scrollHeight > max ? 'auto' : 'hidden';
   }
 
-  function handleChange(value: string) {
+  /*
+   * Link-Vorschau: Steht ein Link im Text und ist die Einstellung an, fragt
+   * die App nach kurzer Pause den eigenen Server. Nur der Absender löst das
+   * aus; wer sie verworfen hat (✕), bekommt für denselben Link keine neue.
+   */
+  const link = linkVorschauenAn && !bearbeiten ? ersterLink(text) : null;
+  useEffect(() => {
+    if (!link) {
+      setVorschau(null);
+      return undefined;
+    }
+    if (vorschau?.url === link || verworfeneVorschau.current === link) return undefined;
+    let aktiv = true;
+    const wecker = window.setTimeout(() => {
+      api.messages
+        .linkVorschau(link)
+        .then((ergebnis) => {
+          if (aktiv) setVorschau(ergebnis);
+        })
+        .catch(() => {
+          if (aktiv) setVorschau(null);
+        });
+    }, 700);
+    return () => {
+      aktiv = false;
+      window.clearTimeout(wecker);
+    };
+    // Nur bei einem anderen Link neu fragen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [link]);
+
+  function anfrageAktualisieren(wert: string, marke: number | null) {
+    const neu = marke == null ? null : erwaehnungsAnfrage(wert, marke);
+    setAnfrage(neu);
+    setAktivIndex(0);
+  }
+
+  function erwaehnen(person: ErwaehnbarePerson) {
+    const feld = textareaRef.current;
+    if (!anfrage || !feld) return;
+    const ergebnis = erwaehnungEinfuegen(text, anfrage, person.name);
+    if (!gewaehlt.current.some((p) => p.userId === person.userId)) {
+      gewaehlt.current = [...gewaehlt.current, person];
+    }
+    setAnfrage(null);
+    handleChange(ergebnis.text, false);
+    window.requestAnimationFrame(() => {
+      feld.focus();
+      feld.setSelectionRange(ergebnis.marke, ergebnis.marke);
+    });
+  }
+
+  /** Was aus dem Text an Zusatzangaben folgt: Erwähnungen, @alle, Vorschau. */
+  function zusatzAus(body: string): ClientMessageMetadata {
+    const metadata: ClientMessageMetadata = {};
+    const mentions = erwaehnungenImText(body, gewaehlt.current);
+    if (mentions.length > 0) metadata.mentions = mentions;
+    if (alleErwaehnt(body) && personen.some((p) => p.userId === 'alle')) {
+      metadata.mentionsAlle = true;
+    }
+    if (vorschau && body.includes(vorschau.url)) {
+      const { bildUrl: _bild, ...ohneBildUrl } = vorschau;
+      metadata.linkVorschau = ohneBildUrl;
+    }
+    return metadata;
+  }
+
+  function handleChange(value: string, anfragePruefen = true) {
     setText(value);
     resize();
+    if (anfragePruefen) anfrageAktualisieren(value, textareaRef.current?.selectionStart ?? null);
     if (!bearbeiten) entwurfSetzen(conversationId, value, replyTo?.id ?? null);
     if (value.trim().length === 0 || bearbeiten) {
       stopTyping();
@@ -219,9 +330,10 @@ export function Composer({
       return;
     }
     const nachricht = bearbeiten;
+    const mentions = erwaehnungenImText(body, gewaehlt.current);
     bearbeitenBeenden();
     try {
-      await useChat.getState().editMessage(nachricht, body);
+      await useChat.getState().editMessage(nachricht, body, mentions);
     } catch {
       toast('Nachricht konnte nicht bearbeitet werden', 'error');
     }
@@ -235,15 +347,23 @@ export function Composer({
     const body = text.trim();
     if (body.length === 0) return;
     const replyToId = replyTo?.id ?? null;
+    const metadata = zusatzAus(body);
     setText('');
     setAuswahl(null);
+    setAnfrage(null);
+    setVorschau(null);
+    gewaehlt.current = [];
     stopTyping();
     onCancelReply();
     window.requestAnimationFrame(resize);
     try {
-      await useChat
-        .getState()
-        .sendMessage(conversationId, { type: 'text', body, replyToId, silent });
+      await useChat.getState().sendMessage(conversationId, {
+        type: 'text',
+        body,
+        replyToId,
+        silent,
+        ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+      });
       if (silent) toast('Ohne Ton gesendet', 'success');
       onScrollToBottom();
     } catch {
@@ -254,6 +374,26 @@ export function Composer({
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    // Die Vorschlagsliste hat Vorrang: ↑/↓ wählen, Enter/Tab übernehmen.
+    if (anfrage && vorschlaege.length > 0) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const schritt = event.key === 'ArrowDown' ? 1 : -1;
+        setAktivIndex((i) => (i + schritt + vorschlaege.length) % vorschlaege.length);
+        return;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault();
+        const person = vorschlaege[Math.min(aktivIndex, vorschlaege.length - 1)];
+        if (person) erwaehnen(person);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setAnfrage(null);
+        return;
+      }
+    }
     if (event.key === 'Escape' && bearbeiten) {
       event.preventDefault();
       bearbeitenBeenden();
@@ -284,6 +424,14 @@ export function Composer({
     if (!feld) return;
     const { selectionStart: von, selectionEnd: bis } = feld;
     setAuswahl(bis > von ? { von, bis } : null);
+    if (bis === von) anfrageAktualisieren(feld.value, von);
+  }
+
+  function spaeterSenden() {
+    setLeiseMenue(false);
+    const body = text.trim();
+    if (!body) return;
+    setPlanen({ body, replyToId: replyTo?.id ?? null, metadata: zusatzAus(body) });
   }
 
   function formatieren(art: Umschliessen) {
@@ -372,6 +520,24 @@ export function Composer({
         </div>
       )}
 
+      <ErwaehnungsVorschlaege
+        id={listeId}
+        vorschlaege={anfrage ? vorschlaege : []}
+        aktiv={aktivIndex}
+        onWaehlen={erwaehnen}
+      />
+
+      {vorschau && !bearbeiten && (
+        <LinkVorschauKarte
+          vorschau={vorschau}
+          imEntwurf
+          onVerwerfen={() => {
+            verworfeneVorschau.current = vorschau.url;
+            setVorschau(null);
+          }}
+        />
+      )}
+
       {auswahl && (
         <div className="msg-formathilfe" role="toolbar" aria-label="Formatierung">
           {FORMATE.map((format) => (
@@ -432,6 +598,13 @@ export function Composer({
           placeholder={bearbeiten ? 'Nachricht bearbeiten' : 'Nachricht schreiben'}
           disabled={nurAdminsGesperrt}
           aria-label={bearbeiten ? 'Nachricht bearbeiten' : 'Nachricht schreiben'}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={Boolean(anfrage && vorschlaege.length > 0)}
+          aria-controls={anfrage && vorschlaege.length > 0 ? listeId : undefined}
+          aria-activedescendant={
+            anfrage && vorschlaege.length > 0 ? `${listeId}-${aktivIndex}` : undefined
+          }
           value={text}
           enterKeyHint="enter"
           onChange={(event) => handleChange(event.target.value)}
@@ -446,7 +619,7 @@ export function Composer({
             className="msg-send"
             aria-label={bearbeiten ? 'Änderung speichern' : 'Senden'}
             aria-haspopup={bearbeiten ? undefined : 'menu'}
-            title={bearbeiten ? undefined : 'Lange drücken: ohne Ton senden'}
+            title={bearbeiten ? undefined : 'Lange drücken: ohne Ton oder später senden'}
             disabled={!canSend}
             onPointerDown={druckAnfang}
             onPointerUp={druckEnde}
@@ -489,6 +662,18 @@ export function Composer({
                 type="button"
                 role="menuitem"
                 className="list-row"
+                onClick={spaeterSenden}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') setLeiseMenue(false);
+                }}
+              >
+                <span aria-hidden="true">🕒</span>
+                <span>Später senden …</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="list-row"
                 onClick={() => setLeiseMenue(false)}
               >
                 <span aria-hidden="true">✕</span>
@@ -519,6 +704,21 @@ export function Composer({
           ))}
         </div>
       </Sheet>
+
+      <PlanenSheet
+        conversationId={conversationId}
+        entwurf={planen}
+        onClose={() => setPlanen(null)}
+        onGeplant={() => {
+          setPlanen(null);
+          setText('');
+          setVorschau(null);
+          gewaehlt.current = [];
+          entwurfSetzen(conversationId, '', null);
+          onCancelReply();
+          window.requestAnimationFrame(resize);
+        }}
+      />
 
       {ActiveActionView && (
         <ActiveActionView

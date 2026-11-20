@@ -738,6 +738,16 @@ function ChatRow({
             <span className={`chat-row-preview truncate ${typing ? 'chat-row-typing' : ''}`}>
               {preview}
             </span>
+            {(conversation.ungeleseneErwaehnungen ?? 0) > 0 && (
+              <span
+                className="chat-badge chat-badge-erwaehnung"
+                role="img"
+                aria-label="Du wurdest erwähnt"
+                title="Du wurdest erwähnt"
+              >
+                @
+              </span>
+            )}
             {marke?.art === 'zahl' && <span className="chat-badge">{marke.text}</span>}
             {marke?.art === 'punkt' && (
               <span className="chat-badge chat-badge-punkt" aria-label="als ungelesen markiert" />

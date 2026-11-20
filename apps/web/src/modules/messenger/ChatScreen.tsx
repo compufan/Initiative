@@ -1,6 +1,23 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { hakenFuer, type Haken, type MitgliedStand } from '@initiative/shared';
+import {
+  abgelaufen,
+  hakenFuer,
+  selbstloeschenText,
+  type Haken,
+  type MitgliedStand,
+} from '@initiative/shared';
+import { api } from '../../lib/api.js';
+import { AngeheftetBanner } from './AngeheftetBanner.js';
+import { BearbeitungsverlaufSheet } from './BearbeitungsverlaufSheet.js';
+import { GeplantListeSheet } from './GeplantSheet.js';
+import { SelbstloeschenSheet } from './SelbstloeschenSheet.js';
+import { darfInfoAendern } from './gruppenRechte.js';
+import {
+  chatZusatzVerdrahten,
+  geplantLaden,
+  useChatZusatz,
+} from '../../state/angeheftet.js';
 import { Avatar } from '../../components/Avatar.js';
 import { EmptyState, Spinner } from '../../components/Feedback.js';
 import { useChat, type ChatMessage } from '../../state/chat.js';
@@ -37,6 +54,7 @@ import {
 
 const NO_MESSAGES: ChatMessage[] = [];
 const NO_TYPING: { userId: string; until: number; art: 'text' | 'audio' }[] = [];
+const KEINE_GEPLANTEN: never[] = [];
 
 type RenderItem =
   | { kind: 'day'; key: string; label: string }
@@ -87,7 +105,33 @@ export function ChatScreen() {
   const conversation = useChat(
     (state) => state.conversations.find((item) => item.id === conversationId) ?? null,
   );
-  const messages = useChat((state) => state.messages[conversationId] ?? NO_MESSAGES);
+  const alleNachrichten = useChat((state) => state.messages[conversationId] ?? NO_MESSAGES);
+  /*
+   * Selbstlöschende Nachrichten verschwinden zur Ablaufzeit auch hier, ohne
+   * auf den Aufräumdienst des Servers zu warten: Ein Takt prüft, solange eine
+   * mit Ablauf im Verlauf steht.
+   */
+  const [ablaufTakt, setAblaufTakt] = useState(() => Date.now());
+  const hatAblauf = alleNachrichten.some((item) => item.expiresAt);
+  useEffect(() => {
+    if (!hatAblauf) return undefined;
+    const id = window.setInterval(() => setAblaufTakt(Date.now()), 15_000);
+    return () => window.clearInterval(id);
+  }, [hatAblauf]);
+  const messages = useMemo(
+    () =>
+      hatAblauf
+        ? alleNachrichten.filter((item) => !abgelaufen(item.expiresAt, ablaufTakt))
+        : alleNachrichten,
+    [alleNachrichten, hatAblauf, ablaufTakt],
+  );
+  const geplantAnzahl = useChatZusatz(
+    (state) => (state.geplant[conversationId] ?? KEINE_GEPLANTEN).length,
+  );
+  const [geplantOffen, setGeplantOffen] = useState(false);
+  const [selbstloeschenOffen, setSelbstloeschenOffen] = useState(false);
+  /** Welche ungelesene Erwähnung als nächste dran ist. */
+  const erwaehnungStelle = useRef(0);
   const loading = useChat((state) => state.loading[conversationId] ?? false);
   const hasMore = useChat((state) => state.hasMore[conversationId] ?? false);
   const typingEntries = useChat((state) => state.typing[conversationId] ?? NO_TYPING);
@@ -161,7 +205,12 @@ export function ChatScreen() {
     setAuswahl(null);
     setSucheOffen(false);
     suchbegriffSetzen(null, null);
+    setGeplantOffen(false);
+    setSelbstloeschenOffen(false);
+    erwaehnungStelle.current = 0;
     void useChat.getState().ensureConversation(conversationId);
+    chatZusatzVerdrahten();
+    void geplantLaden(conversationId);
     void useChat.getState().staendeLaden(conversationId);
     useChat
       .getState()
@@ -565,6 +614,23 @@ export function ChatScreen() {
   }
 
   return (
+  /** Zur nächsten ungelesenen Erwähnung springen – Tipp für Tipp weiter. */
+  async function zurErwaehnung() {
+    try {
+      const { items } = await api.messages.erwaehnungen(conversationId);
+      if (items.length === 0) {
+        toast('Keine ungelesenen Erwähnungen', 'info');
+        return;
+      }
+      const ziel = items[erwaehnungStelle.current % items.length]!;
+      erwaehnungStelle.current += 1;
+      await useChat.getState().ladenBis(conversationId, ziel);
+      await jumpTo(ziel);
+    } catch {
+      toast('Springen hat nicht geklappt', 'error');
+    }
+  }
+
     <div className="app-main msg-screen" style={{ paddingBottom: keyboardInset }}>
       {auswahl ? (
         <AuswahlLeiste
@@ -656,6 +722,12 @@ export function ChatScreen() {
 
       {/* Hintergrund je Chat: die Klasse setzt `--hg` (verwaltung.css). */}
       <div
+      <AngeheftetBanner
+        conversationId={conversationId}
+        conversation={conversation}
+        onSprung={(id) => void jumpTo(id)}
+      />
+
         className={`msg-body${conversation?.hintergrund ? ` hg-${conversation.hintergrund} hat-hintergrund` : ''}`}
       >
         <div className="msg-scroll" ref={scrollRef} onScroll={onScroll}>
@@ -739,6 +811,19 @@ export function ChatScreen() {
 
         {showJump && (
           <button
+        {(conversation?.ungeleseneErwaehnungen ?? 0) > 0 && (
+          <button
+            type="button"
+            className="msg-jump msg-jump-erwaehnung"
+            aria-label={`Zur nächsten Erwähnung (${conversation?.ungeleseneErwaehnungen} ungelesen)`}
+            title="Zur nächsten Erwähnung"
+            onClick={() => void zurErwaehnung()}
+          >
+            @
+            <span className="chat-badge">{conversation?.ungeleseneErwaehnungen}</span>
+          </button>
+        )}
+
             type="button"
             className="msg-jump"
             aria-label="Zu den neuesten Nachrichten"
@@ -754,6 +839,26 @@ export function ChatScreen() {
 
       <Composer
         conversationId={conversationId}
+      {(geplantAnzahl > 0 || conversation?.selbstloeschenS) && (
+        <div className="msg-zusatzleiste">
+          {geplantAnzahl > 0 && (
+            <button type="button" className="msg-zusatz-knopf" onClick={() => setGeplantOffen(true)}>
+              🕒 {geplantAnzahl === 1 ? '1 geplante Nachricht' : `${geplantAnzahl} geplante Nachrichten`}
+            </button>
+          )}
+          {conversation?.selbstloeschenS ? (
+            <button
+              type="button"
+              className="msg-zusatz-knopf"
+              onClick={() => setSelbstloeschenOffen(true)}
+              aria-label={`Selbstlöschende Nachrichten: ${selbstloeschenText(conversation.selbstloeschenS)}`}
+            >
+              ⏱ {selbstloeschenText(conversation.selbstloeschenS)}
+            </button>
+          ) : null}
+        </div>
+      )}
+
         conversation={conversation}
         replyTo={replyTo}
         onCancelReply={() => setReplyTo(null)}
@@ -827,6 +932,26 @@ export function ChatScreen() {
         onUnten={() => scrollToBottom(true)}
       />
 
+        onGeplant={() => setGeplantOffen(true)}
+        onSelbstloeschen={() => setSelbstloeschenOffen(true)}
+      />
+
+      <BearbeitungsverlaufSheet />
+
+      <GeplantListeSheet
+        conversationId={conversationId}
+        open={geplantOffen}
+        onClose={() => setGeplantOffen(false)}
+      />
+
+      <SelbstloeschenSheet
+        open={selbstloeschenOffen}
+        conversation={conversation}
+        darfAendern={
+          conversation != null &&
+          (conversation.type === 'direct' || darfInfoAendern(conversation, myId))
+        }
+        onClose={() => setSelbstloeschenOffen(false)}
       <ChatInfoSheet
         open={infoOpen}
         conversation={conversation}

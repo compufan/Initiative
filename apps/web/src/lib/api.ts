@@ -44,6 +44,9 @@ import type {
   VerlaufsantragDto,
   ZustellungStandDto,
   ErinnernStandDto,
+  BearbeitungsverlaufDto,
+  GeplantDto,
+  LinkVorschau,
 } from '@initiative/shared';
 import type { OrtTreffer } from './ortSuche.js';
 import type { StueckStand } from './stueckUpload.js';
@@ -596,6 +599,11 @@ export const api = {
     /** Vorschläge für Adressen und Orte; `quelle` ist die Namensnennung, die angezeigt werden muss. */
     suche: (q: string, signal?: AbortSignal) =>
       get<{ items: OrtTreffer[]; quelle: string }>('/orte/suche', { query: { q }, signal }),
+    /** Welche Adresse liegt an diesem Punkt? `item` ist `null`, wenn die Suche aus ist. */
+    rueckwaerts: (lat: number, lon: number) =>
+      get<{ item: OrtTreffer | null; quelle: string }>('/orte/rueckwaerts', {
+        query: { lat, lon },
+      }),
   },
   users: {
     search: (q: string, limit = 20) => get<ListResult<UserDto>>('/users', { query: { q, limit } }),
@@ -656,7 +664,35 @@ export const api = {
     send: (conversationId: string, body: Record<string, unknown>) =>
       post<MessageDto>(`/conversations/${conversationId}/messages`, body),
     byId: (id: string) => get<MessageDto>(`/messages/${id}`),
-    edit: (id: string, body: string) => patch<MessageDto>(`/messages/${id}`, { body }),
+    edit: (id: string, body: string, mentions?: string[]) =>
+      patch<MessageDto>(`/messages/${id}`, mentions ? { body, mentions } : { body }),
+    /** Frühere Fassungen einer bearbeiteten Nachricht – für alle im Chat. */
+    bearbeitungen: (id: string) => get<BearbeitungsverlaufDto>(`/messages/${id}/bearbeitungen`),
+    /** Ungelesene Nachrichten, die mich erwähnen (älteste zuerst). */
+    erwaehnungen: (conversationId: string) =>
+      get<ListResult<string>>(`/conversations/${conversationId}/erwaehnungen`),
+    anheften: (id: string) => put<{ angeheftet: boolean }>(`/messages/${id}/anheften`, {}),
+    loesen: (id: string) => del<void>(`/messages/${id}/anheften`),
+    angeheftet: (conversationId: string) =>
+      get<ListResult<MessageDto>>(`/conversations/${conversationId}/angeheftet`),
+    selbstloeschen: (conversationId: string, sekunden: number | null) =>
+      put<ConversationDto>(`/conversations/${conversationId}/selbstloeschen`, { sekunden }),
+    /** Die Bytes eines einmal ansehbaren Fotos/Videos – je Person genau einmal. */
+    einmalOeffnen: (id: string, anhang: string) =>
+      request<Blob>('GET', `/messages/${id}/einmal/${anhang}`, { raw: true }),
+    linkVorschau: (url: string) =>
+      post<LinkVorschau & { bildUrl: string | null }>('/link-vorschau', { url }),
+    standortNachfuehren: (id: string, punkt: { lat: number; lon: number; genauigkeit?: number }) =>
+      put<MessageDto>(`/messages/${id}/standort`, punkt),
+    standortBeenden: (id: string) => post<MessageDto>(`/messages/${id}/standort/beenden`),
+    geplant: (conversationId: string) =>
+      get<ListResult<GeplantDto>>(`/conversations/${conversationId}/geplant`),
+    planen: (conversationId: string, body: Record<string, unknown>) =>
+      post<GeplantDto>(`/conversations/${conversationId}/geplant`, body),
+    geplantAendern: (id: string, body: { body?: string; sendenUm?: string; zeitzone?: string }) =>
+      patch<GeplantDto>(`/geplant/${id}`, body),
+    geplantJetzt: (id: string) => post<{ messageId: string }>(`/geplant/${id}/jetzt`),
+    geplantLoeschen: (id: string) => del<void>(`/geplant/${id}`),
     /**
      * `me` nimmt die Nachricht nur aus dem eigenen Verlauf, `all` bei allen.
      * Fuer alle loeschen geht nur bei eigenen Nachrichten (oder als Verwalter).

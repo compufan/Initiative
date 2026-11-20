@@ -13,6 +13,8 @@ import { blasenPropsGleich, type BlasenProps } from './praesenz.js';
 import { ConfirmDialog } from '../profile/ConfirmDialog.js';
 import { useSterne } from '../../state/sterne.js';
 import { useWischenZumAntworten } from './wischen.js';
+import { EinmalBubble } from './EinmalBubble.js';
+import { verlaufZeigen } from '../../state/angeheftet.js';
 
 let rendererCache: Record<string, ComponentType<MessageRendererProps>> | null = null;
 
@@ -47,7 +49,10 @@ function MessageBubbleInnen({
 }: BlasenProps) {
   const myId = useMyId();
   const isMine = message.senderId == null || message.senderId === myId;
-  const Renderer = rendererFor(message.type);
+  // Einmal ansehbar: nie die gewöhnliche Medienblase (die zeigte Vorschau
+  // und Bild) – eine eigene, die erst auf Tipp und genau einmal öffnet.
+  const Renderer =
+    message.metadata?.einmalAnsehen && !message.deletedAt ? EinmalBubble : rendererFor(message.type);
   const istLokal = Boolean(message.pending || message.failed) || message.id.startsWith('local:');
   /*
    * Langes Drücken beginnt die Auswahl (wie bei WhatsApp); in der Auswahl
@@ -198,7 +203,26 @@ function MessageBubbleInnen({
               ⭐
             </span>
           )}
-          {message.editedAt && <span>bearbeitet</span>}
+          {message.expiresAt && (
+            <span
+              className="msg-ablauf"
+              role="img"
+              aria-label={`Verschwindet ${new Date(message.expiresAt).toLocaleString('de-DE')}`}
+              title={`Verschwindet ${new Date(message.expiresAt).toLocaleString('de-DE')}`}
+            >
+              ⏱
+            </span>
+          )}
+          {message.editedAt && !message.deletedAt && (
+            <button
+              type="button"
+              className="msg-bearbeitet"
+              aria-label="Bearbeitet – Bearbeitungsverlauf zeigen"
+              onClick={() => verlaufZeigen(message)}
+            >
+              bearbeitet
+            </button>
+          )}
           <span>{formatTime(message.createdAt)}</span>
           {isMine && message.pending && <span aria-label="wird gesendet">⏳</span>}
           {isMine && message.failed && (

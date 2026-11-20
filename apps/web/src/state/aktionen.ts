@@ -28,7 +28,15 @@ import type { ChatMessage } from './chat.js';
  * ausstehenden Aktionen überlagert, bis der Server sie bestätigt hat.
  */
 export type Aktion =
-  | { art: 'bearbeiten'; messageId: string; conversationId: string; body: string; am: string }
+  | {
+      art: 'bearbeiten';
+      messageId: string;
+      conversationId: string;
+      body: string;
+      am: string;
+      /** Erwähnungen im neuen Text (fehlt: die alten bleiben). */
+      mentions?: string[];
+    }
   | { art: 'loeschen'; messageId: string; conversationId: string; scope: 'me' | 'all' }
   | {
       art: 'reaktion';

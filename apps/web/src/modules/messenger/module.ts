@@ -15,6 +15,7 @@ import './styles.css';
 
 /**
  * Messenger – the first feature module of Initiative.
+import './welle2.css';
  *
  * It owns the chat list, the chat view and the composer, and it contributes the
  * two message renderers every other module can rely on as a fallback.

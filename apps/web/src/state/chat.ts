@@ -158,7 +158,7 @@ interface ChatState {
   deleteMessage: (message: MessageDto, scope?: 'me' | 'all') => Promise<void>;
   toggleReaction: (message: MessageDto, emoji: string, mine: boolean) => Promise<void>;
   /** Bearbeiten – sofort sichtbar, beim Server über die Aktionswarteschlange. */
-  editMessage: (message: MessageDto, body: string) => Promise<void>;
+  editMessage: (message: MessageDto, body: string, mentions?: string[]) => Promise<void>;
   /** Sternchen setzen oder entfernen. */
   toggleStern: (message: MessageDto, setzen: boolean) => Promise<void>;
   /** Die Häkchen-Stände eines Chats vom Server holen. */
@@ -510,13 +510,14 @@ export const useChat = create<ChatState>((set, get) => ({
     });
   },
 
-  async editMessage(message, body) {
+  async editMessage(message, body, mentions) {
     await aktionEinreihen({
       art: 'bearbeiten',
       messageId: message.id,
       conversationId: message.conversationId,
       body,
       am: new Date().toISOString(),
+      ...(mentions ? { mentions } : {}),
     });
   },
 
@@ -593,7 +594,7 @@ export const useChat = create<ChatState>((set, get) => ({
     if (ungelesen > 0) {
       set((state) => ({
         conversations: state.conversations.map((item) =>
-          item.id === conversationId ? { ...item, unreadCount: 0 } : item,
+          item.id === conversationId ? { ...item, unreadCount: 0, ungeleseneErwaehnungen: 0 } : item,
         ),
       }));
     }
@@ -1192,9 +1193,18 @@ function ungelesenMitzaehlen(message: MessageDto): void {
   // Hochzählen (die Liste hinter dem Chat soll gar nicht erst aufblitzen);
   // gemeldet wird sie von `markRead`, sobald der Chat sie zeigt.
   if (neuesSofortGesehen(message.conversationId)) return;
+  // Erwähnt mich die Nachricht (oder alle), zählt sie auch für das „@“.
+  const erwaehnt =
+    message.metadata?.mentionsAlle === true || (message.metadata?.mentions ?? []).includes(ich);
   useChat.setState((state) => ({
     conversations: state.conversations.map((item) =>
-      item.id === message.conversationId ? { ...item, unreadCount: item.unreadCount + 1 } : item,
+      item.id === message.conversationId
+        ? {
+            ...item,
+            unreadCount: item.unreadCount + 1,
+            ...(erwaehnt ? { ungeleseneErwaehnungen: (item.ungeleseneErwaehnungen ?? 0) + 1 } : {}),
+          }
+        : item,
     ),
   }));
 }
@@ -1344,7 +1354,7 @@ function aktionEntfernen(eintrag: AktionsEintrag): void {
 async function aktionSenden(aktion: Aktion): Promise<void> {
   switch (aktion.art) {
     case 'bearbeiten': {
-      const neu = await api.messages.edit(aktion.messageId, aktion.body);
+      const neu = await api.messages.edit(aktion.messageId, aktion.body, aktion.mentions);
       // Erst aus der Warteschlange, dann anwenden – sonst überlagerte die
       // ausstehende Fassung die bestätigte.
       ausstehendeAktionen = ausstehendeAktionen.filter((item) => item.aktion !== aktion);

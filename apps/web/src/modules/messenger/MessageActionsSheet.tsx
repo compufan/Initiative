@@ -1,5 +1,14 @@
 import { createElement, useMemo, useState } from 'react';
-import { REACTION_EMOJIS, type ConversationDto } from '@initiative/shared';
+import {
+  REACTION_EMOJIS,
+  bearbeitenMoeglich,
+  bearbeitenRestMinuten,
+  fuerAlleLoeschenMoeglich,
+  type ConversationDto,
+} from '@initiative/shared';
+import { api } from '../../lib/api.js';
+import { angeheftetLaden, useChatZusatz, verlaufZeigen } from '../../state/angeheftet.js';
+import { darfInfoAendern } from './gruppenRechte.js';
 import { Sheet } from '../../components/Sheet.js';
 import { messageActions } from '../registry.js';
 import { useChat, type ChatMessage } from '../../state/chat.js';
@@ -77,8 +86,33 @@ function Actions({
 
   const isMine = message.senderId == null || message.senderId === myId;
   const isLocal = Boolean(message.pending || message.failed);
+  const einmal = message.metadata?.einmalAnsehen === true;
   const canReply = !isLocal && !message.deletedAt;
-  const canEdit = isMine && !isLocal && message.type === 'text' && !message.deletedAt;
+  /*
+   * Bearbeiten: Text und Bildunterschriften, nur in den ersten fünfzehn
+   * Minuten (der Server prüft dasselbe). Einmal ansehbare Medien haben keine
+   * Unterschrift, Standort und Kontakt sind keine Texte.
+   */
+  const bearbeitbareArt =
+    message.type === 'text' ||
+    (['image', 'video', 'file', 'audio'].includes(message.type) && message.attachments.length > 0);
+  const canEdit =
+    isMine &&
+    !isLocal &&
+    bearbeitbareArt &&
+    !einmal &&
+    !message.deletedAt &&
+    bearbeitenMoeglich(message.createdAt);
+  const angeheftet = useChatZusatz((state) =>
+    (state.angeheftet[message.conversationId] ?? []).some((m) => m.id === message.id),
+  );
+  const darfAnheften =
+    !isLocal &&
+    !message.deletedAt &&
+    !einmal &&
+    message.type !== 'system' &&
+    conversation != null &&
+    (conversation.type === 'direct' || darfInfoAendern(conversation, myId));
   // Lokale Nachrichten haben den Server nie erreicht; sie werden nicht
   // geloescht, sondern aus der Outbox verworfen. Ohne das blieb ein
   // haengender Bild-Upload dauerhaft im Chat stehen.
@@ -100,7 +134,12 @@ function Actions({
    * Der Kommentar unten spricht von etwas anderem: „nur für mich" gegen „für
    * alle". Diese Unterscheidung bleibt, sie hat mit Moderation nichts zu tun.
    */
-  const canDelete = isMine || (!isLocal && canModerate(conversation, myId));
+  const moderiert = !isLocal && canModerate(conversation, myId) && conversation?.type === 'group';
+  // Für alle löschen: eigene binnen 48 Stunden, Admins einer Gruppe ohne Frist.
+  const canDelete =
+    isLocal ||
+    moderiert ||
+    (isMine && fuerAlleLoeschenMoeglich(message.createdAt, false));
   const canCopy = Boolean(message.body?.trim());
 
   // Was andere Bereiche der App an dieser Nachricht anbieten – etwa „Zur
@@ -108,8 +147,10 @@ function Actions({
   const [offen, setOffen] = useState<string | null>(null);
   const weitere = useMemo(
     () =>
-      isLocal ? [] : messageActions().filter((action) => action.applies(message, conversation)),
-    [isLocal, message, conversation],
+      isLocal || einmal
+        ? []
+        : messageActions().filter((action) => action.applies(message, conversation)),
+    [isLocal, einmal, message, conversation],
   );
   const offeneAktion = weitere.find((action) => action.key === offen);
 
@@ -152,8 +193,21 @@ function Actions({
     }
   }
 
-  const kannWeiterleiten = weiterleitbar(message);
-  const kannSpeichern = !isLocal && !message.deletedAt && message.type !== 'system';
+  // Einmal ansehbar: weder weiterleiten noch speichern – das wären Kopien.
+  const kannWeiterleiten = weiterleitbar(message) && !einmal;
+  const kannSpeichern = !isLocal && !message.deletedAt && message.type !== 'system' && !einmal;
+
+  async function anheftenUmschalten() {
+    try {
+      if (angeheftet) await api.messages.loesen(message.id);
+      else await api.messages.anheften(message.id);
+      void angeheftetLaden(message.conversationId);
+      toast(angeheftet ? 'Gelöst' : 'Angeheftet', 'success');
+      onClose();
+    } catch (fehler) {
+      toast(fehler instanceof Error ? fehler.message : 'Hat nicht geklappt', 'error');
+    }
+  }
   const kannInfo = isMine && !isLocal && !message.deletedAt;
   const hatReaktionen = message.reactions.length > 0;
 
@@ -265,7 +319,31 @@ function Actions({
             }}
           >
             <span aria-hidden="true">✏️</span>
-            <span>Bearbeiten</span>
+            <span>
+              {message.type === 'text' ? 'Bearbeiten' : 'Bildunterschrift bearbeiten'}
+              <small className="msg-action-hint">
+                Noch {bearbeitenRestMinuten(message.createdAt)} min möglich
+              </small>
+            </span>
+          </button>
+        )}
+        {message.editedAt && !message.deletedAt && (
+          <button
+            type="button"
+            className="list-row"
+            onClick={() => {
+              verlaufZeigen(message);
+              onClose();
+            }}
+          >
+            <span aria-hidden="true">🕘</span>
+            <span>Bearbeitungsverlauf</span>
+          </button>
+        )}
+        {darfAnheften && (
+          <button type="button" className="list-row" onClick={() => void anheftenUmschalten()}>
+            <span aria-hidden="true">📌</span>
+            <span>{angeheftet ? 'Lösen' : 'Anheften'}</span>
           </button>
         )}
         {hatReaktionen && (

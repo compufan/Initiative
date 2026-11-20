@@ -29,6 +29,8 @@ export function ChatMenue({
   onSuche,
   onSprung,
   onUnten,
+  onSelbstloeschen,
+  onGeplant,
 }: {
   open: boolean;
   conversationId: string;
@@ -37,6 +39,10 @@ export function ChatMenue({
   onSuche: () => void;
   onSprung: (messageId: string) => Promise<void> | void;
   onUnten: () => void;
+  /** Selbstlöschende Nachrichten einstellen. */
+  onSelbstloeschen?: () => void;
+  /** Die Liste „Geplant“ dieses Chats. */
+  onGeplant?: () => void;
 }) {
   const [datumOffen, setDatumOffen] = useState(false);
   const [datum, setDatum] = useState(heute());
@@ -131,6 +137,32 @@ export function ChatMenue({
             <span aria-hidden="true">📅</span>
             <span>Zu Datum springen</span>
           </button>
+          {onGeplant && (
+            <button
+              type="button"
+              className="list-row"
+              onClick={() => {
+                schliessen();
+                onGeplant();
+              }}
+            >
+              <span aria-hidden="true">🕒</span>
+              <span>Geplante Nachrichten</span>
+            </button>
+          )}
+          {onSelbstloeschen && (
+            <button
+              type="button"
+              className="list-row"
+              onClick={() => {
+                schliessen();
+                onSelbstloeschen();
+              }}
+            >
+              <span aria-hidden="true">⏱</span>
+              <span>Selbstlöschende Nachrichten</span>
+            </button>
+          )}
           <Link className="list-row" to="/gespeichert" onClick={schliessen}>
             <span aria-hidden="true">⭐</span>
             <span>Gespeicherte Nachrichten</span>

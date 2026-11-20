@@ -1,7 +1,50 @@
-import { Fragment, useState, type ReactNode } from 'react';
-import { formatierungParsen, hatFormatierung, type FormatKnoten } from '@initiative/shared';
+import { Fragment, createContext, useContext, useState, type ReactNode } from 'react';
+import {
+  erwaehnungenZerlegen,
+  formatierungParsen,
+  hatFormatierung,
+  type ErwaehnbarePerson,
+  type FormatKnoten,
+} from '@initiative/shared';
 import type { MessageRendererProps } from '../types.js';
 import { useSuchbegriff } from './suchbegriff.js';
+import { erwaehnteIn } from './erwaehnungshilfe.js';
+import { LinkVorschauKarte } from './LinkVorschauKarte.js';
+import { useMyId } from '../../state/session.js';
+
+/**
+ * Wer in der Nachricht erwähnt ist – für die Hervorhebung. Über einen Kontext,
+ * weil die Erwähnung tief in Formatierung und Links steckt (`@Anna` in
+ * *fett*), und jede Ebene sonst die Liste durchreichen müsste.
+ */
+interface ErwaehnungsSicht {
+  erwaehnte: ErwaehnbarePerson[];
+  alle: boolean;
+  ich: string;
+}
+const Erwaehnungen = createContext<ErwaehnungsSicht>({ erwaehnte: [], alle: false, ich: '' });
+
+/** Ein Textstück mit hervorgehobenen Erwähnungen (die eigene farbig). */
+function TextMitErwaehnungen({ text, begriff, schluessel }: { text: string; begriff: string | null; schluessel: string }) {
+  const sicht = useContext(Erwaehnungen);
+  if (sicht.erwaehnte.length === 0 && !sicht.alle) return <>{mitTreffern(text, begriff, schluessel)}</>;
+  return (
+    <>
+      {erwaehnungenZerlegen(text, sicht.erwaehnte, sicht.alle).map((stueck, index) =>
+        stueck.art === 'text' ? (
+          <Fragment key={index}>{mitTreffern(stueck.text, begriff, `${schluessel}-${index}`)}</Fragment>
+        ) : (
+          <span
+            key={index}
+            className={`msg-erwaehnung${stueck.userId === sicht.ich || stueck.userId === 'alle' ? ' msg-erwaehnung-ich' : ''}`}
+          >
+            {stueck.text}
+          </span>
+        ),
+      )}
+    </>
+  );
+}
 
 const URL_PATTERN = /(https?:\/\/[^\s<>()]+|www\.[^\s<>()]+)/gi;
 
@@ -54,7 +97,14 @@ function withLinks(text: string, begriff: string | null = null): ReactNode[] {
   while (match) {
     const [url, trailing] = splitTrailing(match[0]);
     if (match.index > lastIndex) {
-      nodes.push(...mitTreffern(text.slice(lastIndex, match.index), begriff, `t${lastIndex}`));
+      nodes.push(
+        <TextMitErwaehnungen
+          key={`t${lastIndex}`}
+          text={text.slice(lastIndex, match.index)}
+          begriff={begriff}
+          schluessel={`t${lastIndex}`}
+        />,
+      );
     }
     if (url.length > 0) {
       nodes.push(
@@ -68,7 +118,16 @@ function withLinks(text: string, begriff: string | null = null): ReactNode[] {
     lastIndex = match.index + match[0].length;
     match = URL_PATTERN.exec(text);
   }
-  if (lastIndex < text.length) nodes.push(...mitTreffern(text.slice(lastIndex), begriff, `t${lastIndex}`));
+  if (lastIndex < text.length) {
+    nodes.push(
+      <TextMitErwaehnungen
+        key={`t${lastIndex}`}
+        text={text.slice(lastIndex)}
+        begriff={begriff}
+        schluessel={`t${lastIndex}`}
+      />,
+    );
+  }
   return nodes.map((node, index) => <Fragment key={index}>{node}</Fragment>);
 }
 
@@ -161,9 +220,10 @@ function emojiOnlyCount(text: string): number {
 }
 
 /** Default chat bubble: links, line breaks and oversized emoji-only messages. */
-export function TextBubble({ message, isMine }: MessageRendererProps) {
+export function TextBubble({ message, isMine, conversation }: MessageRendererProps) {
   const tone = isMine ? 'msg-bubble-mine' : 'msg-bubble-theirs';
   const begriff = useSuchbegriff(message.conversationId);
+  const ich = useMyId();
 
   if (message.deletedAt) {
     return (
@@ -211,9 +271,18 @@ export function TextBubble({ message, isMine }: MessageRendererProps) {
     );
   }
 
+  const sicht: ErwaehnungsSicht = {
+    erwaehnte: erwaehnteIn(message.metadata, conversation),
+    alle: message.metadata?.mentionsAlle === true,
+    ich,
+  };
+  const vorschau = message.metadata?.linkVorschau;
   return (
     <div className={`msg-bubble ${tone}`}>
-      <FormatierterText text={body} begriff={begriff} />
+      <Erwaehnungen.Provider value={sicht}>
+        <FormatierterText text={body} begriff={begriff} />
+      </Erwaehnungen.Provider>
+      {vorschau && <LinkVorschauKarte vorschau={vorschau} />}
     </div>
   );
 }

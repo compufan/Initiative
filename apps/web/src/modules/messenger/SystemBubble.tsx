@@ -30,6 +30,13 @@ export function describe(
   const isMe = actor === 'Du';
   const hat = isMe ? 'hast' : 'hat';
   switch (kind) {
+    case 'message.pinned':
+      return `${actor} ${hat} eine Nachricht angeheftet`;
+    // `text` ist die Dauer in Worten („24 Stunden“) oder „aus“.
+    case 'conversation.selbstloeschen':
+      return text && text !== 'aus'
+        ? `${actor} ${hat} selbstlöschende Nachrichten eingeschaltet – neue Nachrichten verschwinden nach ${text}`
+        : `${actor} ${hat} selbstlöschende Nachrichten ausgeschaltet`;
     // Gruppenverwaltung: `text` ist der Rumpf der Systemzeile (neuer Name,
     // geänderte Schalter) – der Server setzt ihn, damit auch spätere Namen
     // die Zeile nicht umschreiben.

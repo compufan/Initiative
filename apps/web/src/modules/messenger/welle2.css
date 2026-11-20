@@ -1,0 +1,488 @@
+/*
+ * Zweite Welle Nachrichtenfunktionen: Erwähnungen, Link-Vorschau, Anheften,
+ * Geplant, Selbstlöschen, Einmal ansehen, Kontakt, Standort.
+ * Nur Variablen aus tokens.css – hell und dunkel folgen von selbst.
+ */
+
+/* ---------- Erwähnungen ---------- */
+
+.msg-erwaehnung {
+  font-weight: 600;
+  color: var(--accent);
+}
+.msg-bubble-mine .msg-erwaehnung {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+/* Die eigene Erwähnung: farbig hinterlegt – nicht nur durch die Farbe zu erkennen. */
+.msg-erwaehnung-ich {
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 0 2px;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.msg-erwaehnung-liste {
+  list-style: none;
+  margin: 0 0 var(--space-2);
+  padding: var(--space-1);
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.msg-erwaehnung-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-height: 44px;
+}
+.msg-erwaehnung-option.is-aktiv,
+.msg-erwaehnung-option:hover {
+  background: var(--accent-soft);
+}
+.msg-erwaehnung-option.is-aktiv {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.msg-erwaehnung-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.msg-erwaehnung-name small {
+  color: var(--text-muted);
+}
+.msg-erwaehnung-alle {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  display: grid;
+  place-items: center;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 700;
+}
+
+.msg-jump-erwaehnung {
+  bottom: calc(var(--space-4) + 56px);
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* ---------- Link-Vorschau ---------- */
+
+.msg-link-karte {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-3) 60%, transparent);
+  border-left: 3px solid var(--accent);
+  color: inherit;
+  text-decoration: none;
+  min-width: 0;
+  max-width: 100%;
+}
+.msg-bubble-mine .msg-link-karte {
+  background: color-mix(in srgb, #000 18%, transparent);
+  border-left-color: currentColor;
+}
+.msg-link-entwurf {
+  margin: 0 0 var(--space-2);
+  align-items: flex-start;
+}
+.msg-link-bild {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  flex: none;
+}
+.msg-link-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+.msg-link-seite {
+  font-size: 0.75rem;
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.msg-link-titel {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.msg-link-beschreibung {
+  font-size: 0.85rem;
+  opacity: 0.85;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* ---------- Bearbeitet, Ablauf ---------- */
+
+.msg-bearbeitet {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline dotted;
+  cursor: pointer;
+  min-height: 24px;
+}
+.msg-ablauf {
+  font-size: 0.8em;
+}
+
+.msg-verlauf-liste {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.msg-verlauf-eintrag {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--border-strong);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.msg-verlauf-aktuell {
+  border-left-color: var(--accent);
+}
+.msg-verlauf-gesendet {
+  background: none;
+}
+.msg-verlauf-zeit {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* ---------- Angeheftet ---------- */
+
+.msg-angeheftet {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.msg-angeheftet-striche {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 3px;
+}
+.msg-angeheftet-striche span {
+  flex: 1;
+  border-radius: 2px;
+  background: var(--border-strong);
+}
+.msg-angeheftet-striche span.is-aktiv {
+  background: var(--accent);
+}
+.msg-angeheftet-inhalt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  flex: 1;
+  background: none;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+  min-height: 40px;
+}
+.msg-angeheftet-titel {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+.msg-angeheftet-text {
+  max-width: 100%;
+  font-size: 0.9rem;
+}
+
+/* ---------- Geplant, Selbstlöschen ---------- */
+
+.msg-zusatzleiste {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
+  flex: none;
+}
+.msg-zusatz-knopf {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--text);
+  padding: var(--space-1) var(--space-3);
+  min-height: 32px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.msg-geplant-vorschau {
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+.msg-geplant-schnell,
+.msg-geplant-knoepfe {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.msg-geplant-liste {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.msg-geplant-eintrag {
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+.msg-geplant-kopf {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+}
+.msg-geplant-kopf small {
+  color: var(--text-muted);
+}
+.msg-geplant-text {
+  margin: var(--space-1) 0 var(--space-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.msg-geplant-fehler {
+  color: var(--danger);
+  margin: 0 0 var(--space-2);
+}
+.msg-stufe {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 44px;
+  cursor: pointer;
+}
+.msg-stufe input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--accent);
+}
+.msg-hinweis-ehrlich {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+  font-size: 0.85rem;
+}
+
+/* ---------- Einmal ansehen ---------- */
+
+.msg-einmal-zeile {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  text-align: left;
+}
+.msg-einmal-oeffnen {
+  cursor: pointer;
+  min-height: 44px;
+}
+.msg-einmal-symbol {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  border: 2px dashed currentColor;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+  flex: none;
+}
+.msg-einmal-status {
+  display: block;
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+.msg-einmal-ansicht {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: #000;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.msg-einmal-ansicht img,
+.msg-einmal-ansicht video {
+  max-width: 100%;
+  max-height: 75vh;
+  object-fit: contain;
+  pointer-events: none;
+}
+.msg-einmal-ansicht video {
+  pointer-events: auto;
+}
+.msg-einmal-hinweis {
+  font-size: 0.8rem;
+  opacity: 0.8;
+  text-align: center;
+}
+
+/* ---------- Kontakt ---------- */
+
+.msg-kontakt {
+  min-width: min(240px, 70vw);
+}
+.msg-kontakt-kopf {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+.msg-kontakt-kopf span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.msg-kontakt-kopf small {
+  opacity: 0.8;
+}
+.msg-kontakt-knoepfe {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.msg-kontakt-liste {
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+/* ---------- Standort ---------- */
+
+.msg-standort {
+  min-width: min(260px, 72vw);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.msg-standort-karte {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+/* Ein Feld, das an eine Karte erinnert – ohne Kacheln von einem fremden Server. */
+.msg-standort-feld {
+  position: relative;
+  height: 110px;
+  border-radius: var(--radius-sm);
+  background-color: var(--surface-2);
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px),
+    linear-gradient(35deg, transparent 46%, color-mix(in srgb, var(--accent) 25%, transparent) 46% 54%, transparent 54%);
+  background-size: 22px 22px, 22px 22px, 100% 100%;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.msg-standort-nadel {
+  font-size: 1.8rem;
+  z-index: 1;
+  transform: translateY(-10px);
+}
+.msg-standort-kreis {
+  position: absolute;
+  width: 70px;
+  height: 70px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border: 1px solid var(--accent);
+}
+.msg-standort-angaben {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+.msg-standort-angaben small {
+  opacity: 0.8;
+}
+.msg-standort-live {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.msg-live-wahl {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.msg-live-wahl legend {
+  font-weight: 600;
+  padding: 0 var(--space-1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-angeheftet,
+  .msg-erwaehnung-liste {
+    animation: none;
+  }
+}
+
+.chat-badge-erwaehnung {
+  font-weight: 700;
+  margin-right: var(--space-1);
+}
