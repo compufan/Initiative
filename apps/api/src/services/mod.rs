@@ -1,3 +1,4 @@
+pub mod anhaenge;
 pub mod attachments;
 pub mod auslagern;
 pub mod bierjunge;
@@ -23,4 +24,5 @@ pub mod stickers;
 pub mod users;
 pub mod verlauf;
 pub mod vorab;
+pub mod zip_strom;
 pub mod zugriff;

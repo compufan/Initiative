@@ -6,6 +6,7 @@
 //! one line in [`router`].
 
 pub mod admin;
+pub mod anhaenge;
 pub mod auth;
 pub mod beitritt;
 pub mod calendar;
@@ -49,6 +50,7 @@ pub fn router() -> Router<AppState> {
         .merge(media::router())
         .merge(stuecke::router())
         .merge(stickers::router())
+        .merge(anhaenge::router())
         .merge(collections::router())
         .merge(fernsehen::router())
         .merge(calendar::router())

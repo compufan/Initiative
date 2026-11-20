@@ -343,6 +343,11 @@ pub mod regeln {
     /// bevor etwas angelegt ist.
     pub const EINZELCHATS_NEU: Regel = Regel::neu(300, Duration::from_secs(3600));
 
+    /// Chat exportieren: Ein Export liest den ganzen Verlauf samt Medien.
+    /// Drei je Stunde reichen jedem, der sichern will, und verhindern,
+    /// dass jemand den Server mit Gigabyte-Strömen beschäftigt.
+    pub const CHAT_EXPORT: Regel = Regel::neu(3, Duration::from_secs(3600));
+
     /// Mitteilungen über Änderungen an einem Termin: drei je zehn Minuten und
     /// Termin.
     ///
