@@ -576,3 +576,48 @@
 .poll-voter-list.poll-scroll {
   max-height: 220px;
 }
+
+/* ---------- Quiz ---------- */
+
+.poll-richtig {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 44px;
+  min-height: 44px;
+  justify-content: center;
+  color: var(--success);
+}
+.poll-richtig input {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--success);
+}
+.poll-option.is-richtig {
+  outline: 2px solid var(--success);
+  outline-offset: -2px;
+}
+.poll-option.is-richtig .poll-option-mark {
+  color: var(--success);
+}
+.poll-option.is-falsch {
+  outline: 2px dashed var(--danger);
+  outline-offset: -2px;
+}
+.poll-option.is-falsch .poll-option-mark {
+  color: var(--danger);
+}
+.poll-quiz-ergebnis {
+  margin: var(--space-2) 0 0;
+  font-weight: 600;
+}
+.poll-quiz-ergebnis.is-richtig {
+  color: var(--success);
+}
+.poll-quiz-ergebnis.is-falsch {
+  color: var(--danger);
+}
+.poll-quiz-erklaerung {
+  margin: var(--space-1) 0 0;
+  font-size: 0.9rem;
+}

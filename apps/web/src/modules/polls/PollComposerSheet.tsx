@@ -39,8 +39,19 @@ export function PollComposerSheet({ conversationId, onClose }: ComposerActionPro
   const [endDay, setEndDay] = useState(() => dayKey(addDays(new Date(), 1)));
   const [endTime, setEndTime] = useState('18:00');
   const [saving, setSaving] = useState(false);
+  /** Quiz: welche Optionen richtig sind (gleich lang wie `options`). */
+  const [quiz, setQuiz] = useState(false);
+  const [richtig, setRichtig] = useState<boolean[]>([false, false]);
+  const [erklaerung, setErklaerung] = useState('');
 
   const filled = options.map((option) => option.trim()).filter((option) => option.length > 0);
+  const richtigeGefuellt = options.filter((option, index) => option.trim() && richtig[index]).length;
+
+  function richtigSetzen(index: number, wert: boolean): void {
+    setRichtig((current) =>
+      current.map((alt, at) => (at === index ? wert : multiple ? alt : wert ? false : alt)),
+    );
+  }
 
   function patchOption(index: number, value: string): void {
     setOptions((current) => current.map((option, at) => (at === index ? value : option)));
@@ -48,12 +59,27 @@ export function PollComposerSheet({ conversationId, onClose }: ComposerActionPro
 
   function addOption(): void {
     setOptions((current) => (current.length >= MAX_OPTIONS ? current : [...current, '']));
+    setRichtig((current) => (current.length >= MAX_OPTIONS ? current : [...current, false]));
   }
 
   function removeOption(index: number): void {
     setOptions((current) =>
       current.length <= 2 ? current : current.filter((_, at) => at !== index),
     );
+    setRichtig((current) =>
+      current.length <= 2 ? current : current.filter((_, at) => at !== index),
+    );
+  }
+
+  function verschieben(from: number, to: number): void {
+    setOptions((current) => move(current, from, to));
+    setRichtig((current) => {
+      if (to < 0 || to >= current.length) return current;
+      const next = current.slice();
+      const [eintrag] = next.splice(from, 1);
+      next.splice(to, 0, eintrag!);
+      return next;
+    });
   }
 
   function deadlineIso(): string | null | undefined {
@@ -76,6 +102,10 @@ export function PollComposerSheet({ conversationId, onClose }: ComposerActionPro
       toast('Bitte gib mindestens zwei Optionen an', 'error');
       return;
     }
+    if (quiz && (richtigeGefuellt === 0 || richtigeGefuellt >= filled.length)) {
+      toast('Markiere mindestens eine richtige und eine falsche Antwort', 'error');
+      return;
+    }
     const closesAt = deadlineIso();
     if (closesAt === undefined) {
       toast('Das Ende der Umfrage muss in der Zukunft liegen', 'error');
@@ -89,11 +119,18 @@ export function PollComposerSheet({ conversationId, onClose }: ComposerActionPro
         kind: 'choice',
         question: trimmed.slice(0, MAX_QUESTION),
         description: description.trim() || null,
-        options: filled.map((label) => ({ label: label.slice(0, MAX_OPTION_LABEL) })),
+        options: options
+          .map((label, index) => ({ label: label.trim(), richtig: richtig[index] === true }))
+          .filter((option) => option.label.length > 0)
+          .map((option) => ({
+            label: option.label.slice(0, MAX_OPTION_LABEL),
+            ...(quiz && option.richtig ? { richtig: true } : {}),
+          })),
         multiple,
         anonymous,
-        allowAddOptions,
+        allowAddOptions: quiz ? false : allowAddOptions,
         closesAt,
+        ...(quiz ? { quiz: true, erklaerung: erklaerung.trim() || null } : {}),
       });
       onClose();
     } catch (error) {
@@ -155,12 +192,24 @@ export function PollComposerSheet({ conversationId, onClose }: ComposerActionPro
                 aria-label={`Option ${index + 1}`}
                 onChange={(event) => patchOption(index, event.target.value)}
               />
+              {quiz && (
+                <label className="poll-richtig">
+                  <input
+                    type={multiple ? 'checkbox' : 'radio'}
+                    name="poll-richtig"
+                    checked={richtig[index] === true}
+                    aria-label={`Option ${index + 1} ist richtig`}
+                    onChange={(event) => richtigSetzen(index, event.target.checked)}
+                  />
+                  <span aria-hidden="true">✓</span>
+                </label>
+              )}
               <button
                 type="button"
                 className="icon-btn poll-tool"
                 aria-label={`Option ${index + 1} nach oben`}
                 disabled={index === 0}
-                onClick={() => setOptions((current) => move(current, index, index - 1))}
+                onClick={() => verschieben(index, index - 1)}
               >
                 ↑
               </button>
@@ -169,7 +218,7 @@ export function PollComposerSheet({ conversationId, onClose }: ComposerActionPro
                 className="icon-btn poll-tool"
                 aria-label={`Option ${index + 1} nach unten`}
                 disabled={index === options.length - 1}
-                onClick={() => setOptions((current) => move(current, index, index + 1))}
+                onClick={() => verschieben(index, index + 1)}
               >
                 ↓
               </button>
@@ -194,6 +243,31 @@ export function PollComposerSheet({ conversationId, onClose }: ComposerActionPro
           ＋ Option
         </button>
       </div>
+
+      <label className="poll-switch">
+        <span>
+          Quiz
+          <span className="poll-hint">
+            Mit richtiger Antwort – die Auflösung sieht man nach der eigenen Stimme.
+          </span>
+        </span>
+        <input type="checkbox" checked={quiz} onChange={(event) => setQuiz(event.target.checked)} />
+      </label>
+
+      {quiz && (
+        <div className="field">
+          <label htmlFor="poll-erklaerung">Erklärung (optional)</label>
+          <textarea
+            id="poll-erklaerung"
+            className="textarea"
+            value={erklaerung}
+            maxLength={500}
+            rows={2}
+            placeholder="Warum ist die Antwort richtig?"
+            onChange={(event) => setErklaerung(event.target.value)}
+          />
+        </div>
+      )}
 
       <label className="poll-switch">
         <span>
@@ -226,7 +300,8 @@ export function PollComposerSheet({ conversationId, onClose }: ComposerActionPro
         </span>
         <input
           type="checkbox"
-          checked={allowAddOptions}
+          checked={allowAddOptions && !quiz}
+          disabled={quiz}
           onChange={(event) => setAllowAddOptions(event.target.checked)}
         />
       </label>
