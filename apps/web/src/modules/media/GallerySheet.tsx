@@ -8,6 +8,7 @@ import { rezeptSenden } from './RezeptBubble.js';
 import type { Anpassung } from '../bild/ton.js';
 import type { ComposerActionProps } from '../types.js';
 import { toast } from '../../state/ui.js';
+import { hdGemerkt, hdMerken, hdZiel, istHd } from './fotoQualitaet.js';
 import {
   buildAttachment,
   errorMessage,
@@ -29,6 +30,11 @@ interface GalleryItem {
    * noch in den Bildpunkten, und der des zweiten käme obendrauf.
    */
   original: Blob;
+  /**
+   * Die gewählte Datei selbst, unverändert – für „Als Datei senden“ (Original
+   * mit allen Metadaten) und um beim Umschalten auf HD neu zu rechnen.
+   */
+  quelle: File;
   mime: string;
   fileName: string;
   url: string;
@@ -59,6 +65,9 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
   const [caption, setCaption] = useState('');
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  /** HD: bis 4096 Punkte statt 1920 (`fotoQualitaet.ts`), je Gerät gemerkt. */
+  const [hd, setHd] = useState(hdGemerkt);
+  const [umrechnen, setUmrechnen] = useState(false);
   /*
    * Solange der Fotoeditor offen ist, tritt dieses Blatt zur Seite.
    *
@@ -105,7 +114,8 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
 
         try {
           if (kind === 'image') {
-            const prepared = await prepareImage(file);
+            const ziel = hdZiel(hd);
+            const prepared = await prepareImage(file, ziel.kante, false, ziel.guete);
             next.push({
               /*
                * Die Kennung muss über AUFRUFE hinweg eindeutig sein.
@@ -120,6 +130,7 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
               kind,
               blob: prepared.blob,
               original: prepared.blob,
+              quelle: file,
               mime: prepared.mime,
               fileName: file.name,
               url: URL.createObjectURL(prepared.blob),
@@ -137,6 +148,7 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
               kind,
               blob: file,
               original: file,
+              quelle: file,
               mime: mimeForFile(file),
               fileName: file.name,
               url: URL.createObjectURL(file),
@@ -154,6 +166,77 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
       if (next.length > 0) setItems((current) => [...current, ...next]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  /**
+   * HD an oder aus – und die noch unbearbeiteten Bilder neu rechnen.
+   *
+   * Bearbeitete bleiben, wie sie sind: Neu aus der Quelle gerechnet, wäre die
+   * Bearbeitung weg.
+   */
+  const hdSetzen = async (an: boolean) => {
+    setHd(an);
+    hdMerken(an);
+    const ziele = itemsRef.current.filter(
+      (item) => item.kind === 'image' && item.blob === item.original,
+    );
+    if (ziele.length === 0) return;
+    setUmrechnen(true);
+    try {
+      const ziel = hdZiel(an);
+      const neu = new Map<string, Awaited<ReturnType<typeof prepareImage>>>();
+      for (const item of ziele) {
+        neu.set(item.id, await prepareImage(item.quelle, ziel.kante, false, ziel.guete));
+      }
+      setItems((alt) =>
+        alt.map((eintrag) => {
+          const fertig = neu.get(eintrag.id);
+          if (!fertig || eintrag.blob !== eintrag.original) return eintrag;
+          URL.revokeObjectURL(eintrag.url);
+          return {
+            ...eintrag,
+            blob: fertig.blob,
+            original: fertig.blob,
+            mime: fertig.mime,
+            url: URL.createObjectURL(fertig.blob),
+            width: fertig.width,
+            height: fertig.height,
+            previewDataUrl: fertig.previewDataUrl,
+            size: fertig.blob.size,
+          };
+        }),
+      );
+    } catch (error) {
+      toast(errorMessage(error, 'Die Bilder konnten nicht neu berechnet werden'), 'error');
+    } finally {
+      setUmrechnen(false);
+    }
+  };
+
+  /**
+   * „Als Datei senden“: jede gewählte Datei unverändert, als Dokument – ohne
+   * Verkleinern, ohne Neukodierung, mit allen Metadaten.
+   */
+  const alsDateiSenden = async () => {
+    if (items.length === 0 || sending) return;
+    if (!items.every((item) => withinUploadLimit('file', item.quelle.size, item.fileName))) return;
+    setSending(true);
+    try {
+      for (const item of items) {
+        const ok = await sendMedia(conversationId, 'file', null, [
+          buildAttachment({
+            kind: 'file',
+            mime: item.quelle.type || mimeForFile(item.quelle),
+            fileName: item.quelle.name || item.fileName,
+            blob: item.quelle,
+          }),
+        ]);
+        if (!ok) return;
+      }
+      onClose();
+    } finally {
+      setSending(false);
     }
   };
 
@@ -347,7 +430,24 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
         />
       </label>
 
-      {loading && <Spinner label="Vorschau wird erstellt …" />}
+      <label className="media-hd-schalter">
+        <input
+          type="checkbox"
+          role="switch"
+          checked={hd}
+          disabled={umrechnen || sending}
+          onChange={(event) => void hdSetzen(event.target.checked)}
+        />
+        <span className="media-hd-abzeichen" aria-hidden="true">
+          HD
+        </span>
+        <span>
+          Fotos in HD senden
+          <span className="muted"> · bis 4096 statt 1920 Punkte</span>
+        </span>
+      </label>
+
+      {(loading || umrechnen) && <Spinner label="Vorschau wird erstellt …" />}
 
       {!loading && items.length === 0 && (
         <EmptyState
@@ -377,6 +477,11 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
                       ▶ {item.durationMs ? formatDuration(item.durationMs) : 'Video'}
                     </span>
                   </>
+                )}
+                {item.kind === 'image' && istHd(item.width, item.height) && (
+                  <span className="media-hd-abzeichen media-tile-hd" title="In HD">
+                    HD
+                  </span>
                 )}
                 {item.kind === 'image' && (
                   <span className="media-tile-edit">
@@ -473,10 +578,22 @@ export function GallerySheet({ conversationId, onClose }: ComposerActionProps) {
             type="button"
             className="btn btn-primary btn-block"
             onClick={() => void send()}
-            disabled={sending || reihe !== null}
+            disabled={sending || reihe !== null || umrechnen}
           >
             {sending ? 'Wird gesendet …' : `Senden (${items.length})`}
           </button>
+          <button
+            type="button"
+            className="btn btn-block"
+            onClick={() => void alsDateiSenden()}
+            disabled={sending || reihe !== null}
+          >
+            📎 Als Datei senden (Original)
+          </button>
+          <p className="muted" style={{ margin: 0, fontSize: '0.78rem' }}>
+            Als Datei geht jedes Foto und Video unverändert hinaus – in voller Grösse und mit
+            allen Angaben, die die Kamera hineinschreibt (etwa der Ort).
+          </p>
         </>
       )}
     </Sheet>

@@ -8,6 +8,7 @@ import { rezeptSenden } from './RezeptBubble.js';
 import { prepareImage } from '../../lib/upload.js';
 import { toast } from '../../state/ui.js';
 import { MAX_KANTE } from '../bild/kennwerte.js';
+import { istHd } from './fotoQualitaet.js';
 
 function ImageTile({
   attachment,
@@ -29,8 +30,13 @@ function ImageTile({
       className="media-frame"
       style={{ aspectRatio: square ? '1 / 1' : ratio }}
       onClick={onOpen}
-      aria-label="Foto öffnen"
+      aria-label={istHd(attachment.width, attachment.height) ? 'Foto in HD öffnen' : 'Foto öffnen'}
     >
+      {istHd(attachment.width, attachment.height) && (
+        <span className="media-hd-abzeichen media-tile-hd" aria-hidden="true">
+          HD
+        </span>
+      )}
       {attachment.previewDataUrl && (
         <img className="media-blur" src={attachment.previewDataUrl} alt="" aria-hidden="true" />
       )}

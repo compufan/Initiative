@@ -310,6 +310,8 @@ export async function prepareImage(
    * hintereinander – jede baut auf den Artefakten der vorigen auf.
    */
   fertig = false,
+  /** Güte der Neukodierung (HD: höher, siehe `media/fotoQualitaet.ts`). */
+  guete = 0.82,
 ): Promise<PreparedImage> {
   const source = await loadBitmap(file);
   const naturalWidth = 'width' in source ? source.width : 0;
@@ -340,7 +342,7 @@ export async function prepareImage(
       : 'image/jpeg';
   const full = unberuehrt
     ? file
-    : await toBlob(drawTo(source, width, height), mime, fertig ? 0.92 : 0.82);
+    : await toBlob(drawTo(source, width, height), mime, fertig ? 0.92 : guete);
 
   const previewScale = Math.min(1, VORSCHAU_KANTE / Math.max(width, height || 1));
   const preview = drawTo(source, width * previewScale, height * previewScale);

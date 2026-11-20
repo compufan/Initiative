@@ -1279,3 +1279,52 @@
   line-height: 1.1;
   color: var(--text-muted);
 }
+
+/* ---------- HD ---------- */
+.media-hd-abzeichen {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  border: 1.5px solid currentColor;
+}
+
+.media-tile-hd {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  border-color: rgba(255, 255, 255, 0.9);
+  pointer-events: none;
+}
+
+.media-hd-schalter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.media-hd-schalter input {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--accent);
+}
+
+.media-hd-knopf {
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.media-hd-knopf.is-active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}

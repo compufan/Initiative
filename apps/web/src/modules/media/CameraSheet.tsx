@@ -23,6 +23,7 @@ import {
   useObjectUrl,
   withinUploadLimit,
 } from './helpers.js';
+import { hdGemerkt, hdMerken, hdZiel } from './fotoQualitaet.js';
 
 type Facing = 'user' | 'environment';
 type Mode = 'photo' | 'video';
@@ -77,6 +78,8 @@ export function CameraSheet({ conversationId, onClose }: ComposerActionProps) {
   const [draft, setDraft] = useState<CaptureDraft | null>(null);
   const [caption, setCaption] = useState('');
   const [sending, setSending] = useState(false);
+  /** HD: höhere Auflösung der Kamera und bis 4096 Punkte im Foto. */
+  const [hd, setHd] = useState(hdGemerkt);
 
   const photoUrl = useObjectUrl(draft?.kind === 'image' ? draft.blob : null);
   const videoUrl = useObjectUrl(draft?.kind === 'video' ? draft.blob : null);
@@ -117,7 +120,13 @@ export function CameraSheet({ conversationId, onClose }: ComposerActionProps) {
     const start = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: facing },
+          // Ohne Wunschgrösse liefern viele Kameras 640×480 – zu wenig für
+          // ein Foto, erst recht in HD.
+          video: {
+            facingMode: facing,
+            width: { ideal: hd && mode === 'photo' ? 4096 : 1920 },
+            height: { ideal: hd && mode === 'photo' ? 2160 : 1080 },
+          },
           audio: mode === 'video',
         });
         if (cancelled) {
@@ -155,7 +164,7 @@ export function CameraSheet({ conversationId, onClose }: ComposerActionProps) {
       cancelled = true;
       stopStream();
     };
-  }, [draft, facing, mode, stopStream]);
+  }, [draft, facing, mode, hd, stopStream]);
 
   // Running recording time plus the hard three minute ceiling.
   useEffect(() => {
@@ -204,7 +213,8 @@ export function CameraSheet({ conversationId, onClose }: ComposerActionProps) {
           0.92,
         );
       });
-      const prepared = await prepareImage(raw);
+      const ziel = hdZiel(hd);
+      const prepared = await prepareImage(raw, ziel.kante, false, ziel.guete);
       if (!aliveRef.current) return;
       if (!withinUploadLimit('image', prepared.blob.size)) return;
       setDraft({
@@ -304,7 +314,8 @@ export function CameraSheet({ conversationId, onClose }: ComposerActionProps) {
         });
         return;
       }
-      const prepared = await prepareImage(file);
+      const ziel = hdZiel(hd);
+      const prepared = await prepareImage(file, ziel.kante, false, ziel.guete);
       if (!withinUploadLimit('image', prepared.blob.size, file.name)) return;
       setDraft({
         kind: 'image',
@@ -424,6 +435,22 @@ export function CameraSheet({ conversationId, onClose }: ComposerActionProps) {
           </div>
         )}
 
+        {!draft && mode === 'photo' && (
+          <button
+            type="button"
+            className={`media-round-btn media-hd-knopf${hd ? ' is-active' : ''}`}
+            aria-pressed={hd}
+            aria-label="Fotos in HD"
+            title={hd ? 'HD an – bis 4096 Punkte' : 'HD aus – 1920 Punkte'}
+            onClick={() => {
+              setHd(!hd);
+              hdMerken(!hd);
+            }}
+            disabled={busy}
+          >
+            HD
+          </button>
+        )}
         {!draft && !streamError && multipleCameras ? (
           <button
             type="button"
