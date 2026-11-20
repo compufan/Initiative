@@ -7,7 +7,11 @@ use serde_json::Value;
 use std::collections::HashMap;
 use uuid::Uuid;
 
+/// `nextCursor` in camelCase wie alles andere – hier fehlte die Angabe, und
+/// der Client (`nextCursor`) sah nie einen Zeiger: Ältere Nachrichten liessen
+/// sich nicht nachladen, und ein Sprung zu einem alten Zitat endete am Rand.
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListResult<T> {
     pub items: Vec<T>,
     #[serde(skip_serializing_if = "Option::is_none")]

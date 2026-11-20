@@ -575,7 +575,7 @@ async fn neuzugang_seite_stimmt() {
         .map(|eintrag| eintrag["id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, vec![neu[1].as_str(), neu[2].as_str()], "{seite}");
-    let weiter = seite["next_cursor"]
+    let weiter = seite["nextCursor"]
         .as_str()
         .expect("volle Seite hat einen Zeiger");
     let seite = liste(bodo.clone(), format!("?limit=2&before={weiter}")).await;
@@ -596,7 +596,7 @@ async fn neuzugang_seite_stimmt() {
         };
         let seite = liste(anna.clone(), abfrage).await;
         gesehen += seite["items"].as_array().unwrap().len();
-        match seite["next_cursor"].as_str() {
+        match seite["nextCursor"].as_str() {
             Some(z) => zeiger = Some(z.to_string()),
             None => break,
         }
